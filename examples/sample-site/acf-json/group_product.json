@@ -1,0 +1,34 @@
+{
+  "key": "group_product",
+  "title": "製品補足情報",
+  "location": [
+    [
+      {
+        "param": "post_type",
+        "operator": "==",
+        "value": "product"
+      }
+    ]
+  ],
+  "fields": [
+    {
+      "key": "field_main_visual",
+      "name": "main_visual",
+      "label": "メイン画像",
+      "type": "image",
+      "return_format": "array"
+    },
+    {
+      "key": "field_published_at",
+      "name": "published_at",
+      "label": "公開日時",
+      "type": "date_time_picker"
+    },
+    {
+      "key": "field_store_name",
+      "name": "店舗名",
+      "label": "店舗名",
+      "type": "text"
+    }
+  ]
+}

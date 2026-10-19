@@ -1,0 +1,109 @@
+{
+  "name": "local/sample-site",
+  "description": "Sample site for TMStack WordPress Framework.",
+  "type": "project",
+  "license": "proprietary",
+  "require": {
+    "php": ">=8.2",
+    "tmswp/acf-bridge": "^0.1",
+    "tmswp/core": "^0.1",
+    "tmswp/ja-toolkit": "^0.1",
+    "tmswp/settings-page": "^0.1",
+    "tmswp/thumbnail": "^0.1"
+  },
+  "require-dev": {
+    "brain/monkey": "^2.6",
+    "friendsofphp/php-cs-fixer": "^3.64",
+    "phpstan/extension-installer": "^1.4",
+    "phpstan/phpstan": "^2.1",
+    "phpunit/phpunit": "^11.5",
+    "szepeviktor/phpstan-wordpress": "^2.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "App\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "lint": "php-cs-fixer fix --dry-run --diff",
+    "fix": "php-cs-fixer fix",
+    "analyse": "phpstan analyse --memory-limit=1G",
+    "test": "phpunit",
+    "qa": [
+      "@lint",
+      "@analyse",
+      "@tms:check",
+      "@test"
+    ],
+    "acf:check": "wp tmswp acf check",
+    "acf:sync": "wp tmswp acf sync",
+    "tms:check": [
+      "phpstan analyse -c phpstan-actions.neon --memory-limit=1G",
+      "@php vendor/bin/tms-check actions ."
+    ]
+  },
+  "repositories": [
+    {
+      "type": "path",
+      "url": "../../packages/core",
+      "options": {
+        "symlink": false,
+        "versions": {
+          "tmswp/core": "0.1.0"
+        }
+      }
+    },
+    {
+      "type": "path",
+      "url": "../../packages/acf-bridge",
+      "options": {
+        "symlink": false,
+        "versions": {
+          "tmswp/acf-bridge": "0.1.0"
+        }
+      }
+    },
+    {
+      "type": "path",
+      "url": "../../packages/ja-toolkit",
+      "options": {
+        "symlink": false,
+        "versions": {
+          "tmswp/ja-toolkit": "0.1.0"
+        }
+      }
+    },
+    {
+      "type": "path",
+      "url": "../../packages/settings-page",
+      "options": {
+        "symlink": false,
+        "versions": {
+          "tmswp/settings-page": "0.1.0"
+        }
+      }
+    },
+    {
+      "type": "path",
+      "url": "../../packages/thumbnail",
+      "options": {
+        "symlink": false,
+        "versions": {
+          "tmswp/thumbnail": "0.1.0"
+        }
+      }
+    }
+  ],
+  "config": {
+    "allow-plugins": {
+      "phpstan/extension-installer": true
+    },
+    "optimize-autoloader": true,
+    "sort-packages": true
+  }
+}

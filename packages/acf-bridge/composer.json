@@ -1,0 +1,27 @@
+{
+  "name": "tmswp/acf-bridge",
+  "description": "TMStack WordPress Framework - ACF Bridge",
+  "type": "library",
+  "license": "GPL-2.0-or-later",
+  "require": {
+    "php": ">=8.2",
+    "tmswp/core": "^0.1"
+  },
+  "suggest": {
+    "advanced-custom-fields-pro": "ACF Pro 6.0+ をWPプラグインとして導入すること"
+  },
+  "autoload": {
+    "psr-4": {
+      "TMSWP\\AcfBridge\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "TMSWP\\AcfBridge\\Tests\\": "tests/"
+    }
+  },
+  "minimum-stability": "stable",
+  "config": {
+    "sort-packages": true
+  }
+}

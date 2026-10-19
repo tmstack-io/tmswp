@@ -1,0 +1,10 @@
+parameters:
+  level: 0
+  paths:
+    - actions
+    - index.php
+  treatPhpDocTypesAsCertain: false
+
+rules:
+  - TMSWP\Core\PHPStan\Actions\NoOutputRule
+  - TMSWP\Core\PHPStan\Actions\NoSet404Rule

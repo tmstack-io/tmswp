@@ -1,0 +1,24 @@
+{
+  "name": "tmswp/settings-page",
+  "description": "TMStack WordPress Framework - Settings Page",
+  "type": "library",
+  "license": "GPL-2.0-or-later",
+  "require": {
+    "php": ">=8.2",
+    "tmswp/core": "^0.1"
+  },
+  "autoload": {
+    "psr-4": {
+      "TMSWP\\SettingsPage\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "TMSWP\\SettingsPage\\Tests\\": "tests/"
+    }
+  },
+  "minimum-stability": "stable",
+  "config": {
+    "sort-packages": true
+  }
+}

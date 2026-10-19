@@ -1,0 +1,11 @@
+.DS_Store
+.omc/
+.omx/
+.codex/
+.playwright-mcp/
+/.phpunit.result.cache
+/.wp-env.override.json
+/node_modules/
+/vendor/
+/vendor-bin/*/vendor/
+/var/

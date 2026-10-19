@@ -1,0 +1,14 @@
+services:
+    -
+        class: TMSWP\Core\PHPStan\MetaSchemaReflector
+    -
+        class: TMSWP\Core\PHPStan\MetaBagGetterReturnTypeExtension
+        tags:
+            - phpstan.broker.dynamicMethodReturnTypeExtension
+    -
+        class: TMSWP\Core\PHPStan\OptionGroupGetterReturnTypeExtension
+        tags:
+            - phpstan.broker.dynamicMethodReturnTypeExtension
+
+rules:
+    - TMSWP\Core\PHPStan\MetaKeyOwnershipRule

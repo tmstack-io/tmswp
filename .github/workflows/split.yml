@@ -1,0 +1,54 @@
+name: Split Packages
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+env:
+  GITHUB_ORG: tmswp
+  SPLIT_ACCESS_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
+
+jobs:
+  split:
+    name: Split ${{ matrix.package.local }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - { local: 'packages/core', repo: 'core' }
+          - { local: 'packages/thumbnail', repo: 'thumbnail' }
+          - { local: 'packages/settings-page', repo: 'settings-page' }
+          - { local: 'packages/acf-bridge', repo: 'acf-bridge' }
+          - { local: 'packages/ja-toolkit', repo: 'ja-toolkit' }
+          - { local: 'starters/theme', repo: 'starter-theme' }
+          - { local: 'starters/plugin', repo: 'starter-plugin' }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate split source
+        run: test -d "${{ matrix.package.local }}"
+      - name: Split branch
+        if: "!startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
+        uses: danharrin/monorepo-split-github-action@v2
+        with:
+          access_token: ${{ secrets.SPLIT_ACCESS_TOKEN }}
+          package_directory: ${{ matrix.package.local }}
+          repository_organization: ${{ env.GITHUB_ORG }}
+          repository_name: ${{ matrix.package.repo }}
+          user_name: tmswp-bot
+          user_email: bot@tmswp.dev
+      - name: Split tag
+        if: "startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
+        uses: danharrin/monorepo-split-github-action@v2
+        with:
+          tag: ${{ github.ref_name }}
+          access_token: ${{ secrets.SPLIT_ACCESS_TOKEN }}
+          package_directory: ${{ matrix.package.local }}
+          repository_organization: ${{ env.GITHUB_ORG }}
+          repository_name: ${{ matrix.package.repo }}
+          user_name: tmswp-bot
+          user_email: bot@tmswp.dev
+      - name: Dry-run notice
+        if: env.SPLIT_ACCESS_TOKEN == ''
+        run: echo "SPLIT_ACCESS_TOKEN is not set; validated split source only."

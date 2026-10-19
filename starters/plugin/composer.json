@@ -1,0 +1,49 @@
+{
+  "name": "tmswp/starter-plugin",
+  "description": "Starter plugin for TMStack WordPress Framework.",
+  "type": "project",
+  "license": "proprietary",
+  "require": {
+    "php": ">=8.2",
+    "tmswp/core": "^0.1"
+  },
+  "require-dev": {
+    "brain/monkey": "^2.6",
+    "friendsofphp/php-cs-fixer": "^3.64",
+    "phpstan/extension-installer": "^1.4",
+    "phpstan/phpstan": "^2.1",
+    "phpunit/phpunit": "^11.5",
+    "szepeviktor/phpstan-wordpress": "^2.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "PluginApp\\": "app/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "PluginApp\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "lint": "php-cs-fixer fix --dry-run --diff",
+    "fix": "php-cs-fixer fix",
+    "analyse": "phpstan analyse --memory-limit=1G",
+    "test": "phpunit",
+    "qa": [
+      "@lint",
+      "@analyse",
+      "@test"
+    ],
+    "acf:check": "wp tmswp acf check",
+    "acf:sync": "wp tmswp acf sync",
+    "post-create-project-cmd": "@php bin/setup.php"
+  },
+  "config": {
+    "allow-plugins": {
+      "phpstan/extension-installer": true
+    },
+    "optimize-autoloader": true,
+    "sort-packages": true
+  }
+}

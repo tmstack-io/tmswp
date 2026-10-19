@@ -1,0 +1,81 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: tmswp-core\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: ja\n"
+
+msgid ", "
+msgstr "、"
+
+msgid "Please complete all parts of {label}."
+msgstr "{label}をすべて入力してください。"
+
+msgid "{label} is invalid."
+msgstr "{label}の入力値が不正です。"
+
+msgid "Your session has expired. Please submit the form again."
+msgstr "セッションの有効期限が切れました。お手数ですが再度送信してください。"
+
+msgid "The form could not be resubmitted. Please start again."
+msgstr "フォームの再送信に失敗しました。お手数ですが最初から入力してください。"
+
+msgid "The confirmation screen has expired. Please review your entries and continue again."
+msgstr "確認画面の有効期限が切れました。内容を確認のうえ再度お進みください。"
+
+msgid "This form has already been submitted."
+msgstr "このフォームは既に送信されています。"
+
+msgid "The uploaded file is too large."
+msgstr "アップロードされたファイルが大きすぎます。"
+
+msgid "The file was only partially uploaded."
+msgstr "ファイルが一部しかアップロードされませんでした。"
+
+msgid "Please select a file."
+msgstr "ファイルを選択してください。"
+
+msgid "The temporary upload folder is missing."
+msgstr "一時フォルダが見つかりません。"
+
+msgid "The file could not be written."
+msgstr "ファイルを書き込めませんでした。"
+
+msgid "A PHP extension stopped the file upload."
+msgstr "拡張機能によりアップロードが停止されました。"
+
+msgid "The file upload failed."
+msgstr "ファイルのアップロードに失敗しました。"
+
+msgid "{label} is required."
+msgstr "{label}を入力してください。"
+
+msgid "Please enter a valid email address for {label}."
+msgstr "{label}はメールアドレスの形式で入力してください。"
+
+msgid "{label} must be {length} characters or fewer."
+msgstr "{label}は{length}文字以内で入力してください。"
+
+msgid "{label} must be at least {length} characters."
+msgstr "{label}は{length}文字以上で入力してください。"
+
+msgid "{label} has an invalid format."
+msgstr "{label}の形式が正しくありません。"
+
+msgid "{label} must be between {min} and {max}."
+msgstr "{label}は{min}から{max}の間で入力してください。"
+
+msgid "{label} has an invalid choice."
+msgstr "{label}の選択値が不正です。"
+
+msgid "{label} must match {otherLabel}."
+msgstr "{label}が{otherLabel}と一致しません。"
+
+msgid "Please upload {label} as one of these file types: {extensions}."
+msgstr "{label}は{extensions}形式のファイルを指定してください。"
+
+msgid "{label} must be {size} or smaller."
+msgstr "{label}のファイルサイズは{size}以下にしてください。"
+
+msgid "Please enter a valid URL for {label}."
+msgstr "{label}はURLの形式で入力してください。"

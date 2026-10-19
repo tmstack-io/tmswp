@@ -1,0 +1,48 @@
+{
+  "name": "tmswp/core",
+  "description": "TMStack WordPress Framework - Core",
+  "type": "library",
+  "license": "GPL-2.0-or-later",
+  "require": {
+    "php": ">=8.2",
+    "ext-mbstring": "*",
+    "psr/container": "^2.0",
+    "psr/log": "^3.0"
+  },
+  "suggest": {
+    "ext-mbstring": "Required for multibyte string handling in TMSWP\\Core\\Support\\Str",
+    "tmswp/acf-bridge": "Typed accessors generated from acf-json",
+    "tmswp/thumbnail": "Signed dynamic thumbnail URLs"
+  },
+  "autoload": {
+    "psr-4": {
+      "TMSWP\\Core\\": "src/",
+      "TMSWP\\Core\\PHPStan\\": "phpstan/src/"
+    },
+    "files": [
+      "src/functions.php"
+    ]
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "TMSWP\\Core\\Tests\\": "tests/"
+    }
+  },
+  "bin": [
+    "bin/tms-check"
+  ],
+  "extra": {
+    "phpstan": {
+      "includes": [
+        "extension.neon"
+      ]
+    },
+    "branch-alias": {
+      "dev-main": "0.1.x-dev"
+    }
+  },
+  "minimum-stability": "stable",
+  "config": {
+    "sort-packages": true
+  }
+}

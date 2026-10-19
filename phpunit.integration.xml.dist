@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor-bin/wp-tests/vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/bootstrap-integration.php"
+         backupGlobals="false"
+         colors="true"
+         convertDeprecationsToExceptions="false"
+         failOnWarning="true"
+         beStrictAboutTestsThatDoNotTestAnything="true">
+    <testsuites>
+        <testsuite name="core">
+            <directory>packages/core/tests/Integration</directory>
+        </testsuite>
+        <testsuite name="thumbnail">
+            <directory>packages/thumbnail/tests/Integration</directory>
+        </testsuite>
+        <testsuite name="settings-page">
+            <directory>packages/settings-page/tests/Integration</directory>
+        </testsuite>
+        <testsuite name="acf-bridge">
+            <directory>packages/acf-bridge/tests/Integration</directory>
+        </testsuite>
+        <testsuite name="ja-toolkit">
+            <directory>packages/ja-toolkit/tests/Integration</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>

@@ -1,0 +1,103 @@
+{
+  "name": "tmswp/tmswp",
+  "description": "TMStack WordPress Framework (monorepo)",
+  "license": "GPL-2.0-or-later",
+  "type": "library",
+  "require": {
+    "php": ">=8.2",
+    "ext-gd": "*",
+    "ext-mbstring": "*",
+    "psr/container": "^2.0",
+    "psr/log": "^3.0"
+  },
+  "require-dev": {
+    "bamarni/composer-bin-plugin": "^1.8",
+    "brain/monkey": "^2.6",
+    "friendsofphp/php-cs-fixer": "^3.64",
+    "mikey179/vfsstream": "^1.6.12",
+    "mockery/mockery": "^1.6",
+    "php-stubs/acf-pro-stubs": "^6.0",
+    "phpstan/phpstan": "^2.1",
+    "phpstan/phpstan-deprecation-rules": "^2.0",
+    "phpstan/phpstan-phpunit": "^2.0",
+    "phpstan/phpstan-strict-rules": "^2.0",
+    "phpunit/phpunit": "^11.5",
+    "symplify/monorepo-builder": "^11.2",
+    "szepeviktor/phpstan-wordpress": "^2.0"
+  },
+  "replace": {
+    "tmswp/acf-bridge": "self.version",
+    "tmswp/core": "self.version",
+    "tmswp/ja-toolkit": "self.version",
+    "tmswp/settings-page": "self.version",
+    "tmswp/thumbnail": "self.version"
+  },
+  "autoload": {
+    "psr-4": {
+      "TMSWP\\AcfBridge\\": "packages/acf-bridge/src/",
+      "TMSWP\\Core\\": "packages/core/src/",
+      "TMSWP\\Core\\PHPStan\\": "packages/core/phpstan/src/",
+      "TMSWP\\JaToolkit\\": "packages/ja-toolkit/src/",
+      "TMSWP\\SettingsPage\\": "packages/settings-page/src/",
+      "TMSWP\\Thumbnail\\": "packages/thumbnail/src/"
+    },
+    "files": [
+      "packages/core/src/functions.php",
+      "packages/thumbnail/src/functions.php"
+    ]
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "TMSWP\\AcfBridge\\Tests\\": "packages/acf-bridge/tests/",
+      "TMSWP\\Core\\Tests\\": "packages/core/tests/",
+      "TMSWP\\JaToolkit\\Tests\\": "packages/ja-toolkit/tests/",
+      "TMSWP\\SettingsPage\\Tests\\": "packages/settings-page/tests/",
+      "TMSWP\\Thumbnail\\Tests\\": "packages/thumbnail/tests/"
+    }
+  },
+  "scripts": {
+    "lint": "php-cs-fixer fix --dry-run --diff --show-progress=none",
+    "fix": "php-cs-fixer fix",
+    "analyse": "phpstan analyse -c phpstan.neon.dist --memory-limit=1G",
+    "i18n:build": "php tools/build-l10n.php packages/core/languages/tmswp-ja.po packages/ja-toolkit/languages/tmswp-ja.po",
+    "test:unit": "phpunit -c phpunit.unit.xml.dist",
+    "test:coverage": [
+      "@putenv XDEBUG_MODE=off",
+      "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/clover.xml --coverage-text",
+      "php bin/coverage-check.php var/coverage/clover.xml 85"
+    ],
+    "test:integration": "npx wp-env run tests-cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
+    "test": [
+      "@test:unit",
+      "@test:integration"
+    ],
+    "qa:fast": [
+      "@lint",
+      "@analyse",
+      "@test:unit"
+    ],
+    "qa": [
+      "@lint",
+      "@analyse",
+      "@test"
+    ],
+    "monorepo:validate": "monorepo-builder validate",
+    "monorepo:merge": "monorepo-builder merge",
+    "wp:start": "npx wp-env start",
+    "wp:stop": "npx wp-env stop"
+  },
+  "config": {
+    "sort-packages": true,
+    "allow-plugins": {
+      "bamarni/composer-bin-plugin": true
+    }
+  },
+  "extra": {
+    "bamarni-bin": {
+      "bin-links": false,
+      "forward-command": true,
+      "target-directory": "vendor-bin"
+    }
+  },
+  "minimum-stability": "stable"
+}

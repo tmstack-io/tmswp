@@ -1,0 +1,12 @@
+body {
+    margin: 0;
+    font-family: system-ui, sans-serif;
+}
+
+.site-header,
+.site-footer,
+main {
+    margin-inline: auto;
+    max-width: 72rem;
+    padding: 1.5rem;
+}

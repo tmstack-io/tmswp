@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/bootstrap-unit.php"
+         cacheDirectory="var/phpunit"
+         executionOrder="depends,defects"
+         colors="true"
+         failOnRisky="true"
+         failOnWarning="true"
+         failOnDeprecation="true"
+         beStrictAboutOutputDuringTests="true"
+         displayDetailsOnTestsThatTriggerDeprecations="true"
+         displayDetailsOnTestsThatTriggerWarnings="true">
+    <testsuites>
+        <testsuite name="core">
+            <directory>packages/core/tests/Unit</directory>
+        </testsuite>
+        <testsuite name="thumbnail">
+            <directory>packages/thumbnail/tests/Unit</directory>
+        </testsuite>
+        <testsuite name="settings-page">
+            <directory>packages/settings-page/tests/Unit</directory>
+        </testsuite>
+        <testsuite name="acf-bridge">
+            <directory>packages/acf-bridge/tests/Unit</directory>
+        </testsuite>
+        <testsuite name="ja-toolkit">
+            <directory>packages/ja-toolkit/tests/Unit</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>packages/core/src</directory>
+            <directory>packages/thumbnail/src</directory>
+            <directory>packages/settings-page/src</directory>
+            <directory>packages/acf-bridge/src</directory>
+            <directory>packages/ja-toolkit/src</directory>
+        </include>
+    </source>
+</phpunit>

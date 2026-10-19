@@ -1,0 +1,25 @@
+{
+  "name": "tmswp/ja-toolkit",
+  "description": "TMStack WordPress Framework - Japanese Toolkit",
+  "type": "library",
+  "license": "GPL-2.0-or-later",
+  "require": {
+    "php": ">=8.2",
+    "ext-mbstring": "*",
+    "tmswp/core": "^0.1"
+  },
+  "autoload": {
+    "psr-4": {
+      "TMSWP\\JaToolkit\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "TMSWP\\JaToolkit\\Tests\\": "tests/"
+    }
+  },
+  "minimum-stability": "stable",
+  "config": {
+    "sort-packages": true
+  }
+}

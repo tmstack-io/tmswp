@@ -1,0 +1,12 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: tmswp-ja-toolkit\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: ja\n"
+
+msgid "Please enter {label} in katakana."
+msgstr "{label}は全角カタカナで入力してください。"
+
+msgid "Please enter {label} in hiragana."
+msgstr "{label}はひらがなで入力してください。"

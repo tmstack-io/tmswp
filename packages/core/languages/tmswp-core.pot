@@ -1,0 +1,80 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: tmswp-core\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid ", "
+msgstr ""
+
+msgid "Please complete all parts of {label}."
+msgstr ""
+
+msgid "{label} is invalid."
+msgstr ""
+
+msgid "Your session has expired. Please submit the form again."
+msgstr ""
+
+msgid "The form could not be resubmitted. Please start again."
+msgstr ""
+
+msgid "The confirmation screen has expired. Please review your entries and continue again."
+msgstr ""
+
+msgid "This form has already been submitted."
+msgstr ""
+
+msgid "The uploaded file is too large."
+msgstr ""
+
+msgid "The file was only partially uploaded."
+msgstr ""
+
+msgid "Please select a file."
+msgstr ""
+
+msgid "The temporary upload folder is missing."
+msgstr ""
+
+msgid "The file could not be written."
+msgstr ""
+
+msgid "A PHP extension stopped the file upload."
+msgstr ""
+
+msgid "The file upload failed."
+msgstr ""
+
+msgid "{label} is required."
+msgstr ""
+
+msgid "Please enter a valid email address for {label}."
+msgstr ""
+
+msgid "{label} must be {length} characters or fewer."
+msgstr ""
+
+msgid "{label} must be at least {length} characters."
+msgstr ""
+
+msgid "{label} has an invalid format."
+msgstr ""
+
+msgid "{label} must be between {min} and {max}."
+msgstr ""
+
+msgid "{label} has an invalid choice."
+msgstr ""
+
+msgid "{label} must match {otherLabel}."
+msgstr ""
+
+msgid "Please upload {label} as one of these file types: {extensions}."
+msgstr ""
+
+msgid "{label} must be {size} or smaller."
+msgstr ""
+
+msgid "Please enter a valid URL for {label}."
+msgstr ""
