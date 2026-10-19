@@ -1571,7 +1571,7 @@ add_filter(
 composer lint      # php-cs-fixer (PSR-12 + strict_types)
 composer analyse   # PHPStan level max・baselineなし(szepeviktor/phpstan-wordpress)
 composer test      # ユニット: Form層はWP関数をBrain Monkeyでスタブ(wp_verify_nonce/wp_salt/wp_unslash/apply_filters等)。JtiStoreは $wpdb をスタブして検証
-composer test:integration  # wp-env + wp-phpunit: nonce実検証・TempFileStore実IO・toAttachment
+composer test:integration  # wp-env + WordPress のテストライブラリ: nonce実検証・TempFileStore実IO・toAttachment
 composer qa        # 上記一括(CI同等)
 ```
 

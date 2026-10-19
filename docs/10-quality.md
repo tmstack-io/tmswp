@@ -64,13 +64,17 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 | `composer fix` | php-cs-fixer 適用 | 不要 |
 | `composer analyse` | PHPStan level max | 不要 |
 | `composer test:unit` | ユニットテスト(PHPUnit 11 + Brain Monkey) | 不要 |
-| `composer test:coverage` | ユニットテスト + pcov カバレッジ + 閾値ゲート | 不要 |
+| `composer test:coverage` | `test:coverage:unit` → `test:coverage:integration` → `test:coverage:check`(wp-env を `wp:start:coverage` で起動しておく) | **必要** |
+| `composer test:coverage:unit` | ユニットテスト + pcov で clover を `var/coverage/unit.xml` に出力 | 不要 |
+| `composer test:coverage:integration` | 統合テスト + Xdebug で clover を `var/coverage/integration.xml` に出力(wp-env の `cli` コンテナ内) | **必要** |
+| `composer test:coverage:check` | 2 つの clover を行単位で合算し、閾値を判定(`bin/coverage-check.php`。4.8) | 不要 |
 | `composer test:integration` | 統合テスト(wp-env の `cli` コンテナ内で PHPUnit 9.6 実行) | **必要** |
 | `composer test` | `test:unit` → `test:integration` | 必要 |
 | `composer qa:fast` | `lint` → `analyse` → `test:unit`(Docker 不要の全 QA) | 不要 |
 | `composer qa` | `lint` → `analyse` → `test`(全 QA) | 必要 |
 | `composer monorepo:validate` | パッケージ間バージョン整合検査 | 不要 |
 | `composer wp:start` / `wp:stop` | wp-env の起動 / 停止(`npm ci` で入れたローカルの @wordpress/env を使う。1.1 補足) | 必要 |
+| `composer wp:start:coverage` | Xdebug をカバレッジのモードで有効にして wp-env を起動(`--xdebug=coverage`。4.8) | 必要 |
 
 ### 1.1 ルート composer.json(完全版)
 
@@ -142,10 +146,16 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
         "i18n:build": "php tools/build-l10n.php packages/core/languages/tmswp-ja.po packages/ja-toolkit/languages/tmswp-ja.po",
         "test:unit": "phpunit -c phpunit.unit.xml.dist",
         "test:coverage": [
-            "@putenv XDEBUG_MODE=off",
-            "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/clover.xml --coverage-text",
-            "php bin/coverage-check.php var/coverage/clover.xml 85"
+            "@test:coverage:unit",
+            "@test:coverage:integration",
+            "@test:coverage:check"
         ],
+        "test:coverage:unit": [
+            "@putenv XDEBUG_MODE=off",
+            "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/unit.xml"
+        ],
+        "test:coverage:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --coverage-clover=var/coverage/integration.xml",
+        "test:coverage:check": "php bin/coverage-check.php 58 var/coverage/unit.xml var/coverage/integration.xml",
         "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
         "test": ["@test:unit", "@test:integration"],
         "qa:fast": ["@lint", "@analyse", "@test:unit"],
@@ -153,6 +163,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
         "monorepo:validate": "monorepo-builder validate",
         "monorepo:merge": "monorepo-builder merge",
         "wp:start": "node node_modules/@wordpress/env/bin/wp-env start",
+        "wp:start:coverage": "node node_modules/@wordpress/env/bin/wp-env start --xdebug=coverage",
         "wp:stop": "node node_modules/@wordpress/env/bin/wp-env stop"
     },
     "config": {
@@ -279,6 +290,8 @@ parameters:
         - bin
         # 開発用スクリプト(rules/ のコード例の抽出・検査等)
         - tools
+        # bin/・tools/ のユニットテスト
+        - tests/Unit
 
     excludePaths:
         # テスト用フィクスチャ(意図的な型違反・生成コードのサンプルを含む)
@@ -532,7 +545,7 @@ php bin/tms-check <actions-dir> [<template-root> ...]
 
 | 層 | 配置 | 基盤 | 実行環境 | 目的 |
 |---|---|---|---|---|
-| ユニット | `packages/<pkg>/tests/Unit/` | PHPUnit **11** + Brain Monkey(+ Mockery / vfsStream) | 素の PHP(WP 不要) | ロジックの仕様確定。高速・常時実行 |
+| ユニット | `packages/<pkg>/tests/Unit/`(bin/・tools/ のテストはリポジトリルートの `tests/Unit/`) | PHPUnit **11** + Brain Monkey(+ Mockery / vfsStream) | 素の PHP(WP 不要) | ロジックの仕様確定。高速・常時実行 |
 | 統合 | `packages/<pkg>/tests/Integration/` | PHPUnit **9.6** + WordPress のテストライブラリ(WP_TESTS_DIR)+ Yoast Polyfills | wp-env(Docker) | WP 実環境での登録系・DB 系の検証 |
 
 ディレクトリ規約(全パッケージ共通):
@@ -550,14 +563,15 @@ packages/core/
     └── fixtures/        # ユニット層のフィクスチャ(QA 対象外)
 ```
 
-`tests/Unit/` は `src/` のディレクトリ構造をミラーする(旧 iwf2b の `tests/TestCase` 規約を踏襲)。
+パッケージの `tests/Unit/` は `src/` のディレクトリ構造をミラーする(旧 iwf2b の `tests/TestCase` 規約を踏襲)。
 
-統合層の fixture(テスト用のテーマ・プラグイン)はパッケージごとではなく、リポジトリルートの `tests/fixtures/` に置く。全パッケージの統合テストが同じ fixture を共有する(4.6)。
+統合層の fixture(テスト用のテーマ・プラグイン)はパッケージごとではなく、リポジトリルートの `tests/fixtures/` に置く。全パッケージの統合テストが同じ fixture を共有する(4.6)。どのパッケージにも属さない `bin/`・`tools/` のユニットテストは、リポジトリルートの `tests/Unit/` に置く(4.3 の testsuite `tools`)。
 
 ```
 tests/
 ├── bootstrap-integration.php
 ├── wp-tests-config.php
+├── Unit/                                  # bin/・tools/ のユニットテスト(testsuite tools。名前空間 TMSWP\Tests\Unit\)
 └── fixtures/
     ├── _boot.php                          # fixture と無料版 ACF を有効化する
     ├── themes/tmswp-fixture-theme/        # Kernel 名前空間 TmswpFixtureTheme
@@ -633,6 +647,9 @@ WordPress コアテストスイート(wordpress-develop の `tests/phpunit/inclu
         </testsuite>
         <testsuite name="ja-toolkit">
             <directory>packages/ja-toolkit/tests/Unit</directory>
+        </testsuite>
+        <testsuite name="tools">
+            <directory>tests/Unit</directory>
         </testsuite>
     </testsuites>
     <source>
@@ -733,10 +750,19 @@ abstract class UnitTestCase extends TestCase
             <directory>packages/ja-toolkit/tests/Integration</directory>
         </testsuite>
     </testsuites>
+    <coverage>
+        <include>
+            <directory suffix=".php">packages/core/src</directory>
+            <directory suffix=".php">packages/thumbnail/src</directory>
+            <directory suffix=".php">packages/settings-page/src</directory>
+            <directory suffix=".php">packages/acf-bridge/src</directory>
+            <directory suffix=".php">packages/ja-toolkit/src</directory>
+        </include>
+    </coverage>
 </phpunit>
 ```
 
-カバレッジは統合層では計測しない(4.8 参照)ため `<coverage>` 要素は置かない。
+`<coverage>` の計測対象は、4.3 の `<source>` と同じ 5 パッケージの src である(4.8)。`--coverage-clover` を付けない通常の実行(`composer test:integration`)では計測しない。
 
 `convertDeprecationsToExceptions="true"` により、テスト中に出た非推奨(`E_DEPRECATED` / `E_USER_DEPRECATED`)はテストの失敗になる。ユニット層の `failOnDeprecation` と同じ方針である。発生元が FW か WordPress 本体かは区別しない。FW が WordPress や PHP の関数に不正な値を渡した結果の非推奨は、呼び出された側のファイルで報告されるため、発生元のパスでは FW 由来かどうかを判定できないからである。WordPress 本体や ACF が出す非推奨で失敗した場合は、その版の組み合わせと非推奨の内容を確かめてから対処を決める。
 
@@ -884,9 +910,22 @@ define('WP_DEBUG', true);
 
 ### 4.8 カバレッジ方針
 
-- 計測対象は**ユニット層のみ**。ドライバは pcov(ローカル: `pecl install pcov`、CI: `setup-php` の `coverage: pcov`)。統合層は wp-env コンテナ内実行でありカバレッジは計測しない(実行コストと環境差異のため)。
-- CI ゲート: **5パッケージ合算の line coverage ≥ 85%**。`composer test:coverage` が clover を生成し `bin/coverage-check.php` が閾値を検査する。
-- モジュール別の目標値(レビュー指針。CI 自動ゲートは合算 85% のみ):
+- 計測対象は 5 パッケージの src である。4.3 の `<source>` と 4.5 の `<coverage><include>` は同じディレクトリを指す。
+- ユニット層と統合層のカバレッジを合算して判定する(DR-12)。WordPress に依存するクラス(PostType・Taxonomy・UserRole・PageRegistrar・AcfFieldAccess・AcfCommand・thumbnail の RestController 等)は、モックを多用したユニットテストではなく、実物の WordPress での統合テストで確かめる。
+- 計測の方法:
+
+| 層 | 実行環境 | ドライバ | コマンド | 出力 |
+|---|---|---|---|---|
+| ユニット | ホストの PHPUnit 11 | pcov(ローカル: `pecl install pcov`、CI: `setup-php` の `coverage: pcov`) | `composer test:coverage:unit`(`XDEBUG_MODE=off` で Xdebug を止める) | `var/coverage/unit.xml` |
+| 統合 | wp-env の `cli` コンテナ内の PHPUnit 9.6 | Xdebug(`composer wp:start:coverage` = `wp-env start --xdebug=coverage` で有効にする) | `composer test:coverage:integration` | `var/coverage/integration.xml` |
+
+- `composer wp:start` で起動し直すと、wp-env の Xdebug は無効に戻る。
+- 統合層で数えるのは、PHPUnit がテストを実行している間に通った行である。WordPress の読み込み中(fixture の Kernel の boot、init での登録)に通った行は数えない。登録の処理を数えるには、テストの中で登録の処理を呼ぶ。
+- 合算の方式: PHPUnit 9 系と 11 系では、内部のカバレッジ形式(`.cov`)に互換が無い。そのため、両層の clover を `bin/coverage-check.php` が行単位で合わせる。
+  - ファイルのパスは、リポジトリからの相対パスに正規化する。ホストのパスはリポジトリのルートを、コンテナ内のパスは `/var/www/html/wp-content/plugins/tmswp`(4.7 の `mappings`)を除く。
+  - 同じファイルの同じ行は、どちらかの層で実行されていれば実行済みとする。行の集合は両層の和集合である(PHPUnit の版によって、実行可能と判定する行がわずかに異なるため)。
+- CI ゲート: **5 パッケージ合算の行カバレッジ ≥ 版ごとの閾値**。閾値は composer.json の `test:coverage:check` の引数の 1 か所で定義し、`12-implementation-plan.md` §0.7 の版ごとの表と一致させる。v0.9.0(導入できる版)の閾値は 85%。判定は qa.yml の `coverage` ジョブ(PHP 8.3 / WordPress 最新版の 1 セル)で行う(5.1)。
+- モジュール別の目標値(レビュー指針。合算の行カバレッジで見る。CI 自動ゲートは合算の閾値のみ):
 
 | モジュール | 目標(行) | 根拠 |
 |---|---|---|
@@ -902,12 +941,14 @@ define('WP_DEBUG', true);
 
 `bin/coverage-check.php` の仕様(完全):
 
-- 引数: `argv[1]` = clover.xml パス、`argv[2]` = 最低カバレッジ(float、%)。
+- 引数: `argv[1]` = 最低カバレッジ(0〜100 の数値、%)、`argv[2]` 以降 = clover のパス(1 つ以上)。個数・型・範囲が不正なら usage を STDERR に出して exit(2)。
 - 手順:
-  1. `simplexml_load_file(argv[1])`。失敗時は STDERR にメッセージを出し exit(2)。
-  2. `//project/metrics` の `statements` / `coveredstatements` 属性を取得。`statements` が 0 なら exit(2)。
-  3. `coverage = coveredstatements / statements * 100`(小数 2 桁丸め)。
-  4. `coverage < argv[2]` なら `Coverage 83.21% is below required 85%` 形式で STDERR 出力し exit(1)。以上なら `Coverage 87.45% (>= 85%)` を STDOUT 出力し exit(0)。
+  1. 各 clover を `simplexml_load_file()` で読む。ファイルが無い・XML として読めない場合、ルート要素が `coverage` でない・`project` が無い場合、`file` が 1 つも無い場合、`type="stmt"` の行が 0 の場合は、STDERR にメッセージを出し exit(2)。
+  2. 各 `file` の `name` をリポジトリからの相対パスに正規化する。まずパスの要素の `.`・`..`・重複したスラッシュを解消し(同じファイルの別表記を同じ計測対象にする)、そのうえでホストのルート(`bin/` の親を realpath したもの)とコンテナ内のルートのどちらかの下にあるかを確かめる。絶対パスでない、ファイルシステムのルートより上を指す、どちらのルートの下にも無い(`<ホストのルート>/../outside.php` を含む)パスは exit(2)。
+  3. 各 `file` の `type="stmt"` の行を集める。`num` が 1 以上、`count` が 0 以上の、int で表せる範囲(`PHP_INT_MAX` 以下)の整数でなければ exit(2)。受け付ける表記は、先頭に 0 が付かない 10 進表記(`0` は可。`01`・`00` は不可)だけである(PHPUnit の clover はこれ以外を出力しないため、誤りを早く検出する)。ファイルと行番号の組ごとに、どれかの clover で `count > 0` なら実行済みとする。
+  4. clover ごとの行数と実行済みの行数を STDOUT に出す。合算の `coverage = 実行済みの行数 / 行数 * 100`(小数 2 桁丸め)。
+  5. `coverage < argv[1]` なら `Combined coverage 57.11% (3534/6188 lines in 206 files) is below required 58%` 形式で STDERR に出し exit(1)。以上なら `Combined coverage 58.34% (3610/6188 lines in 206 files) (>= 58%)` を STDOUT に出し exit(0)。
+- clover は、実行可能な行がメソッドの開始行と重なる場合、その行を `type="method"`(メソッド全体の集計値)として出力し、行単位の実行有無を持たない。合算は `type="stmt"` の行だけで行うため、行数は PHPUnit が表示する `statements` よりわずかに少ない。
 
 ---
 
@@ -932,12 +973,12 @@ jobs:
     name: Coding Standards
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
       - name: Forbid PHPStan baseline
         run: |
           if ls phpstan-baseline* 2>/dev/null; then
@@ -950,36 +991,36 @@ jobs:
     name: Static Analysis
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
       - run: composer analyse
 
   monorepo:
     name: Monorepo Validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
       - run: composer monorepo:validate
 
   rules-verify:
     name: Rules Code Examples
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
       - name: Extract rules code examples
         run: php tools/extract-rules-code.php
       - name: Verify extracted examples
@@ -993,24 +1034,13 @@ jobs:
       matrix:
         php: ['8.3', '8.5']
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php }}
-          coverage: ${{ matrix.php == '8.3' && 'pcov' || 'none' }}
-      - uses: ramsey/composer-install@v3
-      - name: Run unit tests
-        if: matrix.php != '8.3'
-        run: composer test:unit
-      - name: Run unit tests with coverage gate
-        if: matrix.php == '8.3'
-        run: composer test:coverage
-      - name: Upload coverage artifact
-        if: matrix.php == '8.3'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-clover
-          path: var/coverage/clover.xml
+          coverage: none
+      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - run: composer test:unit
 
   integration:
     name: Integration (PHP ${{ matrix.php }} / WP ${{ matrix.wp }})
@@ -1023,17 +1053,17 @@ jobs:
         php: ['8.3', '8.5']
         wp: ['7.0', 'latest']
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php }}
           coverage: none
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
       # 検証する WordPress の版を確定する。latest は WordPress.org の版情報 API から最新版を取得する。
       # テストライブラリは、wp-env がこの版と同じタグの wordpress-develop から取得する(WP_TESTS_DIR)。
       - name: Resolve WordPress version
@@ -1068,6 +1098,64 @@ jobs:
       - name: Show wp-env logs on failure
         if: failure()
         run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+
+  # 合算カバレッジ(unit と integration)の判定。PHP 8.3 / WordPress 最新版の 1 セルで行う。
+  # unit は pcov、integration は wp-env の Xdebug(--xdebug=coverage)で計測し、clover を行単位で合算する。
+  coverage:
+    name: Coverage (PHP 8.3 / WP latest)
+    runs-on: ubuntu-latest
+    needs: [unit]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: pcov
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - name: Resolve WordPress version
+        id: wp
+        shell: bash
+        run: |
+          version=$(curl -fsS https://api.wordpress.org/core/version-check/1.7/ | jq -er '.offers[0].current')
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: Create wp-env override
+        run: |
+          printf '{"core": "https://wordpress.org/wordpress-%s.zip", "phpVersion": "8.3"}\n' \
+            "${{ steps.wp.outputs.version }}" > .wp-env.override.json
+      - name: Start wp-env with Xdebug
+        run: |
+          for attempt in 1 2 3; do
+            if composer wp:start:coverage; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+      - name: Run unit tests with coverage
+        run: composer test:coverage:unit
+      - name: Run integration tests with coverage
+        run: composer test:coverage:integration
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-clover
+          path: |
+            var/coverage/unit.xml
+            var/coverage/integration.xml
+          if-no-files-found: error
+      - name: Check combined coverage
+        run: composer test:coverage:check
+      - name: Show wp-env logs on failure
+        if: failure()
+        run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
 ```
 
 設計上の要点:
@@ -1076,14 +1164,15 @@ jobs:
 - 統合の各セルは、検証する WP の版を先に確定し(WP 7.0 のセルは 7.0、最新版のセルは WordPress.org の版情報 API の最新版)、wp-env の `core` をその版の zip にする。テストライブラリは wp-env がその版と同じタグから取得する(§4.2)。API の取得に失敗したセルは、その時点で失敗する。
 - wp-env は `npm ci` で package-lock.json どおりに導入し(`actions/setup-node` の npm キャッシュを使う)、composer スクリプト経由でローカルの wp-env だけを呼ぶ(§1.1 補足)。
 - `lint` / `analyse` / `monorepo` / `rules-verify` は下限の PHP 8.3 で実行する(php-cs-fixer の推奨と依存解決の下限に合わせる。§1.1 補足)。PHP 8.5 での解析は PHPStan の `phpVersion`(8.3〜8.5。§2.1)が担う。
-- `integration` は `timeout-minutes: 20` で打ち切る。`wp:start` は Docker イメージ取得の一時的な失敗に備えて 10 秒間隔で 3 回まで再試行し、3 回目の失敗でジョブを失敗させる。失敗時は wp-env のログ(`logs development --no-watch`)を出力する。
+- `integration` と `coverage` は `timeout-minutes: 20` で打ち切る。wp-env の起動(`wp:start` / `wp:start:coverage`)は Docker イメージ取得の一時的な失敗に備えて 10 秒間隔で 3 回まで再試行し、3 回目の失敗でジョブを失敗させる。失敗時は wp-env のログ(`logs development --no-watch`)を出力する。
 - `lint` ジョブが baseline ファイルの不存在を機械的に強制する。
-- カバレッジゲートは PHP 8.3 セルでのみ実行(計測の重複を避ける)。
-- `integration` は `unit` 成功後に起動し、Docker 起動コストを失敗時に節約する。
+- 合算カバレッジの判定は `coverage` ジョブ(PHP 8.3 / WordPress 最新版の 1 セル)だけで行う(4.8)。このジョブは pcov で unit を、`wp:start:coverage` で起動した wp-env の Xdebug で integration を計測し、2 つの clover を artifact `coverage-clover` に保存してから `test:coverage:check` で判定する。clover はジョブ内で生成して使うため、ジョブ間の受け渡しは無い。`unit` と `integration` の各セルはカバレッジを計測しない。
+- `integration` と `coverage` は `unit` 成功後に起動し、Docker 起動コストを失敗時に節約する。
+- 外部アクションはコミットの SHA で固定する(5.3)。
 
 ### 5.2 .github/workflows/split.yml(完全版)
 
-read-only split 配布(DR-11)。各パッケージを個別リポジトリ(`<org>/core` 等)へ push し、Packagist はその split リポジトリを購読する。split 先リポジトリは Archive しないが、README に「read-only / 開発は monorepo で」と明記し PR を受け付けない。
+read-only split 配布(DR-11)。各パッケージを個別リポジトリ(`tmstack-io/tmswp-core` 等の 7 件。01 §4.4)へ push し、Packagist はその split リポジトリを `tmswp/*` の名前で購読する。split 先リポジトリはアーカイブせず(split が書き込めなくなるため)、Issue と Wiki を無効にし、説明文で monorepo へ案内する。誤って送られたプルリクエストは、同期先で動くワークフローが自動で閉じて案内する(01 §4.4)。
 
 ```yaml
 name: Split Packages
@@ -1094,53 +1183,82 @@ on:
     tags: ['v*']
 
 env:
-  GITHUB_ORG: tmswp
+  GITHUB_ORG: tmstack-io
+  SPLIT_ACCESS_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
 
 jobs:
   split:
-    name: "Split ${{ matrix.package.local }}"
+    name: Split ${{ matrix.package.local }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         package:
-          - { local: 'packages/core',          repo: 'core' }
-          - { local: 'packages/thumbnail',     repo: 'thumbnail' }
-          - { local: 'packages/settings-page', repo: 'settings-page' }
-          - { local: 'packages/acf-bridge',    repo: 'acf-bridge' }
-          - { local: 'packages/ja-toolkit',    repo: 'ja-toolkit' }
-          - { local: 'starters/theme',         repo: 'starter-theme' }
-          - { local: 'starters/plugin',        repo: 'starter-plugin' }
+          - { local: 'packages/core', repo: 'tmswp-core' }
+          - { local: 'packages/thumbnail', repo: 'tmswp-thumbnail' }
+          - { local: 'packages/settings-page', repo: 'tmswp-settings-page' }
+          - { local: 'packages/acf-bridge', repo: 'tmswp-acf-bridge' }
+          - { local: 'packages/ja-toolkit', repo: 'tmswp-ja-toolkit' }
+          - { local: 'starters/theme', repo: 'tmswp-starter-theme' }
+          - { local: 'starters/plugin', repo: 'tmswp-starter-plugin' }
     steps:
-      - uses: actions/checkout@v4
-
-      # ブランチ push: 最新コミットを split
-      - if: "!startsWith(github.ref, 'refs/tags/')"
-        uses: danharrin/monorepo-split-github-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Validate split source
+        run: test -d "${{ matrix.package.local }}"
+      - name: Split branch
+        if: "!startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
+        uses: danharrin/monorepo-split-github-action@14e42e2437f674b8987c1f50ca3689116aea1893 # v2.4.5
+        # このアクションに access_token 入力は無く、push 用トークンは環境変数 GITHUB_TOKEN から読む
+        env:
+          GITHUB_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
         with:
-          access_token: ${{ secrets.SPLIT_ACCESS_TOKEN }}
           package_directory: ${{ matrix.package.local }}
           repository_organization: ${{ env.GITHUB_ORG }}
           repository_name: ${{ matrix.package.repo }}
-          user_name: 'tmswp-bot'
-          user_email: 'bot@tmswp.dev'
-
-      # タグ push: 同名タグを split 先にも付与
-      - if: "startsWith(github.ref, 'refs/tags/')"
-        uses: danharrin/monorepo-split-github-action@v2
+          user_name: tmstack-io
+          user_email: tommy@tmstack.io
+      - name: Split tag
+        if: "startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
+        uses: danharrin/monorepo-split-github-action@14e42e2437f674b8987c1f50ca3689116aea1893 # v2.4.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
         with:
           tag: ${{ github.ref_name }}
-          access_token: ${{ secrets.SPLIT_ACCESS_TOKEN }}
           package_directory: ${{ matrix.package.local }}
           repository_organization: ${{ env.GITHUB_ORG }}
           repository_name: ${{ matrix.package.repo }}
-          user_name: 'tmswp-bot'
-          user_email: 'bot@tmswp.dev'
+          user_name: tmstack-io
+          user_email: tommy@tmstack.io
+      - name: Dry-run notice
+        if: env.SPLIT_ACCESS_TOKEN == ''
+        run: echo "SPLIT_ACCESS_TOKEN is not set; validated split source only."
 ```
 
-- `SPLIT_ACCESS_TOKEN` は split 先リポジトリへの push 権限を持つ PAT(fine-grained、contents: write)。リポジトリ Secrets に登録する。
-- `user_name` / `user_email` の実値は組織運用に合わせて差し替えてよい(機能要件ではない)。
-- split アクションは `danharrin/monorepo-split-github-action@v2`(メンテナンス終了した symplify 版の維持後継)を正準とする(01 §4.4 と同一)。タグは `${{ github.ref_name }}` で渡すこと。`with:` の値内では bash のパラメータ展開(`${GITHUB_REF#refs/tags/}` 等)は評価されず文字列リテラルのままタグ名として渡るため、使用してはならない。同等機能の action への差し替えは PATCH 扱いで可(01 §4.4)。
+- `SPLIT_ACCESS_TOKEN` は split 先への push に使うトークンで、fine-grained PAT。対象は送り先の 7 リポジトリ(`tmstack-io/tmswp-*`)だけ。権限は Contents: Read and write と Workflows: Read and write だけ(同期先へ `.github/workflows/` のプルリクエスト自動クローズ用ワークフローも送るため)。monorepo のリポジトリ Secrets に登録する。split アクションは push 用のトークンを入力ではなく環境変数 `GITHUB_TOKEN` から読むため、ステップの `env` で渡す。未登録の場合は split をせず、split 元のディレクトリの存在だけを確かめる。
+- `user_name` / `user_email` は split 先に作られるコミットのコミッターで、`tmstack-io` / `tommy@tmstack.io` とする。
+- split アクションは `danharrin/monorepo-split-github-action`(メンテナンス終了した symplify 版の維持後継)の v2.4.5 を正準とし、コミットの SHA で固定する(5.3)。タグは `${{ github.ref_name }}` で渡すこと。`with:` の値内では bash のパラメータ展開(`${GITHUB_REF#refs/tags/}` 等)は評価されず文字列リテラルのままタグ名として渡るため、使用してはならない。同等機能の action への差し替えは PATCH 扱いで可(01 §4.4)。
+
+### 5.3 外部アクションの固定
+
+qa.yml と split.yml の外部アクションは、すべてコミットの SHA(40 桁)で固定し、行末にその SHA のタグ名をコメントで書く(`uses: actions/checkout@<SHA> # v4.4.0`)。タグやブランチは付け替えられるため、名前で指定すると、同じワークフローでも実行されるコードが変わりうる。版は、採用しているメジャー版の範囲で最新のタグを使う。
+
+| アクション | タグ | コミットの SHA |
+|---|---|---|
+| `actions/checkout` | v4.4.0 | `11d5960a326750d5838078e36cf38b85af677262` |
+| `actions/setup-node` | v4.4.0 | `49933ea5288caeca8642d1e84afbd3f7d6820020` |
+| `actions/upload-artifact` | v4.6.2 | `ea165f8d65b6e75b540449e92b4886f43607fa02` |
+| `shivammathur/setup-php` | 2.40.0 | `eb7c497e18156a6bbabfef1d3a82760b9eda3962` |
+| `ramsey/composer-install` | 3.2.1 | `a8d0d959dab41457692a5e2041bd9b757a119e3f` |
+| `danharrin/monorepo-split-github-action` | v2.4.5 | `14e42e2437f674b8987c1f50ca3689116aea1893` |
+
+更新手順:
+
+1. 採用しているメジャー版の範囲で最新のタグを確かめる(例: `gh api repos/actions/checkout/git/matching-refs/tags/v4.`)。タグ名に `v` が付かないアクション(`shivammathur/setup-php`、`ramsey/composer-install`)は、`v` を除いた接頭辞で調べる。
+2. `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` で SHA を取得する。`object.type` が `tag`(注釈付きタグ)の場合、その SHA はタグオブジェクトのものである。`gh api repos/<owner>/<repo>/git/tags/<sha>` の `object.sha` でコミットの SHA にたどる。
+3. qa.yml と split.yml で同じアクションを使う `uses:` をすべて同じ SHA とタグ名に書き換え、5.1・5.2 の完全版と上の表を同じ内容に改訂する。
+4. `grep -nE "uses:" .github/workflows/*.yml | grep -vE "uses: [^@]+@[0-9a-f]{40} # "` が 0 件であることを確かめる。
+
+メジャー版を上げる場合は、入力・既定値・実行環境(Node.js の版等)の変更点を確かめてから行う。
 
 ---
 
@@ -1283,7 +1401,7 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 
 ```bash
 # 1. クローン
-git clone git@github.com:tmswp/tmswp.git
+git clone git@github.com:tmstack-io/tmswp.git
 cd tmswp
 
 # 2. 依存インストール(vendor と vendor-bin/wp-tests の両方が入る)
@@ -1314,7 +1432,8 @@ composer qa
 | `composer analyse` が scanDirectories エラー | 同上(vendor-bin 未インストール) |
 | `wp-env start` が失敗 | Docker デーモン未起動。Docker Desktop を起動して再実行 |
 | ポート 8888 が使用中 | `.wp-env.override.json` に `{"port": 8890}` を作成 |
-| `test:coverage` で「No code coverage driver」 | pcov 未導入。`pecl install pcov` 後、php.ini に `extension=pcov` |
+| `test:coverage:unit` で「No code coverage driver」 | pcov 未導入。`pecl install pcov` 後、php.ini に `extension=pcov` |
+| `test:coverage:integration` で「No code coverage driver」 | wp-env を Xdebug 無しで起動している。`composer wp:start:coverage` で起動し直す |
 | 統合テストが DB 接続エラー | wp-env 未起動、または古いコンテナ。`node node_modules/@wordpress/env/bin/wp-env destroy && composer wp:start` でリセット |
 | wp-env 環境の WP/PHP を変えたい | `.wp-env.override.json` で `core` / `phpVersion` を上書き(CI と同形式) |
 
@@ -1388,7 +1507,7 @@ final class EmailRuleTest extends UnitTestCase
 ### チェックリスト
 
 - [ ] `composer install` 一発で `vendor/` と `vendor-bin/wp-tests/vendor/` の両方が揃う
-- [ ] `composer lint` / `fix` / `analyse` / `test:unit` / `test:integration` / `test` / `test:coverage` / `qa:fast` / `qa` / `monorepo:validate` が本書 1 章の表どおりに動作する
+- [ ] `composer lint` / `fix` / `analyse` / `test:unit` / `test:integration` / `test` / `test:coverage`(`:unit` / `:integration` / `:check`)/ `qa:fast` / `qa` / `monorepo:validate` / `wp:start:coverage` が本書 1 章の表どおりに動作する
 - [ ] `phpstan.neon.dist` が level max で、`packages/core/phpstan/extension.neon`(04 文書の FW 拡張)と szepeviktor/phpstan-wordpress を include している
 - [ ] リポジトリに `phpstan-baseline*` が存在せず、qa.yml がその存在を fail にする
 - [ ] `parameters.ignoreErrors` が空で、`reportUnmatchedIgnoredErrors: true`
@@ -1397,8 +1516,9 @@ final class EmailRuleTest extends UnitTestCase
 - [ ] 全ユニットテストが `TMSWP\Core\Tests\Support\UnitTestCase` を継承している
 - [ ] 統合テストが wp-env の `cli` コンテナ内で PHPUnit 9.6(vendor-bin 隔離)+ WP_TESTS_DIR のテストライブラリで全件パスする
 - [ ] `phpunit.unit.xml.dist` / `phpunit.integration.xml.dist` に 5 パッケージ分の testsuite が定義されている
-- [ ] ユニット層カバレッジ(5 パッケージ合算)が 85% 以上で、`bin/coverage-check.php` が閾値未満を exit 1 にする
-- [ ] qa.yml に lint / analyse / monorepo / rules-verify / unit(PHP 8.3 / 8.5)/ integration(PHP 8.3 / 8.5 × WP 7.0 / 最新版 = 4 セル。テストライブラリは各セルの WP と同じ系列)の全ジョブがある
+- [ ] ユニット層と統合層を合算した行カバレッジ(5 パッケージ)が、その版の閾値(`12-implementation-plan.md` §0.7。v0.9.0 で 85%)以上で、`bin/coverage-check.php` が閾値未満を exit 1、不正な引数・読めない clover・正規化できないパスを exit 2 にする
+- [ ] qa.yml に lint / analyse / monorepo / rules-verify / unit(PHP 8.3 / 8.5)/ integration(PHP 8.3 / 8.5 × WP 7.0 / 最新版 = 4 セル。テストライブラリは各セルの WP と同じ系列)/ coverage(PHP 8.3 / WP 最新版)の全ジョブがある
+- [ ] qa.yml と split.yml のすべての `uses:` がコミットの SHA で固定され、行末にタグ名のコメントがある(5.3)
 - [ ] `npm ci` で package.json に固定した版の @wordpress/env が入り、composer スクリプト・qa.yml が wp-env を `node node_modules/@wordpress/env/bin/wp-env` のパスでだけ呼ぶ
 - [ ] split.yml がタグ push で 7 リポジトリ(packages 5 + starters 2)を read-only リポジトリへ split し、同名タグを伝播する
 - [ ] `monorepo-builder.php` が packages/ と starters/ を対象に validate / merge / release を構成している
@@ -1416,7 +1536,8 @@ npm ci && npm ls @wordpress/env                 # package.json で固定した�
 composer qa:fast                                # lint + analyse + unit(Docker 不要)
 ls phpstan-baseline* 2>/dev/null && echo NG || echo OK   # baseline 不在
 composer wp:start && composer test:integration  # 統合
-composer test:coverage                          # カバレッジゲート(>= 85)
+composer wp:start:coverage && composer test:coverage   # 合算カバレッジゲート(>= その版の閾値)
+grep -nE "uses:" .github/workflows/*.yml | grep -vE "uses: [^@]+@[0-9a-f]{40} # "   # 0 件(SHA 固定)
 composer monorepo:validate                      # パッケージ整合
 act -W .github/workflows/qa.yml -l              # (任意) ワークフロー構文確認
 ```

@@ -1461,7 +1461,7 @@ $lead    = Str::excerpt(get_the_content(), 120);
 composer lint      # php-cs-fixer: PSR-12 + declare(strict_types=1) 検査
 composer analyse   # PHPStan level max・baseline なし(本章クラスはエラーゼロ)
 composer test      # PHPUnit 11: ユニット(Arr/Str/Html/Log ディスパッチ = Brain Monkey)
-                   #             統合(Template 解決順/SimpleLogger 実書き込み = wp-env + wp-phpunit)
+                   #             統合(Template 解決順/SimpleLogger 実書き込み = wp-env + WordPress のテストライブラリ)
 composer qa        # 上記すべて
 grep -rn "extract(" packages/core/src/            # ヒット 0 件であること
 grep -rn "compact(" packages/core/src/            # ヒット 0 件であること(actions の正準形は明示的配列リテラル。§1D.1)

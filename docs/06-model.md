@@ -1373,6 +1373,6 @@ $migrator->dropTable(\App\Model\InquiryModel::class);
 composer lint      # php-cs-fixer (PSR-12 + strict_types)
 composer analyse   # PHPStan level max・baselineなし
 composer test      # ユニット(Brain Monkey / wpdbフェイク)
-wp-env start && composer test:integration   # 統合(wp-phpunit: dbDelta実機・prepare通過・WP-CLI)
+composer wp:start && composer test:integration   # 統合(WordPress のテストライブラリ: dbDelta実機・prepare通過・WP-CLI)
 composer qa        # 上記一括
 ```

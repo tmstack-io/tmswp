@@ -1421,7 +1421,7 @@ final class ContainerTest extends TestCase
 - [ ] ComponentCache: `validateMtimes=true` で「ファイル編集」「ファイル追加」「ファイル削除」「属性なしファイルへの属性追記」のすべてが無効化を引き起こす。`validateMtimes=false` ではmtime変更後もキャッシュが使われる
 - [ ] `Kernel::reset()` 後に同一名前空間で再bootできる(テスト隔離)
 
-## 統合(wp-env + wp-phpunit で検証)
+## 統合(wp-env + WordPress のテストライブラリ(WP_TESTS_DIR)で検証)
 
 - [ ] ウォームキャッシュ時のリクエストで、Discovery起因の `ReflectionClass` 生成とapp/クラスのロードが発生しない(`get_declared_classes()` の差分、またはDiscoveryへのスパイで検証)
 - [ ] `boot()` 直後(フック発火前)の時点で `register_post_type` / `register_taxonomy` / `add_role` / DB書込が一切発生していない(即時同期初期化の禁止)

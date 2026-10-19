@@ -1642,6 +1642,6 @@ $id = ProductPost::create([
 composer lint      # php-cs-fixer (PSR-12 + strict_types)
 composer analyse   # PHPStan level max + phpstan-wordpress + 型テスト(assertType)
 composer test      # ユニット層: Definition/LabelGenerator/各Query::toArgs()/PageResult (WP非依存・Brain Monkey)
-composer test:integration  # 統合層: wp-env + wp-phpunit。register往復・クエリ実行・paginate・UserRole登録のDB書込冪等性
+composer test:integration  # 統合層: wp-env + WordPress のテストライブラリ。register往復・クエリ実行・paginate・UserRole登録のDB書込冪等性
 composer qa        # 上記一括
 ```

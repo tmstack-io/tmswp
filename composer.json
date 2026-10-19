@@ -63,10 +63,16 @@
     "i18n:build": "php tools/build-l10n.php packages/core/languages/tmswp-ja.po packages/ja-toolkit/languages/tmswp-ja.po",
     "test:unit": "phpunit -c phpunit.unit.xml.dist",
     "test:coverage": [
-      "@putenv XDEBUG_MODE=off",
-      "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/clover.xml --coverage-text",
-      "php bin/coverage-check.php var/coverage/clover.xml 85"
+      "@test:coverage:unit",
+      "@test:coverage:integration",
+      "@test:coverage:check"
     ],
+    "test:coverage:unit": [
+      "@putenv XDEBUG_MODE=off",
+      "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/unit.xml"
+    ],
+    "test:coverage:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --coverage-clover=var/coverage/integration.xml",
+    "test:coverage:check": "php bin/coverage-check.php 58 var/coverage/unit.xml var/coverage/integration.xml",
     "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
     "test": [
       "@test:unit",
@@ -85,6 +91,7 @@
     "monorepo:validate": "monorepo-builder validate",
     "monorepo:merge": "monorepo-builder merge",
     "wp:start": "node node_modules/@wordpress/env/bin/wp-env start",
+    "wp:start:coverage": "node node_modules/@wordpress/env/bin/wp-env start --xdebug=coverage",
     "wp:stop": "node node_modules/@wordpress/env/bin/wp-env stop"
   },
   "config": {

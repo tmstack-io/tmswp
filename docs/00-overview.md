@@ -135,7 +135,7 @@ tmswp/core は WordPress コアと PSR インターフェース(psr/log ^3、psr
 | DR-09 | DI | PSR-11 準拠の軽量コンテナを内部に持ち、テンプレート向けには静的ファサード(例: `ProductPost::permalink()`)を提供する二層構成。旧 AbstractSingleton(final private __construct)は廃止しテスト可能な設計へ | 02 |
 | DR-10 | Hook 解体 | 日本語サイト対応(日本語スラッグ・全角スペース検索正規化・wptexturize 無効化)は tmswp/ja-toolkit 公式拡張のオプトインモジュールへ。WP クリーンアップ(管理画面整理・wp_head 掃除等)は削除対象がテーマ毎に異なるため FW コードに収載せず、rules/hooks.md のレシピ(app 側 Hook クラス)で提供。ACF/CF7/Yoast 連携コードはコアから完全排除(ACF は acf-bridge のみ)。template_include 乗っ取り+exit+グローバル変数展開(load_global)は完全廃止 | 08 |
 | DR-11 | リポジトリ | monorepo(packages/ 配下に core+各拡張)+Packagist へ read-only split 配布。SemVer+リリースタグ運用必須 | 01 |
-| DR-12 | QA | PHPStan(szepeviktor/phpstan-wordpress)level max・baseline なし、php-cs-fixer(PER-CS 2.0+strict_types)、PHPUnit 11 で2層テスト(ユニット=WP非依存/Brain Monkey、統合=wp-env+wp-phpunit)、GitHub Actions(ユニット層は PHP 8.3 / 8.5、統合層は PHP 8.3 / 8.5 × WP 7.0 / 最新版の 4 セル。統合層のテストライブラリは各セルの WP と同じ系列に揃える。PHPStan の phpVersion は 8.3〜8.5)。composer test/lint/fix/analyse/qa を人間・CI・AI が同一コマンドで実行。※PHPUnit 11 が適用されるのはユニット層のみ。統合層は wp-phpunit(WP コアテストスイート)が PHPUnit 9.6 上限のため、vendor-bin 隔離した PHPUnit 9.6 で実行する(確定仕様は QA 設計書 `10-quality.md` §4.2 に従う) | 10 |
+| DR-12 | QA | PHPStan(szepeviktor/phpstan-wordpress)level max・baseline なし、php-cs-fixer(PER-CS 2.0+strict_types)、PHPUnit 11 で2層テスト(ユニット=WP非依存/Brain Monkey、統合=wp-env+wp-env が取得する WordPress のテストライブラリ(WP_TESTS_DIR))、GitHub Actions(ユニット層は PHP 8.3 / 8.5、統合層は PHP 8.3 / 8.5 × WP 7.0 / 最新版の 4 セル。統合層のテストライブラリは各セルの WP と同じ系列に揃える。PHPStan の phpVersion は 8.3〜8.5)。composer test/lint/fix/analyse/qa を人間・CI・AI が同一コマンドで実行。カバレッジはユニット層と統合層を合算して行単位で測る。WordPress に依存するクラスは、モックを多用したユニットテストではなく、実物の WordPress での統合テストで確かめる。合算の基準は v0.9.0(導入できる版)で 85% とし、それまでの版は版ごとの基準(`12-implementation-plan.md` §0.7)を版が上がるたびに引き上げる(仕様は `10-quality.md` §4.8)。※PHPUnit 11 が適用されるのはユニット層のみ。統合層は WordPress のテストライブラリが PHPUnit 9.6 上限のため、vendor-bin 隔離した PHPUnit 9.6 で実行する(確定仕様は QA 設計書 `10-quality.md` §4.2 に従う) | 10 |
 | DR-13 | AI 資料 | AGENTS.md+rules/(機能別レシピ)+app/ スケルトン+composer create-project 対応スターター(starter-theme / starter-plugin) | 11 |
 | DR-14 | コア収載 | Kernel/Container/Attribute 探索、PostType/Taxonomy/UserRole 宣言、meta/option 宣言層、フォーム+バリデーション、Model(独自テーブル)、Log(自前 PSR-3 v3、依存ゼロ)、Template::part 相当の薄いテンプレートヘルパ(View\Template。プラグイン同梱テンプレート fallback 付き)、Support(Arr/Str/Html 属性レンダラ=実利用メソッドのみ)。コアの runtime 依存は psr/log ^3 と psr/container ^2 のみ。ext-gd は thumbnail 拡張へ | 01 |
 | DR-15 | 拡張パッケージ | tmswp/thumbnail(timthumb 全面置換=署名付き URL+WP_Image_Editor)、tmswp/settings-page(Form 層ベース、nonce 自動)、tmswp/acf-bridge、tmswp/ja-toolkit | 08, 09 |
@@ -350,7 +350,7 @@ InquiryModel::query()->where('email', $email)->orderByDesc('id')->limit(10)->get
 | **スターター(starter)** | `composer create-project` で生成する雛形(starter-theme / starter-plugin)。ブート定型・app/ スケルトン・QA 設定・AGENTS.md を同梱する。 |
 | **AGENTS.md / rules/** | AI エージェント向けの機械可読規約。AGENTS.md が FW 全体規約(命名・初期化タイミング・禁止事項)、rules/ が機能別レシピ(CPT 追加・フォーム作成・独自テーブル等)を持つ(DR-13)。 |
 | **read-only split** | monorepo の packages/* を Packagist 配布用の読み取り専用個別リポジトリへ自動分割する配布方式(DR-11)。 |
-| **2層テスト** | ユニット層(WP 非依存、Brain Monkey でフック関数をスタブ、高速)と統合層(wp-env + wp-phpunit、実 WP 環境)の二段構え(DR-12)。 |
+| **2層テスト** | ユニット層(WP 非依存、Brain Monkey でフック関数をスタブ、高速)と統合層(wp-env + WordPress のテストライブラリ(WP_TESTS_DIR)、実 WP 環境)の二段構え(DR-12)。 |
 | **null センチネル(禁止語)** | 「null を返したら未設定/フォールスルー」という暗黙規約。旧FWの ACF 差し替えフィルタが機能しなかった根本原因であり、TMSWP では全面禁止(DR-18)。 |
 
 ---

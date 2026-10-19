@@ -57,10 +57,10 @@ TMStack WordPress Framework 全体の物理構成を確定する。すなわち�
 
 ## 2. monorepo 構成(ディレクトリツリー全体)
 
-リポジトリ名は仮に `<org>/tmswp` とする(`<org>` は GitHub オーナー。確定は運用開始時)。以下が正準ツリーである。
+monorepo のリポジトリは `tmstack-io/tmswp` である。以下が正準ツリーである。
 
 ```
-tmswp/                                  # monorepo ルート (<org>/tmswp)
+tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 ├── composer.json                         # 開発用ルート(§4.2。Packagist 非公開)
 ├── composer.lock
 ├── monorepo-builder.php                  # symplify/monorepo-builder 設定
@@ -350,55 +350,82 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 ### 4.4 read-only split 配布
 
 ```
-開発者                monorepo (<org>/tmswp)        split リポジトリ              Packagist
-  │                         │                              │                          │
-  │ merge PR / tag vX.Y.Z   │                              │                          │
-  ├────────────────────────>│                              │                          │
-  │                         │ GitHub Actions split.yml     │                          │
-  │                         │  packages/core      ────────>│ <org>/tmswp-core       │
-  │                         │  packages/thumbnail ────────>│ <org>/tmswp-thumbnail  │
-  │                         │  ...(計 7 split)             │ ...                      │
-  │                         │  (subtree push + tag 複製)   │                          │
-  │                         │                              │ webhook ────────────────>│ tmswp/core 等を更新
+開発者                monorepo (tmstack-io/tmswp)   split リポジトリ                       Packagist
+  │                         │                              │                                   │
+  │ merge PR / tag vX.Y.Z   │                              │                                   │
+  ├────────────────────────>│                              │                                   │
+  │                         │ GitHub Actions split.yml     │                                   │
+  │                         │  packages/core      ────────>│ tmstack-io/tmswp-core             │
+  │                         │  packages/thumbnail ────────>│ tmstack-io/tmswp-thumbnail        │
+  │                         │  ...(計 7 split)             │ ...                               │
+  │                         │  (subtree push + tag 複製)   │                                   │
+  │                         │                              │ webhook ─────────────────────────>│ tmswp/core 等を更新
 ```
 
-- split 対象は packages/ 配下 5 + starters/ 配下 2 の**計 7 リポジトリ**。split リポジトリは read-only(Issue/PR 無効化、README に monorepo への誘導を明記)。
-- 実装: `.github/workflows/split.yml` で `danharrin/monorepo-split-github-action@v2` を使用する(同等機能の action への差し替えは PATCH 扱いで可。ただし「main への push で HEAD を、タグ push で同名タグを各 split リポジトリへ複製する」挙動は不変条件)。
-- ワークフロー手順(擬似コード):
+- 開発は monorepo(`tmstack-io/tmswp`)で行う。split 対象は packages/ 配下 5 + starters/ 配下 2 の**計 7 リポジトリ**で、送り先は `tmstack-io/tmswp-{パッケージ名}`(tmswp-core、tmswp-acf-bridge、tmswp-settings-page、tmswp-thumbnail、tmswp-ja-toolkit、tmswp-starter-theme、tmswp-starter-plugin)である。Packagist の名前は `tmswp/*` のまま。
+- split リポジトリは読み取り専用として運用する。Issue と Wiki を無効にし、リポジトリの説明文で monorepo へ案内する。誤って送られたプルリクエストは、各パッケージのディレクトリに置くワークフロー(split で同期先へ複製され、同期先で動く)が自動で閉じ、monorepo へ案内する。アーカイブは使わない(アーカイブしたリポジトリには split が書き込めないため)。
+- 送り先のリポジトリの作成と、送り先への書き込み権限だけを持つトークン(`SPLIT_ACCESS_TOKEN`。fine-grained PAT。対象は送り先の 7 リポジトリ(`tmstack-io/tmswp-*`)だけ。権限は Contents: Read and write と Workflows: Read and write だけ)の登録は、公開の作業で行う。
+- 実装: `.github/workflows/split.yml` で `danharrin/monorepo-split-github-action` の v2.4.5 をコミットの SHA で固定して使用する(`10-quality.md` §5.3。同等機能の action への差し替えは PATCH 扱いで可。ただし「main への push で HEAD を、タグ push で同名タグを各 split リポジトリへ複製する」挙動は不変条件)。
+- ワークフロー(`10-quality.md` §5.2 の完全版と同じ):
 
 ```yaml
-# .github/workflows/split.yml
+name: Split Packages
+
 on:
   push:
     branches: [main]
     tags: ['v*']
+
+env:
+  GITHUB_ORG: tmstack-io
+  SPLIT_ACCESS_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
+
 jobs:
   split:
+    name: Split ${{ matrix.package.local }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         package:
-          - { dir: packages/core,          repo: tmswp-core }
-          - { dir: packages/thumbnail,     repo: tmswp-thumbnail }
-          - { dir: packages/settings-page, repo: tmswp-settings-page }
-          - { dir: packages/acf-bridge,    repo: tmswp-acf-bridge }
-          - { dir: packages/ja-toolkit,    repo: tmswp-ja-toolkit }
-          - { dir: starters/theme,         repo: tmswp-starter-theme }
-          - { dir: starters/plugin,        repo: tmswp-starter-plugin }
+          - { local: 'packages/core', repo: 'tmswp-core' }
+          - { local: 'packages/thumbnail', repo: 'tmswp-thumbnail' }
+          - { local: 'packages/settings-page', repo: 'tmswp-settings-page' }
+          - { local: 'packages/acf-bridge', repo: 'tmswp-acf-bridge' }
+          - { local: 'packages/ja-toolkit', repo: 'tmswp-ja-toolkit' }
+          - { local: 'starters/theme', repo: 'tmswp-starter-theme' }
+          - { local: 'starters/plugin', repo: 'tmswp-starter-plugin' }
     steps:
-      - uses: actions/checkout@v4
-      - if: "!startsWith(github.ref, 'refs/tags/')"
-        uses: danharrin/monorepo-split-github-action@v2
-        with: { package_directory: '${{ matrix.package.dir }}',
-                repository_organization: '<org>',
-                repository_name: '${{ matrix.package.repo }}' }
-      - if: "startsWith(github.ref, 'refs/tags/')"
-        uses: danharrin/monorepo-split-github-action@v2
-        with: { tag: '${{ github.ref_name }}',
-                package_directory: '${{ matrix.package.dir }}',
-                repository_organization: '<org>',
-                repository_name: '${{ matrix.package.repo }}' }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Validate split source
+        run: test -d "${{ matrix.package.local }}"
+      - name: Split branch
+        if: "!startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
+        uses: danharrin/monorepo-split-github-action@14e42e2437f674b8987c1f50ca3689116aea1893 # v2.4.5
+        # このアクションに access_token 入力は無く、push 用トークンは環境変数 GITHUB_TOKEN から読む
+        env:
+          GITHUB_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
+        with:
+          package_directory: ${{ matrix.package.local }}
+          repository_organization: ${{ env.GITHUB_ORG }}
+          repository_name: ${{ matrix.package.repo }}
+          user_name: tmstack-io
+          user_email: tommy@tmstack.io
+      - name: Split tag
+        if: "startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
+        uses: danharrin/monorepo-split-github-action@14e42e2437f674b8987c1f50ca3689116aea1893 # v2.4.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          package_directory: ${{ matrix.package.local }}
+          repository_organization: ${{ env.GITHUB_ORG }}
+          repository_name: ${{ matrix.package.repo }}
+          user_name: tmstack-io
+          user_email: tommy@tmstack.io
+      - name: Dry-run notice
+        if: env.SPLIT_ACCESS_TOKEN == ''
+        run: echo "SPLIT_ACCESS_TOKEN is not set; validated split source only."
 ```
 
 - Packagist には split リポジトリ 7 件を `tmswp/core` 等の名前で登録し、GitHub webhook で自動更新する。monorepo 本体は登録しない。

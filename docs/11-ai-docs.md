@@ -107,7 +107,7 @@ tmswp/ (monorepo)
 | `composer fix` | php-cs-fixer 自動修正 |
 | `composer analyse` | PHPStan level max |
 | `composer test:unit` | PHPUnit(ユニット層。WP非依存・Docker不要) |
-| `composer test:coverage` | ユニットテスト+カバレッジ計測 |
+| `composer test:coverage` | ユニット・統合テストの合算カバレッジの計測と閾値判定(wp-env/Docker必要。`composer wp:start:coverage` で起動) |
 | `composer test:integration` | PHPUnit(統合層、wp-env必須) |
 | `composer test` | `test:unit` → `test:integration` の合成(wp-env/Docker必要) |
 | `composer qa:fast` | lint + analyse + test:unit(Docker不要。**AIの実装中の反復ループはこれ**) |
@@ -167,7 +167,7 @@ composer qa                 # lint + analyse + test。これが通らない変�
 composer qa:fast            # lint + analyse + test:unit。Docker不要の高速ループ(実装中の反復はこちらを使う)
 composer test               # ユニット+統合テスト(test:unit → test:integration。wp-env起動が必要: composer wp:start)
 composer test:unit          # ユニットテスト(WP非依存・Brain Monkey。Docker不要)
-composer test:coverage      # ユニットテスト+カバレッジ計測
+composer test:coverage      # ユニット・統合テストの合算カバレッジの計測と閾値判定(wp-env起動が必要: composer wp:start:coverage)
 composer test:integration   # 統合テスト(wp-env起動が必要: composer wp:start)
 composer analyse            # PHPStan level max(baseline禁止)
 composer lint               # コードスタイル検査(php-cs-fixer dry-run)
@@ -177,7 +177,7 @@ composer fix                # コードスタイル自動修正
 - wp-env は `npm ci` で入れたローカルの `@wordpress/env`(package.jsonで版を固定)を `composer wp:start` / `wp:stop` / `test:integration` 経由で使う。直接呼ぶときは `node node_modules/@wordpress/env/bin/wp-env` とパスで指定し、コマンド名 `wp-env` を名前解決する呼び出しは使わない。
 - PHPStanは **level max・baselineなし** で運用する。エラーを baseline や @phpstan-ignore で握りつぶす変更は拒否される。
   ignoreが本当に必要な場合(WP関数のstub不備等)は理由コメントを併記し、PRで明示すること。
-- テストはユニット層(tests/Unit, WP非依存)と統合層(tests/Integration, wp-env + wp-phpunit)の2層。
+- テストはユニット層(tests/Unit, WP非依存)と統合層(tests/Integration, wp-env + WordPress のテストライブラリ(WP_TESTS_DIR))の2層。
   新規クラスにはユニットテストを必ず追加する。WP関数に触れるロジックは薄い境界クラスに寄せ、境界より内側をユニットテスト可能に保つ。
 
 ## コーディング規約

@@ -46,7 +46,7 @@ monorepo `tmswp` 全体。すなわち:
 
 タスクごとの完了条件に加えて、次を満たすこと。
 
-- `composer lint`・`composer analyse`・`composer test:unit` が通る(v0.1.0 の T1〜T5 の途中段階を除く。各タスクに明記する)。
+- `composer lint`・`composer analyse`・`composer test:unit` が通る(v0.1.0 の T1〜T5 の途中段階と、T5 より前に行う T7 を除く。T7 は T5 で消える tools/build-l10n.php の analyse の 2 件だけを許容する。各タスクに明記する)。
 - v0.1.0 の T4 以降は `composer test:integration` も通る。
 - 変更したファイルに TODO の書き置き、`markTestSkipped` / `markTestIncomplete`、未実装の分岐が無い。
 - rules/ を変えた場合は `php tools/extract-rules-code.php && php tools/verify-rules-code.php` が通る。
@@ -95,6 +95,27 @@ v0.1.0 → v0.2.0 ─┬→ v0.3.0 ─→ v0.6.0 ─┐
                  ├→ v0.4.0 ───────────┼→ v0.7.0 ─┐
                  └→ v0.5.0 ───────────┴──────────┴→ v0.8.0 → v0.9.0
 ```
+
+## 0.7 カバレッジの基準
+
+- unit と integration を合算した行カバレッジ(5 パッケージの src)で判定する(DR-12、`10-quality.md` §4.8)。WordPress に依存するクラスは、モックを多用したユニットテストではなく、実物の WordPress での統合テストで確かめる。
+- 閾値は composer.json の `test:coverage:check` の引数の 1 か所で定義し、次の表と一致させる。v0.1.0 は実測の合算値(58.34%)の小数点以下を切り捨てた値とし、v0.2.0〜v0.9.0 は v0.9.0 の 85% まで均等に引き上げる(整数に丸める)。
+
+| 版 | 閾値(合算の行カバレッジ) |
+|---|---|
+| v0.1.0 | 58% |
+| v0.2.0 | 61% |
+| v0.3.0 | 65% |
+| v0.4.0 | 68% |
+| v0.5.0 | 72% |
+| v0.6.0 | 75% |
+| v0.7.0 | 78% |
+| v0.8.0 | 82% |
+| v0.9.0 | 85% |
+
+- 各版の受け入れ確認のタスク(各版の最後のタスク)は、composer.json の閾値を、その版の値と完了済みの版の値のうち最大のものにし、CI の `coverage` ジョブで判定が通ることを確かめる。この閾値の変更は、受け入れ確認のタスクの対象ファイル領域に含む。
+- パッケージ別の判定は v0.8.0-T6 で加える(パッケージ別の基準値はその版で決める)。
+- 版の完了の順が版番号の順と異なる場合(§0.6)も閾値は下げない。たとえば v0.5.0 が v0.3.0 より先に完了した場合、v0.3.0 の受け入れ確認では、合算カバレッジが v0.3.0 の値(65%)以上であることを確かめ、閾値は v0.5.0 の値(72%)のまま保つ。
 
 ---
 
@@ -212,17 +233,21 @@ TMSWP の主な利用形態は、1 サイト用のテーマ(必要に応じて�
 ## 1.16 配布
 
 - 各パッケージを read-only split で配布し、Packagist に登録する(DR-11)。ライセンスは GPL-2.0-or-later。CI と split には GitHub Actions を使う。
+- 開発は monorepo(`tmstack-io/tmswp`)で行う。公開時は GitHub Actions で `tmstack-io/tmswp-{パッケージ名}` の読み取り専用リポジトリ 7 つ(tmswp-core、tmswp-acf-bridge、tmswp-settings-page、tmswp-thumbnail、tmswp-ja-toolkit、tmswp-starter-theme、tmswp-starter-plugin)へ自動で同期する。Packagist の名前は `tmswp/*` のまま。
+- 読み取り専用にする方法は、Issue と Wiki の無効化、説明文での monorepo への案内、誤って送られたプルリクエストの自動クローズと案内である。アーカイブは使わない(同期が書き込めなくなるため)。
+- スターターは `composer create-project tmswp/starter-theme` 等で作る。
 - 名前空間のプレフィックス化(strauss 等)は行わない。
 - 反映先: `01-architecture.md` §3〜§4、`10-quality.md` §5〜§6、`RELEASING.md`。担当: v0.8.0-T3、v0.9.0-T4。
 
 ## 1.17 導入できる版
 
 - 利用者のプロジェクトへの導入は、0.x 系の最後の版(本計画では v0.9.0)から行う。1.0.0 は導入先で安定運用を確認してから出す。
-- 導入できる版の条件は次の 4 つ。
+- 導入できる版の条件は次の 5 つ。
   1. 既知の critical / high の不具合がすべて解消している。
   2. 全マトリクスで `composer qa`(integration を含む)が通る。
   3. 実物の ACF Pro で確認済みである。
   4. 想定する用途の機能(フォーム、設定ページ、サムネイル、日本語対応、ACF、ブロック)が examples/sample-site で動く。
+  5. unit と integration の合算の行カバレッジが 85% 以上である(§0.7)。
 - 本計画全体の完了条件は次の 3 つ。
   1. integration を含む `composer qa` がすべて通る。
   2. examples/sample-site が実際の WordPress 上で動く。
@@ -309,11 +334,23 @@ TMSWP の主な利用形態は、1 サイト用のテーマ(必要に応じて�
 - 完了条件: §0.3 の共通受け入れ条件と、この版の受け入れ条件を確認して記録する。
 - 検証コマンド: `composer qa`(CI の 4 セル)、`composer monorepo:validate`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`
 
+#### v0.1.0-T7: 合算カバレッジと外部アクションの固定
+
+- 対象ファイル領域: bin/coverage-check.php、tests/Unit/(新設。bin/ のユニットテスト)、composer.json(ルートの `test:coverage*`・`wp:start:coverage` スクリプト)、phpunit.unit.xml.dist(testsuite `tools`)、phpunit.integration.xml.dist(`<coverage>`)、phpstan.neon.dist(`paths`)、.github/workflows/qa.yml、.github/workflows/split.yml、docs/00 DR-12・§7、docs/01 §2・§4.4、docs/02・03・05・06・07・11 の統合層の表記、docs/10 §1・§2.1・§4・§5・§9・受け入れ基準、docs/12 §0.7・§1.16・§1.17・各版の受け入れ条件・v0.9.0-T4
+- 完了条件:
+  - unit(ホストの PHPUnit 11 と pcov)と integration(wp-env のコンテナ内の PHPUnit 9.6 と Xdebug)の clover を、bin/coverage-check.php がリポジトリからの相対パスに正規化して行単位で合算し、§0.7 の v0.1.0 の閾値で判定する。閾値は composer.json の 1 か所だけにある。
+  - 不正な引数・読めない clover・正規化できないパス(ルートの外、`..` でルートを出る表記)・範囲外の行の属性が exit 2 になり、同じファイルの別表記(`./`、重複したスラッシュ、`../`)が同じ計測対象になることを、tests/Unit のテストで確かめている。
+  - qa.yml の `coverage` ジョブ(PHP 8.3 / WordPress 最新版の 1 セル)が合算を判定し、unit のセルは単独でカバレッジを判定しない。
+  - qa.yml と split.yml のすべての `uses:` がコミットの SHA で固定され、行末にタグ名のコメントがある(docs/10 §5.3)。
+  - split.yml の送り先が `tmstack-io/tmswp-{パッケージ名}` の 7 リポジトリである(§1.16)。
+  - docs/10 §1.1・§2.1・§4.3・§4.5・§5.1・§5.2 の完全版と docs/01 §4.4 のワークフローが、実ファイルと一致する。
+- 検証コマンド: `composer validate`、`composer lint`、`composer analyse`(T5 で消える tools/build-l10n.php の 2 件を除き 0 件)、`composer test:unit`(PHP 8.3 と 8.5 で実行)、`composer wp:start:coverage && composer test:coverage`、`composer wp:start && composer test:integration`、`grep -nE "uses:" .github/workflows/*.yml | grep -vE "uses: [^@]+@[0-9a-f]{40} # "`(0 件)、`grep -rn "wp-[p]hpunit" docs AGENTS.md`(0 件)
+
 ### 並列化
 
-- 順序: {T1 ∥ T2} → T3 → T4 → T5 → T6
+- 順序: {T1 ∥ T2} → T3 → T4 → T7 → T5 → T6
 - T1 と T2 はファイル領域が重ならない。T1 は設定ファイル群と、下限・CI・wp-env に伴う文書(docs/00 DR-02、AGENTS.md の下限、docs/01 §3.2・§3.5、docs/10 §1〜§2・§4.2・§5)を担当する。T2 はテスト支援と bin だけを触り、docs を改訂しない。
-- T3(残りの文書)は T1 と docs/00・01・10、AGENTS.md を共有するため T1 の後。T4 は T1(wp-env)・T2(tests/Support)・T3(docs/10)の後。T5 は T3(docs/00・01)と T4(統合テスト基盤)の後。
+- T3(残りの文書)は T1 と docs/00・01・10、AGENTS.md を共有するため T1 の後。T4 は T1(wp-env)・T2(tests/Support)・T3(docs/10)の後。T7 は T4(統合テスト基盤と phpunit.integration.xml.dist)の後。T5 は T3(docs/00・01)と T4(統合テスト基盤)の後で、T7 と composer.json・docs/00・01 を共有するため T7 の後。
 
 ### 受け入れ条件
 
@@ -321,6 +358,7 @@ TMSWP の主な利用形態は、1 サイト用のテーマ(必要に応じて�
 2. コマンド名 `wp-env` を npx 等で名前解決する呼び出しが、composer スクリプト・CI・文書に残っていない。
 3. 日本語訳が WP 7.0 と最新版で実際に表示される(統合テストで確認)。
 4. docs/12 がロードマップであり、受け入れ記録が docs/acceptance/v0.1.0.md にある。
+5. unit と integration の合算カバレッジが §0.7 の表のこの版の閾値(58%)以上である(CI の `coverage` ジョブ)。composer.json の `test:coverage:check` の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。
 
 ---
 
@@ -418,6 +456,7 @@ v0.1.0
 1. 本番相当(debug=false)で、探索結果ファイルが無いと起動時にエラーになり、ファイルがあれば走査しない(統合テスト)。探索結果ファイルが最新でないと qa が失敗する(§1.4)。
 2. テーマとプラグインの 2 つの Kernel が同じサイトで起動でき、TMSWP の版の食い違いを起動時に検出する(統合テスト)。
 3. docs/02 の受け入れ基準がすべてテストで確認されている。
+4. unit と integration の合算カバレッジが §0.7 の表のこの版の閾値(61%)以上である(CI の `coverage` ジョブ)。composer.json の `test:coverage:check` の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。
 
 ---
 
@@ -500,6 +539,7 @@ v0.2.0
 1. エンティティ・メタ・オプションの受け入れ基準がすべて統合テストで確認されている(init 前に boot)。
 2. WpBridge と QueryValidator が無く、エンティティクエリと Model のクエリが同じ enum を使う。
 3. 単純な値の読み書きの経路が `#[MetaSchema]` と `MetaBag` に一本化され、docs/04 と rules に書かれている(§1.9)。
+4. unit と integration の合算カバレッジが §0.7 の表のこの版の閾値(65%)以上である(CI の `coverage` ジョブ)。composer.json の `test:coverage:check` の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。
 
 ---
 
@@ -578,6 +618,7 @@ v0.2.0
 2. フォームのあるページのレスポンスに nocache のヘッダと `DONOTCACHEPAGE` が付く(統合テスト)。
 3. ユーザー入力(数値キー、配列のファイル、未知のトークン項目)で致命的エラーにならない。
 4. form.md と form-mail.md のコード例が抽出・検査を通る。
+5. unit と integration の合算カバレッジが §0.7 の表のこの版の閾値(68%)以上である(CI の `coverage` ジョブ)。composer.json の `test:coverage:check` の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。
 
 ---
 
@@ -658,6 +699,7 @@ v0.2.0
 1. 空でないテーブルで `find()` / `first()` / `get()` が行を返し、DateTime・enum・NULL が正しく保存される(統合テスト)。
 2. マイグレーションは `wp tmswp migrate` だけで適用され、食い違いは管理者に通知され、自動適用されない。
 3. actions/ 規約の痕跡(コード・設定・テスト・文書)が無い。
+4. unit と integration の合算カバレッジが §0.7 の表のこの版の閾値(72%)以上である(CI の `coverage` ジョブ)。composer.json の `test:coverage:check` の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。
 
 ---
 
@@ -750,6 +792,7 @@ v0.3.0(v0.2.0 を含む)
 3. Pro 専用の型は、ライセンスキーを環境変数で渡した手元の実行で型どおりの値を返したことが記録されている(実物の ACF Pro での最終確認は v0.9.0-T1)。
 4. テーマとプラグインの両方で acf-bridge を使える。
 5. 偽の ACF を使うテストが無い。
+6. unit と integration の合算カバレッジが §0.7 の表のこの版の閾値(75%)以上である(CI の `coverage` ジョブ)。composer.json の `test:coverage:check` の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。
 
 ---
 
@@ -823,6 +866,7 @@ v0.2.0、v0.4.0、v0.6.0
 
 1. 4 つの拡張(acf-bridge を含む)の起動 API が `KernelConfig` 経由の登録に統一され、旧 API が残っていない。
 2. 管理者以外のユーザーでの管理画面、アイキャッチ未設定の投稿、KanaTextField の単独利用が統合テストで正常に動く。
+3. unit と integration の合算カバレッジが §0.7 の表のこの版の閾値(78%)以上である(CI の `coverage` ジョブ)。composer.json の `test:coverage:check` の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。
 
 ---
 
@@ -883,7 +927,7 @@ v0.2.0〜v0.7.0
 - 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、docs/10 §4.8(カバレッジゲート)
 - 完了条件:
   - rules の検査が全パッケージの rules/ を対象にし、docs/11 §6.3 どおりの検証をする。sample-site と starters の `composer qa` が CI にある。
-  - カバレッジゲートがパッケージ別になり、docs/10 §4.8 がその方式に改訂されている。php-cs-fixer の設定が docs/10 §3.2・§7 項目4 どおり。
+  - unit と integration の合算カバレッジが、5 パッケージ全体に加えてパッケージ別にも判定され(パッケージ別の基準値はこの版で決める)、docs/10 §4.8 がその方式に改訂されている。php-cs-fixer の設定が docs/10 §3.2・§7 項目4 どおり。
 - 検証コマンド: `composer lint`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`、`composer test:coverage`
 
 #### v0.8.0-T7: rules・AGENTS.md・README の全面整備
@@ -911,6 +955,7 @@ v0.2.0〜v0.7.0
 2. 各パッケージが単独でテストでき、配布物にテストや fixture が含まれない。
 3. スターター由来のプラグイン 2 本とテーマが同じサイトで動く。
 4. sample-site と starters の `composer qa` が CI で通る。
+5. unit と integration の合算カバレッジが §0.7 の表のこの版の閾値(82%)以上である(CI の `coverage` ジョブ)。composer.json の `test:coverage:check` の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。
 
 ---
 
@@ -918,7 +963,7 @@ v0.2.0〜v0.7.0
 
 ### 目的
 
-導入できる版の 4 条件(§1.17)を満たすことを確認し、公開して、利用者のプロジェクトから `composer require` で導入できる状態にする。
+導入できる版の 5 条件(§1.17)を満たすことを確認し、公開して、利用者のプロジェクトから `composer require` で導入できる状態にする。
 
 ### 依存する版
 
@@ -941,19 +986,23 @@ v0.8.0
 #### v0.9.0-T3: 全マトリクスの qa と critical / high の解消確認
 
 - 対象ファイル領域: なし(確認作業)
-- 完了条件: 既知の critical / high の不具合がすべて解消し、CI の 4 セルで `composer qa`(integration を含む)と E2E が通る。
+- 完了条件: 既知の critical / high の不具合がすべて解消し、CI の 4 セルで `composer qa`(integration を含む)と E2E が通り、CI の `coverage` ジョブで合算カバレッジが 85% 以上である(§0.7)。
 - 検証コマンド: `composer qa`(CI の 4 セル)
 
 #### v0.9.0-T4: 公開(push・split・Packagist 登録・タグ付け)
 
-- 対象ファイル領域: GitHub 上のリポジトリ(monorepo と split 先)、.github/workflows/split.yml、Packagist
-- 完了条件: monorepo と split 先のリポジトリが GitHub にあり、各パッケージが Packagist に登録され、v0.9.0 のタグが付いている(§1.16)。push・split・Packagist 登録・タグ付けはメンテナが `RELEASING.md` の手順で行った。
-- 検証コマンド: `composer show tmswp/core --available`(Packagist から取得できる)
+- 対象ファイル領域: GitHub 上のリポジトリ(monorepo と split 先の 7 リポジトリ)、.github/workflows/split.yml、packages/*/.github/workflows/ と starters/*/.github/workflows/(同期先でプルリクエストを自動で閉じるワークフロー。新設)、Packagist
+- 完了条件:
+  - split 先の 7 リポジトリ(`tmstack-io/tmswp-core`、`tmswp-acf-bridge`、`tmswp-settings-page`、`tmswp-thumbnail`、`tmswp-ja-toolkit`、`tmswp-starter-theme`、`tmswp-starter-plugin`)が作成され、Issue と Wiki が無効で、説明文で monorepo へ案内している。アーカイブしていない(§1.16)。
+  - 各パッケージ・スターターのディレクトリに置いたワークフローが split で同期先へ複製され、同期先で動いて、送られたプルリクエストを自動で閉じ、monorepo へ案内する(同期先に試しのプルリクエストを送って確認した)。
+  - 送り先への書き込み権限だけを持つトークンを発行し、monorepo の Secrets に `SPLIT_ACCESS_TOKEN` として登録した。トークンは fine-grained PAT。対象は送り先の 7 リポジトリ(`tmstack-io/tmswp-*`)だけ。権限は Contents: Read and write と Workflows: Read and write だけ(同期先の `.github/workflows/` を更新するため Workflows も要る)。トークンの発行と登録は、ユーザーに確認したうえで行った。
+  - 各パッケージが Packagist に `tmswp/*` の名前で登録され、v0.9.0 のタグが付いている(§1.16)。main への push・split・Packagist 登録・タグ付けは、毎回ユーザーに確認したうえで、メンテナが `RELEASING.md` の手順で行った。
+- 検証コマンド: `composer show tmswp/core --available`(Packagist から取得できる)、`gh repo view tmstack-io/tmswp-core --json hasIssuesEnabled,hasWikiEnabled,isArchived,description`(7 リポジトリで実行)
 
 #### v0.9.0-T5: 利用者のプロジェクトからの導入確認と受け入れ記録
 
 - 対象ファイル領域: docs/acceptance/v0.9.0.md
-- 完了条件: 空のテーマから `composer require tmswp/core` 等で導入して起動できることを確認し、導入できる版の 4 条件と計画全体の完了条件 3 つ(§1.17)の結果を記録している。
+- 完了条件: 空のテーマから `composer require tmswp/core` 等で導入して起動できることを確認し、導入できる版の 5 条件と計画全体の完了条件 3 つ(§1.17)の結果を記録している。
 - 検証コマンド: 空のテーマで `composer require tmswp/core tmswp/acf-bridge tmswp/settings-page tmswp/thumbnail tmswp/ja-toolkit`、wp-env 上での起動確認
 
 ### 並列化
@@ -963,6 +1012,7 @@ v0.8.0
 
 ### 受け入れ条件
 
-1. 導入できる版の 4 条件(既知の critical / high の全解消、全マトリクスの qa、実物の ACF Pro での確認、想定用途の機能の sample-site での動作)を満たす(§1.17)。
+1. 導入できる版の 5 条件(既知の critical / high の全解消、全マトリクスの qa、実物の ACF Pro での確認、想定用途の機能の sample-site での動作、合算カバレッジ 85% 以上)を満たす(§1.17)。
 2. 計画全体の完了条件 3 つ(qa、sample-site が実際の WordPress で動く、`composer require` で導入できる)を満たす(§1.17)。
 3. 1.0.0 は導入先での安定運用を確認してから出す(この版では出さない)。
+4. unit と integration の合算カバレッジが §0.7 の表のこの版の閾値(85%)以上である(CI の `coverage` ジョブ)。composer.json の `test:coverage:check` の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。

@@ -30,6 +30,7 @@ parameters:
     - starters/plugin/app
     - bin
     - tools
+    - tests/Unit
 
   excludePaths:
     - packages/*/tests/fixtures/*

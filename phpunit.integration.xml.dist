@@ -24,4 +24,13 @@
             <directory>packages/ja-toolkit/tests/Integration</directory>
         </testsuite>
     </testsuites>
+    <coverage>
+        <include>
+            <directory suffix=".php">packages/core/src</directory>
+            <directory suffix=".php">packages/thumbnail/src</directory>
+            <directory suffix=".php">packages/settings-page/src</directory>
+            <directory suffix=".php">packages/acf-bridge/src</directory>
+            <directory suffix=".php">packages/ja-toolkit/src</directory>
+        </include>
+    </coverage>
 </phpunit>
