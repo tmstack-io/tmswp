@@ -80,7 +80,7 @@ v0.3.0・v0.4.0・v0.5.0 は v0.2.0 の後に並列に進められる。v0.6.0(v
 | packages/core/phpstan/(extension.neon を含む) | v0.5.0-T1 → v0.5.0-T3 |
 | phpstan.neon.dist | v0.5.0-T1 → v0.6.0-T3(どちらが先でもよいが同時に触らない) |
 | packages/core/rules/extensions.md | v0.6.0-T1 → v0.7.0-T5(版の依存で逐次) |
-| packages/core/rules/acf.md | v0.2.0-T6 → v0.6.0-T7 |
+| packages/core/rules/acf.md | v0.2.0-T3 → v0.2.0-T6 → v0.6.0-T7 |
 | tests/fixtures/(fixture のテーマ・プラグインと探索結果ファイル) | v0.3.0〜v0.5.0 で fixture を変えるタスク(同時に触らない。fixture を変えたタスクが探索結果ファイルを再生成する) |
 
 ## 0.6 版の依存関係
@@ -397,7 +397,7 @@ v0.1.0
 
 #### v0.2.0-T3: Label・PHPStan 拡張
 
-- 対象ファイル領域: packages/core/src/Label/、packages/core/phpstan/、packages/core/tests/Unit/PHPStan*.php・EntityDefinitionTest.php(ラベル部分)、packages/core/tests/Integration/MetaIntegrationTest.php(メタキーをクラス定数に戻す)、docs/03 §2.2、docs/04 §4.18
+- 対象ファイル領域: packages/core/src/Label/、packages/core/src/Post/PostTypeDefinition.php・packages/core/src/Tax/TaxonomyDefinition.php(`label()` とラベル組み立ての部分)、packages/core/phpstan/、packages/core/tests/Unit/PHPStan*.php・EntityDefinitionTest.php(ラベル部分)、packages/core/tests/Integration/MetaIntegrationTest.php(メタキーをクラス定数に戻す)、docs/03 §2.2、docs/04 §4.18、`label()` の呼び出し元(packages・starters・examples・docs・packages/core/rules の呼び出しの行)、tests/fixtures/themes/tmswp-fixture-theme/app/ の `label()` の呼び出し元(Post/{MetaPost,ProductPost,StoredPost}.php・Acf/AcfStoredPost.php・Tax/ProductCategoryTaxonomy.php)、packages/core/tests/Unit/MetaSchemaRegistryTest.php(宣言済みメタキーの定数化)、packages/core/tests/Integration/EntityRegistrationIntegrationTest.php(ラベルのキーとコアの照合)、packages/core/tests/Support/PHPStanFixtureAutoloader.php(新設)、tools/verify-rules-code.php(解析の tmpDir の削除)
 - 完了条件:
   - 英語ラベルが複数形で、docs/03 §2.2 の全キーを出す。
   - MetaSchemaReflector が ReflectionProvider で実装され、解析中に利用者のコードを実行しない。MetaBag の型拡張が `list<T>` を返す。

@@ -10,9 +10,10 @@ use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PHPStan\Analyser\Scope;
 use PHPStan\Reflection\MethodReflection;
+use PHPStan\Type\Accessory\AccessoryArrayListType;
 use PHPStan\Type\ArrayType;
 use PHPStan\Type\DynamicMethodReturnTypeExtension;
-use PHPStan\Type\IntegerType;
+use PHPStan\Type\IntegerRangeType;
 use PHPStan\Type\Type;
 use PHPStan\Type\TypeCombinator;
 use TMSWP\Core\Meta\MetaBag;
@@ -45,13 +46,7 @@ final class MetaBagGetterReturnTypeExtension implements DynamicMethodReturnTypeE
             return null;
         }
 
-        $className = $scope->resolveName($keyArg->class);
-
-        if (!class_exists($className)) {
-            return null;
-        }
-
-        $schema = $this->reflector->metaSchemaOf($className, $keyArg->name->toString());
+        $schema = $this->reflector->metaSchemaOf($scope->resolveName($keyArg->class), $keyArg->name->toString());
 
         if ($schema === null) {
             return null;
@@ -60,7 +55,7 @@ final class MetaBagGetterReturnTypeExtension implements DynamicMethodReturnTypeE
         $type = SchemaTypeMapper::typeFor($schema['type']);
 
         if (!$schema['single']) {
-            $type = new ArrayType(new IntegerType(), $type);
+            $type = TypeCombinator::intersect(new ArrayType(IntegerRangeType::createAllGreaterThanOrEqualTo(0), $type), new AccessoryArrayListType());
         }
 
         if (\array_key_exists(1, $methodCall->getArgs())) {

@@ -11,7 +11,10 @@ use TMSWP\Core\Label\LabelLanguage;
 
 final class TaxonomyDefinition
 {
-    private string $label = '';
+    /** null は label() が呼ばれていないこと */
+    private ?string $singularLabel = null;
+
+    private ?string $pluralLabel = null;
 
     /** @var array<string, string> */
     private array $labelOverrides = [];
@@ -50,10 +53,16 @@ final class TaxonomyDefinition
         return $this;
     }
 
-    public function label(string $label): self
+    /**
+     * labels を生成する元の表示名を指定する。
+     *
+     * 英語(LabelLanguage::En)では複数形が必須。日本語(LabelLanguage::Ja)では省略でき、省略時は単数形を複数形にも使う。
+     */
+    public function label(string $singular, ?string $plural = null): self
     {
         $this->assertNotBuiltin(__FUNCTION__);
-        $this->label = $label;
+        $this->singularLabel = $singular;
+        $this->pluralLabel = $plural;
 
         return $this;
     }
@@ -236,17 +245,36 @@ final class TaxonomyDefinition
         return $this;
     }
 
-    /** @return array<string, string> */
+    /** @return array<string, string|null> */
     private function labelsForArgs(): array
     {
-        if ($this->label === '' && !\array_key_exists('name', $this->labelOverrides)) {
+        if ($this->singularLabel === null && !\array_key_exists('name', $this->labelOverrides)) {
             throw new EntityDefinitionException("taxonomy '{$this->slug}' requires label() or labels(['name' => ...])");
         }
 
-        if ($this->label === '') {
+        if ($this->singularLabel === null) {
             return $this->labelOverrides;
         }
 
-        return array_merge(LabelGenerator::forTaxonomy($this->label, $this->labelLanguage), $this->labelOverrides);
+        // 空文字のラベルは、複数形や labels() の有無・言語に関係なく設定の誤りとして拒否する
+        if ($this->singularLabel === '') {
+            throw new EntityDefinitionException("taxonomy '{$this->slug}' got an empty singular label: pass a non-empty singular to label()");
+        }
+
+        // 複数形の省略は null(第2引数を渡さない)で表すため、空文字の複数形も拒否する
+        if ($this->pluralLabel === '') {
+            throw new EntityDefinitionException("taxonomy '{$this->slug}' got an empty plural label: pass a non-empty plural, or omit the second argument of label() (null) to omit it");
+        }
+
+        // 日本語には複数形が無いため、Ja に限り省略した複数形を単数形で補う。En の省略は設定の誤りとして常に拒否する。
+        $plural = $this->pluralLabel ?? match ($this->labelLanguage) {
+            LabelLanguage::Ja => $this->singularLabel,
+            LabelLanguage::En => throw new EntityDefinitionException("taxonomy '{$this->slug}' requires a plural label for LabelLanguage::En: pass it as label('{$this->singularLabel}', '<plural>')"),
+        };
+
+        return array_merge(
+            LabelGenerator::forTaxonomy($this->singularLabel, $plural, $this->labelLanguage, (bool) ($this->args['hierarchical'] ?? false)),
+            $this->labelOverrides,
+        );
     }
 }

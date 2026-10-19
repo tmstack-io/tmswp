@@ -22,7 +22,7 @@ final class StoredPost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('tmswp_stored_post')
-            ->label('保存先差し替え')
+            ->label('保存先差し替え', '保存先差し替え')
             ->supports('title');
     }
 }

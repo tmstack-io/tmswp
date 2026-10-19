@@ -1204,7 +1204,7 @@ rules:
 
 #### クラス仕様
 
-**`MetaSchemaReflector`**: 共通基盤サービス。PHPStanの `ReflectionProvider` を通じて、与えられたクラス定数の `#[MetaSchema]`/`#[OptionSchema]` 属性引数(`type`/`default`/`single`)を取得する。
+**`MetaSchemaReflector`**: 共通基盤サービス。PHPStanの `ReflectionProvider` だけを通じて、与えられたクラス定数の `#[MetaSchema]`/enum ケースの `#[OptionSchema]` 属性引数(`type`/`default`/`single`)を取得する。
 
 ```php
 namespace TMSWP\Core\PHPStan;
@@ -1218,22 +1218,29 @@ final class MetaSchemaReflector
     }
 
     /**
-     * @param class-string $className
-     * @return array{type: string, hasDefault: bool, single: bool}|null 属性なしは null
+     * @return array{type: string, hasDefault: bool, single: bool}|null 属性なし・引数が定数に定まらない場合は null
      */
     public function metaSchemaOf(string $className, string $constantName): ?array;
+
+    /** クラス自身が宣言した #[MetaSchema] 付き定数のうち、値が $key のものの定数名(MetaKeyOwnershipRule 用) */
+    public function metaConstantNameForKey(string $className, string $key): ?string;
 
     /**
      * オプショングループ enum のケースの #[OptionSchema] を参照する。
      *
-     * @param class-string $enumClass
      * @return array{type: string, hasDefault: bool}|null
      */
     public function optionSchemaOf(string $enumClass, string $caseName): ?array;
+
+    /** #[MetaSchema] 付き定数を実際に宣言したクラス名。属性の無い定数は null(MetaKeyOwnershipRule 用) */
+    public function declaringClassOfMetaConstant(string $className, string $constantName): ?string;
 }
 ```
 
-- 属性引数の `type` はソース上 `MetaValueType::Integer` のような ClassConstFetch(enumケース)として現れる(4.1/4.12)。Reflector は内部でこれを enum ケースとして解決し backing value 文字列へ落として返すため、戻り値の `type` は従来どおり文字列であり、下記の型マップ表はそのまま使える。
+- **解析中に利用者のコードを実行しない**。クラスの読み込み(`class_exists`・`enum_exists` による autoload)、ネイティブの Reflection(`new ReflectionClass` 等)、属性のインスタンス化(`newInstance()`)は使わない。クラス・定数・enum ケースは `ReflectionProvider::getClass()` の `ClassReflection`(`getConstant()`・`getEnumCase()`)で引き、属性は `ClassConstantReflection::getAttributes()`・`EnumCaseReflection::getAttributes()` が返す `AttributeReflection` で読む。PHPStan は利用者のクラスを静的に解析するため、読み込むと副作用のあるファイル(テストの基底クラスが解析プロセスに無いテストクラス等)でも解析が止まらない。
+- 属性引数は `AttributeReflection::getArgumentTypes()` の型(引数名がキー)として受け取る。ソースで省略された引数は、属性クラスのコンストラクタの既定値の型(`ParameterReflection::getDefaultValue()`)で補う。
+- `type` はソース上 `MetaValueType::Integer` のような enum ケースとして現れる(4.1/4.12)。Reflector はその型の enum ケースの backing value 文字列へ落として返すため、戻り値の `type` は文字列であり、下記の型マップ表はそのまま使える。
+- `hasDefault` は `default` 引数の型が null でないと確定する場合だけ true。`single` は真偽の定数型に定まる場合だけ値を返し、定まらなければ絞り込みをしない(null を返す)。
 
 **`MetaBagGetterReturnTypeExtension`**(`PHPStan\Type\DynamicMethodReturnTypeExtension` 実装):
 
@@ -1262,7 +1269,7 @@ final class MetaSchemaReflector
 | `array` | `array<int|string, mixed>` |
 | `object` | `array<string, mixed>` |
 
-**`OptionGroupGetterReturnTypeExtension`**(`PHPStan\Type\DynamicMethodReturnTypeExtension` 実装): 対象はオプショングループ enum 上の `OptionAccess::get()`(enum ケースをレシーバとするインスタンス呼び出し)。レシーバ型が特定の enum ケースに確定する場合(PHPStan は enum ケースを個別の型として追跡するため、`SiteOption::ContactEmail->get()` の形なら常に確定する)、そのケースの `#[OptionSchema]` を `MetaSchemaReflector::optionSchemaOf()` で取得し、メタ側と同じ型マップで絞り込む(single概念なし。null許容の決定は第1引数 `$default` とスキーマ default により上記手順5と同一)。レシーバが enum 型一般(ケース不確定)の場合は宣言型 `mixed` のまま。`OptionRepository::get()` の直接利用(未宣言キーの正式経路。4.15)は絞り込み対象外で `mixed` のままとする。
+**`OptionGroupGetterReturnTypeExtension`**(`PHPStan\Type\DynamicMethodReturnTypeExtension` 実装): 対象はオプショングループ enum 上の `OptionAccess::get()`(enum ケースをレシーバとするインスタンス呼び出し)。PHPStan は trait を拡張の対象クラスとして引かないため、拡張の対象クラス(`getClass()`)は `BackedEnum` とし、`isMethodSupported()` で、呼ばれる `get()` の実体が `OptionAccess` で宣言されたものである場合に限る(`ClassReflection::getNativeReflection()` が返す静的な解析結果のメソッドの宣言元で確かめる。trait から取り込んだメソッドでは宣言元が trait 自身になる)。enum 自身が `get()` を定義した場合は、PHP では trait の同名メソッドより enum 自身のメソッドが優先されるため、絞り込まずにその宣言型のままとする。レシーバの式の型が 1 つの enum ケースの型に確定する場合(`SiteOption::ContactEmail->get()` の直接の形に限らず、ケースを入れた変数や、`@param SiteOption::ContactEmail` で受けた引数も含む)、そのケースの `#[OptionSchema]` を `MetaSchemaReflector::optionSchemaOf()` で取得し、メタ側と同じ型マップで絞り込む(single概念なし。null許容の決定は第1引数 `$default` とスキーマ default により上記手順5と同一)。レシーバが enum 型一般(ケース不確定)の場合は宣言型 `mixed` のまま。`OptionRepository::get()` の直接利用(未宣言キーの正式経路。4.15)は絞り込み対象外で `mixed` のままとする。
 
 **`MetaKeyOwnershipRule`**(`PHPStan\Rules\Rule<PhpParser\Node\Expr\MethodCall>` 実装):
 
@@ -1274,6 +1281,7 @@ final class MetaSchemaReflector
    エンティティ基底 meta() の @return MetaBag<static> 注釈で伝播する。エンティティ設計書)。
    TEntity が解決できない(素の MetaBag 型)場合は検査スキップ
 2. 第1引数が ClassConstFetch の場合:
+   定数が #[MetaSchema] 付きでなければ検査しない(メタキーの宣言ではないため)。
    定数の宣言クラス D を解決し、D === TEntity または TEntity のサブクラス/親で
    定数を実宣言したクラスが一致しなければエラー:
    "Meta key OtherPost::META_X does not belong to entity ProductPost."
@@ -1324,7 +1332,7 @@ final class ProductPost extends PostType
 
     public static function definition(): PostTypeDefinition
     {
-        return PostTypeDefinition::create('product')->label('製品')->hasArchive();
+        return PostTypeDefinition::create('product')->label('製品', '製品')->hasArchive();
     }
 
     /** 頻出フィールドの明示アクセサ(規約) */
@@ -1355,7 +1363,7 @@ final class CampaignPost extends PostType
     // ACF管理下のキーは acf-json が真実源。PHP側で同一キーを #[MetaSchema] 宣言するとブート時エラー(DR-06)
     public static function definition(): PostTypeDefinition
     {
-        return PostTypeDefinition::create('campaign')->label('キャンペーン');
+        return PostTypeDefinition::create('campaign')->label('キャンペーン', 'キャンペーン');
     }
 }
 ```

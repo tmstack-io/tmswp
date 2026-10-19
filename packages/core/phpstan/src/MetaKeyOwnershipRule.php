@@ -11,9 +11,11 @@ use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PHPStan\Analyser\Scope;
+use PHPStan\Reflection\ReflectionProvider;
 use PHPStan\Rules\IdentifierRuleError;
 use PHPStan\Rules\Rule;
 use PHPStan\Rules\RuleErrorBuilder;
+use PHPStan\Type\Type;
 use TMSWP\Core\Meta\MetaBag;
 
 /**
@@ -26,6 +28,7 @@ final class MetaKeyOwnershipRule implements Rule
 
     public function __construct(
         private readonly MetaSchemaReflector $reflector,
+        private readonly ReflectionProvider $reflectionProvider,
     ) {}
 
     public function getNodeType(): string
@@ -76,11 +79,7 @@ final class MetaKeyOwnershipRule implements Rule
         ];
     }
 
-    /**
-     * @param class-string $entityClass
-     *
-     * @return list<IdentifierRuleError>
-     */
+    /** @return list<IdentifierRuleError> */
     private function checkClassConstant(Scope $scope, string $entityClass, ClassConstFetch $fetch): array
     {
         if (!$fetch->class instanceof Name || !$fetch->name instanceof Identifier) {
@@ -88,11 +87,6 @@ final class MetaKeyOwnershipRule implements Rule
         }
 
         $className = $scope->resolveName($fetch->class);
-
-        if (!class_exists($className)) {
-            return [];
-        }
-
         $declaringClass = $this->reflector->declaringClassOfMetaConstant($className, $fetch->name->toString());
 
         if ($declaringClass === null || $declaringClass === $entityClass) {
@@ -106,22 +100,20 @@ final class MetaKeyOwnershipRule implements Rule
         ];
     }
 
-    /** @return class-string|null */
     private function entityClassFromCall(MethodCall $node, Scope $scope): ?string
     {
         if ($node->var instanceof StaticCall && $node->var->class instanceof Name && $node->var->name instanceof Identifier && $node->var->name->toString() === 'meta') {
             $className = $scope->resolveName($node->var->class);
 
-            if (class_exists($className)) {
-                return $className;
+            if ($this->reflectionProvider->hasClass($className)) {
+                return $this->reflectionProvider->getClass($className)->getName();
             }
         }
 
         return $this->entityClassFromReceiver($scope->getType($node->var));
     }
 
-    /** @return class-string|null */
-    private function entityClassFromReceiver(\PHPStan\Type\Type $type): ?string
+    private function entityClassFromReceiver(Type $type): ?string
     {
         if (!\in_array(MetaBag::class, $type->getObjectClassNames(), true)) {
             return null;
@@ -129,11 +121,7 @@ final class MetaKeyOwnershipRule implements Rule
 
         $classNames = $type->getTemplateType(MetaBag::class, 'TEntity')->getObjectClassNames();
 
-        if (\count($classNames) !== 1) {
-            return null;
-        }
-
-        if (!class_exists($classNames[0])) {
+        if (\count($classNames) !== 1 || !$this->reflectionProvider->hasClass($classNames[0])) {
             return null;
         }
 

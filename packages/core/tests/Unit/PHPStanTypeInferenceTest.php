@@ -7,13 +7,18 @@ namespace TMSWP\Core\Tests\Unit;
 use PHPStan\Testing\TypeInferenceTestCase;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
-
-require_once __DIR__ . '/../fixtures/phpstan/schema-classes.php';
+use TMSWP\Core\Tests\Support\PHPStanFixtureAutoloader;
 
 #[RunTestsInSeparateProcesses]
 #[PreserveGlobalState(false)]
 final class PHPStanTypeInferenceTest extends TypeInferenceTestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+        PHPStanFixtureAutoloader::register();
+    }
+
     /** @return list<string> */
     public static function getAdditionalConfigFiles(): array
     {
@@ -22,7 +27,23 @@ final class PHPStanTypeInferenceTest extends TypeInferenceTestCase
 
     public function testMetaBagAndOptionGetterTypesAreInferredFromSchemas(): void
     {
-        $this->assertFileAsserts('assertType', __DIR__ . '/../fixtures/phpstan/type-inference.php');
-        $this->addToAssertionCount(1);
+        $this->assertTypesInFile(__DIR__ . '/../fixtures/phpstan/type-inference.php');
+    }
+
+    public function testInferenceDoesNotLoadAnalysedClasses(): void
+    {
+        $this->assertTypesInFile(__DIR__ . '/../fixtures/phpstan/side-effect-type-inference.php');
+
+        self::assertTrue(PHPStanFixtureAutoloader::sideEffectClassesAreUnloaded());
+    }
+
+    private function assertTypesInFile(string $file): void
+    {
+        $asserts = self::gatherAssertTypes($file);
+        self::assertNotSame([], $asserts);
+
+        foreach ($asserts as $assert) {
+            $this->assertFileAsserts(...$assert);
+        }
     }
 }

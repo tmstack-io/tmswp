@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Integration;
 
+use TMSWP\Core\Label\LabelGenerator;
+use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
 use WP_Post_Type;
 use WP_Role;
@@ -29,6 +31,20 @@ final class EntityRegistrationIntegrationTest extends IntegrationTestCase
         self::assertTrue($taxonomy->hierarchical);
         self::assertTrue($taxonomy->show_in_rest);
         self::assertContains('tmswp_product', $taxonomy->object_type);
+    }
+
+    /** 生成するラベルのキーが、実物の WordPress が組み立てるラベルのキーと過不足なく一致する */
+    public function testGeneratedLabelKeysMatchTheLabelsBuiltByCore(): void
+    {
+        $postType = get_post_type_object('tmswp_product');
+        self::assertInstanceOf(WP_Post_Type::class, $postType);
+        $generated = array_keys(LabelGenerator::forPostType('Item', 'Items', LabelLanguage::En, $postType->hierarchical));
+        self::assertEqualsCanonicalizing($generated, array_keys(get_object_vars($postType->labels)));
+
+        $taxonomy = get_taxonomy('tmswp_product_cat');
+        self::assertInstanceOf(WP_Taxonomy::class, $taxonomy);
+        $generated = array_keys(LabelGenerator::forTaxonomy('Item', 'Items', LabelLanguage::En, $taxonomy->hierarchical));
+        self::assertEqualsCanonicalizing($generated, array_keys(get_object_vars($taxonomy->labels)));
     }
 
     public function testUserRoleIsRegisteredOnInit(): void

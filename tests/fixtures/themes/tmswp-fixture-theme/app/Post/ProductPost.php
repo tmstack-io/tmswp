@@ -14,7 +14,7 @@ final class ProductPost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('tmswp_product')
-            ->label('製品')
+            ->label('製品', '製品')
             ->hasArchive()
             ->showInRest()
             ->supports('title', 'thumbnail')

@@ -54,7 +54,7 @@ final class ProductPost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('product')
-            ->label('製品')
+            ->label('製品', '製品')
             ->hasArchive();
     }
 }
@@ -185,70 +185,100 @@ namespace TMSWP\Core\Label;
 
 final class LabelGenerator
 {
-    /** @return array<string, string> register_post_type の labels 引数 */
-    public static function forPostType(string $label, LabelLanguage $language): array;
+    /** @return array<string, string|null> register_post_type の labels 引数 */
+    public static function forPostType(string $singular, string $plural, LabelLanguage $language, bool $hierarchical): array;
 
-    /** @return array<string, string> register_taxonomy の labels 引数 */
-    public static function forTaxonomy(string $label, LabelLanguage $language): array;
+    /** @return array<string, string|null> register_taxonomy の labels 引数 */
+    public static function forTaxonomy(string $singular, string $plural, LabelLanguage $language, bool $hierarchical): array;
 }
 ```
 
 **振る舞い仕様**:
 
-- テンプレート文字列はFWに内蔵し、`sprintf` で `$label` を展開して返す。**gettext(`__()` 等)は通さない**(翻訳ファイル非依存・決定的。DR-17)。テキストドメイン `tmswp` はFWの他のUI文字列用であり、ラベル生成には使わない。
+- テンプレート文字列はFWに内蔵し、`sprintf` で `%1$s` に単数形、`%2$s` に複数形を展開して返す。**gettext(`__()` 等)は通さない**(翻訳ファイル非依存・決定的。DR-17)。テキストドメイン `tmswp` はFWの他のUI文字列用であり、ラベル生成には使わない。
+- 出すキーは、WordPress コアの `get_post_type_labels()` / `get_taxonomy_labels()` が組み立てるラベルのキーと過不足なく一致させる(`WP_Post_Type::get_default_labels()`・`WP_Taxonomy::get_default_labels()` のキーに、`get_*_labels()` が加える `menu_name`・`template_name` と、`_get_custom_object_labels()` が加える `name_admin_bar`・`archives` を足したもの)。キーごとに単数形と複数形のどちらを使うかは、コアの既定の英語ラベルの使い分けに合わせる。
+- en の文言は WordPress 7.0 コアの既定の英語ラベルに揃え、オブジェクト名(post/posts、tag/tags 等)の部分に単数形・複数形のラベルをそのまま入れる。大文字・小文字は変えず、コアが名詞の前に置く不定冠詞(a/an)は除く(例: `A link to %1$s.`)。ja の文言は FW 独自のテンプレートとする。
+- コアが階層の有無で既定を null にするキー(下表の「階層の有無」列)は、コアと同じく null を返す。階層の有無は `$hierarchical`(定義の `hierarchical` 引数の真偽)で受け取る。
+- 複数形の省略は定義側(`label()`)の規則で扱い、Generator は常に単数形と複数形の両方を受け取る。`LabelLanguage::Ja` では複数形を省略でき、省略時は単数形を複数形にも使う(日本語に複数形が無いため)。`LabelLanguage::En` で複数形が無ければ、labels を組み立てる時点で `EntityDefinitionException`(4.3節)。
 - デフォルト言語は `LabelLanguage::En`。日本語サイトでは定義側で `labelLanguage(LabelLanguage::Ja)` を明示する。
 
-**投稿タイプ用テンプレート(全キー確定)**(`%s` = `$label`):
+**投稿タイプ用テンプレート(全キー確定)**(`%1$s` = 単数形、`%2$s` = 複数形):
 
-| キー | ja | en |
-|---|---|---|
-| name | `%s` | `%s` |
-| singular_name | `%s` | `%s` |
-| add_new | `新規追加` | `Add New` |
-| add_new_item | `新規%sを追加` | `Add New %s` |
-| edit_item | `%sを編集` | `Edit %s` |
-| new_item | `新規%s` | `New %s` |
-| view_item | `%sを表示` | `View %s` |
-| view_items | `%s一覧を表示` | `View %s` |
-| search_items | `%sを検索` | `Search %s` |
-| not_found | `%sが見つかりませんでした` | `No %s found.` |
-| not_found_in_trash | `ゴミ箱内に%sが見つかりませんでした` | `No %s found in Trash.` |
-| parent_item_colon | `親%s:` | `Parent %s:` |
-| all_items | `%s一覧` | `All %s` |
-| archives | `%sアーカイブ` | `%s Archives` |
-| attributes | `%sの属性` | `%s Attributes` |
-| insert_into_item | `%sに挿入` | `Insert into %s` |
-| uploaded_to_this_item | `この%sへのアップロード` | `Uploaded to this %s` |
-| filter_items_list | `%s一覧を絞り込む` | `Filter %s list` |
-| items_list_navigation | `%s一覧ナビゲーション` | `%s list navigation` |
-| items_list | `%s一覧` | `%s list` |
-| item_published | `%sを公開しました` | `%s published.` |
-| item_updated | `%sを更新しました` | `%s updated.` |
+| キー | ja | en | 階層の有無 |
+|---|---|---|---|
+| name | `%2$s` | `%2$s` |  |
+| singular_name | `%1$s` | `%1$s` |  |
+| add_new | `新規追加` | `Add` |  |
+| add_new_item | `新規%1$sを追加` | `Add %1$s` |  |
+| edit_item | `%1$sを編集` | `Edit %1$s` |  |
+| new_item | `新規%1$s` | `New %1$s` |  |
+| view_item | `%1$sを表示` | `View %1$s` |  |
+| view_items | `%2$s一覧を表示` | `View %2$s` |  |
+| search_items | `%2$sを検索` | `Search %2$s` |  |
+| not_found | `%2$sが見つかりませんでした` | `No %2$s found.` |  |
+| not_found_in_trash | `ゴミ箱内に%2$sが見つかりませんでした` | `No %2$s found in Trash.` |  |
+| parent_item_colon | `親%1$s:` | `Parent %1$s:` | 非階層では null |
+| all_items | `%2$s一覧` | `All %2$s` |  |
+| archives | `%1$sアーカイブ` | `%1$s Archives` |  |
+| attributes | `%1$sの属性` | `%1$s Attributes` |  |
+| insert_into_item | `%1$sに挿入` | `Insert into %1$s` |  |
+| uploaded_to_this_item | `この%1$sへのアップロード` | `Uploaded to this %1$s` |  |
+| featured_image | `アイキャッチ画像` | `Featured image` |  |
+| set_featured_image | `アイキャッチ画像を設定` | `Set featured image` |  |
+| remove_featured_image | `アイキャッチ画像を削除` | `Remove featured image` |  |
+| use_featured_image | `アイキャッチ画像として使用` | `Use as featured image` |  |
+| filter_items_list | `%2$s一覧を絞り込む` | `Filter %2$s list` |  |
+| filter_by_date | `日付で絞り込む` | `Filter by date` |  |
+| items_list_navigation | `%2$s一覧ナビゲーション` | `%2$s list navigation` |  |
+| items_list | `%2$s一覧` | `%2$s list` |  |
+| item_published | `%1$sを公開しました` | `%1$s published.` |  |
+| item_published_privately | `%1$sを非公開で公開しました` | `%1$s published privately.` |  |
+| item_reverted_to_draft | `%1$sを下書きに戻しました` | `%1$s reverted to draft.` |  |
+| item_trashed | `%1$sをゴミ箱に移動しました` | `%1$s trashed.` |  |
+| item_scheduled | `%1$sの公開を予約しました` | `%1$s scheduled.` |  |
+| item_updated | `%1$sを更新しました` | `%1$s updated.` |  |
+| item_link | `%1$sリンク` | `%1$s Link` |  |
+| item_link_description | `%1$sへのリンク` | `A link to %1$s.` |  |
+| menu_name | `%2$s` | `%2$s` |  |
+| name_admin_bar | `%1$s` | `%1$s` |  |
+| template_name | `%1$sの個別ページ` | `Single item: %1$s` |  |
 
 **タクソノミー用テンプレート(全キー確定)**:
 
-| キー | ja | en |
-|---|---|---|
-| name | `%s` | `%s` |
-| singular_name | `%s` | `%s` |
-| search_items | `%sを検索` | `Search %s` |
-| popular_items | `よく使われている%s` | `Popular %s` |
-| all_items | `%s一覧` | `All %s` |
-| parent_item | `親%s` | `Parent %s` |
-| parent_item_colon | `親%s:` | `Parent %s:` |
-| edit_item | `%sを編集` | `Edit %s` |
-| view_item | `%sを表示` | `View %s` |
-| update_item | `%sを更新` | `Update %s` |
-| add_new_item | `新規%sを追加` | `Add New %s` |
-| new_item_name | `新規%s名` | `New %s Name` |
-| separate_items_with_commas | `複数の%sはコンマで区切ってください` | `Separate %s with commas` |
-| add_or_remove_items | `%sの追加または削除` | `Add or remove %s` |
-| choose_from_most_used | `よく使われている%sから選択` | `Choose from the most used %s` |
-| not_found | `%sが見つかりませんでした` | `No %s found.` |
-| no_terms | `%sなし` | `No %s` |
-| items_list_navigation | `%s一覧ナビゲーション` | `%s list navigation` |
-| items_list | `%s一覧` | `%s list` |
-| back_to_items | `← %s一覧へ戻る` | `← Back to %s` |
+| キー | ja | en | 階層の有無 |
+|---|---|---|---|
+| name | `%2$s` | `%2$s` |  |
+| singular_name | `%1$s` | `%1$s` |  |
+| search_items | `%2$sを検索` | `Search %2$s` |  |
+| popular_items | `よく使われている%2$s` | `Popular %2$s` | 階層では null |
+| all_items | `%2$s一覧` | `All %2$s` |  |
+| parent_item | `親%1$s` | `Parent %1$s` | 非階層では null |
+| parent_item_colon | `親%1$s:` | `Parent %1$s:` | 非階層では null |
+| name_field_description | `サイト上に表示される名前です。` | `The name is how it appears on your site.` |  |
+| slug_field_description | `「スラッグ」はURLに適した形式の名前です。通常はすべて小文字で、半角英数字とハイフンのみを含みます。` | `The &#8220;slug&#8221; is the URL-friendly version of the name. It is usually all lowercase and contains only letters, numbers, and hyphens.` |  |
+| parent_field_description | `親タームを指定して階層を作ります。たとえば「ジャズ」というタームは「ビバップ」や「ビッグバンド」の親になります。` | `Assign a parent term to create a hierarchy. The term Jazz, for example, would be the parent of Bebop and Big Band.` | 非階層では null |
+| desc_field_description | `説明は標準では目立ちませんが、テーマによっては表示されます。` | `The description is not prominent by default; however, some themes may show it.` |  |
+| edit_item | `%1$sを編集` | `Edit %1$s` |  |
+| view_item | `%1$sを表示` | `View %1$s` |  |
+| update_item | `%1$sを更新` | `Update %1$s` |  |
+| add_new_item | `新規%1$sを追加` | `Add %1$s` |  |
+| new_item_name | `新規%1$s名` | `New %1$s Name` |  |
+| separate_items_with_commas | `複数の%2$sはコンマで区切ってください` | `Separate %2$s with commas` | 階層では null |
+| add_or_remove_items | `%2$sの追加または削除` | `Add or remove %2$s` | 階層では null |
+| choose_from_most_used | `よく使われている%2$sから選択` | `Choose from the most used %2$s` | 階層では null |
+| not_found | `%2$sが見つかりませんでした` | `No %2$s found.` |  |
+| no_terms | `%2$sなし` | `No %2$s` |  |
+| filter_by_item | `%1$sで絞り込む` | `Filter by %1$s` | 非階層では null |
+| items_list_navigation | `%2$s一覧ナビゲーション` | `%2$s list navigation` |  |
+| items_list | `%2$s一覧` | `%2$s list` |  |
+| most_used | `よく使うもの` | `Most Used` |  |
+| back_to_items | `← %2$s一覧へ戻る` | `← Go to %2$s` |  |
+| item_link | `%1$sリンク` | `%1$s Link` |  |
+| item_link_description | `%1$sへのリンク` | `A link to %1$s.` |  |
+| menu_name | `%2$s` | `%2$s` |  |
+| name_admin_bar | `%1$s` | `%1$s` |  |
+| archives | `%2$s一覧` | `All %2$s` |  |
+| template_name | `%1$sアーカイブ` | `%1$s Archives` |  |
 
 ---
 
@@ -322,7 +352,11 @@ use TMSWP\Core\Label\LabelLanguage;
 
 final class PostTypeDefinition
 {
-    private string $label = '';
+    /** null は label() 未指定 */
+    private ?string $singularLabel = null;
+
+    /** null は複数形の省略(LabelLanguage::Ja でのみ許す) */
+    private ?string $pluralLabel = null;
 
     /** @var array<string, string> labels()による部分上書き */
     private array $labelOverrides = [];
@@ -354,7 +388,8 @@ final class PostTypeDefinition
     public static function builtin(string $slug): self;
 
     // ---- ラベル ----
-    public function label(string $label): self;
+    /** 単数形と複数形。複数形は LabelLanguage::En では必須、LabelLanguage::Ja では省略可(省略時は単数形を使う) */
+    public function label(string $singular, ?string $plural = null): self;
     /** @param array<string, string> $labels 自動生成結果へのキー単位上書き */
     public function labels(array $labels): self;
     public function labelLanguage(LabelLanguage $language): self;
@@ -436,9 +471,10 @@ final class PostTypeDefinition
 
 1. builtinなら `EntityDefinitionException`。
 2. labels決定:
-   - `label` が空かつ `labelOverrides` に `name` がない → `EntityDefinitionException`(「labelまたはlabels(name)が必須」)。
-   - `label` 非空 → `LabelGenerator::forPostType($label, $labelLanguage)` で生成し、`labelOverrides` をキー単位で上書きマージ(`array_merge(生成, 上書き)`)。
-   - `label` 空で `labelOverrides` のみ → そのまま `labels` に採用。
+   - `label()` が呼ばれておらず(単数形が null)、かつ `labelOverrides` に `name` がない → `EntityDefinitionException`(「labelまたはlabels(name)が必須」)。
+   - `label()` が呼ばれている → 単数形・複数形とも、空文字は言語・`labels()` の有無に関係なく `EntityDefinitionException` にする(複数形の省略は null、つまり第2引数を渡さないことで表すため、空文字は常に設定の誤り。メッセージにスラッグを含め、複数形では省略するなら第2引数を渡さない旨も含める)。そのうえで複数形を決める。複数形が渡されていればそれを使う。省略されていれば、`LabelLanguage::Ja` では単数形を使い(日本語に複数形が無いための規則)、`LabelLanguage::En` では `EntityDefinitionException` を投げる(設定の誤りのため debug に関係なく常に投げる。メッセージにスラッグと `label('<単数形>', '<plural>')` の書き方を含める)。
+   - そのうえで `LabelGenerator::forPostType($singular, $plural, $labelLanguage, $hierarchical)` で生成し(`$hierarchical` は `$args['hierarchical']` の真偽。未指定は false)、`labelOverrides` をキー単位で上書きマージ(`array_merge(生成, 上書き)`)。
+   - `label()` が呼ばれておらず `labelOverrides` のみ → そのまま `labels` に採用。
    - 結果を `$args['labels']` に設定し、`$args['label']` には `labels['name']` を設定。
 3. `supports` が非null → `$args['supports']` に設定。
 4. `taxonomies` が非空 → 各要素を1.5節の規約で解決し `$args['taxonomies']` に設定。
@@ -801,7 +837,11 @@ use TMSWP\Core\Label\LabelLanguage;
 
 final class TaxonomyDefinition
 {
-    private string $label = '';
+    /** null は label() 未指定 */
+    private ?string $singularLabel = null;
+
+    /** null は複数形の省略(LabelLanguage::Ja でのみ許す) */
+    private ?string $pluralLabel = null;
 
     /** @var array<string, string> */
     private array $labelOverrides = [];
@@ -828,7 +868,8 @@ final class TaxonomyDefinition
     public function objectType(string ...$objectTypes): self;
 
     // ---- ラベル ----
-    public function label(string $label): self;
+    /** 単数形と複数形。複数形は LabelLanguage::En では必須、LabelLanguage::Ja では省略可(省略時は単数形を使う) */
+    public function label(string $singular, ?string $plural = null): self;
     /** @param array<string, string> $labels */
     public function labels(array $labels): self;
     public function labelLanguage(LabelLanguage $language): self;
@@ -879,7 +920,7 @@ final class TaxonomyDefinition
 - **`builtin()`**: 呼び出し可能なのは `objectType()` のみ。それ以外のセッターは即 `EntityDefinitionException`。組込タクソノミーをCPTに紐付ける用途(`register_taxonomy_for_object_type`)に限定する。
 - **`objectType()`**: 複数回呼ぶと追記(重複は解決後に除去)。未指定のまま登録すると「どの投稿タイプにも紐付かないタクソノミー」として `register_taxonomy($slug, [], $args)` で登録される(後から紐付ける運用を許容)。
 - **`resolvedObjectTypes()`**: 各要素を1.5節規約(期待基底=`Post\PostType`)で解決し、`array_values(array_unique(...))` で返す。
-- **`toArgs()`**: labels決定はPostTypeDefinitionと同一手順(生成元は `LabelGenerator::forTaxonomy`)。`label` も `labels['name']` も無い場合は `EntityDefinitionException`。
+- **`toArgs()`**: labels決定はPostTypeDefinitionと同一手順(生成元は `LabelGenerator::forTaxonomy`。複数形の扱いも同じ)。`label()` も `labels['name']` も無い場合は `EntityDefinitionException`。
 
 ---
 
@@ -1377,7 +1418,7 @@ final class BlogPost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('blog')
-            ->label('ブログ・導入事例')
+            ->label('ブログ・導入事例', 'ブログ・導入事例')
             ->hasArchive()
             ->supports('title', 'editor', 'thumbnail')
             ->rewriteSlug('blog')
@@ -1418,7 +1459,7 @@ final class BlogCategoryTax extends Taxonomy
     public static function definition(): TaxonomyDefinition
     {
         return TaxonomyDefinition::create('blog_category')
-            ->label('ブログカテゴリ')
+            ->label('ブログカテゴリ', 'ブログカテゴリ')
             ->objectType(BlogPost::class)   // FQCN相互参照
             ->hierarchical()
             ->rewriteSlug('blog/category')
@@ -1594,7 +1635,7 @@ $id = ProductPost::create([
 
 **定義・登録**
 
-- [ ] `PostTypeDefinition::create('product')->label('Product')->hasArchive()` の `toArgs()` が `public=true`・en自動生成labels・`has_archive=true` を含み、未指定キーを含まない
+- [ ] `PostTypeDefinition::create('product')->label('Product', 'Products')->hasArchive()` の `toArgs()` が `public=true`・en自動生成labels・`has_archive=true` を含み、未指定キーを含まない
 - [ ] `labelLanguage(LabelLanguage::Ja)` で日本語labelsに切り替わり、`labels(['menu_name' => '...'])` がキー単位で上書きされる
 - [ ] label/labels両方未指定の `toArgs()` が `EntityDefinitionException` を投げる
 - [ ] スラッグ形式違反(`create('Invalid Slug!')`、21文字超のpost type、33文字超のtaxonomy)が `EntityDefinitionException` を投げる

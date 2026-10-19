@@ -15,7 +15,7 @@ final class ProductCategoryTaxonomy extends Taxonomy
     public static function definition(): TaxonomyDefinition
     {
         return TaxonomyDefinition::create('tmswp_product_cat')
-            ->label('製品カテゴリ')
+            ->label('製品カテゴリ', '製品カテゴリ')
             ->objectType(ProductPost::class)
             ->hierarchical()
             ->showInRest();

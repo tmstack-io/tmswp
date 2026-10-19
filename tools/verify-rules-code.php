@@ -7,6 +7,9 @@ $codeDir = $root . '/var/rules-code';
 $analysisDir = $root . '/var/rules-analysis';
 $analysisAppDir = $analysisDir . '/app';
 $phpstanConfig = $analysisDir . '/phpstan.neon';
+// PHPStan の tmpDir(writePhpstanConfig() の tmpDir と同じ場所)。拡張のソースは解析対象の外にあり、
+// PHPStan はその変更で DI コンテナのキャッシュを作り直さないため、検証のたびに空にする。
+$phpstanTmpDir = $root . '/var/phpstan-rules';
 
 if (!is_dir($codeDir)) {
     throw new RuntimeException("rules コード例が抽出されていません: {$codeDir}");
@@ -23,6 +26,7 @@ foreach ($phpFiles as $phpFile) {
 }
 
 clearDirectory($analysisDir);
+clearDirectory($phpstanTmpDir);
 copyDirectory($codeDir . '/app', $analysisAppDir);
 writePhpstanConfig($phpstanConfig);
 

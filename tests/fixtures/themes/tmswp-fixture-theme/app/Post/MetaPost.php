@@ -29,7 +29,7 @@ final class MetaPost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('tmswp_meta_post')
-            ->label('メタ確認')
+            ->label('メタ確認', 'メタ確認')
             ->showInRest()
             ->supports('title', 'revisions');
     }

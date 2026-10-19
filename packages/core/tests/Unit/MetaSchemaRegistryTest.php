@@ -64,8 +64,8 @@ final class MetaSchemaRegistryTest extends UnitTestCase
         $registry->registerEntity(RegistryCustomStoragePost::class, ObjectType::Post, 'registry_custom');
 
         $bag = $registry->bagFor(RegistryCustomStoragePost::class, 10);
-        self::assertTrue($bag->set('custom_key', 'stored'));
-        self::assertSame('stored', $bag->string('custom_key'));
+        self::assertTrue($bag->set(RegistryCustomStoragePost::META_CUSTOM, 'stored'));
+        self::assertSame('stored', $bag->string(RegistryCustomStoragePost::META_CUSTOM));
 
         $storage = $container->get(RegistryArrayMetaStorage::class);
         self::assertInstanceOf(RegistryArrayMetaStorage::class, $storage);

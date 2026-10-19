@@ -34,7 +34,7 @@ final class ProductPost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('product')
-            ->label('製品')
+            ->label('製品', '製品')
             ->supports('title', 'editor');
     }
 

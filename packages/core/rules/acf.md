@@ -56,7 +56,7 @@ final class AcfProductPost extends PostType
 {
     public static function definition(): PostTypeDefinition
     {
-        return PostTypeDefinition::create('acf_product')->label('ACF製品');
+        return PostTypeDefinition::create('acf_product')->label('ACF製品', 'ACF製品');
     }
 }
 ```

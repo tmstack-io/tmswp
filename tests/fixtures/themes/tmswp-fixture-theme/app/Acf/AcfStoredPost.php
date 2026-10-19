@@ -17,7 +17,7 @@ final class AcfStoredPost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('tmswp_acf_post')
-            ->label('ACF保存テスト')
+            ->label('ACF保存テスト', 'ACF保存テスト')
             ->supports('title');
     }
 }

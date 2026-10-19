@@ -13,21 +13,27 @@ use WP_Post;
 
 final class MetaIntegrationTest extends IntegrationTestCase
 {
+    private const PRICE = 'tmswp_price';
+
+    private const CODES = 'tmswp_codes';
+
+    private const CUSTOM = 'tmswp_custom';
+
     public function testMetaSchemaIsRegisteredOnInit(): void
     {
         $postClass = self::fixtureClass(self::THEME_NAMESPACE . '\\Post\\MetaPost', PostType::class);
         $registered = get_registered_meta_keys('post', 'tmswp_meta_post');
 
-        self::assertArrayHasKey('tmswp_price', $registered);
-        self::assertSame('integer', $registered['tmswp_price']['type']);
-        self::assertSame(1200, $registered['tmswp_price']['default']);
-        self::assertTrue($registered['tmswp_price']['single']);
-        self::assertTrue($registered['tmswp_price']['show_in_rest']);
-        self::assertSame('価格', $registered['tmswp_price']['description']);
-        self::assertSame([$postClass, 'sanitizePrice'], $registered['tmswp_price']['sanitize_callback']);
-        self::assertTrue($registered['tmswp_price']['revisions_enabled'] ?? false);
-        self::assertArrayHasKey('tmswp_codes', $registered);
-        self::assertFalse($registered['tmswp_codes']['single']);
+        self::assertArrayHasKey(self::PRICE, $registered);
+        self::assertSame('integer', $registered[self::PRICE]['type']);
+        self::assertSame(1200, $registered[self::PRICE]['default']);
+        self::assertTrue($registered[self::PRICE]['single']);
+        self::assertTrue($registered[self::PRICE]['show_in_rest']);
+        self::assertSame('価格', $registered[self::PRICE]['description']);
+        self::assertSame([$postClass, 'sanitizePrice'], $registered[self::PRICE]['sanitize_callback']);
+        self::assertTrue($registered[self::PRICE]['revisions_enabled'] ?? false);
+        self::assertArrayHasKey(self::CODES, $registered);
+        self::assertFalse($registered[self::CODES]['single']);
     }
 
     public function testMetaBagReadsDefaultsAndWritesThroughWpMetaStorage(): void
@@ -37,19 +43,19 @@ final class MetaIntegrationTest extends IntegrationTestCase
         $bag = $postClass::meta($postId);
         $storage = new WpMetaStorage();
 
-        self::assertNull($storage->get(ObjectType::Post, $postId, 'tmswp_price'));
-        self::assertSame([], $storage->getAll(ObjectType::Post, $postId, 'tmswp_codes'));
-        self::assertSame([], $storage->getMultiple(ObjectType::Post, $postId, ['tmswp_price', 'tmswp_codes']));
-        self::assertSame(1200, $bag->int('tmswp_price'));
-        self::assertTrue($bag->set('tmswp_price', 2500));
-        self::assertSame(2500, $bag->int('tmswp_price'));
-        self::assertTrue($bag->set('tmswp_codes', ['alpha', 'beta']));
-        self::assertSame(['alpha', 'beta'], $bag->list('tmswp_codes'));
+        self::assertNull($storage->get(ObjectType::Post, $postId, self::PRICE));
+        self::assertSame([], $storage->getAll(ObjectType::Post, $postId, self::CODES));
+        self::assertSame([], $storage->getMultiple(ObjectType::Post, $postId, [self::PRICE, self::CODES]));
+        self::assertSame(1200, $bag->int(self::PRICE));
+        self::assertTrue($bag->set(self::PRICE, 2500));
+        self::assertSame(2500, $bag->int(self::PRICE));
+        self::assertTrue($bag->set(self::CODES, ['alpha', 'beta']));
+        self::assertSame(['alpha', 'beta'], $bag->list(self::CODES));
 
-        $storedValues = $storage->getMultiple(ObjectType::Post, $postId, ['tmswp_price', 'tmswp_codes']);
-        self::assertArrayHasKey('tmswp_price', $storedValues);
-        self::assertArrayHasKey('tmswp_codes', $storedValues);
-        self::assertSame('alpha', $storedValues['tmswp_codes']);
+        $storedValues = $storage->getMultiple(ObjectType::Post, $postId, [self::PRICE, self::CODES]);
+        self::assertArrayHasKey(self::PRICE, $storedValues);
+        self::assertArrayHasKey(self::CODES, $storedValues);
+        self::assertSame('alpha', $storedValues[self::CODES]);
     }
 
     public function testWpMetaStorageKeepsStoredNullFalseAndEmptyValues(): void
@@ -74,8 +80,8 @@ final class MetaIntegrationTest extends IntegrationTestCase
         $postId = self::createPost('tmswp_stored_post');
         $bag = $postClass::meta($postId);
 
-        self::assertTrue($bag->set('tmswp_custom', 'custom-storage'));
-        self::assertSame('custom-storage', $bag->string('tmswp_custom'));
+        self::assertTrue($bag->set(self::CUSTOM, 'custom-storage'));
+        self::assertSame('custom-storage', $bag->string(self::CUSTOM));
         self::assertTrue($bag->set('custom_null', null));
         self::assertTrue($bag->set('custom_false', false));
         self::assertTrue($bag->set('custom_empty', ''));
@@ -86,7 +92,7 @@ final class MetaIntegrationTest extends IntegrationTestCase
         self::assertFalse($bag->get('custom_false'));
         self::assertSame('', $bag->get('custom_empty'));
         // 差し替え先にだけ保存され、WP のメタには書かれていない
-        self::assertFalse((new WpMetaStorage())->has(ObjectType::Post, $postId, 'tmswp_custom'));
+        self::assertFalse((new WpMetaStorage())->has(ObjectType::Post, $postId, self::CUSTOM));
     }
 
     public function testObjectTypeRejectsInvalidIdsAndMismatchedObjects(): void
