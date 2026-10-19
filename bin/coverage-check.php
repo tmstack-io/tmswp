@@ -2,13 +2,17 @@
 
 declare(strict_types=1);
 
-if ($argc !== 3) {
+// $argc/$argv はスクリプトのトップレベルにだけ CLI SAPI が注入する暗黙の変数で、静的解析からは未定義に見える。
+// 引数は $_SERVER['argv'] から取り、型と個数をここで検証する。
+$arguments = $_SERVER['argv'] ?? null;
+
+if (!is_array($arguments) || count($arguments) !== 3 || !is_string($arguments[1]) || !is_numeric($arguments[2])) {
     fwrite(STDERR, "Usage: php bin/coverage-check.php <clover.xml> <minimum-percent>\n");
     exit(2);
 }
 
-$cloverPath = $argv[1];
-$minimum = (float) $argv[2];
+$cloverPath = $arguments[1];
+$minimum = (float) $arguments[2];
 $xml = simplexml_load_file($cloverPath);
 
 if ($xml === false) {

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Unit;
 
 use Brain\Monkey\Functions;
-use ReflectionMethod;
 use stdClass;
 use TMSWP\Core\Exception\Form\FormConfigException;
 use TMSWP\Core\Exception\Form\TempFileException;
@@ -126,17 +125,25 @@ final class FormViewAndFileTest extends UnitTestCase
         $store->resolve($token);
     }
 
-    public function testTempFileStoreWritesDirectoryProtectionFiles(): void
+    public function testTempFileStoreCreatesProtectedBaseDirectoryOnFirstStore(): void
     {
-        $baseDir = $this->createTempDirectory('temp-file-protection');
-        $store = new TempFileStore($baseDir);
-        $method = new ReflectionMethod($store, 'prepareBaseDir');
-        $method->setAccessible(true);
-        $method->invoke($store);
+        Functions\when('TMSWP\\Core\\Form\\is_uploaded_file')->alias(static fn(string $path): bool => is_file($path));
+        Functions\when('sanitize_file_name')->alias(static fn(string $filename): string => $filename);
+        Functions\when('TMSWP\\Core\\Form\\move_uploaded_file')->alias(static fn(string $from, string $to): bool => rename($from, $to));
 
-        self::assertFileExists($baseDir . '/.htaccess');
-        self::assertFileExists($baseDir . '/index.html');
+        $tmpPath = $this->createTempDirectory('temp-file-protection-upload') . '/upload.txt';
+        file_put_contents($tmpPath, 'sample upload');
+        $baseDir = $this->createTempDirectory('temp-file-protection') . '/store';
+        $store = new TempFileStore($baseDir);
+
+        self::assertDirectoryDoesNotExist($baseDir);
+
+        $stored = $store->store(new UploadedFile($tmpPath, 'upload.txt', 'text/plain', 13, UPLOAD_ERR_OK));
+
+        self::assertDirectoryExists($baseDir);
         self::assertSame("Require all denied\n", file_get_contents($baseDir . '/.htaccess'));
+        self::assertSame('', file_get_contents($baseDir . '/index.html'));
+        self::assertStringStartsWith($baseDir . DIRECTORY_SEPARATOR, $stored->path);
     }
 
     public function testTempFileStoreDetectsMimeBeforeMovingUploadedFile(): void

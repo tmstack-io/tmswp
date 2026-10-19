@@ -5,12 +5,17 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Unit;
 
 use Brain\Monkey\Functions;
+use Closure;
 use DateTimeImmutable;
 use DateTimeZone;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use TMSWP\Core\Attribute\AsModel;
 use TMSWP\Core\Exception\HydrationException;
 use TMSWP\Core\Exception\InvalidQueryException;
 use TMSWP\Core\Exception\MigrationException;
+use TMSWP\Core\Exception\QueryException;
 use TMSWP\Core\Exception\SchemaException;
 use TMSWP\Core\Model\Connection;
 use TMSWP\Core\Model\MigrationResult;
@@ -72,8 +77,12 @@ SQL, $definition->toSql($connection));
             ->index('body');
     }
 
+    // Connection::select()/selectRow() が wpdb の ARRAY_A 定数を参照するため、定数を分離プロセス内でだけ定義する。
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function testQueryBuilderBuildsSqlAndKeepsValuePluckRaw(): void
     {
+        WpdbTestDouble::defineOutputConstants();
         $wpdb = WpdbTestDouble::create();
         $connection = new Connection($wpdb);
 
@@ -97,8 +106,12 @@ SQL, $definition->toSql($connection));
         self::assertSame('SELECT email, id FROM wp_contacts ORDER BY id ASC', $wpdb->queries()[1]);
     }
 
+    // Connection::select()/selectRow() が wpdb の ARRAY_A 定数を参照するため、定数を分離プロセス内でだけ定義する。
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function testQueryBuilderHydratesStrictConstructorValues(): void
     {
+        WpdbTestDouble::defineOutputConstants();
         Functions\when('wp_timezone')->justReturn(new DateTimeZone('Asia/Tokyo'));
 
         $wpdb = WpdbTestDouble::create();
@@ -124,8 +137,12 @@ SQL, $definition->toSql($connection));
         self::assertSame(TestStatus::Published, $row->status);
     }
 
+    // Connection::select()/selectRow() が wpdb の ARRAY_A 定数を参照するため、定数を分離プロセス内でだけ定義する。
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function testQueryBuilderRejectsInvalidHydrationAndUnsafeRawSql(): void
     {
+        WpdbTestDouble::defineOutputConstants();
         $wpdb = WpdbTestDouble::create();
         $wpdb->queueResultSet([[
             'id' => 'not-int',
@@ -153,8 +170,12 @@ SQL, $definition->toSql($connection));
         (new QueryBuilder($connection, 'contacts'))->offset(10)->toSql();
     }
 
+    // Connection::select()/selectRow() が wpdb の ARRAY_A 定数を参照するため、定数を分離プロセス内でだけ定義する。
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function testModelFacadeUsesConfiguredConnection(): void
     {
+        WpdbTestDouble::defineOutputConstants();
         Functions\when('wp_timezone')->justReturn(new DateTimeZone('UTC'));
 
         $wpdb = WpdbTestDouble::create();
@@ -188,6 +209,66 @@ SQL, $definition->toSql($connection));
         self::assertSame(1, TestContactModel::delete(10));
         self::assertSame('UPDATE wp_contacts SET email = \'c@example.test\' WHERE id = 10', $wpdb->queries()[2]);
         self::assertSame('DELETE FROM wp_contacts WHERE id = 10', $wpdb->queries()[3]);
+    }
+
+    /**
+     * @param Closure(Connection): int $write
+     */
+    #[DataProvider('failingWrites')]
+    public function testConnectionThrowsQueryExceptionWhenWpdbWriteReturnsFalse(Closure $write, string $expectedMessage): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $connection = new Connection($wpdb);
+        $wpdb->failNextWrite();
+
+        $this->expectException(QueryException::class);
+        $this->expectExceptionMessage($expectedMessage);
+
+        $write($connection);
+    }
+
+    /**
+     * @return iterable<string, array{Closure(Connection): int, string}>
+     */
+    public static function failingWrites(): iterable
+    {
+        yield 'execute' => [
+            static fn(Connection $connection): int => $connection->execute('UPDATE wp_contacts SET active = %d', [0]),
+            'query failed: UPDATE wp_contacts SET active = 0',
+        ];
+        yield 'insert' => [
+            static fn(Connection $connection): int => $connection->insert('contacts', ['email' => 'a@example.test']),
+            'insert failed: wp_contacts',
+        ];
+        yield 'update' => [
+            static fn(Connection $connection): int => $connection->update('contacts', ['email' => 'b@example.test'], ['id' => 10]),
+            'update failed: wp_contacts',
+        ];
+        yield 'delete' => [
+            static fn(Connection $connection): int => $connection->delete('contacts', ['id' => 10]),
+            'delete failed: wp_contacts',
+        ];
+    }
+
+    public function testConnectionReportsWpdbLastErrorAndRecoversOnNextWrite(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $connection = new Connection($wpdb);
+        $wpdb->failNextWrite("Duplicate entry 'a@example.test' for key 'email_unique'");
+
+        try {
+            $connection->insert('contacts', ['email' => 'a@example.test']);
+            self::fail('wpdb の失敗が QueryException になっていません。');
+        } catch (QueryException $exception) {
+            self::assertSame(
+                "database error: Duplicate entry 'a@example.test' for key 'email_unique'; SQL: INSERT INTO wp_contacts",
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertSame(1, $connection->insert('contacts', ['email' => 'b@example.test']));
+        self::assertSame('', $connection->lastError());
+        self::assertCount(2, $wpdb->insertCalls());
     }
 
     public function testMigratorRegistersModelsAndBuildsDryRunPlan(): void

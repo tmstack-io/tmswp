@@ -5,14 +5,43 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Support;
 
 use InvalidArgumentException;
+use Mockery;
 use ReflectionClass;
 use RuntimeException;
 use stdClass;
 use Stringable;
 use wpdb;
 
+// ユニット層には WordPress 本体が無く、wpdb クラスが存在しない。Connection などの型宣言 \wpdb を満たすため、
+// この test double を読み込んだときに限り、振る舞いを持たない空の wpdb 型を宣言する。
+// wpdb の振る舞いはすべて下の WpdbTestDouble が持つ（偽 wpdb の実装はここだけに置く）。
+if (!class_exists(wpdb::class, false)) {
+    Mockery::declareClass(wpdb::class);
+}
+
+/**
+ * ユニット層用の wpdb フェイク。
+ *
+ * 実行した SQL と insert/update/delete の呼び出しを記録し、読み取り結果はキューから返す。
+ * failNextWrite() で、書き込み系の呼び出しを実 wpdb の失敗と同じく false で返させられる。
+ */
 final class WpdbTestDouble extends wpdb
 {
+    /** @var string */
+    public $prefix = 'wp_';
+
+    /** @var string */
+    public $options = 'wp_options';
+
+    /** @var int */
+    public $insert_id = 0;
+
+    /** @var int */
+    public $rows_affected = 0;
+
+    /** @var string */
+    public $last_error = '';
+
     /** @var list<string> */
     private array $tmswpQueries = [];
 
@@ -39,6 +68,9 @@ final class WpdbTestDouble extends wpdb
 
     private string $tmswpLastQuery = '';
 
+    /** 次の書き込み系呼び出しを失敗させるときに wpdb::$last_error へ入れる値。null なら失敗させない。 */
+    private ?string $tmswpNextWriteError = null;
+
     /** @var list<mixed> */
     private array $tmswpLastArgs = [];
 
@@ -52,6 +84,33 @@ final class WpdbTestDouble extends wpdb
         }
 
         return $wpdb;
+    }
+
+    /**
+     * wpdb の出力形式定数を定義する（実 WordPress では wp-includes/class-wpdb.php が定義する）。
+     *
+     * ユニット層では WP 定数を定義しない（docs/10 §4.4）。ただし wpdb 境界そのものである
+     * Connection::select()/selectRow() は ARRAY_A を参照するため、それを通すテストに限ってこの定数が要る。
+     * 定数は取り消せずプロセス全体に漏れるので、呼び出すテストは必ず #[RunInSeparateProcess] で分離する。
+     * 分離されずに二度定義されると define() の警告で失敗する（failOnWarning）。
+     */
+    public static function defineOutputConstants(): void
+    {
+        \define('OBJECT', 'OBJECT');
+        \define('OBJECT_K', 'OBJECT_K');
+        \define('ARRAY_A', 'ARRAY_A');
+        \define('ARRAY_N', 'ARRAY_N');
+    }
+
+    /**
+     * 次の書き込み系呼び出し（query / insert / update / delete）を、実 wpdb の失敗と同じく false で返させる。
+     *
+     * $lastError が空でなければ wpdb::$last_error に設定する（実 wpdb は DB エラー時に MySQL のエラー文を入れる）。
+     * 空のままなら、last_error を伴わずに false だけが返る経路を再現する。
+     */
+    public function failNextWrite(string $lastError = ''): void
+    {
+        $this->tmswpNextWriteError = $lastError;
     }
 
     /**
@@ -152,6 +211,7 @@ final class WpdbTestDouble extends wpdb
             throw new InvalidArgumentException('query must be string');
         }
 
+        $this->last_error = '';
         $this->tmswpQueries[] = $query;
 
         $rows = array_shift($this->tmswpResultSets);
@@ -186,6 +246,7 @@ final class WpdbTestDouble extends wpdb
             throw new InvalidArgumentException('query must be string');
         }
 
+        $this->last_error = '';
         $this->tmswpQueries[] = $query;
 
         $row = array_shift($this->tmswpRows) ?? null;
@@ -212,19 +273,24 @@ final class WpdbTestDouble extends wpdb
             throw new InvalidArgumentException('query must be string');
         }
 
+        $this->last_error = '';
         $this->tmswpQueries[] = $query;
 
         return array_shift($this->tmswpVars);
     }
 
     /** @param mixed $query */
-    public function query($query): int
+    public function query($query): int|false
     {
         if (!\is_string($query)) {
             throw new InvalidArgumentException('query must be string');
         }
 
         $this->tmswpQueries[] = $query;
+
+        if ($this->consumeWriteFailure()) {
+            return false;
+        }
 
         if (str_starts_with($this->tmswpLastQuery, 'INSERT IGNORE')) {
             $jti = $this->tmswpLastArgs[1] ?? null;
@@ -266,13 +332,18 @@ final class WpdbTestDouble extends wpdb
      * @param mixed $data
      * @param mixed $format
      */
-    public function insert($table, $data, $format = null): int
+    public function insert($table, $data, $format = null): int|false
     {
         if (!\is_string($table) || !\is_array($data) || (!\is_array($format) && !\is_string($format) && $format !== null)) {
             throw new InvalidArgumentException('invalid insert arguments');
         }
 
         $this->tmswpInsertCalls[] = ['table' => $table, 'data' => $this->stringKeyedArray($data), 'format' => $this->normalizeFormat($format)];
+
+        if ($this->consumeWriteFailure()) {
+            return false;
+        }
+
         ++$this->insert_id;
         $this->rows_affected = 1;
 
@@ -286,7 +357,7 @@ final class WpdbTestDouble extends wpdb
      * @param mixed $format
      * @param mixed $where_format
      */
-    public function update($table, $data, $where, $format = null, $where_format = null): int
+    public function update($table, $data, $where, $format = null, $where_format = null): int|false
     {
         if (!\is_string($table) || !\is_array($data) || !\is_array($where) || (!\is_array($format) && !\is_string($format) && $format !== null) || (!\is_array($where_format) && !\is_string($where_format) && $where_format !== null)) {
             throw new InvalidArgumentException('invalid update arguments');
@@ -299,6 +370,11 @@ final class WpdbTestDouble extends wpdb
             'format' => $this->normalizeFormat($format),
             'where_format' => $this->normalizeFormat($where_format),
         ];
+
+        if ($this->consumeWriteFailure()) {
+            return false;
+        }
+
         $this->rows_affected = 1;
 
         return 1;
@@ -309,7 +385,7 @@ final class WpdbTestDouble extends wpdb
      * @param mixed $where
      * @param mixed $where_format
      */
-    public function delete($table, $where, $where_format = null): int
+    public function delete($table, $where, $where_format = null): int|false
     {
         if (!\is_string($table) || !\is_array($where) || (!\is_array($where_format) && !\is_string($where_format) && $where_format !== null)) {
             throw new InvalidArgumentException('invalid delete arguments');
@@ -320,6 +396,11 @@ final class WpdbTestDouble extends wpdb
             'where' => $this->stringKeyedArray($where),
             'where_format' => $this->normalizeFormat($where_format),
         ];
+
+        if ($this->consumeWriteFailure()) {
+            return false;
+        }
+
         $this->rows_affected = 1;
 
         return 1;
@@ -338,6 +419,24 @@ final class WpdbTestDouble extends wpdb
     public function get_charset_collate(): string
     {
         return 'DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci';
+    }
+
+    /**
+     * 実 wpdb の flush() と同じく直前の last_error を消し、failNextWrite() の予約があれば消費して失敗状態にする。
+     */
+    private function consumeWriteFailure(): bool
+    {
+        $this->last_error = '';
+
+        if ($this->tmswpNextWriteError === null) {
+            return false;
+        }
+
+        $this->last_error = $this->tmswpNextWriteError;
+        $this->tmswpNextWriteError = null;
+        $this->rows_affected = 0;
+
+        return true;
     }
 
     /**
