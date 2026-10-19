@@ -722,7 +722,7 @@ final class ProductPost extends PostType { /* ... */ }
 
 #### 役割
 
-「プレビュー時にメタの変更が反映されない」というWPの古典的問題への、ACF非依存のオプトイン対応。旧FWでは `AbstractHook::save_preview_post`(`wp_insert_post` フックでリビジョン保存を検知し独自アクション `save_preview_postmeta` を発火、ACF実装が `$_POST['acf']` をリビジョンへ書き込む)が担っていたが、本FWの下限であるWP 6.4はメタのリビジョン保存をコア機能として持つ(`register_post_meta` の `revisions_enabled` 引数)。よって独自のフック連鎖も命令的な有効化サービスも実装せず、`register_post_meta` の引数と1:1対応する**クラス属性による宣言**として設計する(当初設計の `PreviewMetaSupport::enableFor()` サービスは廃止)。
+「プレビュー時にメタの変更が反映されない」というWPの古典的問題への、ACF非依存のオプトイン対応。旧FWでは `AbstractHook::save_preview_post`(`wp_insert_post` フックでリビジョン保存を検知し独自アクション `save_preview_postmeta` を発火、ACF実装が `$_POST['acf']` をリビジョンへ書き込む)が担っていたが、本FWの下限であるWP 7.0はメタのリビジョン保存をコア機能として持つ(`register_post_meta` の `revisions_enabled` 引数)。よって独自のフック連鎖も命令的な有効化サービスも実装せず、`register_post_meta` の引数と1:1対応する**クラス属性による宣言**として設計する(当初設計の `PreviewMetaSupport::enableFor()` サービスは廃止)。
 
 #### シグネチャ
 

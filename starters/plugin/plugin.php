@@ -2,8 +2,8 @@
 
 /**
  * Plugin Name: {{project_name}}
- * Requires at least: 6.4
- * Requires PHP: 8.2
+ * Requires at least: 7.0
+ * Requires PHP: 8.3
  * Text Domain: {{project_slug}}
  */
 

@@ -79,7 +79,7 @@ SQLに埋め込まれる識別子(テーブル名・カラム名・エイリア�
 `whereRaw` / `orWhereRaw` / `selectRaw` / `innerJoinRaw` / `leftJoinRaw` に渡すSQL断片は以下を満たさなければならない。規約1〜3はランタイム検査であり違反は`InvalidQueryException`、規約4はPHPStanによる静的検査である。これにより「値の直接埋め込み」が構造的に不可能になる。
 
 1. 文字 `'` `"` `` ` `` `;` のいずれも含まないこと(リテラル値・識別子クォート・複文の全面禁止)。値は必ずプレースホルダで渡す。断片内に直接書く識別子はコンパイル時定数に限り(規約4)、動的に決まる識別子は`%i`プレースホルダ+`$bindings`経由とする。
-2. 断片内のプレースホルダ個数と`$bindings`の要素数が一致すること。プレースホルダの抽出は `/(?<!%)%(?:\d+\$)?[dfsi]/` で行う(`%i`はWP 6.2+の識別子プレースホルダ。下限WP 6.4のため常に利用可)。
+2. 断片内のプレースホルダ個数と`$bindings`の要素数が一致すること。プレースホルダの抽出は `/(?<!%)%(?:\d+\$)?[dfsi]/` で行う(`%i`はWP 6.2+の識別子プレースホルダ。下限WP 7.0のため常に利用可)。
 3. リテラルの`%`(例: `DATE_FORMAT`の書式)は`%%`とエスケープして書くこと(最終的に`wpdb->prepare`を通過するため)。この規約はrules/にも記載する。
 4. **raw断片はコンパイル時定数文字列であること(`@param literal-string`による静的強制)**: raw断片の文字列にPHP変数・ユーザ入力を連結してはならない(例: `->whereRaw("{$userColumn} = %s", [$v])` は禁止)。識別子を動的に与える必要がある場合は`%i`プレースホルダ+`$bindings`経由を必須とする(例: `->whereRaw('%i = %s', [$column, $value])`)。本規約は、raw断片を受ける引数 — `whereRaw()`/`orWhereRaw()`の`$sql`、`selectRaw()`の`$expression`、`innerJoinRaw()`/`leftJoinRaw()`の`$on` — に`@param literal-string`を宣言することで、`composer analyse`(PHPStan level max、DR-12)が機械検査する(`innerJoinRaw`/`leftJoinRaw`の`$table`は別途R1検証されるベア名のため対象外)。PHPStanのliteral-string型はリテラル同士の連結・`sprintf`(リテラル書式)の結果も追跡するため、PHP変数を連結した断片はlevel maxで静的解析エラーになる(Doctrine DBAL等で確立した手法)。
    - **効力範囲**: literal-stringが機械保証するのはraw断片の**非動的起源**(PHP変数・ユーザ入力の連結禁止=本規約の主目的)であり、開発者が手書きした定数述語の妥当性(例: `1=1 OR ...`のような恒真条件)までは保証しない。その層は規約1のクォート文字検査とコードレビューで担保する。本規約はrules/にも引き続き記載する(PHPStanを実行しない環境では機械的強制が及ばないため)。

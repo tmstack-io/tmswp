@@ -27,7 +27,7 @@
 
 ## 1. 背景 — 旧 iwf2b の価値と課題
 
-TMSWP は、開発者が約10年・15プロジェクト(テーマ11+プラグイン4)で運用してきた自社FW iwf2b を、PHP 8.2+ / WordPress 6.4+ 前提で完全に新規再構築するものである。コードの移植ではなく「仕様の再実装」であり、旧FWの価値(下記 1.1)を現代的な型システムで作り直し、負債(下記 1.2)を設計段階で排除する。
+TMSWP は、開発者が約10年・15プロジェクト(テーマ11+プラグイン4)で運用してきた自社FW iwf2b を、PHP 8.3〜8.5 / WordPress 7.0 以上を前提に完全に新規再構築するものである。コードの移植ではなく「仕様の再実装」であり、旧FWの価値(下記 1.1)を現代的な型システムで作り直し、負債(下記 1.2)を設計段階で排除する。
 
 ### 1.1 旧FWの価値(踏襲する資産)
 
@@ -46,7 +46,7 @@ TMSWP は、開発者が約10年・15プロジェクト(テーマ11+プラグイ
 
 | # | 課題 | 具体内容(一次資料で確認済み) | TMSWP での解消策 |
 |---|------|------|------|
-| 1 | **PHP 5.3 起源の古い言語水準** | CI マトリクスは PHP 5.3〜7.2 前提(travis-ci.org 終了で死亡)、composer 制約は `php>=7.4` だが本体は型宣言ゼロ・readonly / enum / Attribute 未使用。2025年の「PHP8対応」も3ファイルのみの部分対応 | PHP 8.2 下限。readonly / enum / named arguments / Attribute / 第一級 callable をフル活用(DR-02)。`declare(strict_types=1)` と全シグネチャ型宣言を必須化 |
+| 1 | **PHP 5.3 起源の古い言語水準** | CI マトリクスは PHP 5.3〜7.2 前提(travis-ci.org 終了で死亡)、composer 制約は `php>=7.4` だが本体は型宣言ゼロ・readonly / enum / Attribute 未使用。2025年の「PHP8対応」も3ファイルのみの部分対応 | PHP 8.3 下限。readonly / enum / named arguments / Attribute / 第一級 callable / 型付きクラス定数 / `#[\Override]` をフル活用(DR-02)。`declare(strict_types=1)` と全シグネチャ型宣言を必須化 |
 | 2 | **神クラス AbstractHook** | WPクリーンアップ・日本語対応・View乗っ取り・ACF/CF7/Yoast 直結合(AbstractHook.php L60-119)を1クラスに内包。ACF 非使用の5プロジェクトは継承を回避し独自 Hook を再実装する分裂を招いた | 解体。日本語対応は tmswp/ja-toolkit のオプトインモジュールへ、汎用クリーンアップは rules/hooks.md のレシピ(app 側 Hook クラス)へ、ACF 連携は tmswp/acf-bridge へ、CF7/Yoast 連携は廃止(DR-10) |
 | 3 | **マジックメソッド依存で静的解析不能** | メタ(`SomePost::MK_FOO($id)`)・オプション(`Settings::ON_FOO()`)・Model(wpdb 透過プロキシ)が `__callStatic` + 文字列 constant 解決。IDE 補完・PHPStan・AI 追跡がすべて不能 | マジックメソッド全面禁止。属性付き定数(#[MetaSchema])+型付きアクセサ(MetaBag)+FW同梱 PHPStan 拡張へ置換(DR-05) |
 | 4 | **外部プラグイン制御コードのコア混入** | AbstractHook が ACF 同梱パス・CF7 フィルタ・Yoast フィルタを直結合。しかも ACF 差し替えフィルタは null センチネル + フィルタ名不一致バグ(meta: delete vs clear、option 側も同型)で実際には機能していなかった | コアから完全排除。MetaStorageInterface は has()/get() 分離、差し替えはエンティティ単位の明示オプトイン `#[UseMetaStorage]`(DR-06 / DR-18) |
@@ -83,7 +83,7 @@ TMSWP は、開発者が約10年・15プロジェクト(テーマ11+プラグイ
 5. **認証・会員機能**: ロール宣言(UserRole)とユーザクエリまで。ログイン・登録フローは app/ 実装指針(rules/)の範囲とする。
 6. **HTML 流暢ビルダ・HTTP クライアント・デバッグダンプ**: 旧FWで未使用が実証されたサーフェスは作らない(DR-16)。
 7. **CSVインポート基盤**: 公式拡張として提供しない(DR-20)。データ投入の仕様(列定義・検証・保存先)は案件固有性が高く、必要な案件が app 側で WP-CLI コマンド等として実装する。
-8. **WordPress 6.4 未満・PHP 8.2 未満のサポート**: 行わない(DR-02)。
+8. **WordPress 7.0 未満・PHP 8.3 未満のサポート**: 行わない(DR-02)。
 
 ---
 
@@ -120,7 +120,7 @@ tmswp/core は WordPress コアと PSR インターフェース(psr/log ^3、psr
 | ID | 領域 | 決定内容 | 主担当文書 |
 |----|------|----------|----------|
 | DR-01 | 名称・配布 | 正式名称は TMStack WordPress Framework(以下・略称: **TMSWP**)。TMStack はブランド名でありパッケージ名ではない(iwf2b ⇔ Inspire WordPress Framework 2β と同じ、ブランド名⇔コード接頭辞の関係)。composer vendor=`tmswp`、名前空間ルート=`TMSWP\`、グローバルヘルパ接頭辞=`tms_`。旧 iwf2b は凍結し、本FWは後方互換なしの完全新規パッケージ | 01 |
-| DR-02 | 動作下限 | PHP 8.2 / WordPress 6.4。readonly・enum・named arguments・Attribute・第一級 callable をフル活用 | 全文書 |
+| DR-02 | 動作範囲 | PHP 8.3〜8.5 / WordPress 7.0 以上。readonly・enum・named arguments・Attribute・第一級 callable・型付きクラス定数・`#[\Override]` をフル活用。WordPress 7.0 未満向けの分岐は持たない | 全文書 |
 | DR-03 | 移行 | 完全新規のみ。旧 iwf2b からの移行資料・互換シムは作成しない(設計根拠としての旧FW言及は可) | 全文書 |
 | DR-04 | 自動探索 | PHP 8 Attribute(`#[AsPostType]` 等)+クラスマップ走査+ファイルキャッシュ。「app/ に置くだけ」体験を維持。コア名前空間は走査対象外。初期化は WP フックに整合(即時同期初期化の禁止)。決定的ロード順・循環依存検出・探索失敗の明示エラーを必須とする | 02 |
 | DR-05 | meta/option 定義 | 非 ACF 時は属性付き定数(`#[MetaSchema]`)+型付きアクセサ(MetaBag)。型指定は文字列でなく公開 enum `TMSWP\Core\Meta\MetaValueType` を属性引数へ直接渡す(不正値は言語/静的解析が実行前に拒否し、ブート時の型文字列検証は持たない)。register_post_meta / register_term_meta / register_user_meta へ自動登録。FW 同梱の PHPStan 拡張でスキーマから型ナローイング。頻出フィールドは明示アクセサメソッドを書く規約を rules/ に明記 | 04 |
@@ -130,7 +130,7 @@ tmswp/core は WordPress コアと PSR インターフェース(psr/log ^3、psr
 | DR-09 | DI | PSR-11 準拠の軽量コンテナを内部に持ち、テンプレート向けには静的ファサード(例: `ProductPost::permalink()`)を提供する二層構成。旧 AbstractSingleton(final private __construct)は廃止しテスト可能な設計へ | 02 |
 | DR-10 | Hook 解体 | 日本語サイト対応(日本語スラッグ・全角スペース検索正規化・wptexturize 無効化)は tmswp/ja-toolkit 公式拡張のオプトインモジュールへ。WP クリーンアップ(管理画面整理・wp_head 掃除等)は削除対象がテーマ毎に異なるため FW コードに収載せず、rules/hooks.md のレシピ(app 側 Hook クラス)で提供。ACF/CF7/Yoast 連携コードはコアから完全排除(ACF は acf-bridge のみ)。template_include 乗っ取り+exit+グローバル変数展開(load_global)は完全廃止 | 08 |
 | DR-11 | リポジトリ | monorepo(packages/ 配下に core+各拡張)+Packagist へ read-only split 配布。SemVer+リリースタグ運用必須 | 01 |
-| DR-12 | QA | PHPStan(szepeviktor/phpstan-wordpress)level max・baseline なし、php-cs-fixer(PER-CS 2.0+strict_types)、PHPUnit 11 で2層テスト(ユニット=WP非依存/Brain Monkey、統合=wp-env+wp-phpunit)、GitHub Actions(PHP 8.2-8.4 × WP 6.4/latest。加えてユニット層ジョブのみ forward 互換検知として PHP 8.5 を追加。統合層マトリクスと PHPStan の phpVersion 上限は不変)。composer test/lint/fix/analyse/qa を人間・CI・AI が同一コマンドで実行。※PHPUnit 11 が適用されるのはユニット層のみ。統合層は wp-phpunit(WP コアテストスイート)が PHPUnit 9.6 上限のため、vendor-bin 隔離した PHPUnit 9.6 で実行する(確定仕様は QA 設計書 `10-quality.md` §4.2 に従う) | 10 |
+| DR-12 | QA | PHPStan(szepeviktor/phpstan-wordpress)level max・baseline なし、php-cs-fixer(PER-CS 2.0+strict_types)、PHPUnit 11 で2層テスト(ユニット=WP非依存/Brain Monkey、統合=wp-env+wp-phpunit)、GitHub Actions(ユニット層は PHP 8.3 / 8.5、統合層は PHP 8.3 / 8.5 × WP 7.0 / 最新版の 4 セル。統合層のテストライブラリは各セルの WP と同じ系列に揃える。PHPStan の phpVersion は 8.3〜8.5)。composer test/lint/fix/analyse/qa を人間・CI・AI が同一コマンドで実行。※PHPUnit 11 が適用されるのはユニット層のみ。統合層は wp-phpunit(WP コアテストスイート)が PHPUnit 9.6 上限のため、vendor-bin 隔離した PHPUnit 9.6 で実行する(確定仕様は QA 設計書 `10-quality.md` §4.2 に従う) | 10 |
 | DR-13 | AI 資料 | AGENTS.md+rules/(機能別レシピ)+app/ スケルトン+composer create-project 対応スターター(starter-theme / starter-plugin) | 11 |
 | DR-14 | コア収載 | Kernel/Container/Attribute 探索、PostType/Taxonomy/UserRole 宣言、meta/option 宣言層、フォーム+バリデーション、Model(独自テーブル)、Log(自前 PSR-3 v3、依存ゼロ)、Template::part 相当の薄いテンプレートヘルパ(View\Template。プラグイン同梱テンプレート fallback 付き)、Support(Arr/Str/Html 属性レンダラ=実利用メソッドのみ)。コアの runtime 依存は psr/log ^3 と psr/container ^2 のみ。ext-gd は thumbnail 拡張へ | 01 |
 | DR-15 | 拡張パッケージ | tmswp/thumbnail(timthumb 全面置換=署名付き URL+WP_Image_Editor)、tmswp/settings-page(Form 層ベース、nonce 自動)、tmswp/acf-bridge、tmswp/ja-toolkit | 08, 09 |

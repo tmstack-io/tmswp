@@ -44,7 +44,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 
 - 00 全体アーキテクチャ(monorepo レイアウト、パッケージ一覧、DR 一覧)
 - 01 Kernel / Discovery(統合テストでの Kernel ブート方法)
-- 04 meta/option 定義層 — **FW 同梱 PHPStan 拡張(`packages/core/extension.neon` とその services 定義)の正準仕様**。本書は登録方法のみを定める
+- 04 meta/option 定義層 — **FW 同梱 PHPStan 拡張(`packages/core/phpstan/extension.neon` とその services 定義)の正準仕様**。本書は登録方法のみを定める
 - 05 フォーム層(Rule 群の正準クラス名。移植対応表のテスト対象名はこれに従う)
 - 06 Model 層(QueryBuilder / Migrator の新規テスト要件)
 - 07〜 各拡張パッケージ文書(thumbnail / settings-page / acf-bridge / ja-toolkit)
@@ -60,17 +60,17 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 
 | コマンド | 内容 | Docker 要否 |
 |---|---|---|
-| `composer lint` | php-cs-fixer dry-run(差分表示、変更なし) | 不要 |
+| `composer lint` | php-cs-fixer dry-run(差分表示、変更なし)。下限の PHP 8.3 で実行する(1.1 補足) | 不要 |
 | `composer fix` | php-cs-fixer 適用 | 不要 |
 | `composer analyse` | PHPStan level max | 不要 |
 | `composer test:unit` | ユニットテスト(PHPUnit 11 + Brain Monkey) | 不要 |
 | `composer test:coverage` | ユニットテスト + pcov カバレッジ + 閾値ゲート | 不要 |
-| `composer test:integration` | 統合テスト(wp-env コンテナ内で PHPUnit 9.6 実行) | **必要** |
+| `composer test:integration` | 統合テスト(wp-env の `cli` コンテナ内で PHPUnit 9.6 実行) | **必要** |
 | `composer test` | `test:unit` → `test:integration` | 必要 |
 | `composer qa:fast` | `lint` → `analyse` → `test:unit`(Docker 不要の全 QA) | 不要 |
 | `composer qa` | `lint` → `analyse` → `test`(全 QA) | 必要 |
 | `composer monorepo:validate` | パッケージ間バージョン整合検査 | 不要 |
-| `composer wp:start` / `wp:stop` | wp-env の起動 / 停止 | 必要 |
+| `composer wp:start` / `wp:stop` | wp-env の起動 / 停止(`npm ci` で入れたローカルの @wordpress/env を使う。1.1 補足) | 必要 |
 
 ### 1.1 ルート composer.json(完全版)
 
@@ -80,10 +80,12 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 {
     "name": "tmswp/tmswp",
     "description": "TMStack WordPress Framework (monorepo)",
-    "license": "MIT",
+    "license": "GPL-2.0-or-later",
     "type": "library",
     "require": {
-        "php": ">=8.2",
+        "php": ">=8.3",
+        "ext-gd": "*",
+        "ext-mbstring": "*",
         "psr/container": "^2.0",
         "psr/log": "^3.0"
     },
@@ -99,7 +101,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
         "phpstan/phpstan-phpunit": "^2.0",
         "phpstan/phpstan-strict-rules": "^2.0",
         "phpunit/phpunit": "^11.5",
-        "symplify/monorepo-builder": "^11.2",
+        "symplify/monorepo-builder": "^12.7",
         "szepeviktor/phpstan-wordpress": "^2.0"
     },
     "replace": {
@@ -113,12 +115,14 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
         "psr-4": {
             "TMSWP\\AcfBridge\\": "packages/acf-bridge/src/",
             "TMSWP\\Core\\": "packages/core/src/",
+            "TMSWP\\Core\\PHPStan\\": "packages/core/phpstan/src/",
             "TMSWP\\JaToolkit\\": "packages/ja-toolkit/src/",
             "TMSWP\\SettingsPage\\": "packages/settings-page/src/",
             "TMSWP\\Thumbnail\\": "packages/thumbnail/src/"
         },
         "files": [
-            "packages/core/src/helpers.php"
+            "packages/core/src/functions.php",
+            "packages/thumbnail/src/functions.php"
         ]
     },
     "autoload-dev": {
@@ -134,23 +138,27 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
         "lint": "php-cs-fixer fix --dry-run --diff --show-progress=none",
         "fix": "php-cs-fixer fix",
         "analyse": "phpstan analyse -c phpstan.neon.dist --memory-limit=1G",
+        "i18n:build": "php tools/build-l10n.php packages/core/languages/tmswp-ja.po packages/ja-toolkit/languages/tmswp-ja.po",
         "test:unit": "phpunit -c phpunit.unit.xml.dist",
         "test:coverage": [
             "@putenv XDEBUG_MODE=off",
             "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/clover.xml --coverage-text",
             "php bin/coverage-check.php var/coverage/clover.xml 85"
         ],
-        "test:integration": "npx wp-env run tests-cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
+        "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
         "test": ["@test:unit", "@test:integration"],
         "qa:fast": ["@lint", "@analyse", "@test:unit"],
         "qa": ["@lint", "@analyse", "@test"],
         "monorepo:validate": "monorepo-builder validate",
         "monorepo:merge": "monorepo-builder merge",
-        "wp:start": "npx wp-env start",
-        "wp:stop": "npx wp-env stop"
+        "wp:start": "node node_modules/@wordpress/env/bin/wp-env start",
+        "wp:stop": "node node_modules/@wordpress/env/bin/wp-env stop"
     },
     "config": {
         "sort-packages": true,
+        "platform": {
+            "php": "8.3.0"
+        },
         "allow-plugins": {
             "bamarni/composer-bin-plugin": true
         }
@@ -171,6 +179,23 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 - コア(`tmswp/core`)の runtime 依存は `psr/log` と `psr/container` のみ(DR-14)。
 - `extra.bamarni-bin.forward-command: true` により、`composer install` 一発で後述の `vendor-bin/wp-tests` 隔離環境も同時にインストールされる。
 - `php-stubs/wordpress-stubs` は `szepeviktor/phpstan-wordpress` の依存として自動導入される(明示 require 不要)。
+- `config.platform.php` を下限の `8.3.0` に固定し、依存を下限の PHP で解決する(上位の PHP で `composer update` しても、8.3 で動かない版が lock に入らない)。`vendor-bin/wp-tests/composer.json` も同じ値を持つ(§4.2)。
+- php-cs-fixer は composer.json の PHP 下限より新しい PHP で実行すると、下限で使えない構文を生成しうるとして警告を出す。`composer lint` / `fix` は下限の PHP 8.3 で実行する(CI の `lint` ジョブも 8.3)。
+- wp-env は npm の開発依存として monorepo ルートの `package.json` で版を固定し(`@wordpress/env` を完全一致で指定。`package-lock.json` もコミットする)、`npm ci` で導入する。composer スクリプトと qa.yml は、固定したパッケージの実行ファイルを `node node_modules/@wordpress/env/bin/wp-env …` とパスで直接実行する。未導入ならファイルが無いため node がエラーで止まる。`npx` や npm の `exec` / `run` のようにコマンド名 `wp-env` で解決する呼び出しは、ローカルに実行ファイルが無いときに npm 上の第三者パッケージ `wp-env` やグローバルの同名コマンドを実行しうるため使わない。
+
+`package.json`(完全版):
+
+```json
+{
+  "name": "tmswp",
+  "private": true,
+  "description": "TMStack WordPress Framework (monorepo) development tooling",
+  "license": "GPL-2.0-or-later",
+  "devDependencies": {
+    "@wordpress/env": "11.17.0"
+  }
+}
+```
 
 ### 1.2 `acf:sync` スクリプト
 
@@ -186,7 +211,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 }
 ```
 
-wp-env 利用時は `npx wp-env run cli --env-cwd=wp-content/themes/<theme> wp tmswp acf sync` の形で実行する。monorepo ルートには `acf:sync` を置かない(acf-json はアプリ資産であり FW リポジトリには存在しないため)。acf-bridge 自身のジェネレータ検証は `packages/acf-bridge/tests/` のフィクスチャ acf-json に対するユニット/統合テストで行う。
+wp-env 利用時は `node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/themes/<theme> wp tmswp acf sync` の形で実行する(wp-env はプロジェクトの package.json で版を固定して導入する。1.1 補足)。monorepo ルートには `acf:sync` を置かない(acf-json はアプリ資産であり FW リポジトリには存在しないため)。acf-bridge 自身のジェネレータ検証は `packages/acf-bridge/tests/` のフィクスチャ acf-json に対するユニット/統合テストで行う。
 
 ### 1.3 `tms:check` スクリプト
 
@@ -225,17 +250,19 @@ includes:
     # @deprecated 利用検出(WP バージョン更新時の検知)
     - vendor/phpstan/phpstan-deprecation-rules/rules.neon
     # FW 同梱 PHPStan 拡張(MetaSchema/OptionSchema からの型ナローイング。正準仕様は 04 文書)
-    - packages/core/extension.neon
+    - packages/core/phpstan/extension.neon
 
 parameters:
     level: max
 
+    # 対応範囲 PHP 8.3〜8.5(DR-02)
     phpVersion:
-        min: 80200
-        max: 80400
+        min: 80300
+        max: 80500
 
     paths:
         - packages/core/src
+        - packages/core/phpstan/src
         - packages/core/tests
         - packages/core/bin
         - packages/thumbnail/src
@@ -249,6 +276,8 @@ parameters:
         - starters/theme/app
         - starters/plugin/app
         - bin
+        # 開発用スクリプト(rules/ のコード例の抽出・検査等)
+        - tools
 
     excludePaths:
         # テスト用フィクスチャ(意図的な型違反・生成コードのサンプルを含む)
@@ -292,18 +321,18 @@ parameters:
     ```
 
    ファイル全体・ディレクトリ単位の抑止は禁止。
-3. FW 同梱拡張(`packages/core/extension.neon`)の services 定義・拡張クラス(`TMSWP\Core\PHPStan\` 名前空間)の正準仕様は 04 文書。本書はルート設定への登録(includes 行)とパッケージ配布形のみを定める。
+3. FW 同梱拡張(`packages/core/phpstan/extension.neon`)の services 定義・拡張クラス(`TMSWP\Core\PHPStan\` 名前空間)の正準仕様は 04 文書。本書はルート設定への登録(includes 行)とパッケージ配布形のみを定める。
 4. パッケージ配布形: `packages/core/composer.json` に以下を持たせ、**アプリ側では `phpstan/extension-installer` により自動登録**されるようにする。
 
     ```json
     "extra": {
         "phpstan": {
-            "includes": ["extension.neon"]
+            "includes": ["phpstan/extension.neon"]
         }
     }
     ```
 
-   monorepo ルートでは `packages/core` が vendor 配下に存在しない(replace 運用)ため extension-installer の対象外であり、上記のとおり**明示 includes** で登録する。
+   monorepo ルートでは `packages/core` が vendor 配下に存在しない(replace 運用)ため extension-installer の対象外であり、上記のとおり**明示 includes** で同じ `packages/core/phpstan/extension.neon` を登録する。拡張の設定ファイルはこの 1 枚だけで、別の neon から include し直す 2 段構成にはしない(01 文書 §3.4・§3.5)。
 5. 統合テストコードも解析対象に含める。`WP_UnitTestCase` 等のシンボルは `scanDirectories` の wp-phpunit 実体から解決する。`vendor-bin/wp-tests` が未インストールの状態で `composer analyse` を実行した場合は scanDirectories 不在のエラーになるため、セットアップ手順(後述)どおり `composer install` を先に完了させること。
 
 ---
@@ -327,6 +356,7 @@ $finder = (new Finder())
         __DIR__ . '/starters',
         __DIR__ . '/tests',
         __DIR__ . '/bin',
+        __DIR__ . '/tools',
     ])
     ->name('*.php')
     ->notPath('#tests/(.+/)?fixtures/#')
@@ -423,7 +453,7 @@ return (new Config())
 ### 3A.1 PHPStan カスタムルール(output / set_404)
 
 - ルールクラスは `tmswp/core` 同梱の `TMSWP\Core\PHPStan\Actions\NoOutputRule` / `TMSWP\Core\PHPStan\Actions\NoSet404Rule`(名前空間は §2.2 項 3 と同じ。検査仕様の正準は本節)。
-- **`packages/core/extension.neon` には登録しない**(extension-installer で自動有効化されると `actions/` 以外のコードにも適用されてしまうため)。アプリ側の `actions/` 専用設定 `phpstan-actions.neon` で明示登録する。
+- **`packages/core/phpstan/extension.neon` には登録しない**(extension-installer で自動有効化されると `actions/` 以外のコードにも適用されてしまうため)。アプリ側の `actions/` 専用設定 `phpstan-actions.neon` で明示登録する。
 - スターター(starters/theme)に置く `phpstan-actions.neon`(完全版):
 
 ```neon
@@ -523,7 +553,7 @@ packages/core/
 
 ### 4.2 統合層の PHPUnit バージョン制約と隔離(確定事項)
 
-WordPress コアテストスイート(wp-phpunit が配布する `includes/bootstrap.php` / `WP_UnitTestCase`)は **PHPUnit 9.6 が上限**であり(WP 6.4〜現行の制約。bootstrap が PHPUnit 10+ を明示拒否する)、PHPUnit 11 とは併用できない。よって DR-12 の「PHPUnit 11」は**ユニット層に適用**し、統合層は次のとおり隔離した PHPUnit 9.6 で実行する。これは本書で確定する技術判断である。
+WordPress コアテストスイート(wp-phpunit が配布する `includes/bootstrap.php` / `WP_UnitTestCase`)は **PHPUnit 9.6 が上限**であり(WP 7.x の制約。bootstrap が PHPUnit 10+ を明示拒否する)、PHPUnit 11 とは併用できない。よって DR-12 の「PHPUnit 11」は**ユニット層に適用**し、統合層は次のとおり隔離した PHPUnit 9.6 で実行する。これは本書で確定する技術判断である。
 
 - `bamarni/composer-bin-plugin` の名前空間 `wp-tests` に統合テスト専用ツールチェーンを隔離インストールする。
 - ルート vendor(PHPUnit 11)と `vendor-bin/wp-tests/vendor`(PHPUnit 9.6)は衝突しない。
@@ -534,20 +564,23 @@ WordPress コアテストスイート(wp-phpunit が配布する `includes/boots
 ```json
 {
     "require": {
-        "php": ">=8.2",
+        "php": ">=8.3",
         "phpunit/phpunit": "^9.6",
-        "wp-phpunit/wp-phpunit": "*",
+        "wp-phpunit/wp-phpunit": "^7.0",
         "yoast/phpunit-polyfills": "^2.0"
     },
     "config": {
-        "sort-packages": true
+        "sort-packages": true,
+        "platform": {
+            "php": "8.3.0"
+        }
     }
 }
 ```
 
-`wp-phpunit/wp-phpunit` はテスト対象 WP バージョンと同系列を使う。ローカルと CI の latest 行はそのまま(`*` = 最新)、CI の WP 6.4 行では実行前に
-`composer bin wp-tests require "wp-phpunit/wp-phpunit:~6.4.0" --update-with-all-dependencies`
-で固定する(qa.yml 参照)。
+- `wp-phpunit/wp-phpunit` はテスト対象の WP と同じ系列(メジャー.マイナー)を使う。lock には最新の系列を入れ、ローカルの既定(`.wp-env.json` の `core: null` = 最新版)と揃える。
+- CI は各セルで検証する WP の版を確定し、実行前に `composer bin wp-tests require "wp-phpunit/wp-phpunit:~X.Y.0" --update-with-all-dependencies` で同じ系列に固定する(WP 7.0 のセルは `~7.0.0`、最新版のセルは WordPress.org の版情報 API から得た最新版の系列。§5.1)。その系列の wp-phpunit がまだ公開されていなければ、この固定が失敗して CI が止まる。
+- 統合テストはコンテナ内の PHP(8.3 または 8.5)で実行するため、ホストの PHP で依存を解決しても下限 8.3 で動く版に限る(`config.platform.php`)。
 
 ### 4.3 phpunit.unit.xml.dist(PHPUnit 11、完全版)
 
@@ -726,20 +759,21 @@ require $wpPhpunitDir . '/includes/bootstrap.php';
 
 ### 4.7 tests/wp-tests-config.php と .wp-env.json(完全版)
 
-`tests/wp-tests-config.php`(wp-env の tests 環境内で読まれる):
+`tests/wp-tests-config.php`(wp-env の `cli` コンテナ内で読まれる):
 
 ```php
 <?php
 
 declare(strict_types=1);
 
-// wp-env の tests 環境(tests-wordpress コンテナ)の既定値。環境変数で上書き可能
+// wp-env の環境(mysql コンテナの wordpress データベース)の既定値。環境変数で上書き可能。
+// テーブル接頭辞 wptests_ で開発用サイトのテーブル(wp_)と分ける
 define('ABSPATH', '/var/www/html/');
 
-define('DB_NAME', getenv('WP_TESTS_DB_NAME') ?: 'tests-wordpress');
+define('DB_NAME', getenv('WP_TESTS_DB_NAME') ?: 'wordpress');
 define('DB_USER', getenv('WP_TESTS_DB_USER') ?: 'root');
 define('DB_PASSWORD', getenv('WP_TESTS_DB_PASSWORD') ?: 'password');
-define('DB_HOST', getenv('WP_TESTS_DB_HOST') ?: 'tests-mysql');
+define('DB_HOST', getenv('WP_TESTS_DB_HOST') ?: 'mysql');
 define('DB_CHARSET', 'utf8mb4');
 define('DB_COLLATE', '');
 
@@ -751,7 +785,7 @@ define('WP_TESTS_TITLE', 'TMSWP Test Suite');
 define('WP_PHP_BINARY', 'php');
 define('WP_DEBUG', true);
 
-// WP 6.4 コアは PHP 8.4 正式対応前のため、コア由来の deprecation を除外する
+// WP コア由来の deprecation を除外する
 error_reporting(E_ALL & ~E_DEPRECATED);
 ```
 
@@ -760,8 +794,11 @@ error_reporting(E_ALL & ~E_DEPRECATED);
 ```json
 {
     "core": null,
-    "phpVersion": "8.2",
-    "plugins": [],
+    "phpVersion": "8.3",
+    "testsEnvironment": false,
+    "plugins": [
+        "https://downloads.wordpress.org/plugin/advanced-custom-fields.6.8.10.zip"
+    ],
     "mappings": {
         "wp-content/plugins/tmswp": "."
     },
@@ -772,8 +809,10 @@ error_reporting(E_ALL & ~E_DEPRECATED);
 }
 ```
 
-- `core: null` は最新安定版。特定バージョンは `"core": "https://wordpress.org/wordpress-6.4.zip"` 形式で override する。
-- `mappings` により monorepo 全体が両環境(development / tests)の `wp-content/plugins/tmswp` にマウントされ、コンテナ内からルートの `vendor/` / `vendor-bin/` / 各設定ファイルにそのままアクセスできる。これが `composer test:integration` の `--env-cwd=wp-content/plugins/tmswp` の前提。
+- `core: null` は最新安定版。特定バージョンは `"core": "https://wordpress.org/wordpress-7.0.zip"` 形式で override する。`phpVersion` の既定は下限の 8.3。
+- `testsEnvironment: false` により、wp-env は開発用の環境(`wordpress` / `cli` / `mysql`)だけを作る。@wordpress/env 11 では development と tests の 2 環境を同時に作る既定の動作が非推奨のため、統合テストはこの環境の `cli` コンテナで実行し、テーブル接頭辞 `wptests_` で開発用サイトのテーブルと分ける。
+- `plugins` に wordpress.org の無料版 ACF(本家 WP Engine の `advanced-custom-fields`)を、版を固定した zip で入れる(D-11)。ACF Pro 限定機能のテストは CI では行わない。
+- `mappings` により monorepo 全体が `wp-content/plugins/tmswp` にマウントされ、コンテナ内からルートの `vendor/` / `vendor-bin/` / 各設定ファイルにそのままアクセスできる。これが `composer test:integration` の `--env-cwd=wp-content/plugins/tmswp` の前提。
 - `.wp-env.override.json` は `.gitignore` に追加する。
 
 ### 4.8 カバレッジ方針
@@ -829,13 +868,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          php-version: '8.3'
           coverage: none
       - uses: ramsey/composer-install@v3
       - name: Forbid PHPStan baseline
         run: |
           if ls phpstan-baseline* 2>/dev/null; then
-            echo '::error::PHPStan baseline files are forbidden (DR-12)'; exit 1
+            echo '::error::PHPStan baseline files are forbidden (DR-12)'
+            exit 1
           fi
       - run: composer lint
 
@@ -858,19 +898,33 @@ jobs:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          php-version: '8.3'
           coverage: none
       - uses: ramsey/composer-install@v3
       - run: composer monorepo:validate
 
+  rules-verify:
+    name: Rules Code Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+      - uses: ramsey/composer-install@v3
+      - name: Extract rules code examples
+        run: php tools/extract-rules-code.php
+      - name: Verify extracted examples
+        run: php tools/verify-rules-code.php
+
   unit:
-    name: "Unit (PHP ${{ matrix.php }})"
+    name: Unit (PHP ${{ matrix.php }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # 8.5 は forward 互換検知用(DR-12 の列挙集合 8.2-8.4 は不変。設計上の要点を参照)
-        php: ['8.2', '8.3', '8.4', '8.5']
+        php: ['8.3', '8.5']
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
@@ -892,14 +946,15 @@ jobs:
           path: var/coverage/clover.xml
 
   integration:
-    name: "Integration (PHP ${{ matrix.php }} / WP ${{ matrix.wp }})"
+    name: Integration (PHP ${{ matrix.php }} / WP ${{ matrix.wp }})
     runs-on: ubuntu-latest
     needs: [unit]
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.2', '8.3', '8.4']
-        wp: ['6.4', 'latest']
+        php: ['8.3', '8.5']
+        wp: ['7.0', 'latest']
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
@@ -908,31 +963,56 @@ jobs:
           coverage: none
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
+          cache: npm
+      - run: npm ci
       - uses: ramsey/composer-install@v3
-      - name: Pin wp-phpunit to WP 6.4
-        if: matrix.wp != 'latest'
-        run: composer bin wp-tests require --no-interaction "wp-phpunit/wp-phpunit:~6.4.0" --update-with-all-dependencies
-      - name: Create wp-env override
+      # 検証する WordPress の版を確定し、テストライブラリ(wp-phpunit)を同じ系列(X.Y)に揃える。
+      # latest は WordPress.org の版情報 API から最新版を取得する。
+      - name: Resolve WordPress version
+        id: wp
+        # bash を明示して pipefail を有効にし、curl の失敗をパイプ先の成功で隠さない
+        shell: bash
         run: |
           if [ "${{ matrix.wp }}" = "latest" ]; then
-            CORE=null
+            version=$(curl -fsS https://api.wordpress.org/core/version-check/1.7/ | jq -er '.offers[0].current')
           else
-            CORE='"https://wordpress.org/wordpress-${{ matrix.wp }}.zip"'
+            version='${{ matrix.wp }}'
           fi
-          printf '{"core": %s, "phpVersion": "%s"}\n' "$CORE" "${{ matrix.php }}" > .wp-env.override.json
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "series=$(echo "${version}" | cut -d. -f1,2)" >> "$GITHUB_OUTPUT"
+      - name: Pin wp-phpunit to WordPress ${{ steps.wp.outputs.series }}
+        run: composer bin wp-tests require --no-interaction "wp-phpunit/wp-phpunit:~${{ steps.wp.outputs.series }}.0" --update-with-all-dependencies
+      - name: Create wp-env override
+        run: |
+          printf '{"core": "https://wordpress.org/wordpress-%s.zip", "phpVersion": "%s"}\n' \
+            "${{ steps.wp.outputs.version }}" "${{ matrix.php }}" > .wp-env.override.json
+      # Docker イメージ取得の一時的な失敗に備えて 3 回まで再試行する
       - name: Start wp-env
-        run: npx wp-env start
+        run: |
+          for attempt in 1 2 3; do
+            if composer wp:start; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
       - name: Run integration tests
         run: composer test:integration
       - name: Show wp-env logs on failure
         if: failure()
-        run: npx wp-env logs tests || true
+        run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
 ```
 
 設計上の要点:
 
-- マトリクスは DR-12 のとおり **PHP 8.2 / 8.3 / 8.4 × WP 6.4 / latest**(統合のみ。ユニットは WP 非依存のため PHP 軸のみ)。`unit` ジョブにのみ PHP 8.5 を追加し、現行安定版 PHP への forward 互換を Brain Monkey 層で検知する。これは DR-12 の検証面の追加であり、マトリクス大枠(PHP 8.2-8.4 × WP 6.4/latest)は維持する。`integration` ジョブと `phpstan.neon.dist` の `phpVersion.max`(80400)は変更しない(WP 6.4 × PHP 8.5 の組み合わせはコア由来 deprecation で脆弱なため。PHPStan 側の非推奨検知は phpstan-deprecation-rules(§2.1)が担う)。8.5 専用構文の使用は引き続き禁止(下限 8.2 は不変)。
+- マトリクスは D-09 のとおり、ユニットが PHP 8.3 / 8.5、統合が **PHP 8.3 / 8.5 × WP 7.0 / 最新版** の 4 セル。ユニットは WP 非依存のため PHP 軸のみ。
+- 統合の各セルは、検証する WP の版を先に確定し(WP 7.0 のセルは 7.0、最新版のセルは WordPress.org の版情報 API の最新版)、wp-env の `core` をその版の zip に、テストライブラリ(wp-phpunit)を同じ系列に固定する(§4.2)。API の取得や系列の固定に失敗したセルは、その時点で失敗する。
+- wp-env は `npm ci` で package-lock.json どおりに導入し(`actions/setup-node` の npm キャッシュを使う)、composer スクリプト経由でローカルの wp-env だけを呼ぶ(§1.1 補足)。
+- `lint` / `analyse` / `monorepo` / `rules-verify` は下限の PHP 8.3 で実行する(php-cs-fixer の推奨と依存解決の下限に合わせる。§1.1 補足)。PHP 8.5 での解析は PHPStan の `phpVersion`(8.3〜8.5。§2.1)が担う。
+- `integration` は `timeout-minutes: 20` で打ち切る。`wp:start` は Docker イメージ取得の一時的な失敗に備えて 10 秒間隔で 3 回まで再試行し、3 回目の失敗でジョブを失敗させる。失敗時は wp-env のログ(`logs development --no-watch`)を出力する。
 - `lint` ジョブが baseline ファイルの不存在を機械的に強制する。
 - カバレッジゲートは PHP 8.3 セルでのみ実行(計測の重複を避ける)。
 - `integration` は `unit` 成功後に起動し、Docker 起動コストを失敗時に節約する。
@@ -1095,7 +1175,7 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 | 6 | `TestCase/OptionTest.php` | `packages/core/tests/Unit/Option/OptionRepositoryTest.php` + `Integration/Option/OptionGroupTest.php` | 両方 | 定数ベースの option 読み書き仕様を移植。ユニット層はフェイク `OptionStorageInterface` 実装で、統合層は実 `wp_options` で検証 |
 | 7 | `TestCase/Field/FieldTest.php` | `packages/core/tests/Unit/Form/FieldTest.php` | Unit | エラー設定 / クリアの仕様を移植 |
 | 8 | `TestCase/Field/FieldSetTest.php` | — | — | 廃棄。FieldSet のシングルトン的インスタンス管理は DR-09(AbstractSingleton 廃止)で機構ごと消滅。フィールド集合の保持は `FormDefinition` のテストとして新規作成 |
-| 9 | `TestCase/Field/Rule/RuleTraitTest.php` | `packages/core/tests/Unit/Form/Rule/RuleContractTest.php` | Unit | **空値スルー**(空値は Required 系以外を素通り)の仕様を移植。必須パラメータ欠落 / 型不一致の実行時検査は PHP 8.2 のコンストラクタ型宣言 + named arguments による静的保証に置換(`TypeError` の検証のみ残す)。`PHPUnit\Framework\Error\Notice` 依存の検証は廃棄 |
+| 9 | `TestCase/Field/Rule/RuleTraitTest.php` | `packages/core/tests/Unit/Form/Rule/RuleContractTest.php` | Unit | **空値スルー**(空値は Required 系以外を素通り)の仕様を移植。必須パラメータ欠落 / 型不一致の実行時検査は PHP 8.3 のコンストラクタ型宣言 + named arguments による静的保証に置換(`TypeError` の検証のみ残す)。`PHPUnit\Framework\Error\Notice` 依存の検証は廃棄 |
 | 10 | `TestCase/Field/Rule/ChoiceRuleTest.php` | `Unit/Form/Rule/ChoiceRuleTest.php` | Unit | 選択肢一致・strict・multiple の全ケース移植 |
 | 11 | `TestCase/Field/Rule/EmailRuleTest.php` | `Unit/Form/Rule/EmailRuleTest.php` | Unit | 正常 / 異常メールアドレスのデータプロバイダ**全件**移植 |
 | 12 | `TestCase/Field/Rule/ExactLengthRuleTest.php` | `Unit/Form/Rule/`(05 文書の対応 Rule 名) | Unit | 文字数一致の境界値を移植(マルチバイト件を追加) |
@@ -1112,7 +1192,7 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 | 22 | `TestCase/Tax/AbstractTaxTest.php` | `packages/core/tests/Integration/Tax/TaxonomyTest.php` | Integration | タクソノミー登録(object_type の文字列 / 配列 / PostType クラス名解決)・term meta 定数操作・term link を移植 |
 | 23 | `TestCase/User/AbstractUserTest.php` | `packages/core/tests/Integration/User/UserRoleTest.php` | Integration | ロール登録・user meta 定数操作・author link を移植 |
 | 24 | `bin/install-wp-tests.sh` | — | — | 廃棄(wp-env + wp-phpunit に置換) |
-| 25 | `.travis.yml` / `.phpcs.xml.dist` / `Gruntfile.js` / `package.json` | — | — | 廃棄(qa.yml / php-cs-fixer / npx wp-env に置換。i18n pot 生成は `wp i18n make-pot` を必要時に使用) |
+| 25 | `.travis.yml` / `.phpcs.xml.dist` / `Gruntfile.js` / `package.json` | — | — | 廃棄(qa.yml / php-cs-fixer / wp-env(@wordpress/env)に置換。i18n pot 生成は `wp i18n make-pot` を必要時に使用) |
 
 ### 8.2 旧 FW で未テストだった領域(新規テスト必須リスト)
 
@@ -1135,7 +1215,7 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 
 ## 9. 開発環境セットアップ手順
 
-前提ソフトウェア: PHP 8.2+(CLI、pcov 拡張推奨)、Composer 2.7+、Node.js 20+、Docker(Desktop または Engine + Compose v2)、Git。
+前提ソフトウェア: PHP 8.3〜8.5(CLI、pcov 拡張推奨。lint は 8.3 で実行する)、Composer 2.7+、Node.js 18.12+(@wordpress/env の要件。CI は 24)、Docker(Desktop または Engine + Compose v2)、Git。
 
 ```bash
 # 1. クローン
@@ -1146,13 +1226,14 @@ cd tmswp
 composer install
 #    → bamarni/composer-bin-plugin の allow-plugins 確認には yes と答える
 #    → vendor-bin/wp-tests/vendor/bin/phpunit が存在することを確認
+npm ci                  # package-lock.json どおりに @wordpress/env を入れる
 
 # 3. Docker 不要の QA が通ることを確認
 composer qa:fast        # lint + analyse + test:unit
 
 # 4. WordPress 環境の起動(初回はイメージ取得で数分)
-composer wp:start       # = npx wp-env start
-#    development: http://localhost:8888 / tests: http://localhost:8889
+composer wp:start       # = node node_modules/@wordpress/env/bin/wp-env start
+#    http://localhost:8888
 
 # 5. 統合テスト
 composer test:integration
@@ -1168,9 +1249,9 @@ composer qa
 | `composer install` 後に `vendor-bin/wp-tests/vendor` がない | allow-plugins で bamarni を拒否した。`composer config allow-plugins.bamarni/composer-bin-plugin true && composer bin wp-tests install` |
 | `composer analyse` が scanDirectories エラー | 同上(vendor-bin 未インストール) |
 | `wp-env start` が失敗 | Docker デーモン未起動。Docker Desktop を起動して再実行 |
-| ポート 8888/8889 が使用中 | `.wp-env.override.json` に `{"port": 8890, "testsPort": 8891}` を作成 |
+| ポート 8888 が使用中 | `.wp-env.override.json` に `{"port": 8890}` を作成 |
 | `test:coverage` で「No code coverage driver」 | pcov 未導入。`pecl install pcov` 後、php.ini に `extension=pcov` |
-| 統合テストが DB 接続エラー | wp-env 未起動、または古いコンテナ。`npx wp-env destroy && npx wp-env start` でリセット |
+| 統合テストが DB 接続エラー | wp-env 未起動、または古いコンテナ。`node node_modules/@wordpress/env/bin/wp-env destroy && composer wp:start` でリセット |
 | wp-env 環境の WP/PHP を変えたい | `.wp-env.override.json` で `core` / `phpVersion` を上書き(CI と同形式) |
 
 `.gitignore` に最低限含めるもの: `/vendor/`, `/vendor-bin/*/vendor/`, `/var/`, `/.wp-env.override.json`, `/node_modules/`。
@@ -1186,8 +1267,7 @@ composer analyse
 composer fix
 
 # 単一パッケージの統合テストのみ
-npx wp-env run tests-cli --env-cwd=wp-content/plugins/tmswp \
-  vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --testsuite core
+composer test:integration -- --testsuite core
 
 # コミット前(Docker なし環境)
 composer qa:fast
@@ -1236,7 +1316,7 @@ final class EmailRuleTest extends UnitTestCase
 - テストの実質的価値は「FW の期待仕様を実行可能な形で記述した唯一のドキュメント」(AbstractPost/Tax/UserTest、Rule 系データプロバイダ、Log 系 vfsStream)にあった。→ コードではなく**仕様を**移植する対応表(8 章)を確定。
 - git タグゼロ・version フィールドなしで利用側は dev-master 参照しかできなかった。→ monorepo-builder release + SemVer タグ + split 配布(DR-11)。
 - Model / View / SettingsPage / CsvImport / Thumb が完全未テストのまま 10 年運用された。→ 未テスト領域の新規テスト必須リスト(8.2)とカバレッジゲートで再発を防止。
-- モダン化監査(2026-06-13)による更新: `actions/` の output / set_404 検査をトークン手書きリンタから FW 同梱 PHPStan 拡張のカスタムルール + `actions/` 専用 neon(level 0)へ移行し静的検査エンジンを統一。孤児検査は Docker 不要の軽量スクリプト `bin/tms-check` に残置。split アクションを保守後継の danharrin 版へ統一し、`with:` 内で評価されないタグ式の実バグを修正。unit マトリクスへ PHP 8.5 を forward 互換検知として追加。DR-12 の列挙集合 8.2-8.4 と統合マトリクスは不変。php-cs-fixer 基底を PSR-12 から後継規格 PER-CS 2.0(`@PER-CS2x0`)へ更新し、基底に内包される手動ルールを削減。
+- モダン化監査(2026-06-13)による更新: `actions/` の output / set_404 検査をトークン手書きリンタから FW 同梱 PHPStan 拡張のカスタムルール + `actions/` 専用 neon(level 0)へ移行し静的検査エンジンを統一。孤児検査は Docker 不要の軽量スクリプト `bin/tms-check` に残置。split アクションを保守後継の danharrin 版へ統一し、`with:` 内で評価されないタグ式の実バグを修正。php-cs-fixer 基底を PSR-12 から後継規格 PER-CS 2.0(`@PER-CS2x0`)へ更新し、基底に内包される手動ルールを削減。
 
 ---
 
@@ -1246,16 +1326,17 @@ final class EmailRuleTest extends UnitTestCase
 
 - [ ] `composer install` 一発で `vendor/` と `vendor-bin/wp-tests/vendor/` の両方が揃う
 - [ ] `composer lint` / `fix` / `analyse` / `test:unit` / `test:integration` / `test` / `test:coverage` / `qa:fast` / `qa` / `monorepo:validate` が本書 1 章の表どおりに動作する
-- [ ] `phpstan.neon.dist` が level max で、`packages/core/extension.neon`(04 文書の FW 拡張)と szepeviktor/phpstan-wordpress を include している
+- [ ] `phpstan.neon.dist` が level max で、`packages/core/phpstan/extension.neon`(04 文書の FW 拡張)と szepeviktor/phpstan-wordpress を include している
 - [ ] リポジトリに `phpstan-baseline*` が存在せず、qa.yml がその存在を fail にする
 - [ ] `parameters.ignoreErrors` が空で、`reportUnmatchedIgnoredErrors: true`
 - [ ] php-cs-fixer が `@PER-CS2x0`(+ `:risky`)基底と `declare_strict_types` / `final_class` / `strict_comparison` を含む 3.1 のルール全文で構成され、`composer lint` がクリーンに通る
 - [ ] ユニットテストが PHPUnit 11・`tests/bootstrap-unit.php`(WP 定数を定義しない)で、WP / MySQL / Docker なしで全件パスする
 - [ ] 全ユニットテストが `TMSWP\Core\Tests\Support\UnitTestCase` を継承している
-- [ ] 統合テストが wp-env の tests 環境内で PHPUnit 9.6(vendor-bin 隔離)+ wp-phpunit で全件パスする
+- [ ] 統合テストが wp-env の `cli` コンテナ内で PHPUnit 9.6(vendor-bin 隔離)+ wp-phpunit で全件パスする
 - [ ] `phpunit.unit.xml.dist` / `phpunit.integration.xml.dist` に 6 パッケージ分の testsuite が定義されている
 - [ ] ユニット層カバレッジ(コア 6 パッケージ合算)が 85% 以上で、`bin/coverage-check.php` が閾値未満を exit 1 にする
-- [ ] qa.yml に lint / analyse / monorepo / unit(PHP 8.2-8.4 + 8.5 = forward 互換検知)/ integration(PHP 8.2-8.4 × WP 6.4/latest = 6 セル)の全ジョブがある
+- [ ] qa.yml に lint / analyse / monorepo / rules-verify / unit(PHP 8.3 / 8.5)/ integration(PHP 8.3 / 8.5 × WP 7.0 / 最新版 = 4 セル。テストライブラリは各セルの WP と同じ系列)の全ジョブがある
+- [ ] `npm ci` で package.json に固定した版の @wordpress/env が入り、composer スクリプト・qa.yml が wp-env を `node node_modules/@wordpress/env/bin/wp-env` のパスでだけ呼ぶ
 - [ ] split.yml がタグ push で 8 パッケージ(packages 6 + starters 2)を read-only リポジトリへ split し、同名タグを伝播する
 - [ ] `monorepo-builder.php` が packages/ と starters/ を対象に validate / merge / release を構成している
 - [ ] ルート composer.json の `replace` に全 6 パッケージが列挙されている
@@ -1268,6 +1349,7 @@ final class EmailRuleTest extends UnitTestCase
 ```bash
 composer validate --strict                      # composer.json 構文
 composer install && test -x vendor-bin/wp-tests/vendor/bin/phpunit
+npm ci && npm ls @wordpress/env                 # package.json で固定した版
 composer qa:fast                                # lint + analyse + unit(Docker 不要)
 ls phpstan-baseline* 2>/dev/null && echo NG || echo OK   # baseline 不在
 composer wp:start && composer test:integration  # 統合

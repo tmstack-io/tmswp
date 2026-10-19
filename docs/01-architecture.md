@@ -2,7 +2,7 @@
 
 ## 目的
 
-TMStack WordPress Framework 全体の物理構成を確定する。すなわち、monorepo のディレクトリツリー、全パッケージの composer 名・名前空間・責務・runtime 依存、依存ポリシー、SemVer とリリースフロー(read-only split 配布)、PHP 8.2 / WP 6.4 下限の根拠と WP API 下限棚卸し、グローバルヘルパポリシー、i18n 方針、利用側(テーマ・プラグイン)の標準ディレクトリレイアウトを、この文書だけで実装・構築できる粒度で定義する。
+TMStack WordPress Framework 全体の物理構成を確定する。すなわち、monorepo のディレクトリツリー、全パッケージの composer 名・名前空間・責務・runtime 依存、依存ポリシー、SemVer とリリースフロー(read-only split 配布)、PHP 8.3〜8.5 / WP 7.0 以上の対応範囲と WP API 下限棚卸し、グローバルヘルパポリシー、i18n 方針、利用側(テーマ・プラグイン)の標準ディレクトリレイアウトを、この文書だけで実装・構築できる粒度で定義する。
 
 各モジュール(Kernel、Form、Model 等)の内部 API 仕様は本書のスコープ外であり、各担当文書が定義する。本書はそれらが収まる「器」と「配布の仕組み」を確定する。
 
@@ -78,7 +78,7 @@ tmswp/                                  # monorepo ルート (<org>/tmswp)
 ├── bin/                                  # 開発補助スクリプト(split 検証等)
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml                        # PHP 8.2-8.4 × WP 6.4/latest マトリクス(詳細: QA・CI 設計書)
+│       ├── qa.yml                        # PHP 8.3 / 8.5 × WP 7.0 / 最新版マトリクス(詳細: QA・CI 設計書)
 │       └── split.yml                     # read-only split 配布(§4.4)
 ├── packages/
 │   ├── core/                             # tmswp/core
@@ -198,8 +198,8 @@ tmswp/                                  # monorepo ルート (<org>/tmswp)
    - 依存追加は当該拡張の設計書に「何を・なぜ」を記録する(本表の更新を伴う)。
    - WordPress プラグイン同梱で衝突しやすいライブラリ(グローバル関数を定義するもの、メジャーバージョンが乱立しているもの)を避ける。
    - `ext-gd` は `tmswp/thumbnail` のみが require する(旧 iwf2b はコアが ext-gd を要求していた。これを拡張へ移設する)。thumbnail は `WP_Image_Editor` 経由で処理するため Imagick 環境でも動作するが、最低保証として ext-gd を要求する。
-3. **require-dev は monorepo ルートに集約**する(phpstan、szepeviktor/phpstan-wordpress、php-stubs/wordpress-stubs、friendsofphp/php-cs-fixer、phpunit ^11、brain/monkey、wp-phpunit/wp-phpunit、symplify/monorepo-builder 等。確定リストは QA・CI 設計書)。各パッケージの composer.json には split 配布後に単体で `composer install && composer test` が成立する最小限の require-dev を重複記載する(monorepo-builder の validate で乖離を検出)。
-4. **WordPress 本体・ACF 等のプラグインを composer 依存に含めない**。WP 関数はホスト環境が提供する前提とし、静的解析は wordpress-stubs で行う。
+3. **require-dev は monorepo ルートに集約**する(phpstan、szepeviktor/phpstan-wordpress、php-stubs/wordpress-stubs、friendsofphp/php-cs-fixer、phpunit ^11、brain/monkey、bamarni/composer-bin-plugin、symplify/monorepo-builder 等。確定リストは QA・CI 設計書)。統合テスト用の PHPUnit 9.6 と wp-phpunit/wp-phpunit はルートの require-dev に置かず、`vendor-bin/wp-tests` に隔離する(QA・CI 設計書 §4.2)。各パッケージの composer.json には split 配布後に単体で `composer install && composer test` が成立する最小限の require-dev を重複記載する(monorepo-builder の validate で乖離を検出)。
+4. **WordPress 本体・ACF 等のプラグインを composer 依存に含めない**。WP 関数はホスト環境が提供する前提とし、静的解析は wordpress-stubs で行う。統合テスト環境の WordPress と ACF(wordpress.org の無料版 `advanced-custom-fields`。版を固定した zip)は `.wp-env.json` で導入する(QA・CI 設計書 §4.7)。
 
 ### 3.3 同一サイト内の複数インストール共存規約
 
@@ -229,7 +229,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
     "type": "library",
     "license": "GPL-2.0-or-later",
     "require": {
-        "php": ">=8.2",
+        "php": ">=8.3",
         "psr/log": "^3.0",
         "psr/container": "^2.0"
     },
@@ -250,7 +250,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
     },
     "extra": {
         "phpstan": {"includes": ["phpstan/extension.neon"]},
-        "branch-alias": {"dev-main": "1.x-dev"}
+        "branch-alias": {"dev-main": "0.1.x-dev"}
     },
     "minimum-stability": "stable",
     "config": {"sort-packages": true}
@@ -260,6 +260,8 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 注意点:
 
 - PSR-4 で `TMSWP\Core\PHPStan\` を先に書いても、composer は最長一致で解決するため `src/` 側と衝突しない。
+- PHPStan 拡張の設定ファイルは `phpstan/extension.neon` の 1 枚だけを置く(§3.4)。`extra.phpstan.includes` とルートの phpstan.neon.dist はどちらもこのファイルを直接指す。
+- `branch-alias` は monorepo-builder の `UpdateBranchAliasReleaseWorker` がリリースごとに `<major>.<minor>.x-dev` 形式で更新する(§4.3)。上の値は v0.1.0 開発中のもの。
 - `files` オートロードは `src/functions.php` の 1 ファイルのみ(§6)。拡張パッケージがヘルパを持つ場合も同形式(各 1 ファイル)とする。
 - 拡張パッケージの composer.json は本形式から `require` に `"tmswp/core": "^X.Y"` を加え、psr-4・phpstan エントリを各自のものに差し替えた形とする(thumbnail のみ `"ext-gd": "*"` を追加)。
 - スターターの composer.json は §8.4 に正準形を示す。
@@ -289,7 +291,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
     "description": "TMStack WordPress Framework - development monorepo (not for production use)",
     "license": "GPL-2.0-or-later",
     "require": {
-        "php": ">=8.2",
+        "php": ">=8.3",
         "psr/log": "^3.0",
         "psr/container": "^2.0",
         "ext-gd": "*"
@@ -301,8 +303,8 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
         "friendsofphp/php-cs-fixer": "...",
         "phpunit/phpunit": "^11",
         "brain/monkey": "...",
-        "wp-phpunit/wp-phpunit": "...",
-        "symplify/monorepo-builder": "^11"
+        "bamarni/composer-bin-plugin": "...",
+        "symplify/monorepo-builder": "^12"
     },
     "replace": {
         "tmswp/core": "self.version",
@@ -330,12 +332,13 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 
 - `require` / `autoload` は `monorepo-builder merge` で各パッケージの composer.json から機械的に合成する(手動編集しない)。
 - `replace` により monorepo 内でのパッケージ相互解決に path repository を使わない(単一 vendor/ で完結)。
+- 統合テスト用の PHPUnit 9.6 と wp-phpunit は `bamarni/composer-bin-plugin` で `vendor-bin/wp-tests` に隔離し、ルートの require-dev には置かない(QA・CI 設計書 §4.2)。
 - `scripts` の中身(lint/fix/analyse/test/qa)は QA・CI 設計書が定義する。コマンド名はこの 5 つで確定であり、人間・CI・AI が同一コマンドを使う。
 - starters/ は autoload マージ対象外(利用側雛形であり FW のコードではない)。CI では create-project 相当のシナリオテストで検証する(QA・CI 設計書)。
 
 ### 4.3 monorepo-builder の利用範囲
 
-`symplify/monorepo-builder ^11` を次の 3 用途に限定して使う:
+`symplify/monorepo-builder ^12` を次の 3 用途に限定して使う:
 
 1. **merge**: packages/*/composer.json → ルート composer.json への require / require-dev / autoload 合成。
 2. **validate**: パッケージ間の依存バージョン矛盾、ルートとの乖離検出(CI で実行)。
@@ -413,11 +416,11 @@ jobs:
 
 ---
 
-## 5. PHP 8.2 / WordPress 6.4 下限の根拠
+## 5. PHP 8.3〜8.5 / WordPress 7.0 以上の対応範囲
 
-### 5.1 PHP 8.2 下限の根拠
+### 5.1 PHP 8.3〜8.5
 
-DR-02 で確定済み。設計上の裏付けは「FW が前提とする言語機能の最大要求が 8.2」であること:
+対応範囲は PHP 8.3〜8.5(DR-02)。FW は次の言語機能を前提とし、いずれも下限の 8.3 で使える:
 
 | 言語機能 | 必要 PHP | FW での用途 |
 |---|---|---|
@@ -427,22 +430,24 @@ DR-02 で確定済み。設計上の裏付けは「FW が前提とする言語�
 | enum | 8.1 | `FormStep`、`Meta\ObjectType` |
 | readonly プロパティ | 8.1 | Definition 系・Config 系の不変オブジェクト |
 | 第一級 callable 構文 | 8.1 | フック登録・Rule 合成 |
-| **readonly クラス** | **8.2** | `KernelConfig`、`FormResult` 等の値オブジェクト全体 readonly 化 |
-| DNF 型・trait 内定数 | 8.2 | 必要箇所で使用可(下限が許容) |
+| readonly クラス | 8.2 | `KernelConfig`、`FormResult` 等の値オブジェクト全体 readonly 化 |
+| DNF 型・trait 内定数 | 8.2 | 必要箇所で使用可 |
+| **型付きクラス定数** | **8.3** | クラス定数の型宣言(`const string NAME = ...`) |
+| **`#[\Override]`** | **8.3** | 親クラス・インターフェースのメソッドを上書きするメソッドへの付与 |
 
-サポート状況の面でも、PHP 8.1 はセキュリティサポートが 2025-12-31 で終了済み(本書執筆時点)であり、新規 FW の下限として 8.2 未満を選ぶ理由がない。CI は PHP 8.2 / 8.3 / 8.4 でテストする(DR-12)。8.3+ 専用構文(typed class constants 等)は**使用禁止**(下限 8.2 でパースできること)。
+CI は PHP 8.3 / 8.5 でテストし、PHPStan は 8.3〜8.5 を解析範囲とする(DR-12)。8.4 以降の専用構文(プロパティフック、非対称可視性、パイプ演算子等)は**使用禁止**(下限 8.3 でパースできること)。
 
-### 5.2 WordPress 6.4 下限の根拠
+### 5.2 WordPress 7.0 以上
 
-WP 6.4(2023-11)を下限とする決定(DR-02)は、FW が使う WP API の最大要求バージョンが 6.4 であることに裏付けられる。決定打は次の 3 API:
+対応範囲は WordPress 7.0 以上(DR-02)。FW が使う WP API はすべて 7.0 より前に導入済みであり(§5.3)、7.0 を下限とすれば引数互換の心配なく使える。導入が比較的新しく、FW の機能が前提とする API は次の 3 つ:
 
-1. `register_post_meta()` の `revisions_enabled` 引数(**6.4**)— `Meta\PreviewMetaSupport`(プレビュー時メタ保存)はリビジョンへのメタ保存機構の上に実装する。これ未満の WP では autosave/プレビューにメタが乗らず、旧 iwf2b 時代の「プレビューでカスタムフィールドが反映されない」問題を自前ハックで解決する羽目になる。
+1. `register_post_meta()` の `revisions_enabled` 引数(**6.4**)— `Meta\PreviewMetaSupport`(プレビュー時メタ保存)はリビジョンへのメタ保存機構の上に実装する。
 2. `wp_trigger_error()`(**6.4**)— Discovery の探索失敗・循環依存検出(DR-04)の開発時通知を WP 標準作法(`WP_DEBUG` 連動)で出すために使用。
 3. `wp_admin_notice()`(**6.4**)— Migrator の移行失敗通知、acf-bridge のドリフト検知通知等の管理画面表示に使用。
 
 ### 5.3 WP API 下限棚卸し表
 
-FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★」は下限選定に効いた API。
+FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★」は FW の機能が前提とする、導入が比較的新しい API。
 
 | FW 機能(担当文書) | WP API / 引数 | 導入 WP | 用途・備考 |
 |---|---|---|---|
@@ -478,12 +483,12 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 | thumbnail 拡張 | `wp_get_image_editor()` / `WP_Image_Editor` | 3.5 | GD/Imagick 抽象。timthumb 置換の中核 |
 | settings-page 拡張 | `add_menu_page()` / `add_submenu_page()` | 1.5 | メニュー登録 |
 
-**結論**: 最大要求は 6.4(`revisions_enabled` / `wp_trigger_error` / `wp_admin_notice`)。WP 6.4 を下限とすれば、上表すべての API を引数互換の心配なく使える。6.4 未満のための条件分岐・フォールバックは**書いてはならない**(下限未満は Kernel がブート時に明示エラーで拒否する。検出方法は Kernel 設計書)。
+**結論**: 上表の最大要求は 6.4(`revisions_enabled` / `wp_trigger_error` / `wp_admin_notice`)で、すべて下限の WP 7.0 に含まれる。7.0 未満のための条件分岐・フォールバックは**書いてはならない**(下限未満は Kernel がブート時に明示エラーで拒否する。検出方法は Kernel 設計書)。
 
 ### 5.4 上限互換(forward compatibility)に関する注意
 
-- CI は WP latest でもテストする(DR-12)。既知の forward 互換注意点として、**WP 6.7 以降は init フックより前の翻訳ロード・翻訳関数呼び出しが `_doing_it_wrong` 通知を出す**(just-in-time translation loading)。FW の翻訳ロードとラベル生成は必ず init 以降に行う(§7.3。実装拘束は Kernel / PostType 設計書に課す)。
-- PHP 8.4 の暗黙 nullable 非推奨(`function f(Type $x = null)` 形式)に該当するシグネチャを書かない(明示 `?Type` を使う)。
+- CI は WP の最新版でもテストする(DR-12)。**init フックより前の翻訳ロード・翻訳関数呼び出しは `_doing_it_wrong` 通知を出す**(WP 6.7 で入った just-in-time translation loading。下限の 7.0 を含む全対応版の挙動)。FW の翻訳ロードとラベル生成は必ず init 以降に行う(§7.3。実装拘束は Kernel / PostType 設計書に課す)。
+- PHP 8.4 の暗黙 nullable 非推奨(`function f(Type $x = null)` 形式)に該当するシグネチャを書かない(明示 `?Type` を使う)。PHP 8.5 で非推奨の書き方(非正準のキャスト名 `(integer)` / `(boolean)` / `(double)` 等)も使わない。
 
 ---
 
@@ -533,7 +538,7 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 
 - 同一ドメイン `tmswp` に対して複数パッケージが MO を持つが、WP の `load_textdomain()` は既ロードドメインへ**マージ**するため衝突しない。msgid の重複を避けるため、拡張パッケージの文字列にはパッケージ文脈が分かる文言を使う(機械的接頭辞は付けない)。
 - ビルド手順は `wp i18n make-pot` →(翻訳して .po 更新)→ `wp i18n make-mo` + `wp i18n make-php` の順(make-php の入力は PO であり、MO からは生成しない)。WP-CLI が無い開発環境では `composer i18n:build` が `.po` から `.mo` と `.l10n.php` を生成する。
-- `.l10n.php` 併載による高速化(gettext バイナリパースの除去・OPcache 共有)は **WP 6.5+ 環境でのみ発現**する。下限の WP 6.4 では `.l10n.php` は参照されず従来どおり `.mo` を読み、性能・挙動とも不変(無害に同居する。条件分岐・フォールバックは一切書かない=§5.3 の禁止規定を遵守)。成果物が PHP 配列テキストになるため diff レビュー・静的解析も可能になる。
+- `.l10n.php` 併載による高速化(gettext バイナリパースの除去・OPcache 共有)は WP 6.5 で入った挙動で、下限の WP 7.0 を含む全対応版で発現する(条件分岐・フォールバックは一切書かない=§5.3 の禁止規定を遵守)。成果物が PHP 配列テキストになるため diff レビュー・静的解析も可能になる。
 
 ### 7.3 ロード手順
 
@@ -544,7 +549,7 @@ $locale = determine_locale();                       // WP 5.0+
 load_textdomain('tmswp', <pkg>/languages/"tmswp-{$locale}.mo");
 ```
 
-- 上記ロードコードは `.l10n.php` 併載(§7.2)後も**一字も変更しない**。WP 6.5+ の `load_textdomain()` は引数の `.mo` パスから同名の `.l10n.php` を自動導出して優先ロードし、WP 6.4 は従来どおり `.mo` を読む。FW 側に分岐・フォールバックは書かない。
+- 上記ロードコードは `.l10n.php` 併載(§7.2)後も**一字も変更しない**。`load_textdomain()` は引数の `.mo` パスから同名の `.l10n.php` を自動導出して優先ロードする(WP 6.5 で入った挙動で、全対応版で有効)。FW 側に分岐・フォールバックは書かない。
 - `init` より前に FW 内で `__()` / `_x()` 等を呼ぶことを全パッケージで禁止する(WP 6.7+ の just-in-time translation loading が `_doing_it_wrong` を出すため。§5.4)。翻訳済み文字列が必要な値(バリデーションメッセージ等)は遅延評価(クロージャまたは取得時解決)で持つ。この拘束は各担当文書の実装要件とする。
 - ja 以外のロケールで MO が無い場合はソース文字列(英語)がそのまま表示される。これを正常動作とする(フォールバック処理を書かない)。
 
@@ -675,7 +680,7 @@ my-plugin/
     "type": "project",
     "license": "proprietary",
     "require": {
-        "php": ">=8.2",
+        "php": ">=8.3",
         "tmswp/core": "^1.0"
     },
     "autoload": {
@@ -716,7 +721,7 @@ my-plugin/
 
 - [ ] monorepo ルートに §2 のツリーどおり `packages/` 5 パッケージ + `starters/` 2 スターターが存在する
 - [ ] 各パッケージの composer.json の name / 名前空間 / runtime 依存が §3.1 の表と完全一致する
-- [ ] `tmswp/core` の require が `php >=8.2` / `psr/log ^3.0` / `psr/container ^2.0` のみである(ext 要求なし)
+- [ ] `tmswp/core` の require が `php >=8.3` / `psr/log ^3.0` / `psr/container ^2.0` のみである(ext 要求なし)
 - [ ] `tmswp/thumbnail` のみ `ext-gd` を require している
 - [ ] 拡張パッケージが `tmswp/core` 以外の tmswp/* を require していない(拡張間依存禁止)
 - [ ] 全パッケージのライセンスが GPL-2.0-or-later である
@@ -732,16 +737,16 @@ my-plugin/
 
 下限・互換:
 
-- [ ] 全 PHP ファイルが `declare(strict_types=1)` を持ち、PHP 8.2 でパース可能(8.3+ 専用構文なし)
-- [ ] §5.3 の表にない WP API を新規使用する場合、導入バージョンが 6.4 以下であることを確認するレビュー手順が rules/ に記載されている
-- [ ] WP 6.4 未満のためのフォールバック分岐がコードベースに存在しない
+- [ ] 全 PHP ファイルが `declare(strict_types=1)` を持ち、PHP 8.3 でパース可能(8.4 以降の専用構文なし)
+- [ ] §5.3 の表にない WP API を新規使用する場合、導入バージョンが 7.0 以下であることを確認するレビュー手順が rules/ に記載されている
+- [ ] WP 7.0 未満のためのフォールバック分岐がコードベースに存在しない
 - [ ] FW 内に init フック前の `__()` 等の呼び出しが存在しない(WP 6.7 JIT 翻訳対応)
 
 ヘルパ・i18n:
 
 - [ ] グローバル関数はすべて `tms_` 接頭辞 + `function_exists` ガード + §6.2 の予約表掲載のもののみ
 - [ ] ヘルパ本体が静的ファサード 1 メソッドへの委譲のみで構成されている
-- [ ] 翻訳が `languages/tmswp-{locale}.mo` と同名の `tmswp-{locale}.l10n.php`(`wp i18n make-php` で .po から生成)の併載形式で配置され、`init`(priority 1)でロードされる(ロードコードは .mo パス指定のままで、6.4 向けの分岐が存在しない)
+- [ ] 翻訳が `languages/tmswp-{locale}.mo` と同名の `tmswp-{locale}.l10n.php`(`wp i18n make-php` で .po から生成)の併載形式で配置され、`init`(priority 1)でロードされる(ロードコードは .mo パス指定のままで、WP の版による分岐が存在しない)
 
 利用側レイアウト:
 
@@ -760,8 +765,8 @@ composer validate --strict packages/*/composer.json
 composer lint && composer analyse && composer test
 composer qa   # 上記一括
 
-# 下限構文チェック(CI: PHP 8.2 ジョブで composer install が成功し全テスト green であること)
-php8.2 -l $(git ls-files 'packages/*/src/**/*.php')
+# 下限構文チェック(CI: PHP 8.3 ジョブで composer install が成功し全テスト green であること)
+php8.3 -l $(git ls-files 'packages/*/src/**/*.php')
 
 # ヘルパ規約
 grep -rn "^function \|^\tfunction " packages/*/src/functions.php   # 直定義(ガード外)が無いこと

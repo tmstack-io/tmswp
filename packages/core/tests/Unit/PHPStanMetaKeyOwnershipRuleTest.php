@@ -27,7 +27,7 @@ final class PHPStanMetaKeyOwnershipRuleTest extends RuleTestCase
     /** @return list<string> */
     public static function getAdditionalConfigFiles(): array
     {
-        return [__DIR__ . '/../../extension.neon'];
+        return [__DIR__ . '/../../phpstan/extension.neon'];
     }
 
     public function testReportsForeignEntityConstantsAndDeclaredStringLiterals(): void

@@ -4,7 +4,7 @@
   "type": "project",
   "license": "proprietary",
   "require": {
-    "php": ">=8.2",
+    "php": ">=8.3",
     "tmswp/acf-bridge": "^0.1",
     "tmswp/core": "^0.1",
     "tmswp/ja-toolkit": "^0.1",

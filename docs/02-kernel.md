@@ -813,7 +813,7 @@ final class ComponentCache
 ];
 ```
 
-書出しは `var_export()` による(enumケースは PHP 8.2 の var_export で有効なPHPコードとして出力される。属性引数をスカラー/配列/enumに制限している(§4手順3-e)のはこのため)。ファイルは `return` 文のみで構成され、Webから直接アクセスされても何も出力しない。
+書出しは `var_export()` による(enumケースは var_export で有効なPHPコードとして出力される。属性引数をスカラー/配列/enumに制限している(§4手順3-e)のはこのため)。ファイルは `return` 文のみで構成され、Webから直接アクセスされても何も出力しない。
 
 ### store() のアルゴリズム
 

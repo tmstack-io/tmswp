@@ -1,6 +1,6 @@
 # TMStack WordPress Framework — 設計書群
 
-本ディレクトリ(`docs/tmswp/`)は、WordPress 用フレームワーク **TMStack WordPress Framework**(以下 TMSWP)をゼロから実装するための設計書一式である。10 年・15 プロジェクトで運用された自社 FW iwf2b の価値を踏襲しつつ、PHP 8.2+ / WordPress 6.4+ 前提で**完全新規**(後方互換なし)に再構築する。
+本ディレクトリ(`docs/tmswp/`)は、WordPress 用フレームワーク **TMStack WordPress Framework**(以下 TMSWP)をゼロから実装するための設計書一式である。10 年・15 プロジェクトで運用された自社 FW iwf2b の価値を踏襲しつつ、PHP 8.3〜8.5 / WordPress 7.0 以上を前提に**完全新規**(後方互換なし)に再構築する。
 
 ## この設計書群の目的
 

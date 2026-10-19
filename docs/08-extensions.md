@@ -33,7 +33,7 @@ tmswp/acf-bridge は本書のスコープ外(専用文書が定義)。CSVイン�
     "name": "tmswp/<package>",
     "type": "library",
     "require": {
-        "php": ">=8.2",
+        "php": ">=8.3",
         "tmswp/core": "^1.0"
     },
     "autoload": {
@@ -637,7 +637,7 @@ final class SiteSettingsPage extends SettingsPage
 
 1. 1関心事=1モジュール(final class)。`JaToolkit::enable([...])` に列挙したものだけが有効化される。
 2. 収載対象は**日本語サイト固有の課題を解くモジュールとFormプリセットのみ**。管理メニュー・管理バー・ダッシュボード・wp_head 出力等の汎用WPクリーンアップは、削除対象がテーマ毎に異なり一律の既定値が成立しないため**コード収載しない**。app側Hookクラスのレシピ(コアの rules/hooks.md)として提供する(3.6の対応表参照)。
-3. クラシックエディタ(TinyMCE・クラシックメタボックス)専用の挙動調整は、WP 6.4+ を下限とする本FWでは収載しない。必要案件はapp側Hookクラスで実装する。
+3. クラシックエディタ(TinyMCE・クラシックメタボックス)専用の挙動調整は、WP 7.0 を下限とする本FWでは収載しない。必要案件はapp側Hookクラスで実装する。
 4. ACF/CF7/Yoast連携・View乗っ取り(`template_include`+exit)・`load_global` は**本パッケージにも収載しない**(完全廃止。3.6の対応表参照)。
 5. 全モジュールはフロント/管理画面の双方で安全に `register()` できる(各モジュールが内部で適切なフックに繋ぐ)。
 
@@ -802,7 +802,7 @@ FormDefinition::create('contact')
 | 旧フック登録(AbstractHook) | 内容 | 新FWでの処遇 |
 |---|---|---|
 | `init` → `init_theme()` | show_acf/hide_acfクッキー切替 | **廃止**(ACF開発者向けトグル。acf-bridgeにも収載しない) |
-| `wp_terms_checklist_args` → `terms_checklist_args()` | 選択済みタームの最上部移動を無効化 | 廃止(クラシックメタボックス専用。WP 6.4+ 下限では収載しない。必要案件はapp側Hookクラスで実装) |
+| `wp_terms_checklist_args` → `terms_checklist_args()` | 選択済みタームの最上部移動を無効化 | 廃止(クラシックメタボックス専用。WP 7.0 下限の本FWでは収載しない。必要案件はapp側Hookクラスで実装) |
 | `admin_enqueue_scripts` → `check_tinymce_override()` / `tiny_mce_before_init` → `override_mce_options()` | 固定ページTinyMCEの空タグ削除抑制 | 廃止(TinyMCE=クラシックエディタ専用。同上) |
 | `widgets_init` → `remove_default_widgets()` | 標準ウィジェット13種解除 | レシピ化(rules/hooks.md。`widgets_init` priority 11 で `unregister_widget()`) |
 | `admin_menu` → `remove_admin_menu()` | 管理メニュー全削除 | レシピ化(rules/hooks.md の `AdminCleanupHook` 例。削除対象はテーマ毎にapp側で明示) |
@@ -817,7 +817,7 @@ FormDefinition::create('contact')
 | `wp_head` → `head_scripts()` | `var ajaxurl = ...` のインラインscript出力 | 廃止。rules/レシピ化(`wp_add_inline_script`/`wp_localize_script` を案内) |
 | `wpcf7_support_html5` / `wpcf7_map_meta_cap` → `cf7_meta_cap()` | **CF7連携** | **廃止**(DR-10/DR-16。コアにも全拡張にも収載しない。必要案件はapp側で2行書く) |
 | `wpseo_metabox_prio` → `yoast_seo_metabox_priority()` | **Yoast連携**(メタボックス位置low) | **廃止**(同上) |
-| `remove_action wp_head`: shortlink/generator/rsd/wlwmanifest/rest_output_link | headタグ掃除 | レシピ化(rules/hooks.md。wlwmanifest_linkのみ対応不要: WP 6.3で本体撤去済み・本FW下限WP 6.4+のため全環境で恒久no-op) |
+| `remove_action wp_head`: shortlink/generator/rsd/wlwmanifest/rest_output_link | headタグ掃除 | レシピ化(rules/hooks.md。wlwmanifest_linkのみ対応不要: WP 6.3で本体撤去済み・本FW下限WP 7.0のため全環境で恒久no-op) |
 | `remove_action wp_head`: feed_links_extra | フィードリンク削除 | レシピ化(同上) |
 | 絵文字3点セット+`emoji_svg_url` | 絵文字無効化 | レシピ化(同上。admin側remove_actionを含めて完全化) |
 | `remove_action welcome_panel` | ウェルカムパネル削除 | レシピ化(同上) |
@@ -834,7 +834,7 @@ FormDefinition::create('contact')
 - ACF/CF7/Yoast連携のハードコードが、それらを使わないプロジェクトにまで暗黙の結合を強いた → 外部プラグイン制御コードはコア・本パッケージから完全排除(要件4/DR-10)。
 - `auto_post_slug`/`yoast_seo_metabox_priority` のvisibility欠落、`$_GET` 直接書き換え等の品質問題 → 全モジュールで型宣言+strict_types+クエリオブジェクト操作に統一。
 - 管理画面整理・wp_head掃除等の汎用クリーンアップは削除対象がテーマ毎に変動し、FW側の一律プリセットは「継承一発で全部消える」の変種になりやすい → コード収載をやめ、rules/hooks.md のapp側Hookクラスレシピへ移した(削除対象は必ず案件側で明示する)。
-- 旧TinyMCE空タグ抑制・checked_ontop調整・固定ページwpautop解除はクラシックエディタ専用の挙動であり、WP 6.4+(ブロックエディタ標準)を下限とする本FWでは収載しない。旧wlwmanifest_link対応も WP 6.3 で本体撤去済みのため対応を持たない。
+- 旧TinyMCE空タグ抑制・checked_ontop調整・固定ページwpautop解除はクラシックエディタ専用の挙動であり、WP 7.0(ブロックエディタ標準)を下限とする本FWでは収載しない。旧wlwmanifest_link対応も WP 6.3 で本体撤去済みのため対応を持たない。
 
 ---
 
@@ -842,7 +842,7 @@ FormDefinition::create('contact')
 
 ## 共通
 
-- [ ] 3パッケージとも `composer.json` が共通規約(php>=8.2、tmswp/core ^1.0、PSR-4)に従い、固有依存(ext-gd/ext-mbstring)が正しいパッケージにのみ存在する
+- [ ] 3パッケージとも `composer.json` が共通規約(php>=8.3、tmswp/core ^1.0、PSR-4)に従い、固有依存(ext-gd/ext-mbstring)が正しいパッケージにのみ存在する
 - [ ] 全クラスが `declare(strict_types=1)`・PSR-12・final優先・全シグネチャ型宣言・マジックメソッド不使用・`extract()` 不使用
 - [ ] 各 `register()`/`enable()` の二重呼び出しが `LogicException` になるユニットテストがある
 - [ ] PHPStan level max(szepeviktor/phpstan-wordpress)をbaselineなしで通過: `composer analyse`

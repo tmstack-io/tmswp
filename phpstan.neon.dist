@@ -4,14 +4,14 @@ includes:
   - vendor/phpstan/phpstan-phpunit/rules.neon
   - vendor/phpstan/phpstan-strict-rules/rules.neon
   - vendor/phpstan/phpstan-deprecation-rules/rules.neon
-  - packages/core/extension.neon
+  - packages/core/phpstan/extension.neon
 
 parameters:
   level: max
 
   phpVersion:
-    min: 80200
-    max: 80400
+    min: 80300
+    max: 80500
 
   paths:
     - packages/core/src

@@ -39,9 +39,9 @@ Advanced Custom Fields (ACF / ACF Pro) と TMSWP を統合する唯一の公式�
 
 ## 1.2 対応バージョン
 
-- ACF 6.0+ / ACF Pro 6.0+(WP 6.4+ / PHP 8.2+ は DR-02 に従う)。
+- ACF 6.0+ / ACF Pro 6.0+(WP 7.0 以上 / PHP 8.3〜8.5 は DR-02 に従う)。
 - ACF 無印では Pro 専用フィールド型(repeater / flexible_content / gallery / clone / options_page)は acf-json に現れないため、生成側の分岐は不要。
-- ACF は composer 依存にしない(WP プラグインとして導入される前提)。`composer.json` の `require` は `tmswp/core` と `php: >=8.2` のみ。`suggest` に ACF を記載する。
+- ACF は composer 依存にしない(WP プラグインとして導入される前提)。`composer.json` の `require` は `tmswp/core` と `php: >=8.3` のみ。`suggest` に ACF を記載する。
 
 ## 1.3 処理フロー全体図
 
@@ -111,7 +111,7 @@ packages/acf-bridge/
 ```json
 {
     "name": "tmswp/acf-bridge",
-    "require": { "php": ">=8.2", "tmswp/core": "^1.0" },
+    "require": { "php": ">=8.3", "tmswp/core": "^1.0" },
     "suggest": { "advanced-custom-fields-pro": "ACF Pro 6.0+ をWPプラグインとして導入すること" },
     "autoload": { "psr-4": { "TMSWP\\AcfBridge\\": "src/" } }
 }

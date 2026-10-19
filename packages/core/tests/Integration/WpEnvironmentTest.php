@@ -10,6 +10,6 @@ final class WpEnvironmentTest extends WP_UnitTestCase
 {
     public function testWordPressVersionIsSupported(): void
     {
-        self::assertGreaterThanOrEqual(0, version_compare(get_bloginfo('version'), '6.4'));
+        self::assertGreaterThanOrEqual(0, version_compare(get_bloginfo('version'), '7.0'));
     }
 }

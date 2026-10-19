@@ -1,6 +1,6 @@
 # TMStack WordPress Framework
 
-TMStack WordPress Framework (TMSWP) は、PHP 8.2+ / WordPress 6.4+ を前提にした WordPress テーマ・プラグイン制作用フレームワークです。
+TMStack WordPress Framework (TMSWP) は、PHP 8.3〜8.5 / WordPress 7.0 以上を前提にした WordPress テーマ・プラグイン制作用フレームワークです。
 
 本リポジトリは開発用 monorepo です。`packages/` にコアと拡張、`starters/` にテーマ・プラグイン雛形を収載し、GitHub Actions の split ワークフローで配布用 read-only リポジトリへ展開する構成です。
 

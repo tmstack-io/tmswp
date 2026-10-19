@@ -17,7 +17,7 @@ final class PHPStanTypeInferenceTest extends TypeInferenceTestCase
     /** @return list<string> */
     public static function getAdditionalConfigFiles(): array
     {
-        return [__DIR__ . '/../../extension.neon'];
+        return [__DIR__ . '/../../phpstan/extension.neon'];
     }
 
     public function testMetaBagAndOptionGetterTypesAreInferredFromSchemas(): void
