@@ -4,6 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Exception;
 
-class KernelException extends \RuntimeException
+class KernelException extends RuntimeException
 {
 }

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tax;
 
 use TMSWP\Core\Exception\DiscoveryException;
-use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\ComponentInitializerInterface;
 use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\Kernel;
@@ -23,10 +22,6 @@ final class TaxonomyInitializer implements ComponentInitializerInterface
         $component->class::register();
 
         $registry = $kernel->container()->get(MetaSchemaRegistry::class);
-
-        if (!$registry instanceof MetaSchemaRegistry) {
-            throw new KernelException('container entry MetaSchemaRegistry must resolve to MetaSchemaRegistry');
-        }
 
         $registry->registerEntity($component->class, ObjectType::Term, $component->class::slug());
     }

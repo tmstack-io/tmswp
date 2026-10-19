@@ -105,7 +105,7 @@ SQLに埋め込まれる識別子(テーブル名・カラム名・エイリア�
 
 ### R4. 例外体系
 
-すべて`TMSWP\Core\Exception\`配下。`\RuntimeException`を継承し`final`とする(Kernel設計書が共通基底`TMSWPException`を定義する場合はそれを継承に差し替える。継承元変更のみで本文書のクラス名・用途は不変)。
+すべて`TMSWP\Core\Exception\`配下。実行前に検出される誤り(`SchemaException`・`InvalidQueryException`)はFWの基底`LogicException`を、実行時の失敗(`MigrationException`・`QueryException`・`HydrationException`)はFWの基底`RuntimeException`を継承する。FWの基底とマーカーinterface`TmswpExceptionInterface`はKernel設計書の例外章(`02-kernel.md` §9)が定義する。`QueryException`はエンティティ層(`03-entities.md` §1.7)と共有するため`final`にせず、他は`final`とする。
 
 | 例外 | 投げる状況 |
 |---|---|

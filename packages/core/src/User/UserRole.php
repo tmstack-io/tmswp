@@ -7,7 +7,6 @@ namespace TMSWP\Core\User;
 use TMSWP\Core\Entity\WpBridge;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\EntityPersistenceException;
-use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Meta\MetaBag;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
@@ -121,10 +120,6 @@ abstract class UserRole
         }
 
         $registry = Kernel::forClass(static::class)->container()->get(MetaSchemaRegistry::class);
-
-        if (!$registry instanceof MetaSchemaRegistry) {
-            throw new KernelException('container entry MetaSchemaRegistry must resolve to MetaSchemaRegistry');
-        }
 
         return $registry->bagFor(static::class, $resolved);
     }

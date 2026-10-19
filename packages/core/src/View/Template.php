@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\View;
 
-use LogicException;
 use Throwable;
+use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Exception\TemplateNotFoundException;
 
 final class Template

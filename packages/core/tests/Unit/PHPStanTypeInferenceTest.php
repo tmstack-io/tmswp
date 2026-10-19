@@ -30,6 +30,11 @@ final class PHPStanTypeInferenceTest extends TypeInferenceTestCase
         $this->assertTypesInFile(__DIR__ . '/../fixtures/phpstan/type-inference.php');
     }
 
+    public function testContainerGetIsInferredAsTheRequestedClass(): void
+    {
+        $this->assertTypesInFile(__DIR__ . '/../fixtures/phpstan/container-type-inference.php');
+    }
+
     public function testInferenceDoesNotLoadAnalysedClasses(): void
     {
         $this->assertTypesInFile(__DIR__ . '/../fixtures/phpstan/side-effect-type-inference.php');

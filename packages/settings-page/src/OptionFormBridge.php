@@ -79,10 +79,6 @@ final class OptionFormBridge
     {
         $factory = Kernel::forClass($optionGroupClass)->container()->get(OptionRepositoryFactory::class);
 
-        if (!$factory instanceof OptionRepositoryFactory) {
-            throw new InvalidSchemaException('container entry OptionRepositoryFactory must resolve to OptionRepositoryFactory');
-        }
-
         return $factory->for($optionGroupClass);
     }
 

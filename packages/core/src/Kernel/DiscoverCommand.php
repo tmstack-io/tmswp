@@ -104,20 +104,12 @@ final class DiscoverCommand
     {
         $file = $kernel->container()->get(DiscoveryFile::class);
 
-        if (!$file instanceof DiscoveryFile) {
-            throw new KernelException('container entry DiscoveryFile must resolve to DiscoveryFile');
-        }
-
         return $file;
     }
 
     private static function discovery(Kernel $kernel): Discovery
     {
         $discovery = $kernel->container()->get(Discovery::class);
-
-        if (!$discovery instanceof Discovery) {
-            throw new KernelException('container entry Discovery must resolve to Discovery');
-        }
 
         return $discovery;
     }

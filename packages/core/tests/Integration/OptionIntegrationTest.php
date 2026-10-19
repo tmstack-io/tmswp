@@ -18,10 +18,7 @@ final class OptionIntegrationTest extends IntegrationTestCase
     public function testOptionRepositoryReadsDefaultsAndWritesWithSchemaAutoload(): void
     {
         $optionClass = self::fixtureClass(self::THEME_NAMESPACE . '\\Option\\SiteOption', BackedEnum::class);
-        $factory = Kernel::forClass($optionClass)->container()->get(OptionRepositoryFactory::class);
-        self::assertInstanceOf(OptionRepositoryFactory::class, $factory);
-
-        $repository = $factory->for($optionClass);
+        $repository = Kernel::forClass($optionClass)->container()->get(OptionRepositoryFactory::class)->for($optionClass);
         self::assertSame('info@example.test', $repository->string('contact_email'));
         self::assertTrue($repository->set('contact_email', 'sales@example.test'));
         self::assertSame('sales@example.test', $repository->string('contact_email'));

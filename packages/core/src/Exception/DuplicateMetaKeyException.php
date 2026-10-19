@@ -4,6 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Exception;
 
-class DuplicateMetaKeyException extends \LogicException
+final class DuplicateMetaKeyException extends LogicException
 {
 }

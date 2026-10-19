@@ -1183,25 +1183,26 @@ function tms_log(): LoggerRegistry
 
 ## 6. 例外クラス(本章定義分)
 
-すべて `declare(strict_types=1)` / `final`。
+すべて `declare(strict_types=1)`。マーカー interface `TmswpExceptionInterface` と FW の基底 `RuntimeException` は `02-kernel.md` §9 が定義する。
 
 ```php
 namespace TMSWP\Core\Exception;
 
-/** 引数検証エラーの共通例外(本章では Str/Html/Log の検証に使用) */
-class InvalidArgumentException extends \InvalidArgumentException {}
+/** 引数検証エラーの共通例外で、FW の基底の1つ(本章では Str/Html/Log の検証に使用) */
+class InvalidArgumentException extends \InvalidArgumentException implements TmswpExceptionInterface {}
 
 /** Template の slug 形式違反 */
 final class InvalidTemplateSlugException extends InvalidArgumentException {}
 
 /** Template の解決失敗(メッセージに slug と探索候補全パスを含めること) */
-final class TemplateNotFoundException extends \RuntimeException {}
+final class TemplateNotFoundException extends RuntimeException {}
 
 /** 未登録ログチャンネルの参照 */
-final class UnknownLogChannelException extends \OutOfBoundsException {}
+final class UnknownLogChannelException extends \OutOfBoundsException implements TmswpExceptionInterface {}
 ```
 
-`InvalidArgumentException` のみ継承を許す(`final` にしない)。Kernel 文書が例外の基底体系を別途定義する場合は当該定義に合流させる(open question)。
+- `InvalidArgumentException` は FW の基底なので継承を許す(`final` にしない)。他の3つは `final`。
+- `UnknownLogChannelException` は SPL の `\OutOfBoundsException` を継承するため FW の基底を経由せず、マーカー `TmswpExceptionInterface` を直接実装する。これで本章の例外も `catch (TmswpExceptionInterface $e)` で捕まえられる(継承関係の全体は `02-kernel.md` §9)。
 
 ---
 

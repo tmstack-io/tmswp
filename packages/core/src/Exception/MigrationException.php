@@ -4,6 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Exception;
 
-final class MigrationException extends \RuntimeException
+final class MigrationException extends RuntimeException
 {
 }

@@ -53,10 +53,6 @@ final class MigrateCommand
             foreach (Kernel::all() as $kernel) {
                 $migrator = $kernel->container()->get(Migrator::class);
 
-                if (!$migrator instanceof Migrator) {
-                    throw new KernelException('container entry Migrator must resolve to Migrator');
-                }
-
                 foreach ($migrator->migrateAll($force, $dryRun) as $result) {
                     WP_CLI::line("{$kernel->config()->appNamespace}: {$result->table} {$result->action}");
 

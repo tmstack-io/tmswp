@@ -105,11 +105,10 @@ docs/12-implementation-plan.md の v0.4.0-T2(リクエスト取り込みと描�
 
 ## 実装者裁量(DECISION:)が残る箇所
 
-設計書は原則として実装者裁量を残さないが、以下の 2 箇所のみ `DECISION:` で裁量を明示している(03 は行頭 `DECISION:`、08 は本文中の `(DECISION: …)` 形式)。実装時は各記載の指示に従い、決定内容をコミットメッセージまたは PR 本文に記録すること。
+設計書は原則として実装者裁量を残さないが、以下の 1 箇所のみ `DECISION:` で裁量を明示している(08 の本文中の `(DECISION: …)` 形式)。実装時は各記載の指示に従い、決定内容をコミットメッセージまたは PR 本文に記録すること。
 
 | 文書 | 箇所 | 内容と既定の扱い |
 |---|---|---|
-| `03-entities.md` | 例外階層 | FW 共通の基底例外(例: `TMSWPException`)を全体方針として導入する場合、エンティティ層の 3 例外クラスをそれに継承させてよい(**継承元の変更のみ可**。クラス名・名前空間・プロパティは本文書が正準) |
 | `08-extensions.md` | thumbnail の GC | キャッシュ自動 cron は持たない(運用判断)。必要なら app 側で `wp_schedule_event` から CLI 相当処理を呼ぶレシピを rules/ に記載する |
 
-なお `06-model.md` には `DECISION:` 表記をしない(=実装者裁量にしない)確定事項がある(`ORDER BY RAND()` は非対応とし乱択は PHP 側で行う等)。これらは裁量箇所ではない。
+なお `06-model.md` には `DECISION:` 表記をしない(=実装者裁量にしない)確定事項がある(`ORDER BY RAND()` は非対応とし乱択は PHP 側で行う等)。例外階層も確定事項で、全例外がマーカー interface `TmswpExceptionInterface` を実装し、FW の基底 `LogicException` / `RuntimeException` / `InvalidArgumentException` を継承する(`02-kernel.md` §9)。これらは裁量箇所ではない。

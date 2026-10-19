@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Model;
 
-use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Exception\SchemaException;
 use TMSWP\Core\Kernel\Kernel;
 
@@ -94,10 +93,6 @@ abstract class Model
         }
 
         $connection = Kernel::forClass($class)->container()->get(Connection::class);
-
-        if (!$connection instanceof Connection) {
-            throw new KernelException('container entry Connection must resolve to Connection');
-        }
 
         return $connection;
     }

@@ -31,7 +31,7 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
   - 各コンポーネント属性は本文書の `ComponentAttributeInterface` 契約に従う。コア属性は6種(`AsPostType` / `AsTaxonomy` / `AsUserRole` / `AsModel` / `AsHook` / `AsOptionGroup`)。属性のパラメータ仕様と各 Initializer の中身は各機能文書が定義する。ただし `AsHook` と Hook 基底・`HookInitializer`、メソッドレベルのフック属性 `#[Action]` / `#[Filter]` は本文書が正準定義する(§5)
   - `src/View/ActionRouter.php` — `TMSWP\Core\View\ActionRouter`(本文書はboot時の生成・登録のみを定義。dispatch の正準仕様・actions ファイル規約・View 変数バッグは View/Support/Log 文書が定義する)
   - `src/Container/Container.php` — `TMSWP\Core\Container\Container`
-  - `src/Exception/KernelException.php` / `DiscoveryException.php` / `ContainerException.php` / `NotFoundException.php` / `CircularDependencyException.php`
+  - `src/Exception/TmswpExceptionInterface.php` / `LogicException.php` / `RuntimeException.php` / `KernelException.php` / `DiscoveryException.php` / `ContainerException.php` / `NotFoundException.php` / `CircularDependencyException.php`(§9)
 
 スコープ外: 各属性クラス(`AsPostType` 等)のパラメータ仕様と各初期化処理の中身(register_post_type の発行内容等)。これらは各エンティティ文書が定義する。本文書はそれらが従うべき**契約(インターフェース)とタイミング**のみを確定する。
 
@@ -1068,28 +1068,41 @@ final class Container implements ContainerInterface
      * - \Closure: 遅延ファクトリ。初回get時に $factory($this) を実行し共有
      * - その他 object: 即値インスタンスとして共有
      * - string: クラス名束縛(interface => 実装クラス等)。初回get時に autowire して共有
+     * idがクラス名・interface名なら、登録の時点で型を確かめる(下記「登録の時点の型の確認」)。
      *
-     * @throws \TMSWP\Core\Exception\ContainerException 解決済みidへの再登録
+     * @throws \TMSWP\Core\Exception\ContainerException 解決済みidへの再登録・型の合わない登録
      */
     public function set(string $id, object|string $concrete): void;
 
     /**
      * 別名登録(単段のみ)。get($alias) は get($id) と等価になる。
      *
-     * @throws \TMSWP\Core\Exception\ContainerException 自己参照・$idが別のaliasである(連鎖の禁止)・解決済みidへの再登録
+     * alias名がクラス名・interface名なら、alias先との型の互換性を登録の時点で確かめる。
+     *
+     * @throws \TMSWP\Core\Exception\ContainerException 自己参照・$idが別のaliasである(連鎖の禁止)・解決済みidへの再登録・型の合わないalias
      */
     public function alias(string $alias, string $id): void;
 
     /**
      * PSR-11。未登録のclass-stringはautowireで解決し共有する。
+     * クラス名・interface名のidは、その型のインスタンスに解決されることをContainerが保証する。
+     *
+     * @template T of object
+     *
+     * @param class-string<T>|string $id
      *
      * @throws \TMSWP\Core\Exception\NotFoundException 解決不能なid
      * @throws \TMSWP\Core\Exception\CircularDependencyException 循環依存
-     * @throws \TMSWP\Core\Exception\ContainerException 解決不能なコンストラクタ引数等
+     * @throws \TMSWP\Core\Exception\ContainerException 解決不能なコンストラクタ引数・factoryの失敗・型の食い違い等
+     *
+     * @return ($id is class-string<T> ? T : mixed)
      */
     public function get(string $id): mixed;
 
-    /** PSR-11。登録済み・alias・解決済み・autowire可能(class_exists かつ instantiable)で true */
+    /**
+     * PSR-11。get() が解決できるidだけ true(下記「has() の判定」)。インスタンスは作らない。
+     * factory は実行しないため、factory が投げれば true でも get() は失敗しうる。
+     */
     public function has(string $id): bool;
 }
 ```
@@ -1101,12 +1114,21 @@ final class Container implements ContainerInterface
 - 同一idへの再登録は、未解決(まだ get されていない)であれば後勝ちで置換できる(テストでの差し替え用途)。**解決済み(`$instances` に存在する)idへの再登録は `ContainerException`**(「設定したのに反映されない」サイレント事故の禁止)。
 - `alias()` は**単段のみ**。`$alias === $id`(自己参照)、または `$id` 自体が登録済みのalias(連鎖 A→B→C の試み)は `ContainerException`。これにより alias 解決は配列参照1回で完結し、循環aliasは構造的に発生しない。
 
+**登録の時点の型の確認**(fail fast): idがクラス名・interface名(`class_exists() || interface_exists()`)のとき、登録の時点で次を確かめ、合わなければ `ContainerException` を投げる。
+
+- `set()` の即値の object: `$concrete instanceof $id` であること。
+- `set()` のクラス名束縛: 束縛先が実在し(`class_exists() || interface_exists()`)、`is_a($concrete, $id, true)` であること。
+- `set()` に alias 名を渡した場合は、alias 名と alias 解決後のidの両方について確かめる。
+- `alias()`: alias名がクラス名・interface名なら、alias先のidが alias名の型に解決されうることを確かめる。alias先にインスタンスがあればその型、クラス名束縛があれば束縛先、未登録のクラス名なら alias先そのものを `is_a` で比べる。alias先が factory(`\Closure`)や未登録のサービス名で型が分からない場合は確かめず、`get()` の時点の確認に任せる。
+- factory(`\Closure`)の結果の型は、登録の時点では分からないため `get()` の時点で確かめる。
+
 **解決(get)** — 擬似コード:
 
 ```
-get(id):
-  id = aliases[id] ?? id                                 // 単段解決
-  if instances has id: return instances[id]
+get(requestedId):
+  id = aliases[requestedId] ?? requestedId               // 単段解決。requestedId は保持する
+  if instances has id:
+      return assertType(requestedId, id, instances[id])  // キャッシュから返す経路も両方のidを確かめる
   if id in resolving:
       throw CircularDependencyException(
           'circular dependency: ' . implode(' -> ', resolving) . ' -> ' . id)
@@ -1114,42 +1136,68 @@ get(id):
   try:
       if definitions has id:
           d = definitions[id]
-          value = d instanceof \Closure ? d(this)
-                : is_string(d)          ? this.instantiate(d)       // クラス名束縛
-                : d                                                  // 即値(登録時に即instancesへ入れてもよい)
+          if d instanceof \Closure:
+              try: value = d(this)
+              catch ContainerExceptionInterface e: throw e                    // 入れ子の解決の例外は包まない
+              catch \Throwable e: throw ContainerException(
+                  "factory for container entry '{id}' threw {class}: {message}", previous: e)
+          else:                                                              // クラス名束縛
+              if !class_exists(d): throw NotFoundException("defined class '{d}' not found for '{id}'")
+              value = this.instantiate(d)
       elseif class_exists(id):
           value = this.instantiate(id)                               // autowire
       else:
           throw NotFoundException("no entry or class found for '{id}'")
-      instances[id] = value
-      return value
+      instances[id] = assertType(requestedId, id, value)            // 両方のidの確認を通った値だけを保存する。失敗すれば何も保存せずに投げる
+      return instances[id]
   finally:
       array_pop(resolving)
+
+assertType(requestedId, id, value):                      // alias解決後のidと要求されたidの両方を確かめる
+  for t in [id, requestedId]:
+      if (class_exists(t) || interface_exists(t)) && !(value instanceof t):
+          throw ContainerException("container entry '{t}' resolved to {type}, which is not an instance of '{t}'")
+  return value
 ```
 
-**autowire(instantiate)** — 擬似コード:
+- 即値の object は `set()` 時に型を確かめたうえで `instances` へ入る。即値も factory の結果も、返すときは同じ `assertType` を通るため、alias を経由しても扱いは変わらない。
+- **型の保証**: クラス名・interface名のidは、その型のインスタンスに解決されることを Container 自身が保証する(登録の時点と `get()` の時点で確かめ、違えば `ContainerException`)。これにより `get()` の戻り値型を `@template` の条件付き型で宣言でき、呼び出し側は戻り値を `instanceof` で確かめない(PHPStan が `get(Foo::class)` を `Foo` と推論する)。クラス名でないid(サービス名等)の戻り値は `mixed` のままで、呼び出し側が型を確かめる。
+- **factory の例外**: factory(`\Closure`)の中で投げられた例外は、解決しようとしたidをメッセージに含む `ContainerException` で包み、元の例外を `previous` に1段だけ保持する。すでに `ContainerExceptionInterface` である例外(入れ子の解決で起きた `NotFoundException`・`CircularDependencyException`・包み済みの `ContainerException`)は二重に包まずにそのまま投げ直す。autowire のコンストラクタが投げた例外は包まない。
+
+**autowire(instantiate)** — 引数の得方の規則(`autowirePlan`)は `get()` と `has()` が共有する。擬似コード:
 
 ```
+autowirePlan(class):                            // インスタンスを作らずに、各引数の得方を決める
+  ref = new ReflectionClass(class)              // 不存在は呼出側で確認済み
+  if !ref->isInstantiable(): return 失敗("class '{class}' is not instantiable")
+  plan = []
+  for param in (ref->getConstructor()?->getParameters() ?? []):
+      if param->isVariadic(): continue          // 可変長パラメータは渡さない
+      if type が ReflectionNamedType かつ非builtin: plan[] = 依存(type->getName())
+      elif param->isDefaultValueAvailable():     plan[] = デフォルト値
+      elif type !== null && type->allowsNull():  plan[] = null
+      else: return 失敗("unresolvable parameter \${name} of {class}::__construct(); " .
+                        "register the entry explicitly or add a default value")
+  return plan
+
 instantiate(class):
-  ref = new ReflectionClass(class)              // 不存在は呼出側でNotFoundException済み
-  if !ref->isInstantiable(): throw ContainerException("class '{class}' is not instantiable")
-  ctor = ref->getConstructor()
-  if ctor === null: return new class()
-  args = []
-  for param in ctor->getParameters():
-      if type が ReflectionNamedType かつ非builtin:
-          args[] = this.get(type->getName())     // 再帰解決。循環はスタックで検出
-      elif param->isDefaultValueAvailable():     args[] = デフォルト値
-      elif type !== null && type->allowsNull():  args[] = null
-      else: throw ContainerException(
-          "unresolvable parameter \${name} of {class}::__construct(); " .
-          "register the entry explicitly or add a default value")
+  plan = autowirePlan(class)
+  if 失敗: throw ContainerException(理由)
+  args = [依存なら this.get(依存のid)(再帰解決。循環はスタックで検出)、それ以外はデフォルト値または null]
   return ref->newInstanceArgs(args)
 ```
 
-- Union型・Intersection型のパラメータはautowire不能とし、デフォルト値があればそれを使い、なければ `ContainerException`(推測による解決はしない)。
-- 可変長パラメータ(`...$args`)は空として扱う。
-- `has()` が true を返すのは: 正規id(alias解決後)が `instances` / `definitions` のいずれかに存在する、または `class_exists($id) && (new ReflectionClass($id))->isInstantiable()` の場合。
+- クラス・interface型の引数は、デフォルト値や null 許容があっても、その型をidとして解決する(解決できなければ `get()` は失敗する)。
+- Union型・Intersection型のパラメータはautowire不能とし、デフォルト値があればそれを使い、なければ null 許容なら null、どちらでもなければ `ContainerException`(推測による解決はしない)。
+
+**has() の判定**: `has($id)` は、`get($id)` が解決できる場合だけ true を返す。インスタンスは作らず、`get()` と同じ順で解決の経路をたどる。alias を解決した正規idについて、次のどれかに当たるときだけ true になる。
+
+1. 解決済み、または登録済みのインスタンスがある(要求されたidと正規idの型に合う)。
+2. factory(`\Closure`)が登録されている。factory は実行しないため、factory が投げれば `get()` は失敗しうる。
+3. クラス名の束縛先、または未登録のid自身が、インスタンス化できる実在のクラスで(要求されたidと正規idの型に合う)、`autowirePlan` が失敗せず、依存の引数の型がすべて `has()` で true になる(再帰する)。
+   - 再帰の途中で、解決中のid(`get()` の `resolving` スタックを含む)に戻ったら循環として false にする。
+   - 1回の `has()` の中では、判定の結果を、渡されたid(alias解決前。結果が要求されたidの型の制約に依存するため)ごとに覚え、同じidを再計算しない。これで、共有する依存を持つ依存グラフでも判定の回数がidの数に比例する。覚えた結果は Container に保存せず、その `has()` の中だけで使う(登録を変えた後の `has()` に古い判定を持ち越さない)。循環で得た false も覚える。あるidの解決の途中に循環があれば、どこから `get()` しても `CircularDependencyException` で失敗するため、入口によらず正しい。
+   - 既定値の無い組み込み型の引数や、autowire が扱わない型の引数があれば false になる。
 
 **循環依存検出**: `resolving` スタックは `get()` の解決経路全体(autowireの再帰解決を含む)で共有され、`A → B → A` のような間接循環も検出される。`CircularDependencyException` のメッセージには必ず解決チェーン全体(`A -> B -> A`)を含める。旧Loaderの「直接自己依存のみ検出、間接循環は無限再帰でクラッシュ」の逆転仕様である。
 
@@ -1192,7 +1240,9 @@ abstract class PostType
 
 ## 9. 例外階層
 
-本文書で定義する例外。すべて `packages/core/src/Exception/` に配置する。
+TMSWP のすべての例外は、マーカー interface `TmswpExceptionInterface` を実装する。利用者は `catch (TmswpExceptionInterface $e)` で TMSWP が投げた例外だけをまとめて捕まえられる。マーカーはメソッドを持たない。SPL の型階層(`\LogicException` / `\RuntimeException` 等)はそのまま保つため、`catch (\RuntimeException $e)` のような SPL の型での捕まえ方も変わらない。
+
+本文書は、マーカーと FW の基底例外、Kernel・Container の例外を定義する。すべて `packages/core/src/Exception/` に配置する。
 
 ```php
 <?php
@@ -1201,8 +1251,23 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Exception;
 
+/** TMSWP のすべての例外が実装するマーカー。メソッドを持たない */
+interface TmswpExceptionInterface extends \Throwable
+{
+}
+
+/** FW の基底: プログラムの誤り(宣言・設定・API の誤用)を表す */
+class LogicException extends \LogicException implements TmswpExceptionInterface
+{
+}
+
+/** FW の基底: 実行時にしか検出できない失敗を表す */
+class RuntimeException extends \RuntimeException implements TmswpExceptionInterface
+{
+}
+
 /** Kernel構成・boot手順の誤りを表す。FW利用者(開発者)が修正すべきエラー */
-class KernelException extends \RuntimeException
+class KernelException extends RuntimeException
 {
 }
 
@@ -1212,7 +1277,7 @@ class DiscoveryException extends KernelException
 }
 
 /** コンテナの登録・解決エラー(PSR-11準拠) */
-class ContainerException extends \RuntimeException implements \Psr\Container\ContainerExceptionInterface
+class ContainerException extends RuntimeException implements \Psr\Container\ContainerExceptionInterface
 {
 }
 
@@ -1227,7 +1292,52 @@ class CircularDependencyException extends ContainerException
 }
 ```
 
-- これらは `final` にしない(数少ない例外)。FW全体の例外基底クラスを01文書が別途定義する場合、`\RuntimeException` の部分をその基底へ差し替える(本文書側の調整事項として open question に記載)。
+継承の規則:
+
+- 個別の例外は、FW の基底 `LogicException` / `RuntimeException` / `InvalidArgumentException`(`07-support.md` §6)のいずれかを継承する。SPL の例外を直接継承しない。拡張パッケージの例外も同じ規則に従う。
+- 仕様が特定の SPL 型を指定している例外は、その型を継承し、マーカーを直接実装する(`07-support.md` §6 の `UnknownLogChannelException extends \OutOfBoundsException`)。
+- PSR-11 の例外は、PSR の interface を実装したうえで FW の基底 `RuntimeException` を継承する(上記)。
+
+全パッケージの例外の継承関係(名前空間を省いたものは `TMSWP\Core\Exception\`。括弧内は定義している文書):
+
+```
+\LogicException
+├── LogicException
+│   ├── EntityDefinitionException                     (03 §1.7)
+│   ├── InvalidSchemaException                        (04 §4.17)
+│   ├── DuplicateMetaKeyException                     (04 §4.17)
+│   ├── EntityNotRegisteredException                  (04 §4.17)
+│   ├── SchemaException                               (06 R4)
+│   ├── InvalidQueryException                         (06 R4)
+│   └── Form\FormConfigException                      (05)
+│       └── Form\UnknownFieldException                (05)
+└── \InvalidArgumentException
+    └── InvalidArgumentException                      (07 §6)
+        └── InvalidTemplateSlugException              (07 §6)
+\RuntimeException
+├── RuntimeException
+│   ├── KernelException                               (本文書)
+│   │   └── DiscoveryException                        (本文書)
+│   ├── ContainerException                            (本文書)
+│   │   ├── NotFoundException                         (本文書)
+│   │   └── CircularDependencyException               (本文書)
+│   ├── EntityPersistenceException                    (03 §1.7)
+│   ├── QueryException                                (03 §1.7、06 R4)
+│   ├── MigrationException                            (06 R4)
+│   ├── HydrationException                            (06 R4)
+│   ├── Form\TempFileException                        (05)
+│   ├── TemplateNotFoundException                     (07 §6)
+│   ├── TMSWP\AcfBridge\Exception\AcfBridgeException  (09。abstract)
+│   │   ├── AcfNotActiveException
+│   │   ├── AcfBridgeRuntimeException
+│   │   └── GenerationException
+│   ├── TMSWP\Thumbnail\Exception\InvalidThumbSourceException (08)
+│   └── TMSWP\Thumbnail\Exception\InvalidThumbOptionException (08)
+└── \OutOfBoundsException
+    └── UnknownLogChannelException                    (07 §6。マーカーを直接実装)
+```
+
+- 本文書の例外は `final` にしない(数少ない例外)。
 - 例外メッセージは英語で固定し、必ず「何が・どこで(パス/FQCN)・どう直すか」を含める。
 
 ---
@@ -1440,6 +1550,10 @@ final class ContainerTest extends TestCase
 - [ ] Container: `set`(Closure/object/string束縛)・単段 `alias`・autowire が共有(シングルトン)スコープで動作し、公開APIが `set` / `alias` / `get` / `has` のみである(`factory()` / `make()` / 多段aliasが存在しない)
 - [ ] Container: 間接循環依存(A→B→A、3クラス以上の循環含む)が**無限再帰せず** `CircularDependencyException` となり、メッセージに解決チェーン全体(`A -> B -> A`)を含む
 - [ ] Container: 未解決idの `get()` が `NotFoundException`、解決不能なコンストラクタ引数が `ContainerException`、解決済みidへの再登録・自己参照alias・alias済みidを指す `alias()`(連鎖の試み)が `ContainerException` になる
+- [ ] Container: `has()` が false のidは `get()` も失敗し(必須の組み込み型引数・束縛の無い interface への依存・循環依存・実在しないクラスへの束縛)、true のidは `get()` が成功する(依存の束縛付きの autowire・既定値と null 許容の引数・interface の束縛・サブクラスへの束縛・alias)。`has()` は factory を実行しない
+- [ ] Container: クラス名・interface名のidへの、型の合わないインスタンス・クラスの束縛・alias が登録の時点で `ContainerException` になり、factory の結果の型の食い違いは `get()` の時点で `ContainerException` になる(alias を経由しても同じ)。PHPStan が `get(Foo::class)` を `Foo` と推論する
+- [ ] Container: factory の中で投げられた例外が、id を含む `ContainerException` に包まれて `previous` に元の例外を持ち、`NotFoundException`・`CircularDependencyException` は二重に包まれない
+- [ ] 全パッケージの `src/` の例外クラスが `TmswpExceptionInterface` を実装する(§9)
 - [ ] Discovery: 同一のapp/ファイル群に対し、ファイル作成順・列挙順を入れ替えても(テストでイテレータ順をシャッフルしても)`DiscoveryResult` が完全一致する(決定的ロード順=components の (class, attributeClass) の strcmp ソート+hookMethods の (class, method, hook, priority) ソート。数字だけのフック名も strcmp の順になる)
 - [ ] Discovery: クラス名とファイル名/名前空間の不一致が debug に関係なく `DiscoveryException`(ファイルパス・期待FQCN入り)になる。黙殺・スキップされる分岐が存在しない
 - [ ] Discovery: 走査中のオートロードで起きた Error(ParseError・未定義の親クラスを含む)と、属性の読み取りで起きた Error(属性クラスの ParseError・属性引数の未定義のクラス定数)が、元の例外を previous に持ち、クラス名とファイルを含む `DiscoveryException` になる

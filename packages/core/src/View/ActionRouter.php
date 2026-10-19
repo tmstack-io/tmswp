@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\View;
 
-use LogicException;
+use TMSWP\Core\Exception\LogicException;
 use WP_Query;
 
 final class ActionRouter

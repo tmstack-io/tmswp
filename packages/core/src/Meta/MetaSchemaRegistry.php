@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Meta;
 
-use LogicException;
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
 use ReflectionClassConstant;
@@ -15,6 +14,7 @@ use TMSWP\Core\Entity\WpBridge;
 use TMSWP\Core\Exception\DuplicateMetaKeyException;
 use TMSWP\Core\Exception\EntityNotRegisteredException;
 use TMSWP\Core\Exception\InvalidSchemaException;
+use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Post\PostType;
 use WP_Post;
 use WP_Term;

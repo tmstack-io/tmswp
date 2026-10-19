@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Entity;
 
-use LogicException;
 use ReflectionClass;
+use TMSWP\Core\Exception\LogicException;
 
 /**
  * WPスタブの shaped array 型境界を、FW内部の動的呼び出し1箇所へ閉じ込める。

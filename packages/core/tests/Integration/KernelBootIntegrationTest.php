@@ -53,8 +53,6 @@ final class KernelBootIntegrationTest extends IntegrationTestCase
         foreach ([self::themeKernel(), self::pluginKernel()] as $kernel) {
             $file = $kernel->container()->get(DiscoveryFile::class);
             $discovery = $kernel->container()->get(Discovery::class);
-            self::assertInstanceOf(DiscoveryFile::class, $file);
-            self::assertInstanceOf(Discovery::class, $discovery);
 
             $scanned = $discovery->scan();
 
@@ -138,10 +136,7 @@ PHP);
 
     private function pluginDiscoveryFile(): DiscoveryFile
     {
-        $file = self::pluginKernel()->container()->get(DiscoveryFile::class);
-        self::assertInstanceOf(DiscoveryFile::class, $file);
-
-        return $file;
+        return self::pluginKernel()->container()->get(DiscoveryFile::class);
     }
 
     /**

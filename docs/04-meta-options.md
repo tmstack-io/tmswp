@@ -332,7 +332,6 @@ interface MetaStorageInterface
 
 - 実装は **null を「特別な意味」に使ってはならない**。`get()` の null は「行なし」または「null相当値」のどちらでもあり得る曖昧な値であり、意味判定は常に `has()` が担う。
 - `getMultiple()` は「キーが結果配列に存在するか」で has 相当の情報を持ち帰る。値がnullでもキーは含める。
-- 例外: ストレージ層のI/O失敗(外部API障害等)は `TMSWP\Core\Exception\StorageException` を送出してよい。WP標準実装(4.6)は例外を送出しない。
 
 ### 4.6 `TMSWP\Core\Meta\WpMetaStorage`
 
@@ -1138,7 +1137,7 @@ public static function contactEmail(): string
 
 ### 4.17 例外クラス
 
-本層が送出する例外。すべて `TMSWP\Core\Exception\` 配下(コーディング規約)。基底例外(`RuntimeException`/`LogicException` 系の階層)はKernel設計書の例外章に従い、ここでは本層固有のクラスのみ定義する。
+本層が送出する例外。すべて `TMSWP\Core\Exception\` 配下(コーディング規約)。FWの基底例外(`LogicException`/`RuntimeException`/`InvalidArgumentException`)とマーカーinterface `TmswpExceptionInterface` はKernel設計書の例外章(`02-kernel.md` §9)が定義し、ここでは本層固有のクラスのみ定義する。
 
 ```php
 namespace TMSWP\Core\Exception;
@@ -1151,16 +1150,11 @@ final class DuplicateMetaKeyException extends LogicException {}
 
 /** MetaSchemaRegistry 未登録エンティティへの bagFor()/objectTypeOf()。\LogicException 系 */
 final class EntityNotRegisteredException extends LogicException {}
-
-/** 引数不正(ObjectType とWPオブジェクトの不一致、ID<1、single=false への非list set 等)。\LogicException 系 */
-final class InvalidArgumentException extends LogicException {}
-
-/** 外部ストレージ実装のI/O失敗用(コアのWP標準実装は送出しない)。\RuntimeException 系 */
-final class StorageException extends RuntimeException {}
 ```
 
 - オプショングループ内キーの二重宣言を表す例外は持たない: グループは backed enum であり(4.16)、backing value の重複は PHP がコンパイル時に Fatal とするため、実行時例外は不要。
-- ここでの `LogicException`/`RuntimeException` は `TMSWP\Core\Exception\` 配下のFW基底例外を指す(グローバルの `\LogicException` を直接継承するか否かはKernel設計書の例外章の決定に従う)。
+- ここでの `LogicException` は `TMSWP\Core\Exception\` 配下のFWの基底例外を指す。FWの基底は `\LogicException` を継承して `TmswpExceptionInterface` を実装するため、上記の例外は `catch (\LogicException $e)` でも `catch (TmswpExceptionInterface $e)` でも捕まえられる。
+- 引数不正(ObjectType とWPオブジェクトの不一致、ID<1、single=false への非list set 等)は、FWの基底 `InvalidArgumentException`(`07-support.md` §6。`\InvalidArgumentException` 系)を送出する。
 - 方針: スキーマ・宣言系の誤りはすべて「ブート時に LogicException 系で即死」させ、本番実行時の黙殺・フォールスルー(旧FWのフィルタ名不一致が3年以上発覚しなかった原因)を構造的に防ぐ。
 
 ### 4.18 FW同梱PHPStan拡張

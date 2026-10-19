@@ -406,7 +406,7 @@ v0.1.0
 
 #### v0.2.0-T4: Container・例外階層
 
-- 対象ファイル領域: packages/core/src/Container/、packages/core/src/Exception/、packages/core/src/Attribute/{Action,Filter}.php、packages/core/src/Kernel/UnsupportedComponentInitializer.php(削除)、packages/core/src/ 内の例外を投げる箇所、packages/core/tests/Unit/ContainerTest.php、docs/02 §9、docs/07 §6
+- 対象ファイル領域: packages/core/src/Container/、packages/core/src/Exception/、packages/core/src/Attribute/{Action,Filter}.php、packages/core/src/Kernel/UnsupportedComponentInitializer.php(削除)、packages/core/src/ 内の例外を投げる箇所と `Container::get()` の呼び出し元、他パッケージの例外(packages/acf-bridge/src/Exception/・packages/thumbnail/src/Exception/)と `Container::get()` の呼び出し元(packages/acf-bridge/src/{AcfBridge,Cli/AcfCommand}.php・packages/settings-page/src/OptionFormBridge.php)、packages/core/tests/Unit/{ContainerTest,ExceptionHierarchyTest,PHPStanTypeInferenceTest}.php、packages/core/tests/fixtures/phpstan/container-type-inference.php、`Container::get()` の戻り値を確かめていたテスト(packages/core/tests/Unit/MetaSchemaRegistryTest.php・packages/core/tests/Integration/{OptionIntegrationTest,ModelIntegrationTest,KernelBootIntegrationTest}.php)、docs/02 §8・§9・受け入れ基準、docs/03 §1.7、docs/04 §4.5・§4.17、docs/06 R4、docs/07 §6、docs/09(パッケージ構成の例外の基底)、docs/README.md(DECISION の一覧)
 - 完了条件:
   - 全例外が TMSWP 共通のマーカー interface を実装し、使われていない例外クラスと初期化クラスが無い。
   - `Container::get()` に `@template` の戻り値型があり、呼び出し側の instanceof の定型コードが無い。`has()` と factory 例外のラップが仕様どおり。

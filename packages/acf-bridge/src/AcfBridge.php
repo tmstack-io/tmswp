@@ -76,10 +76,6 @@ final class AcfBridge
         $kernel = self::kernelForConfig();
         $registry = $kernel->container()->get(MetaSchemaRegistry::class);
 
-        if (!$registry instanceof MetaSchemaRegistry) {
-            throw new LogicException('container entry MetaSchemaRegistry must resolve to MetaSchemaRegistry');
-        }
-
         $managedKeys = $manifestClass::managedKeys();
 
         if (!is_iterable($managedKeys)) {

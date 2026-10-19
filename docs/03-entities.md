@@ -124,12 +124,12 @@ declare(strict_types=1);
 namespace TMSWP\Core\Exception;
 
 /** エンティティ定義の不正(スラッグ形式違反・builtin制約違反・登録失敗・FQCN解決失敗)。 */
-class EntityDefinitionException extends \LogicException
+class EntityDefinitionException extends LogicException
 {
 }
 
 /** エンティティ書き込み(wp_insert_post / wp_insert_term / wp_insert_user)の失敗。 */
-class EntityPersistenceException extends \RuntimeException
+class EntityPersistenceException extends RuntimeException
 {
     public readonly ?\WP_Error $wpError;
 
@@ -146,13 +146,13 @@ class EntityPersistenceException extends \RuntimeException
     }
 }
 
-/** クエリビルダの使用方法不正(不正なdirection・compare・limit等)。 */
-class QueryException extends \LogicException
+/** クエリビルダの使用方法不正(不正なdirection・compare・limit等)とクエリの実行失敗。 */
+class QueryException extends RuntimeException
 {
 }
 ```
 
-DECISION: FW共通の基底例外(例: `TMSWPException`)を全体方針として導入する場合、上記3クラスはそれを継承する形に変更してよい(継承元の変更のみ可。クラス名・名前空間・プロパティは本文書が正準)。
+継承元の `LogicException` / `RuntimeException` は `TMSWP\Core\Exception\` のFWの基底で、TMSWP共通のマーカーinterface `TmswpExceptionInterface` を実装する(`02-kernel.md` §9)。クラス名・名前空間・プロパティは本文書が正準。
 
 ---
 

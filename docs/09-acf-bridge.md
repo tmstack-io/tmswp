@@ -100,7 +100,7 @@ packages/acf-bridge/
 │   ├── Cli/
 │   │   └── AcfCommand.php       # wp tmswp acf sync|check
 │   └── Exception/
-│       ├── AcfBridgeException.php    # 基底 (extends \RuntimeException)
+│       ├── AcfBridgeException.php    # 基底 (extends TMSWP\Core\Exception\RuntimeException)
 │       ├── AcfNotActiveException.php
 │       └── GenerationException.php
 └── tests/

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Post;
 
-use InvalidArgumentException;
+use TMSWP\Core\Exception\InvalidArgumentException;
 
 final readonly class Thumbnail
 {

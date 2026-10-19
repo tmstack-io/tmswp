@@ -157,10 +157,6 @@ final class AcfCommand
         foreach (Kernel::all() as $kernel) {
             $registry = $kernel->container()->get(MetaSchemaRegistry::class);
 
-            if (!$registry instanceof MetaSchemaRegistry) {
-                throw new LogicException('container entry MetaSchemaRegistry must resolve to MetaSchemaRegistry');
-            }
-
             foreach ($registry->schemas() as $registered) {
                 foreach ($managedKeys as $managedKey) {
                     if (

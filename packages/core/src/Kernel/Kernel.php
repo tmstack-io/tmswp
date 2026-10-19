@@ -55,20 +55,12 @@ final class Kernel
         $this->container->set(Migrator::class, static function (Container $container): Migrator {
             $connection = $container->get(Connection::class);
 
-            if (!$connection instanceof Connection) {
-                throw new KernelException('container entry Connection must resolve to Connection');
-            }
-
             return new Migrator($connection);
         });
         $this->container->set(MetaSchemaRegistry::class, static fn(Container $container): MetaSchemaRegistry => new MetaSchemaRegistry($container));
         $this->container->set(OptionRepositoryFactory::class, static fn(Container $container): OptionRepositoryFactory => new OptionRepositoryFactory($container));
         $this->container->set(Discovery::class, function (Container $container) use ($config): Discovery {
             $file = $container->get(DiscoveryFile::class);
-
-            if (!$file instanceof DiscoveryFile) {
-                throw new KernelException('container entry DiscoveryFile must resolve to DiscoveryFile');
-            }
 
             return new Discovery($config, $file);
         });
@@ -80,10 +72,6 @@ final class Kernel
 
         $kernel = new self($config);
         $discovery = $kernel->container->get(Discovery::class);
-
-        if (!$discovery instanceof Discovery) {
-            throw new KernelException('container entry Discovery must resolve to Discovery');
-        }
 
         $result = $discovery->discover();
         $kernel->components = $result->components;
@@ -280,13 +268,7 @@ final class Kernel
      */
     private function invokeHookMethod(DiscoveredHookMethod $hookMethod, array $args): mixed
     {
-        $handler = $this->container->get($hookMethod->class);
-
-        if (!\is_object($handler)) {
-            throw new KernelException("hook handler '{$hookMethod->class}' must resolve to an object");
-        }
-
-        $callback = [$handler, $hookMethod->method];
+        $callback = [$this->container->get($hookMethod->class), $hookMethod->method];
 
         if (!\is_callable($callback)) {
             throw new KernelException("hook handler '{$hookMethod->class}::{$hookMethod->method}' is not callable");
@@ -375,10 +357,6 @@ final class Kernel
     {
         $registry = $this->container->get(MetaSchemaRegistry::class);
 
-        if (!$registry instanceof MetaSchemaRegistry) {
-            throw new KernelException('container entry MetaSchemaRegistry must resolve to MetaSchemaRegistry');
-        }
-
         $runner = $registry->registerAll(...);
 
         if (did_action('init') > 0) {
@@ -423,10 +401,6 @@ final class Kernel
     private function registerModelMigrator(): void
     {
         $migrator = $this->container->get(Migrator::class);
-
-        if (!$migrator instanceof Migrator) {
-            throw new KernelException('container entry Migrator must resolve to Migrator');
-        }
 
         $migrator->listen($this);
     }

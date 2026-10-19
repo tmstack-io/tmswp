@@ -131,10 +131,7 @@ final class ModelIntegrationTest extends IntegrationTestCase
 
     private function themeMigrator(): Migrator
     {
-        $migrator = self::themeKernel()->container()->get(Migrator::class);
-        self::assertInstanceOf(Migrator::class, $migrator);
-
-        return $migrator;
+        return self::themeKernel()->container()->get(Migrator::class);
     }
 
     private function objectProperty(object $object, string $name): mixed

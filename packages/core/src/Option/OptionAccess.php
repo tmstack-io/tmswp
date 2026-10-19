@@ -17,10 +17,6 @@ trait OptionAccess
     {
         $factory = Kernel::forClass(static::class)->container()->get(OptionRepositoryFactory::class);
 
-        if (!$factory instanceof OptionRepositoryFactory) {
-            throw new KernelException('container entry OptionRepositoryFactory must resolve to OptionRepositoryFactory');
-        }
-
         return $factory->for(static::class);
     }
 
