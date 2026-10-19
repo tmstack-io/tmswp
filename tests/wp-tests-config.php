@@ -18,5 +18,3 @@ define('WP_TESTS_EMAIL', 'admin@example.org');
 define('WP_TESTS_TITLE', 'TMSWP Test Suite');
 define('WP_PHP_BINARY', 'php');
 define('WP_DEBUG', true);
-
-error_reporting(E_ALL & ~E_DEPRECATED);

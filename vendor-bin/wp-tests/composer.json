@@ -2,7 +2,6 @@
   "require": {
     "php": ">=8.3",
     "phpunit/phpunit": "^9.6",
-    "wp-phpunit/wp-phpunit": "^7.0",
     "yoast/phpunit-polyfills": "^2.0"
   },
   "config": {

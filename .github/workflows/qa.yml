@@ -116,8 +116,8 @@ jobs:
           cache: npm
       - run: npm ci
       - uses: ramsey/composer-install@v3
-      # 検証する WordPress の版を確定し、テストライブラリ(wp-phpunit)を同じ系列(X.Y)に揃える。
-      # latest は WordPress.org の版情報 API から最新版を取得する。
+      # 検証する WordPress の版を確定する。latest は WordPress.org の版情報 API から最新版を取得する。
+      # テストライブラリは、wp-env がこの版と同じタグの wordpress-develop から取得する(WP_TESTS_DIR)。
       - name: Resolve WordPress version
         id: wp
         # bash を明示して pipefail を有効にし、curl の失敗をパイプ先の成功で隠さない
@@ -129,9 +129,6 @@ jobs:
             version='${{ matrix.wp }}'
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "series=$(echo "${version}" | cut -d. -f1,2)" >> "$GITHUB_OUTPUT"
-      - name: Pin wp-phpunit to WordPress ${{ steps.wp.outputs.series }}
-        run: composer bin wp-tests require --no-interaction "wp-phpunit/wp-phpunit:~${{ steps.wp.outputs.series }}.0" --update-with-all-dependencies
       - name: Create wp-env override
         run: |
           printf '{"core": "https://wordpress.org/wordpress-%s.zip", "phpVersion": "%s"}\n' \

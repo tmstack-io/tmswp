@@ -7,7 +7,7 @@ TMStack WordPress Framework の monorepo 全体に適用する品質保証体制
 
 - PHPStan(level max・baseline なし)の完全な設定と運用規律
 - php-cs-fixer(PER-CS 2.0 + strict_types + final_class)の完全な設定
-- PHPUnit による 2 層テスト(ユニット = PHPUnit 11・WP 非依存 / 統合 = wp-env + wp-phpunit・PHPUnit 9.6 隔離。§4.2 で確定)の構成
+- PHPUnit による 2 層テスト(ユニット = PHPUnit 11・WP 非依存 / 統合 = wp-env + wp-env が取得する WordPress のテストライブラリ・PHPUnit 9.6 隔離。§4.2 で確定)の構成
 - composer スクリプト体系(`test` / `lint` / `fix` / `analyse` / `qa` ほか)
 - GitHub Actions ワークフロー(`qa.yml` / `split.yml`)
 - monorepo-builder によるパッケージ間バージョン整合
@@ -96,6 +96,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
         "mikey179/vfsstream": "^1.6.12",
         "mockery/mockery": "^1.6",
         "php-stubs/acf-pro-stubs": "^6.0",
+        "php-stubs/wordpress-tests-stubs": "7.1.0",
         "phpstan/phpstan": "^2.1",
         "phpstan/phpstan-deprecation-rules": "^2.0",
         "phpstan/phpstan-phpunit": "^2.0",
@@ -285,13 +286,14 @@ parameters:
         - packages/*/tests/*/fixtures/*
 
     scanDirectories:
-        # 統合テストが参照する WP_UnitTestCase / tests_add_filter 等の実体
-        - vendor-bin/wp-tests/vendor/wp-phpunit/wp-phpunit/includes
+        # 統合テストが参照する Yoast PHPUnit Polyfills の実体
         - vendor-bin/wp-tests/vendor/yoast/phpunit-polyfills/src
 
     scanFiles:
         # acf-bridge が参照する get_field / update_field 等(ACF Pro スタブ)
         - vendor/php-stubs/acf-pro-stubs/acf-pro-stubs.php
+        # 統合テストが参照する WP_UnitTestCase / tests_add_filter 等(WordPress のテストライブラリのスタブ)
+        - vendor/php-stubs/wordpress-tests-stubs/wordpress-tests-stubs.php
 
     # wordpress-stubs の PHPDoc 精度に起因する誤検知を抑制しつつ、実型での検査を維持する
     treatPhpDocTypesAsCertain: false
@@ -333,7 +335,7 @@ parameters:
     ```
 
    monorepo ルートでは `packages/core` が vendor 配下に存在しない(replace 運用)ため extension-installer の対象外であり、上記のとおり**明示 includes** で同じ `packages/core/phpstan/extension.neon` を登録する。拡張の設定ファイルはこの 1 枚だけで、別の neon から include し直す 2 段構成にはしない(01 文書 §3.4・§3.5)。
-5. 統合テストコードも解析対象に含める。`WP_UnitTestCase` 等のシンボルは `scanDirectories` の wp-phpunit 実体から解決する。`vendor-bin/wp-tests` が未インストールの状態で `composer analyse` を実行した場合は scanDirectories 不在のエラーになるため、セットアップ手順(後述)どおり `composer install` を先に完了させること。
+5. 統合テストコードも解析対象に含める。`WP_UnitTestCase` 等のシンボルは `php-stubs/wordpress-tests-stubs`(ルートの require-dev)から、Yoast Polyfills は `vendor-bin/wp-tests` の実体から解決する。テストライブラリの実体は wp-env のコンテナ内にしか無い(§4.2)ため、解析はスタブで行う。スタブの版は確認できた最新版に固定し、WordPress の新しい版に合わせて上げる。`vendor-bin/wp-tests` が未インストールの状態で `composer analyse` を実行した場合は scanDirectories 不在のエラーになるため、セットアップ手順(後述)どおり `composer install` を先に完了させること。
 
 ---
 
@@ -531,7 +533,7 @@ php bin/tms-check <actions-dir> [<template-root> ...]
 | 層 | 配置 | 基盤 | 実行環境 | 目的 |
 |---|---|---|---|---|
 | ユニット | `packages/<pkg>/tests/Unit/` | PHPUnit **11** + Brain Monkey(+ Mockery / vfsStream) | 素の PHP(WP 不要) | ロジックの仕様確定。高速・常時実行 |
-| 統合 | `packages/<pkg>/tests/Integration/` | PHPUnit **9.6** + wp-phpunit + Yoast Polyfills | wp-env(Docker) | WP 実環境での登録系・DB 系の検証 |
+| 統合 | `packages/<pkg>/tests/Integration/` | PHPUnit **9.6** + WordPress のテストライブラリ(WP_TESTS_DIR)+ Yoast Polyfills | wp-env(Docker) | WP 実環境での登録系・DB 系の検証 |
 
 ディレクトリ規約(全パッケージ共通):
 
@@ -543,17 +545,35 @@ packages/core/
     │   ├── Support/ArrTest.php
     │   └── Form/Rule/EmailRuleTest.php …
     ├── Integration/     # 名前空間 TMSWP\Core\Tests\Integration\
-    │   ├── _boot.php    # (任意) muplugins_loaded 時に require されるブートファイル
-    │   └── Post/PostTypeTest.php …
-    ├── Support/         # テスト支援クラス(UnitTestCase 等)
-    └── fixtures/        # フィクスチャ(QA 対象外)
+    │   └── EntityRegistrationIntegrationTest.php …
+    ├── Support/         # テスト支援クラス(UnitTestCase・IntegrationTestCase 等)
+    └── fixtures/        # ユニット層のフィクスチャ(QA 対象外)
 ```
 
 `tests/Unit/` は `src/` のディレクトリ構造をミラーする(旧 iwf2b の `tests/TestCase` 規約を踏襲)。
 
+統合層の fixture(テスト用のテーマ・プラグイン)はパッケージごとではなく、リポジトリルートの `tests/fixtures/` に置く。全パッケージの統合テストが同じ fixture を共有する(4.6)。
+
+```
+tests/
+├── bootstrap-integration.php
+├── wp-tests-config.php
+└── fixtures/
+    ├── _boot.php                          # fixture と無料版 ACF を有効化する
+    ├── themes/tmswp-fixture-theme/        # Kernel 名前空間 TmswpFixtureTheme
+    │   ├── style.css / functions.php      # functions.php の直下で Kernel::boot()
+    │   ├── index.php / contact.php        # template_include の確認用テンプレート
+    │   ├── actions/ / parts/              # ActionRouter・Template の確認用
+    │   └── app/                           # Hook・Post・Tax・User・Option・Model・Acf 等
+    └── plugins/tmswp-fixture-plugin/      # Kernel 名前空間 TmswpFixturePlugin
+        ├── tmswp-fixture-plugin.php       # 本体ファイルの直下で Kernel::boot()
+        ├── app/                           # Hook
+        └── templates/                     # プラグインのテンプレートのフォールバック確認用
+```
+
 ### 4.2 統合層の PHPUnit バージョン制約と隔離(確定事項)
 
-WordPress コアテストスイート(wp-phpunit が配布する `includes/bootstrap.php` / `WP_UnitTestCase`)は **PHPUnit 9.6 が上限**であり(WP 7.x の制約。bootstrap が PHPUnit 10+ を明示拒否する)、PHPUnit 11 とは併用できない。よって DR-12 の「PHPUnit 11」は**ユニット層に適用**し、統合層は次のとおり隔離した PHPUnit 9.6 で実行する。これは本書で確定する技術判断である。
+WordPress コアテストスイート(wordpress-develop の `tests/phpunit/includes/bootstrap.php` / `WP_UnitTestCase`)は **PHPUnit 9.6 が上限**であり(WP 7.x の制約。bootstrap が PHPUnit 10+ を明示拒否する)、PHPUnit 11 とは併用できない。よって DR-12 の「PHPUnit 11」は**ユニット層に適用**し、統合層は次のとおり隔離した PHPUnit 9.6 で実行する。これは本書で確定する技術判断である。
 
 - `bamarni/composer-bin-plugin` の名前空間 `wp-tests` に統合テスト専用ツールチェーンを隔離インストールする。
 - ルート vendor(PHPUnit 11)と `vendor-bin/wp-tests/vendor`(PHPUnit 9.6)は衝突しない。
@@ -566,7 +586,6 @@ WordPress コアテストスイート(wp-phpunit が配布する `includes/boots
     "require": {
         "php": ">=8.3",
         "phpunit/phpunit": "^9.6",
-        "wp-phpunit/wp-phpunit": "^7.0",
         "yoast/phpunit-polyfills": "^2.0"
     },
     "config": {
@@ -578,8 +597,9 @@ WordPress コアテストスイート(wp-phpunit が配布する `includes/boots
 }
 ```
 
-- `wp-phpunit/wp-phpunit` はテスト対象の WP と同じ系列(メジャー.マイナー)を使う。lock には最新の系列を入れ、ローカルの既定(`.wp-env.json` の `core: null` = 最新版)と揃える。
-- CI は各セルで検証する WP の版を確定し、実行前に `composer bin wp-tests require "wp-phpunit/wp-phpunit:~X.Y.0" --update-with-all-dependencies` で同じ系列に固定する(WP 7.0 のセルは `~7.0.0`、最新版のセルは WordPress.org の版情報 API から得た最新版の系列。§5.1)。その系列の wp-phpunit がまだ公開されていなければ、この固定が失敗して CI が止まる。
+- テストライブラリ(`WP_UnitTestCase` 等)は vendor-bin に入れない。wp-env は、起動した WordPress の版と同じタグの wordpress-develop を取得し、その `tests/phpunit` をコンテナの `/wordpress-phpunit` にマウントして、環境変数 `WP_TESTS_DIR` で示す(core が最新版なら最新版のタグ、`wordpress-7.0.zip` なら `7.0.0`)。統合テストはこれを使うため、テストライブラリの版はパッチ版まで WordPress と一致する。CI でテストライブラリの版を固定する手順は要らない。
+- `WP_TESTS_DIR` の直下には wp-env が `wp-tests-config.php` を置く。WordPress のテストライブラリは設定ファイルの指定が無いとこれを使うが、テーブル接頭辞が開発用サイトと同じ `wp_` である。これで動くとテストの準備が開発用サイトのテーブルを消すため、bootstrap は必ず `WP_TESTS_CONFIG_FILE_PATH` で tests/wp-tests-config.php を指定する(§4.6)。
+- PHPStan はテストライブラリの実体を参照できないため、`php-stubs/wordpress-tests-stubs` で型を得る(§2.2)。
 - 統合テストはコンテナ内の PHP(8.3 または 8.5)で実行するため、ホストの PHP で依存を解決しても下限 8.3 で動く版に限る(`config.platform.php`)。
 
 ### 4.3 phpunit.unit.xml.dist(PHPUnit 11、完全版)
@@ -693,7 +713,7 @@ abstract class UnitTestCase extends TestCase
          bootstrap="tests/bootstrap-integration.php"
          backupGlobals="false"
          colors="true"
-         convertDeprecationsToExceptions="false"
+         convertDeprecationsToExceptions="true"
          failOnWarning="true"
          beStrictAboutTestsThatDoNotTestAnything="true">
     <testsuites>
@@ -718,44 +738,93 @@ abstract class UnitTestCase extends TestCase
 
 カバレッジは統合層では計測しない(4.8 参照)ため `<coverage>` 要素は置かない。
 
-### 4.6 tests/bootstrap-integration.php(完全版)
+`convertDeprecationsToExceptions="true"` により、テスト中に出た非推奨(`E_DEPRECATED` / `E_USER_DEPRECATED`)はテストの失敗になる。ユニット層の `failOnDeprecation` と同じ方針である。発生元が FW か WordPress 本体かは区別しない。FW が WordPress や PHP の関数に不正な値を渡した結果の非推奨は、呼び出された側のファイルで報告されるため、発生元のパスでは FW 由来かどうかを判定できないからである。WordPress 本体や ACF が出す非推奨で失敗した場合は、その版の組み合わせと非推奨の内容を確かめてから対処を決める。
+
+### 4.6 tests/bootstrap-integration.php と fixture(完全版)
 
 ```php
 <?php
 
 declare(strict_types=1);
 
-// 1. monorepo ルートの autoload(FW 本体 + テストクラス)
-require dirname(__DIR__) . '/vendor/autoload.php';
-// 2. 隔離ツールチェーンの autoload(Yoast Polyfills 等)
-require dirname(__DIR__) . '/vendor-bin/wp-tests/vendor/autoload.php';
+use TMSWP\Core\Tests\Support\IntegrationEnvironmentGuard;
 
-$wpPhpunitDir = dirname(__DIR__) . '/vendor-bin/wp-tests/vendor/wp-phpunit/wp-phpunit';
+$rootLoader = require dirname(__DIR__) . '/vendor/autoload.php';
+$wpTestsLoader = require dirname(__DIR__) . '/vendor-bin/wp-tests/vendor/autoload.php';
 
-// WP テストスイートへの設定注入
-putenv('WP_PHPUNIT__TESTS_CONFIG=' . __DIR__ . '/wp-tests-config.php');
-define(
-    'WP_TESTS_PHPUNIT_POLYFILLS_PATH',
-    dirname(__DIR__) . '/vendor-bin/wp-tests/vendor/yoast/phpunit-polyfills'
+$rootLoader->unregister();
+$wpTestsLoader->unregister();
+$rootLoader->register(false);
+$wpTestsLoader->register(true);
+
+/*
+ * WordPress とテストライブラリを読み込む前に、テストのテーブルが tests/wp-tests-config.php の wptests_ になる
+ * 状態かを検査し、そうでなければ止める(IntegrationEnvironmentGuard)。テストライブラリは、wp-env が core と
+ * 同じタグの wordpress-develop から取得して WP_TESTS_DIR に置くものを使う。WP_TESTS_DIR の直下に wp-env が
+ * 置く wp-tests-config.php は開発用サイトと同じ接頭辞 wp_ のため、設定ファイルは必ず自前のものを指定する。
+ */
+$wpTestsDir = IntegrationEnvironmentGuard::assertSafe(
+    getenv('WP_TESTS_DIR'),
+    get_defined_constants(true)['user'] ?? [],
+    $GLOBALS,
 );
 
-require $wpPhpunitDir . '/includes/functions.php';
+define('WP_TESTS_CONFIG_FILE_PATH', __DIR__ . '/wp-tests-config.php');
+define(
+    'WP_TESTS_PHPUNIT_POLYFILLS_PATH',
+    dirname(__DIR__) . '/vendor-bin/wp-tests/vendor/yoast/phpunit-polyfills',
+);
 
-tests_add_filter('muplugins_loaded', static function (): void {
-    // 各パッケージの統合テスト用ブートファイルをパッケージ名昇順(決定的順序)でロードする。
-    // _boot.php は Kernel ブートやテスト用エンティティ(fixtures)の登録に使う。
-    $bootFiles = glob(dirname(__DIR__) . '/packages/*/tests/Integration/_boot.php');
+require $wpTestsDir . '/includes/functions.php';
 
-    foreach ($bootFiles === false ? [] : $bootFiles as $bootFile) {
-        require $bootFile;
-    }
-});
+// fixture のテーマ・プラグインと無料版 ACF を有効化する(boot は WordPress が fixture を読み込むときに行われる)
+require __DIR__ . '/fixtures/_boot.php';
 
-require $wpPhpunitDir . '/includes/bootstrap.php';
+/*
+ * 非推奨は失敗として扱う(テスト中は phpunit.integration.xml.dist の convertDeprecationsToExceptions)。
+ * fixture の boot と init での登録は WordPress の読み込み中、つまり PHPUnit のエラーハンドラーが働く前に
+ * 動くため、読み込みの間も非推奨を例外にする。
+ */
+set_error_handler(static function (int $errno, string $errstr, string $errfile, int $errline): never {
+    throw new ErrorException($errstr, 0, $errno, $errfile, $errline);
+}, E_DEPRECATED | E_USER_DEPRECATED);
+
+require $wpTestsDir . '/includes/bootstrap.php';
+
+restore_error_handler();
 ```
 
-- `_boot.php` の典型的な中身は「テスト用 app ディレクトリ(`tests/fixtures/app`)を指す `KernelConfig` で `Kernel::boot()` を呼ぶ」こと。Kernel のテスト用ブート手順の正準は 01 文書に従う。
-- 統合テストクラスは `WP_UnitTestCase` を継承し、フィクスチャは `set_up()` / `tear_down()`(Polyfills 流儀)、WP ファクトリは `self::factory()->post` 等を使用する。
+- ルートの autoload を後ろ、隔離ツールチェーンの autoload を先に登録し直す(`register(true)` で先頭に置く)。統合層の PHPUnit 9.6 が、ルートの PHPUnit 11 より先に解決されるようにするためである。
+- WordPress とテストライブラリを読み込む前に、`TMSWP\Core\Tests\Support\IntegrationEnvironmentGuard::assertSafe()` が、テストのテーブルが tests/wp-tests-config.php の `wptests_` になる状態かを検査し、そうでなければ例外で止める。テストライブラリは起動時にテーブルを作り直して投稿・ユーザー等の行を削除するため、接頭辞やテーブル名が開発用サイト(`wp_`)に向いたまま起動すると開発用サイトのデータを消す。検査する状態は次のとおり。
+  - `WP_TESTS_DIR`(§4.2)が無い、または `includes/bootstrap.php` を含まない。統合テストは wp-env の `cli` コンテナ内(`composer test:integration`)でだけ動く。
+  - `WP_TESTS_CONFIG_FILE_PATH` が定義済み。別の設定ファイル(wp-env が `WP_TESTS_DIR` の直下に置く `wp_` 接頭辞のもの等)で動く恐れがある。bootstrap はこれを必ず tests/wp-tests-config.php に定義する。
+  - `WP_TESTS_TABLE_PREFIX`・`CUSTOM_USER_TABLE`・`CUSTOM_USER_META_TABLE` が定義済み。後の2つは接頭辞に関係なくユーザー表を差し替える(`wpdb::tables()`)。
+  - tests/wp-tests-config.php が定義する定数(`ABSPATH`・`DB_*`・`WP_TESTS_DOMAIN` 等・`WP_DEBUG`)が定義済み。設定ファイルの `define()` が効かず、先の値が使われる。
+  - グローバル変数 `$table_prefix` または `$wpdb` が既にある。PHPUnit は bootstrap をメソッド内で読み込むため、設定ファイルの `$table_prefix = 'wptests_'` はローカル変数になる。`wp-settings.php` はグローバルの `$table_prefix` が既にあればそちらを使い、`require_wp_db()` は既存の `$wpdb` を使い続ける。どちらも無ければ、接頭辞は設定ファイルの `wptests_` だけから決まる。
+- 検査は引数だけを見る副作用の無い関数で、各状態で例外になることをユニット層(`IntegrationEnvironmentGuardTest`)で確かめる。
+- 読み込みの間の非推奨は `ErrorException` となり、bootstrap のエラーとして実行全体が止まる。テスト中の非推奨は 4.5 のとおりテストの失敗になる。
+
+#### fixture の起動経路
+
+`tests/fixtures/_boot.php` は、WordPress の読み込み前に次を登録するだけで、`Kernel::boot()` を自分では呼ばない。
+
+1. `pre_option_active_plugins` で、無料版 ACF(`advanced-custom-fields/acf.php`)と fixture のプラグインを有効なプラグインにする。
+2. `muplugins_loaded` で `tests/fixtures/themes` をテーマの置き場に登録し、`pre_option_template` / `pre_option_stylesheet` で fixture のテーマを有効なテーマにする。
+3. fixture の Kernel の探索キャッシュの置き場(定数 `TMSWP_TESTS_CACHE_DIR`、一時ディレクトリ配下)を実行ごとに空にする。boot は毎回 app/ を走査した結果でキャッシュを書く。
+4. `init`(priority 0)で 2 つの Kernel が boot 済みかを確かめ、欠けていれば例外にする。
+5. `wp_loaded` で登録済みメタキーを控える(下記の IntegrationTestCase が使う)。
+
+boot は WordPress 自身が行う。fixture のプラグイン本体ファイルはプラグインの読み込み時(`plugins_loaded` の前)に、fixture のテーマの `functions.php` は `after_setup_theme` の前に、それぞれ直下で `Kernel::boot()` を呼ぶ。どちらも `init` より前であり、実際のテーマ・プラグインと同じ経路である。fixture の Kernel は debug の既定値(`WP_DEBUG` = true)で boot する。debug 時は遅延 boot が例外になる(02 文書 §3.3)ため、`init` 発火後に boot する経路は統合テストの起動では通らない。fixture の app/ は、各本体ファイルが Composer の `ClassLoader` で PSR-4 登録する。
+
+#### IntegrationTestCase
+
+全パッケージの統合テストは `TMSWP\Core\Tests\Support\IntegrationTestCase`(`WP_UnitTestCase` を継承する抽象クラス)を継承し、テストの中で `Kernel::boot()` を呼ばない。
+
+- `themeKernel()` / `pluginKernel()` で fixture の Kernel を得る。
+- fixture のクラスは PHPStan の解析対象外のため、テストからは FQCN の文字列で参照し、`fixtureClass($fqcn, $parent)` で親クラスを確かめた class-string として使う。
+- WP のテストライブラリは、各テストの `tear_down` で登録済みメタキーをすべて解除する(`unregister_all_meta_keys()`)。`IntegrationTestCase::set_up()` は、`_boot.php` が `wp_loaded` で控えた登録を毎回戻す。
+- DB の変更は `WP_UnitTestCase` がテストごとにロールバックする。テスト中の `CREATE TABLE` はテストライブラリが一時テーブルに書き換え、接続が続く限り残るため、作ったテーブルは `tear_down` で削除する。フックはテストライブラリが最初のテストの前の状態に戻すため、テスト中の `add_filter` / `remove_action` は後片付けが要らない。
+- WordPress の契機は WordPress の関数・フックで再現する。テーマの有効化は、`switch_theme()` が前のリクエストで残す `theme_switched` を置いてから `check_theme_switched()` を呼ぶ(`after_switch_theme` が発火する)。管理画面のリクエストは `wp-admin/includes/admin.php` を読み込み、`set_current_screen()` で管理画面にしてから `admin_init` を発火する。FW 自身のフック(`tmswp/activated` 等)を直接発火して契機を代用しない。
 
 ### 4.7 tests/wp-tests-config.php と .wp-env.json(完全版)
 
@@ -766,8 +835,6 @@ require $wpPhpunitDir . '/includes/bootstrap.php';
 
 declare(strict_types=1);
 
-// wp-env の環境(mysql コンテナの wordpress データベース)の既定値。環境変数で上書き可能。
-// テーブル接頭辞 wptests_ で開発用サイトのテーブル(wp_)と分ける
 define('ABSPATH', '/var/www/html/');
 
 define('DB_NAME', getenv('WP_TESTS_DB_NAME') ?: 'wordpress');
@@ -784,10 +851,10 @@ define('WP_TESTS_EMAIL', 'admin@example.org');
 define('WP_TESTS_TITLE', 'TMSWP Test Suite');
 define('WP_PHP_BINARY', 'php');
 define('WP_DEBUG', true);
-
-// WP コア由来の deprecation を除外する
-error_reporting(E_ALL & ~E_DEPRECATED);
 ```
+
+- DB の接続先は wp-env の環境(mysql コンテナの `wordpress` データベース)を既定値とし、環境変数で上書きできる。テーブル接頭辞 `wptests_` で開発用サイトのテーブル(`wp_`)と分ける。
+- `error_reporting()` はここで設定しない。`WP_DEBUG` が true のとき WordPress の `wp_debug_mode()` が `error_reporting(E_ALL)` に設定し直すため、ここでの設定はテストの実行時には効かない。非推奨の扱いは 4.5・4.6 のとおりである。
 
 `.wp-env.json`(リポジトリ既定。CI では `.wp-env.override.json` で core / phpVersion を差し替える):
 
@@ -967,8 +1034,8 @@ jobs:
           cache: npm
       - run: npm ci
       - uses: ramsey/composer-install@v3
-      # 検証する WordPress の版を確定し、テストライブラリ(wp-phpunit)を同じ系列(X.Y)に揃える。
-      # latest は WordPress.org の版情報 API から最新版を取得する。
+      # 検証する WordPress の版を確定する。latest は WordPress.org の版情報 API から最新版を取得する。
+      # テストライブラリは、wp-env がこの版と同じタグの wordpress-develop から取得する(WP_TESTS_DIR)。
       - name: Resolve WordPress version
         id: wp
         # bash を明示して pipefail を有効にし、curl の失敗をパイプ先の成功で隠さない
@@ -980,9 +1047,6 @@ jobs:
             version='${{ matrix.wp }}'
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "series=$(echo "${version}" | cut -d. -f1,2)" >> "$GITHUB_OUTPUT"
-      - name: Pin wp-phpunit to WordPress ${{ steps.wp.outputs.series }}
-        run: composer bin wp-tests require --no-interaction "wp-phpunit/wp-phpunit:~${{ steps.wp.outputs.series }}.0" --update-with-all-dependencies
       - name: Create wp-env override
         run: |
           printf '{"core": "https://wordpress.org/wordpress-%s.zip", "phpVersion": "%s"}\n' \
@@ -1009,7 +1073,7 @@ jobs:
 設計上の要点:
 
 - マトリクスは D-09 のとおり、ユニットが PHP 8.3 / 8.5、統合が **PHP 8.3 / 8.5 × WP 7.0 / 最新版** の 4 セル。ユニットは WP 非依存のため PHP 軸のみ。
-- 統合の各セルは、検証する WP の版を先に確定し(WP 7.0 のセルは 7.0、最新版のセルは WordPress.org の版情報 API の最新版)、wp-env の `core` をその版の zip に、テストライブラリ(wp-phpunit)を同じ系列に固定する(§4.2)。API の取得や系列の固定に失敗したセルは、その時点で失敗する。
+- 統合の各セルは、検証する WP の版を先に確定し(WP 7.0 のセルは 7.0、最新版のセルは WordPress.org の版情報 API の最新版)、wp-env の `core` をその版の zip にする。テストライブラリは wp-env がその版と同じタグから取得する(§4.2)。API の取得に失敗したセルは、その時点で失敗する。
 - wp-env は `npm ci` で package-lock.json どおりに導入し(`actions/setup-node` の npm キャッシュを使う)、composer スクリプト経由でローカルの wp-env だけを呼ぶ(§1.1 補足)。
 - `lint` / `analyse` / `monorepo` / `rules-verify` は下限の PHP 8.3 で実行する(php-cs-fixer の推奨と依存解決の下限に合わせる。§1.1 補足)。PHP 8.5 での解析は PHPStan の `phpVersion`(8.3〜8.5。§2.1)が担う。
 - `integration` は `timeout-minutes: 20` で打ち切る。`wp:start` は Docker イメージ取得の一時的な失敗に備えて 10 秒間隔で 3 回まで再試行し、3 回目の失敗でジョブを失敗させる。失敗時は wp-env のログ(`logs development --no-watch`)を出力する。
@@ -1167,7 +1231,7 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 
 | # | 旧テスト(iwf2b/tests/) | 移植先(新 FW) | 層 | 移植する仕様 / 廃棄理由 |
 |---|---|---|---|---|
-| 1 | `bootstrap.php` | `tests/bootstrap-integration.php` | — | `tests_add_filter('muplugins_loaded')` でのロード方式のみ踏襲。install-wp-tests.sh 経路は廃止(wp-env + wp-phpunit へ) |
+| 1 | `bootstrap.php` | `tests/bootstrap-integration.php` | — | `tests_add_filter('muplugins_loaded')` でのロード方式のみ踏襲。install-wp-tests.sh 経路は廃止(wp-env の WP_TESTS_DIR へ) |
 | 2 | `test-sample.php` | — | — | 廃棄(scaffold 残骸) |
 | 3 | `TestCase/ArrTest.php` | `packages/core/tests/Unit/Support/ArrTest.php` | Unit | ドット記法 get/set のデータプロバイダ**全件**移植(ネスト配列・配列パス両形式) |
 | 4 | `TestCase/TextTest.php` | `packages/core/tests/Unit/Support/StrTest.php` | Unit | stringify(__toString / Iterator 対応)・ケース変換のうち、新 `Support\Str` API に存在するものを移植。新 API に対応がない検証は廃棄 |
@@ -1191,7 +1255,7 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 | 21b | 同上(サムネイル解決) | `packages/core/tests/Integration/Post/PostTypeTest.php` | Integration | アイキャッチなし / アイキャッチあり / `tmswp/post/thumbnail_fallback` フィルタの 3 経路の解決を移植(GD 画像生成 + WP ファクトリの作法を踏襲)。ダミー画像は呼び出し側の `?? $dummyUrl` で表すため対象外。本文先頭 img の抽出はコアにも thumbnail 拡張にも持たない(03 文書 §5) |
 | 22 | `TestCase/Tax/AbstractTaxTest.php` | `packages/core/tests/Integration/Tax/TaxonomyTest.php` | Integration | タクソノミー登録(object_type の文字列 / 配列 / PostType クラス名解決)・term meta 定数操作・term link を移植 |
 | 23 | `TestCase/User/AbstractUserTest.php` | `packages/core/tests/Integration/User/UserRoleTest.php` | Integration | ロール登録・user meta 定数操作・author link を移植 |
-| 24 | `bin/install-wp-tests.sh` | — | — | 廃棄(wp-env + wp-phpunit に置換) |
+| 24 | `bin/install-wp-tests.sh` | — | — | 廃棄(wp-env の WP_TESTS_DIR に置換) |
 | 25 | `.travis.yml` / `.phpcs.xml.dist` / `Gruntfile.js` / `package.json` | — | — | 廃棄(qa.yml / php-cs-fixer / wp-env(@wordpress/env)に置換。i18n pot 生成は `wp i18n make-pot` を必要時に使用) |
 
 ### 8.2 旧 FW で未テストだった領域(新規テスト必須リスト)
@@ -1331,7 +1395,7 @@ final class EmailRuleTest extends UnitTestCase
 - [ ] php-cs-fixer が `@PER-CS2x0`(+ `:risky`)基底と `declare_strict_types` / `final_class` / `strict_comparison` を含む 3.1 のルール全文で構成され、`composer lint` がクリーンに通る
 - [ ] ユニットテストが PHPUnit 11・`tests/bootstrap-unit.php`(WP 定数を定義しない)で、WP / MySQL / Docker なしで全件パスする
 - [ ] 全ユニットテストが `TMSWP\Core\Tests\Support\UnitTestCase` を継承している
-- [ ] 統合テストが wp-env の `cli` コンテナ内で PHPUnit 9.6(vendor-bin 隔離)+ wp-phpunit で全件パスする
+- [ ] 統合テストが wp-env の `cli` コンテナ内で PHPUnit 9.6(vendor-bin 隔離)+ WP_TESTS_DIR のテストライブラリで全件パスする
 - [ ] `phpunit.unit.xml.dist` / `phpunit.integration.xml.dist` に 5 パッケージ分の testsuite が定義されている
 - [ ] ユニット層カバレッジ(5 パッケージ合算)が 85% 以上で、`bin/coverage-check.php` が閾値未満を exit 1 にする
 - [ ] qa.yml に lint / analyse / monorepo / rules-verify / unit(PHP 8.3 / 8.5)/ integration(PHP 8.3 / 8.5 × WP 7.0 / 最新版 = 4 セル。テストライブラリは各セルの WP と同じ系列)の全ジョブがある

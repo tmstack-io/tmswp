@@ -5,71 +5,43 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Integration;
 
 use ReflectionProperty;
-use TMSWP\Core\Kernel\Kernel;
-use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Model\Connection;
 use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Model\Model;
-use TMSWP\Core\Tests\Support\UsesTempDirectories;
-use WP_UnitTestCase;
-use wpdb;
+use TMSWP\Core\Tests\Support\IntegrationTestCase;
 
-final class ModelIntegrationTest extends WP_UnitTestCase
+/**
+ * fixture テーマの Contact(#[AsModel])を、テーマの有効化と管理画面のリクエスト(admin_init のハッシュ比較)
+ * という Migrator の実際の契機で移行し、CRUD を確かめる。
+ */
+final class ModelIntegrationTest extends IntegrationTestCase
 {
-    use UsesTempDirectories;
-
-    /** @var list<callable(string): void> */
-    private array $autoloaders = [];
-
-    /** @var list<string> */
-    private array $tables = [];
+    private const TABLE = 'tmswp_fixture_contacts';
 
     public function tear_down(): void
     {
-        $wpdb = $this->wpdb();
-
-        foreach ($this->tables as $table) {
-            $wpdb->query('DROP TABLE IF EXISTS ' . $wpdb->prefix . $table);
-        }
-
-        delete_option('tmswp_schema_hashes');
-
-        foreach ($this->autoloaders as $autoloader) {
-            spl_autoload_unregister($autoloader);
-        }
-
-        $this->autoloaders = [];
-        $this->tables = [];
-        Kernel::reset();
-        $this->cleanupTempDirectories();
+        // テスト中の CREATE TABLE はテストライブラリにより一時テーブルになり、接続が続く限り残るため削除する
+        self::wpdb()->query('DROP TABLE IF EXISTS ' . self::wpdb()->prefix . self::TABLE);
 
         parent::tear_down();
     }
 
-    public function testKernelRegisteredModelMigratesAndRunsCrud(): void
+    public function testThemeActivationMigratesTableAndModelRunsCrud(): void
     {
-        $wpdb = $this->wpdb();
-
-        $namespace = $this->runtimeNamespace('ModelApp');
-        $appDir = $this->createTempDirectory('integration-model-app');
-        $cacheDir = $this->createTempDirectory('integration-model-cache');
-        $table = $this->trackTable('m6_contacts_' . substr(md5(uniqid('', true)), 0, 8));
-
-        $this->writeContactModel($namespace, $appDir, $table);
-        $this->writeContactV2Model($namespace, $appDir, $table);
-        $this->registerAppAutoloader($namespace, $appDir);
-
-        $kernel = Kernel::boot(KernelConfig::theme($appDir, $namespace, $cacheDir, false, false));
-        if (did_action('after_setup_theme') === 0) {
-            do_action('after_setup_theme');
-        }
-
-        do_action('tmswp/activated', $kernel);
-
+        $wpdb = self::wpdb();
         $connection = new Connection($wpdb);
-        self::assertSame($wpdb->prefix . $table, $connection->selectVar('SHOW TABLES LIKE %s', [$wpdb->prefix . $table]));
+        $contact = self::fixtureClass(self::THEME_NAMESPACE . '\\Model\\Contact', Model::class);
+        $migrator = $this->themeMigrator();
 
-        $contact = $this->modelClass($namespace, 'Contact');
+        // #[AsModel] は after_setup_theme で Migrator に登録済み。テーブルはまだ無い
+        self::assertSame([$contact], $migrator->models());
+        self::assertNull($connection->selectVar('SHOW TABLES LIKE %s', [$wpdb->prefix . self::TABLE]));
+
+        $this->activateFixtureTheme();
+
+        self::assertSame($wpdb->prefix . self::TABLE, $connection->selectVar('SHOW TABLES LIKE %s', [$wpdb->prefix . self::TABLE]));
+        self::assertTrue($migrator->status()[0]->current);
+
         $id = $contact::insert([
             'email' => 'first@example.test',
             'active' => true,
@@ -91,55 +63,78 @@ final class ModelIntegrationTest extends WP_UnitTestCase
         self::assertIsObject($updated);
         self::assertSame('updated@example.test', $this->objectProperty($updated, 'email'));
 
-        $v2 = $this->modelClass($namespace, 'ContactV2');
-        $migrator = new Migrator($connection);
-        $migrator->register($v2);
-        $migrator->migrateAll(force: true);
-
-        self::assertSame('phone', $connection->selectVar('SHOW COLUMNS FROM ' . $wpdb->prefix . $table . ' LIKE %s', ['phone']));
-        $phoneIndex = $connection->selectRow('SHOW INDEX FROM ' . $wpdb->prefix . $table . ' WHERE Key_name = %s', ['phone_idx']);
-        self::assertIsArray($phoneIndex);
-        self::assertSame('phone_idx', $phoneIndex['Key_name'] ?? null);
-
         self::assertSame(1, $contact::delete($id));
         self::assertSame(0, $contact::count());
     }
 
-    private function runtimeNamespace(string $prefix): string
+    public function testAdminRequestMigratesChangedSchemaByHashComparison(): void
     {
-        return 'Example\\Tests\\Integration\\' . $prefix . uniqid();
-    }
+        $wpdb = self::wpdb();
+        $connection = new Connection($wpdb);
+        $contact = self::fixtureClass(self::THEME_NAMESPACE . '\\Model\\Contact', Model::class);
+        $migrator = $this->themeMigrator();
 
-    private function wpdb(): wpdb
-    {
-        global $wpdb;
+        // 前回のデプロイ後の DB を用意する: 旧定義(phone 列なし)のテーブルと、そのハッシュが保存された状態
+        $previous = new Migrator($connection);
+        $previous->register(self::fixtureClass(self::THEME_NAMESPACE . '\\Model\\ContactV1', Model::class));
+        $previous->migrateAll();
+        self::assertNull($connection->selectVar('SHOW COLUMNS FROM ' . $wpdb->prefix . self::TABLE . ' LIKE %s', ['phone']));
+        $id = $contact::insert([
+            'email' => 'kept@example.test',
+            'active' => false,
+            'meta' => '{}',
+            'created_at' => '2026-06-13 08:30:00',
+            'status' => 'draft',
+        ]);
 
-        if (!$wpdb instanceof wpdb) {
-            self::fail('wpdb is not available.');
-        }
+        // Kernel が登録した現在の定義は、保存済みのハッシュと食い違う
+        self::assertFalse($migrator->status()[0]->current);
 
-        return $wpdb;
-    }
+        $this->fireAdminInit();
 
-    private function trackTable(string $table): string
-    {
-        $this->tables[] = $table;
+        self::assertTrue($migrator->status()[0]->current);
+        self::assertSame('phone', $connection->selectVar('SHOW COLUMNS FROM ' . $wpdb->prefix . self::TABLE . ' LIKE %s', ['phone']));
+        $phoneIndex = $connection->selectRow('SHOW INDEX FROM ' . $wpdb->prefix . self::TABLE . ' WHERE Key_name = %s', ['phone_idx']);
+        self::assertIsArray($phoneIndex);
+        self::assertSame('phone_idx', $phoneIndex['Key_name'] ?? null);
 
-        return $table;
+        // 列の追加後も既存の行は残り、削除できる
+        self::assertSame(1, $contact::count());
+        self::assertSame(1, $contact::delete($id));
+        self::assertSame(0, $contact::count());
     }
 
     /**
-     * @return class-string<Model>
+     * テーマを有効化した直後のリクエストを再現する。switch_theme() が前のリクエストで残す theme_switched を置き、
+     * WordPress がそのリクエストの init で呼ぶ check_theme_switched() から after_switch_theme を発火させる。
      */
-    private function modelClass(string $namespace, string $name): string
+    private function activateFixtureTheme(): void
     {
-        $class = $namespace . '\\Models\\' . $name;
+        update_option('theme_switched', 'twentytwentyfive');
+        check_theme_switched();
+    }
 
-        if (!is_subclass_of($class, Model::class)) {
-            self::fail("model class was not loaded: {$class}");
-        }
+    /**
+     * 管理画面のリクエストを再現して admin_init を発火する。wp-admin/admin.php と同じく管理画面用の関数を読み込み、
+     * 現在の画面を管理画面にする(is_admin() が真になる)。管理画面用の HTTP ヘッダーを送る WP コアの
+     * コールバック2つは、出力を始めた後の CLI ではヘッダーを送れないため外す(外したフックは tear_down で元に戻る)。
+     */
+    private function fireAdminInit(): void
+    {
+        require_once ABSPATH . 'wp-admin/includes/admin.php';
+        set_current_screen('dashboard');
+        remove_action('admin_init', 'wp_admin_headers');
+        remove_action('admin_init', 'send_frame_options_header', 10);
 
-        return $class;
+        do_action('admin_init');
+    }
+
+    private function themeMigrator(): Migrator
+    {
+        $migrator = self::themeKernel()->container()->get(Migrator::class);
+        self::assertInstanceOf(Migrator::class, $migrator);
+
+        return $migrator;
     }
 
     private function objectProperty(object $object, string $name): mixed
@@ -149,127 +144,5 @@ final class ModelIntegrationTest extends WP_UnitTestCase
         }
 
         return (new ReflectionProperty($object, $name))->getValue($object);
-    }
-
-    private function registerAppAutoloader(string $namespace, string $appDir): void
-    {
-        $prefix = $namespace . '\\';
-        $loader = static function (string $class) use ($appDir, $prefix): void {
-            if (!str_starts_with($class, $prefix)) {
-                return;
-            }
-
-            $relative = str_replace('\\', DIRECTORY_SEPARATOR, substr($class, \strlen($prefix))) . '.php';
-            $file = $appDir . DIRECTORY_SEPARATOR . $relative;
-
-            if (!is_file($file)) {
-                return;
-            }
-
-            require $file;
-        };
-
-        spl_autoload_register($loader);
-        $this->autoloaders[] = $loader;
-    }
-
-    private function writeContactModel(string $namespace, string $appDir, string $table): void
-    {
-        $this->writeFile($appDir . '/Models/Contact.php', <<<PHP
-<?php
-
-declare(strict_types=1);
-
-namespace {$namespace}\\Models;
-
-use DateTimeImmutable;
-use TMSWP\\Core\\Attribute\\AsModel;
-use TMSWP\\Core\\Model\\Model;
-use TMSWP\\Core\\Model\\TableDefinition;
-
-enum ContactStatus: string
-{
-    case Draft = 'draft';
-    case Published = 'published';
-}
-
-#[AsModel]
-final class Contact extends Model
-{
-    public function __construct(
-        public int \$id,
-        public string \$email,
-        public bool \$active,
-        public array \$meta,
-        public DateTimeImmutable \$createdAt,
-        public ContactStatus \$status,
-    ) {}
-
-    public static function table(): TableDefinition
-    {
-        return TableDefinition::create('{$table}')
-            ->id()
-            ->string('email')
-            ->bool('active')
-            ->json('meta')
-            ->datetime('created_at')
-            ->string('status')
-            ->unique('email', 'email_unique');
-    }
-}
-PHP);
-    }
-
-    private function writeContactV2Model(string $namespace, string $appDir, string $table): void
-    {
-        $this->writeFile($appDir . '/Models/ContactV2.php', <<<PHP
-<?php
-
-declare(strict_types=1);
-
-namespace {$namespace}\\Models;
-
-use TMSWP\\Core\\Model\\Model;
-use TMSWP\\Core\\Model\\TableDefinition;
-
-final class ContactV2 extends Model
-{
-    public static function table(): TableDefinition
-    {
-        return TableDefinition::create('{$table}')
-            ->id()
-            ->string('email')
-            ->bool('active')
-            ->json('meta')
-            ->datetime('created_at')
-            ->string('status')
-            ->string('phone', nullable: true)
-            ->unique('email', 'email_unique')
-            ->index('phone', 'phone_idx');
-    }
-
-    public static function rowClass(): ?string
-    {
-        return null;
-    }
-}
-PHP);
-    }
-
-    private function writeFile(string $file, string $contents): string
-    {
-        $dir = \dirname($file);
-
-        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
-            self::fail("fixture ディレクトリを作成できません: {$dir}");
-        }
-
-        $bytes = file_put_contents($file, $contents);
-
-        if ($bytes === false) {
-            self::fail("fixture ファイルを書き込めません: {$file}");
-        }
-
-        return $file;
     }
 }

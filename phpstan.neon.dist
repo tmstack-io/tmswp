@@ -36,11 +36,11 @@ parameters:
     - packages/*/tests/*/fixtures/*
 
   scanDirectories:
-    - vendor-bin/wp-tests/vendor/wp-phpunit/wp-phpunit/includes
     - vendor-bin/wp-tests/vendor/yoast/phpunit-polyfills/src
 
   scanFiles:
     - vendor/php-stubs/acf-pro-stubs/acf-pro-stubs.php
+    - vendor/php-stubs/wordpress-tests-stubs/wordpress-tests-stubs.php
 
   treatPhpDocTypesAsCertain: false
   reportUnmatchedIgnoredErrors: true

@@ -67,7 +67,7 @@ tmswp/                                  # monorepo ルート (<org>/tmswp)
 ├── phpstan.neon.dist                     # 全パッケージ横断の静的解析設定(詳細: QA・CI 設計書)
 ├── .php-cs-fixer.dist.php                # PER-CS 2.0 + strict_types(詳細: QA・CI 設計書)
 ├── phpunit.xml.dist                      # ユニット層(WP 非依存)テストスイート定義
-├── phpunit.integration.xml.dist          # 統合層(wp-env + wp-phpunit)テストスイート定義
+├── phpunit.integration.xml.dist          # 統合層(wp-env + WP_TESTS_DIR)テストスイート定義
 ├── .wp-env.json                          # 統合テスト用 WordPress 環境定義
 ├── .editorconfig
 ├── .gitattributes / .gitignore
@@ -116,7 +116,7 @@ tmswp/                                  # monorepo ルート (<org>/tmswp)
 │   │   ├── languages/                    # tmswp-ja.mo / tmswp-ja.l10n.php / .po / tmswp.pot(§7)
 │   │   └── tests/
 │   │       ├── Unit/                     # WP 非依存(Brain Monkey)
-│   │       └── Integration/              # wp-env + wp-phpunit
+│   │       └── Integration/              # wp-env + WP_TESTS_DIR
 │   ├── thumbnail/                        # tmswp/thumbnail
 │   │   ├── composer.json
 │   │   ├── src/                          # TMSWP\Thumbnail\ → src/
@@ -169,7 +169,7 @@ tmswp/                                  # monorepo ルート (<org>/tmswp)
 ### 2.2 パッケージ内ディレクトリの不変条件
 
 - PSR-4 ルートは常に `src/`。1 パッケージ = 1 名前空間ルート。`src/` 直下のサブディレクトリ = サブ名前空間。
-- `tests/Unit/` は WP 関数に依存しない(Brain Monkey でスタブ)。`tests/Integration/` のみ wp-phpunit を使う。テスト名前空間は `TMSWP\<Pkg>\Tests\`(autoload-dev)。
+- `tests/Unit/` は WP 関数に依存しない(Brain Monkey でスタブ)。`tests/Integration/` のみ WordPress のテストライブラリ(wp-env が提供する WP_TESTS_DIR)を使う。テスト名前空間は `TMSWP\<Pkg>\Tests\`(autoload-dev)。
 - `languages/` には翻訳ファイル(gettext の .pot / .po / .mo と、.po から生成する .l10n.php)のみを置く(§7)。
 - 配布物から `tests/` を除外しない(利用者が仕様の生きた例として参照できるようにする)。ただし `.gitattributes` の `export-ignore` は付与せず、そのまま配布する。
 
@@ -198,7 +198,7 @@ tmswp/                                  # monorepo ルート (<org>/tmswp)
    - 依存追加は当該拡張の設計書に「何を・なぜ」を記録する(本表の更新を伴う)。
    - WordPress プラグイン同梱で衝突しやすいライブラリ(グローバル関数を定義するもの、メジャーバージョンが乱立しているもの)を避ける。
    - `ext-gd` は `tmswp/thumbnail` のみが require する(旧 iwf2b はコアが ext-gd を要求していた。これを拡張へ移設する)。thumbnail は `WP_Image_Editor` 経由で処理するため Imagick 環境でも動作するが、最低保証として ext-gd を要求する。
-3. **require-dev は monorepo ルートに集約**する(phpstan、szepeviktor/phpstan-wordpress、php-stubs/wordpress-stubs、friendsofphp/php-cs-fixer、phpunit ^11、brain/monkey、bamarni/composer-bin-plugin、symplify/monorepo-builder 等。確定リストは QA・CI 設計書)。統合テスト用の PHPUnit 9.6 と wp-phpunit/wp-phpunit はルートの require-dev に置かず、`vendor-bin/wp-tests` に隔離する(QA・CI 設計書 §4.2)。各パッケージの composer.json には split 配布後に単体で `composer install && composer test` が成立する最小限の require-dev を重複記載する(monorepo-builder の validate で乖離を検出)。
+3. **require-dev は monorepo ルートに集約**する(phpstan、szepeviktor/phpstan-wordpress、php-stubs/wordpress-stubs、friendsofphp/php-cs-fixer、phpunit ^11、brain/monkey、bamarni/composer-bin-plugin、symplify/monorepo-builder 等。確定リストは QA・CI 設計書)。統合テスト用の PHPUnit 9.6 と Yoast PHPUnit Polyfills はルートの require-dev に置かず、`vendor-bin/wp-tests` に隔離する。WordPress のテストライブラリは Composer では入れず、wp-env が提供するもの(WP_TESTS_DIR)を使う(QA・CI 設計書 §4.2)。各パッケージの composer.json には split 配布後に単体で `composer install && composer test` が成立する最小限の require-dev を重複記載する(monorepo-builder の validate で乖離を検出)。
 4. **WordPress 本体・ACF 等のプラグインを composer 依存に含めない**。WP 関数はホスト環境が提供する前提とし、静的解析は wordpress-stubs で行う。統合テスト環境の WordPress と ACF(wordpress.org の無料版 `advanced-custom-fields`。版を固定した zip)は `.wp-env.json` で導入する(QA・CI 設計書 §4.7)。
 
 ### 3.3 同一サイト内の複数インストール共存規約
@@ -332,7 +332,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 
 - `require` / `autoload` は `monorepo-builder merge` で各パッケージの composer.json から機械的に合成する(手動編集しない)。
 - `replace` により monorepo 内でのパッケージ相互解決に path repository を使わない(単一 vendor/ で完結)。
-- 統合テスト用の PHPUnit 9.6 と wp-phpunit は `bamarni/composer-bin-plugin` で `vendor-bin/wp-tests` に隔離し、ルートの require-dev には置かない(QA・CI 設計書 §4.2)。
+- 統合テスト用の PHPUnit 9.6 と Yoast PHPUnit Polyfills は `bamarni/composer-bin-plugin` で `vendor-bin/wp-tests` に隔離し、ルートの require-dev には置かない。WordPress のテストライブラリは wp-env が提供するもの(WP_TESTS_DIR)を使う(QA・CI 設計書 §4.2)。
 - `scripts` の中身(lint/fix/analyse/test/qa)は QA・CI 設計書が定義する。コマンド名はこの 5 つで確定であり、人間・CI・AI が同一コマンドを使う。
 - starters/ は autoload マージ対象外(利用側雛形であり FW のコードではない)。CI では create-project 相当のシナリオテストで検証する(QA・CI 設計書)。
 

@@ -358,10 +358,11 @@ v0.1.0
 
 #### v0.2.0-T3: Label・PHPStan 拡張
 
-- 対象ファイル領域: packages/core/src/Label/、packages/core/phpstan/、packages/core/tests/Unit/PHPStan*.php・EntityDefinitionTest.php(ラベル部分)、docs/03 §2.2、docs/04 §4.18
+- 対象ファイル領域: packages/core/src/Label/、packages/core/phpstan/、packages/core/tests/Unit/PHPStan*.php・EntityDefinitionTest.php(ラベル部分)、packages/core/tests/Integration/MetaIntegrationTest.php(メタキーをクラス定数に戻す)、docs/03 §2.2、docs/04 §4.18
 - 完了条件:
   - 英語ラベルが複数形で、docs/03 §2.2 の全キーを出す。
   - MetaSchemaReflector が ReflectionProvider で実装され、解析中に利用者のコードを実行しない。MetaBag の型拡張が `list<T>` を返す。
+  - 統合テストのメタキーをクラス定数で書いても解析が通る。
 - 検証コマンド: `composer test:unit`(PHPStan ルール・型推論のテストを含む)、`composer analyse`
 
 #### v0.2.0-T4: Container・例外階層
@@ -683,10 +684,11 @@ v0.3.0(v0.2.0 を含む)
 
 #### v0.6.0-T2: 実行時アクセス(AcfFieldAccess と AcfMetaStorage)
 
-- 対象ファイル領域: packages/acf-bridge/src/{AcfFieldAccess,AcfMetaStorage,AcfTypes}.php、docs/09 §6・§8・§10
+- 対象ファイル領域: packages/acf-bridge/src/{AcfFieldAccess,AcfMetaStorage,AcfTypes}.php、packages/acf-bridge/tests/Integration/AcfBridgeIntegrationTest.php、tests/fixtures/themes/tmswp-fixture-theme/(ACF のフィールドグループ)、docs/09 §6・§8・§10
 - 完了条件:
   - 未設定の正規化と形の不一致(debug は例外、本番は `Log::error()`)が区別され、gallery は要素単位で検査される。
   - `has()` がメタの存在で判定し、AcfMetaStorage の getAll / setAll / delete が WpMetaStorage と同じ意味になる。DateTime が `wp_timezone()` で往復する。
+  - 実物の ACF で、ACF 管理外・管理下の両方のキーについて、MetaBag 経由の削除と `has()` が正しく動くことを統合テストで確認する。
 - 検証コマンド: `composer test:unit`、`composer test:integration`
 
 #### v0.6.0-T3: 生成コードの型と正規化
