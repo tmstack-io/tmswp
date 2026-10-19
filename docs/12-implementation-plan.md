@@ -392,6 +392,7 @@ v0.1.0
   - ログのファイル名が推測できず、書き込み失敗は `error_log` へ必ず出て、初回だけ可視化される。ローテーションは自チャネルのファイルだけを数える。例外の previous チェーンを出し、改行をエスケープする。
   - URL 属性に `esc_url` を自動適用するか拒否する。
   - ヘルパに PHPDoc がある。
+  - ヘルパを `function_exists` で囲んで定義しておらず、同名の関数が先に定義されている場合に黙ってそちらが使われない(明示エラーになる)。
 - 検証コマンド: `composer test:unit`、`composer analyse`
 
 #### v0.2.0-T3: Label・PHPStan 拡張
@@ -572,6 +573,7 @@ v0.2.0
 - 完了条件:
   - 数値キーや配列のファイル項目の POST で例外が出ず、フィールドエラーになる。
   - `open()` の action と `input()` の id が反映され、上書きできない属性の指定は例外。パスワード項目が再描画・確認画面・トークンに出ない。確認画面での表示の指定がある。
+  - FormHtml が `function_exists` で `esc_html` の有無を確かめて別のエスケープに切り替える分岐を持たず、`esc_html()` を直接呼ぶ。
 - 検証コマンド: `composer test:unit`、`composer test:integration`
 
 #### v0.4.0-T3: ファイル
@@ -585,7 +587,7 @@ v0.2.0
 #### v0.4.0-T4: 検証とルール
 
 - 対象ファイル領域: packages/core/src/Form/{Validator,Messages,ValidationContext}.php、packages/core/src/Form/Rule/、packages/core/src/Form/Composite/、packages/core/tests/Unit/FormValidationTest.php(ルール部分)、docs/05(§Validator・§Rule・§CompositeField)
-- 完了条件: Composite のパーツと単一チェックボックスが検証され、メッセージの解決が Messages に一本化され、docs/05 の CompositeField の節が実装どおり。
+- 完了条件: Composite のパーツと単一チェックボックスが検証され、メッセージの解決が Messages に一本化され、docs/05 の CompositeField の節が実装どおり。Messages と Rule/ に、`function_exists` で WordPress の関数(`apply_filters`・`size_format` 等)の有無を確かめて黙って別の処理に切り替える分岐が無い。
 - 検証コマンド: `composer test:unit`
 
 #### v0.4.0-T5: フォームのレシピ
@@ -722,6 +724,7 @@ v0.3.0(v0.2.0 を含む)
   - acf-bridge が `KernelConfig` 経由で Kernel ごとに登録され、テーマとプラグインの両方で使える(統合テスト)。CLI に `--app=` がある。save_json が登録元の acf-json に向く。
   - acf-bridge の debug による分岐が、登録した Kernel の debug に従う(§1.7)。
   - E101 の静的検査が Generator の managedKeys と共通で、options の post_id を実行時に決めず、黙殺の経路がエラー方針どおりになっている。BridgeConfig の入力を検証する。
+  - ACF が無効なときの扱い(管理キーのマーク、CLI のオプションページの解決)がエラー方針(`00-overview.md` §5.6)に沿って docs/09 に定められ、`function_exists` で黙って処理を飛ばす経路が残っていない。
 - 検証コマンド: `composer test:unit`、`composer test:integration`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`
 
 #### v0.6.0-T2: 実行時アクセス(AcfFieldAccess と AcfMetaStorage)
@@ -755,7 +758,7 @@ v0.3.0(v0.2.0 を含む)
 #### v0.6.0-T5: プレビュー時の ACF 値
 
 - 対象ファイル領域: packages/acf-bridge/src/PreviewAcfSupport.php、packages/acf-bridge/tests/Unit/PreviewAcfSupportTest.php、docs/09 §8.3
-- 完了条件: 実物の ACF でプレビュー値の標準保存の有無と nonce の消費順を確認して記録し、その結果に応じて PreviewAcfSupport を削除するか、nonce を消費しない検査とプレビューの autosave に限定した形に直している。
+- 完了条件: 実物の ACF でプレビュー値の標準保存の有無と nonce の消費順を確認して記録し、その結果に応じて PreviewAcfSupport を削除するか、nonce を消費しない検査とプレビューの autosave に限定した形に直している。残す場合は、ACF の関数が無いときに `function_exists` で黙って保存を飛ばす経路の扱いがエラー方針に沿って決まっている。
 - 検証コマンド: `composer test:integration`(プレビュー保存の統合テスト)
 
 #### v0.6.0-T6: acf-bridge のテスト
@@ -827,6 +830,7 @@ v0.2.0、v0.4.0、v0.6.0
   - `WP_DEBUG` を直接見る箇所が無く、登録した Kernel の debug に従う(§1.7)。
   - REST API が使えることが利用条件として docs/08 と README に明記され、自分の REST ルートが無効化されていると起動後に検出して管理画面で管理者に通知する(§1.15、統合テスト)。REST 以外の経路は無い。
   - `KernelConfig` 経由の登録になり、制約(外部ストレージ非対応等)が docs/08 に書かれている(§1.3)。
+  - `tms_thumb` を `function_exists` で囲んで定義しておらず、同名の関数が先に定義されている場合に黙ってそちらが使われない(明示エラーになる)。
 - 検証コマンド: `composer test:unit`、`composer test:integration`(実画像の生成)
 
 #### v0.7.0-T3: ja-toolkit
@@ -836,6 +840,7 @@ v0.2.0、v0.4.0、v0.6.0
   - KanaTextField だけを使っても訳が出る(統合テスト)。KanaTextField のメッセージが遅延解決され、正規表現と正規化が直り、弾かれるケースのテストがある。
   - JapaneseSlug が許可リストの投稿タイプだけを対象にし、format を検証し、一意性を再確認する。全角スペースだけの検索の扱いが決まっている。
   - `KernelConfig` 経由の登録になり、登録が原子的。debug による分岐が登録した Kernel の debug に従う(§1.7)。
+  - `function_exists` で WordPress の関数(`did_action` 等)の有無を確かめて検査を黙って飛ばす分岐が無い。
 - 検証コマンド: `composer test:unit`、`composer test:integration`
 
 #### v0.7.0-T4: 拡張パッケージのテスト
@@ -924,11 +929,12 @@ v0.2.0〜v0.7.0
 
 #### v0.8.0-T6: 開発基盤の残り
 
-- 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、docs/10 §4.8(カバレッジゲート)
+- 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.github/workflows/split.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、docs/10 §4.8(カバレッジゲート)・§5(ワークフローの完全版)、docs/01 §4.4(ワークフロー)
 - 完了条件:
   - rules の検査が全パッケージの rules/ を対象にし、docs/11 §6.3 どおりの検証をする。sample-site と starters の `composer qa` が CI にある。
   - unit と integration の合算カバレッジが、5 パッケージ全体に加えてパッケージ別にも判定され(パッケージ別の基準値はこの版で決める)、docs/10 §4.8 がその方式に改訂されている。php-cs-fixer の設定が docs/10 §3.2・§7 項目4 どおり。
-- 検証コマンド: `composer lint`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`、`composer test:coverage`
+  - qa.yml と split.yml の外部アクションが Node.js 24 で動く版になり(CI に Node.js 20 の非推奨の警告が出ない)、SHA で固定されている(docs/10 §5.3)。全ジョブの runner の版が固定され、`ubuntu-latest` を使っていない。docs/10 §5 と docs/01 §4.4 のワークフローの完全版が実ファイルと一致する。
+- 検証コマンド: `composer lint`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`、`composer test:coverage`、`grep -n "ubuntu-latest" .github/workflows/*.yml`(0 件)
 
 #### v0.8.0-T7: rules・AGENTS.md・README の全面整備
 
@@ -946,7 +952,7 @@ v0.2.0〜v0.7.0
 
 - 順序: T1 → {T2 ∥ T3 ∥ T4} → {T5 ∥ T6} → T7 → T8
 - T2(starters/ と docs/11)・T3(packages/* の配布設定、テスト支援、docs/01・10)・T4(examples/sample-site/)はファイル領域が重ならない。T2 と T4 は T1 のブロック登録を使うため T1 の後。
-- T5(packages/*/tests/Unit)と T6(tools・bin・CI・cs-fixer の設定・docs/10 §4.8)はファイル領域が重ならない。T5 は T3(テスト支援の配置)、T6 は T2・T4(CI に入れる対象)の後。
+- T5(packages/*/tests/Unit)と T6(tools・bin・CI・cs-fixer の設定・docs/10 §4.8・§5、docs/01 §4.4)はファイル領域が重ならない。T5 は T3(テスト支援の配置)、T6 は T2・T4(CI に入れる対象)と T3(docs/01・docs/10 §5)の後。
 - T7 は全 API の確定後に行う。
 
 ### 受け入れ条件

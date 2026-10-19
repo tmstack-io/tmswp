@@ -1450,5 +1450,5 @@ composer analyse  # PHPStan level max
 composer test     # PHPUnit 11 ユニット層(Brain Monkey)
 composer qa       # 上記一括
 # 統合層
-wp-env start && composer test:integration   # 正式コマンド名はQA文書に従う
+composer wp:start && composer test:integration   # 正式コマンド名はQA文書に従う
 ```

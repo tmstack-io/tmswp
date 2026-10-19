@@ -355,7 +355,7 @@ composer スクリプト(スターターの `composer.json` に同梱。QA 文�
 }
 ```
 
-wp コマンドが PATH にない環境(wp-env 等)では各プロジェクトでスクリプトを上書きする(例: `"acf:check": "wp-env run cli wp tmswp acf check"`)。
+wp コマンドが PATH にない環境(wp-env 等)では各プロジェクトでスクリプトを上書きする。wp-env を使うプロジェクトは `@wordpress/env` を package.json で版を固定して `npm ci` で入れ、コマンド名ではなくパスで呼ぶ(例: `"acf:check": "node node_modules/@wordpress/env/bin/wp-env run cli wp tmswp acf check"`)。コマンド名 `wp-env` を PATH や npx で解決すると、第三者のパッケージやグローバルの同名コマンドを実行しうるためである。
 
 ## 5.2 出力ファイル仕様
 
@@ -905,11 +905,11 @@ final class PreviewAcfSupport
 
 ## 9.3 CI 組み込み
 
-QA 文書の GitHub Actions に以下のステップを追加する(acf-json を持つプロジェクト/スターターで有効化)。
+QA 文書の GitHub Actions に以下のステップを追加する(acf-json を持つプロジェクト/スターターで有効化)。例は wp-env を使うプロジェクトのもので、§5.1 のとおり `@wordpress/env` を package.json で版を固定し、`npm ci` で入れておく。
 
 ```yaml
 - name: ACF drift check
-  run: wp-env run cli wp tmswp acf check --strict
+  run: node node_modules/@wordpress/env/bin/wp-env run cli wp tmswp acf check --strict
 ```
 
 - monorepo 側(acf-bridge パッケージ自体)の CI は、フィクスチャ acf-json を使った Generator のスナップショットテストで同等の検証を行う(wp-env 不要のユニット層)。

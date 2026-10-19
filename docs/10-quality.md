@@ -929,7 +929,7 @@ define('WP_DEBUG', true);
 | 層 | 実行環境 | ドライバ | コマンド | 出力 |
 |---|---|---|---|---|
 | ユニット | ホストの PHPUnit 11 | pcov(ローカル: `pecl install pcov`、CI: `setup-php` の `coverage: pcov`) | `composer test:coverage:unit`(`XDEBUG_MODE=off` で Xdebug を止める) | `var/coverage/unit.xml` |
-| 統合 | wp-env の `cli` コンテナ内の PHPUnit 9.6 | Xdebug(`composer wp:start:coverage` = `wp-env start --xdebug=coverage` で有効にする) | `composer test:coverage:integration` | `var/coverage/integration.xml` |
+| 統合 | wp-env の `cli` コンテナ内の PHPUnit 9.6 | Xdebug(`composer wp:start:coverage` で wp-env を `--xdebug=coverage` 付きで起動して有効にする) | `composer test:coverage:integration` | `var/coverage/integration.xml` |
 
 - `composer wp:start` で起動し直すと、wp-env の Xdebug は無効に戻る。
 - 統合層で数えるのは、PHPUnit がテストを実行している間に通った行である。WordPress の読み込み中(fixture の Kernel の boot、init での登録)に通った行は数えない。登録の処理を数えるには、テストの中で登録の処理を呼ぶ。
@@ -1453,7 +1453,7 @@ composer qa
 |---|---|
 | `composer install` 後に `vendor-bin/wp-tests/vendor` がない | allow-plugins で bamarni を拒否した。`composer config allow-plugins.bamarni/composer-bin-plugin true && composer bin wp-tests install` |
 | `composer analyse` が scanDirectories エラー | 同上(vendor-bin 未インストール) |
-| `wp-env start` が失敗 | Docker デーモン未起動。Docker Desktop を起動して再実行 |
+| `composer wp:start` が失敗 | Docker デーモン未起動。Docker Desktop を起動して再実行 |
 | ポート 8888 が使用中 | `.wp-env.override.json` に `{"port": 8890}` を作成 |
 | `test:coverage:unit` で「No code coverage driver」 | pcov 未導入。`pecl install pcov` 後、php.ini に `extension=pcov` |
 | `test:coverage:integration` で「No code coverage driver」 | wp-env を Xdebug 無しで起動している。`composer wp:start:coverage` で起動し直す |

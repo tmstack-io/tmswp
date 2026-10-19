@@ -884,4 +884,4 @@ FormDefinition::create('contact')
 - [ ] CF7/Yoast/ACF関連のフック名(`wpcf7_*`/`wpseo_*`/`acf*`)がパッケージ内に存在しない(grep検証)
 - [ ] `$_GET`/`$_POST`/`$_REQUEST` への書き込みが存在しない(grep検証)
 
-検証コマンド(monorepo共通): `composer qa` / `composer test -- --testsuite=unit` / `wp-env start && composer test -- --testsuite=integration`
+検証コマンド(monorepo共通): `composer qa` / `composer test -- --testsuite=unit` / `composer wp:start && composer test:integration`
