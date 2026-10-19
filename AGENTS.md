@@ -7,5 +7,6 @@
 - 旧 iwf2b 互換のシム、別名、移行用 API は追加しない。
 - すべての PHP ファイルに `declare(strict_types=1)` を置き、公開 API は型宣言を必須とする。
 - 品質確認は `composer lint` / `composer analyse` / `composer test:unit` / `composer test:integration` / `composer qa` を使う。
+- fixture の app/ を変えたら、探索結果ファイル(`tmswp-discovery.php`)を `composer discover:build` で作り直してコミットする。照合は `composer discover:check`(`composer qa` に含まれ、wp-env が必要)。
 - wp-env は `npm ci` で入れたローカルの `@wordpress/env`(package.json で版を固定)を `composer wp:start` / `wp:stop` / `test:integration` 経由で使う。直接呼ぶときは `node node_modules/@wordpress/env/bin/wp-env` とパスで指定する。`npx` や npm の `exec` / `run` でコマンド名 `wp-env` を解決する呼び出しは、第三者のパッケージやグローバルの同名コマンドを実行しうるので使わない。
 - 版のすべてのタスクを終えたら、その版の受け入れ条件の確認結果を `docs/acceptance/v0.x.y.md` に記録する。

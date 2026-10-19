@@ -33,7 +33,7 @@ TMSWP は、開発者が約10年・15プロジェクト(テーマ11+プラグイ
 
 | # | 資産 | 利用実態(定量) | TMSWP での扱い |
 |---|------|------|------|
-| 1 | **規約ベース起動**: 「WPエンティティ1種=1クラスを app/ に置くだけ」で Loader が自動発見・初期化。composer=vendor/、ビジネスロジック=app/、ブートは functions.php / プラグイン本体の数行という構成 | 全15プロジェクトが完全に同一構造。ブートコードは全件コピペ定型 | 踏襲。PHP 8 Attribute + クラスマップ走査 + ファイルキャッシュで再実装(DR-04)。「app/ に置くだけ」体験は維持 |
+| 1 | **規約ベース起動**: 「WPエンティティ1種=1クラスを app/ に置くだけ」で Loader が自動発見・初期化。composer=vendor/、ビジネスロジック=app/、ブートは functions.php / プラグイン本体の数行という構成 | 全15プロジェクトが完全に同一構造。ブートコードは全件コピペ定型 | 踏襲。PHP 8 Attribute + クラスマップ走査 + ビルド時に生成する探索結果ファイルで再実装(DR-04)。「app/ に置くだけ」体験は維持 |
 | 2 | **宣言的 CPT / Taxonomy / Role 定義**: static プロパティ宣言 → register_post_type / register_taxonomy 自動実行、ラベル自動生成、スコープ付きクエリヘルパ、テンプレートからの静的呼び出し(`BookPost::get_archive_link()` 等) | AbstractPost 継承 58クラス(11プロジェクト)、AbstractTax 継承 42クラス(11プロジェクト)、AbstractUser 継承 5クラス(3プロジェクト)。テンプレート静的呼び出しは T04 単体で100箇所超 | 踏襲(本FW最大の価値)。`PostTypeDefinition` 等の型付き定義オブジェクト + Attribute へモダン化(文書03) |
 | 3 | **フォーム定義+バリデーション**: フィールド定義・値バインド・一括検証・エラー集約・確認画面遷移 | Field 参照 142(8プロジェクト)、RequiredRule 104 / MaxLengthRule 88 / ChoiceRule 50 参照。最大利用の T05 は会員登録3ステップ等30本のフォーム | 踏襲しつつ再設計。「ライフサイクルの持ち主」として Form オブジェクトを新設(DR-07、文書05) |
 | 4 | **独自テーブル対応(Model)**: スキーマ宣言 → dbDelta 自動マイグレーション + 静的 CRUD ファサード | AbstractModel 継承 9クラス(5プロジェクト)。キューテーブル・翻訳グループ等 | 踏襲。クエリビルダ(常時 `wpdb->prepare`)でブラッシュアップ(DR-08、文書06) |
@@ -52,7 +52,7 @@ TMSWP は、開発者が約10年・15プロジェクト(テーマ11+プラグイ
 | 6 | **WP標準テンプレートフローの破壊** | template_include priority 100 で乗っ取り → actions ファイル読込 → `load_global()` が query_vars をグローバル展開 → `exit` で WP 標準ローダをバイパス | 完全廃止(DR-10)。ビューテンプレートに特殊処理を一切行わない(設計原則1) |
 | 7 | **セキュリティ欠陥** | AbstractModel::make_conditions のエスケープなし文字列補間(SQLインジェクション、L364-377)、FieldUpload のユーザ入力からのパス再構築(WP_CONTENT_DIR 全域)、is_child_path の realpath 正規化なし(パストラバーサル検出不能)、timthumb(脆弱性の代名詞)前提、CSRF 手書き任意(検証漏れの実案件あり) | クエリは必ず `wpdb->prepare`(DR-08)、ファイルはトークン付き一時保管+パス再構築全面禁止、CSRF 自動埋込み・自動検証(DR-07)、timthumb は署名付き URL + WP_Image_Editor で全面置換(DR-15) |
 | 8 | **テスト不能な構造と QA 体制の形骸化** | AbstractSingleton の `final private __construct` で DI/モック不可。Model/View/SettingsPage はテストゼロ。phpcs 設定は scaffold 未修正で形骸、PHPUnit はローカル実行不能 | PSR-11 コンテナ+静的ファサードの二層構成(DR-09)、PHPStan level max・baseline なし、2層テスト+GitHub Actions(DR-12) |
-| 9 | **自動探索の性能・信頼性問題** | 毎リクエスト app/ 全 .php を Reflection で実ロード、コア自身も自己スキャン(コア同梱の具象クラスが意図せず初期化対象)、ロード順 OS 依存、間接循環依存で無限再帰、依存未解決はサイレント失敗 | ファイルキャッシュ、コア名前空間は走査対象外、決定的ロード順・循環依存検出・探索失敗の明示エラーを必須化(DR-04) |
+| 9 | **自動探索の性能・信頼性問題** | 毎リクエスト app/ 全 .php を Reflection で実ロード、コア自身も自己スキャン(コア同梱の具象クラスが意図せず初期化対象)、ロード順 OS 依存、間接循環依存で無限再帰、依存未解決はサイレント失敗 | 探索結果ファイルのビルド時生成(本番は走査しない)、コア名前空間は走査対象外、決定的ロード順・循環依存検出・探索失敗の明示エラーを必須化(DR-04) |
 | 10 | **バージョン運用の不在** | git tag ゼロ。全15プロジェクトが `dev-master` 依存で実コミットは2020〜2025年の8世代に分散。`composer update` で最大5年分の破壊的変更を取り込む危険 | monorepo + read-only split 配布、SemVer + リリースタグ運用必須(DR-11) |
 
 ### 1.3 結論
@@ -66,7 +66,7 @@ TMSWP は、開発者が約10年・15プロジェクト(テーマ11+プラグイ
 ### 2.1 ゴール(達成すべきこと)
 
 1. **WP標準テーマ構築手法の完全尊重**: テンプレートは素の WordPress テンプレート階層のまま。FW はテンプレートから呼べる型付きヘルパを提供するだけで、レンダリングフローに介入しない。
-2. **「app/ に置くだけ」DX の型安全な再実装**: Attribute 宣言+キャッシュ付き自動探索で、旧FWの規約ベース起動体験を維持しつつ、決定的・高速・静的解析可能にする。
+2. **「app/ に置くだけ」DX の型安全な再実装**: Attribute 宣言+探索結果ファイルのビルド時生成による自動探索で、旧FWの規約ベース起動体験を維持しつつ、決定的・高速・静的解析可能にする。
 3. **AI が自立実装できる FW**: コード自体が自己記述的(型・Attribute・final・strict_types)+ 規約が機械可読(AGENTS.md / rules/)+ 定型が雛形化(スターター)+ 検証が同一コマンド(composer qa)の4点で実現する。
 4. **テーマ・プラグイン両対応**: 同一の Kernel ブート API(`KernelConfig::theme()` / `KernelConfig::plugin()`)で両者をサポートする。
 5. **コアの最小化と拡張の分離**: コアの runtime 依存は psr/log ^3 と psr/container ^2 のみ。付帯機能は composer で追加導入する拡張パッケージ(DR-15)。
@@ -127,7 +127,7 @@ tmswp/core は WordPress コアと PSR インターフェース(psr/log ^3、psr
 | DR-01 | 名称・配布 | 正式名称は TMStack WordPress Framework(以下・略称: **TMSWP**)。TMStack はブランド名でありパッケージ名ではない(iwf2b ⇔ Inspire WordPress Framework 2β と同じ、ブランド名⇔コード接頭辞の関係)。composer vendor=`tmswp`、名前空間ルート=`TMSWP\`、グローバルヘルパ接頭辞=`tms_`。旧 iwf2b は凍結し、本FWは後方互換なしの完全新規パッケージ | 01 |
 | DR-02 | 動作範囲 | PHP 8.3〜8.5 / WordPress 7.0 以上。readonly・enum・named arguments・Attribute・第一級 callable・型付きクラス定数・`#[\Override]` をフル活用。WordPress 7.0 未満向けの分岐は持たない | 全文書 |
 | DR-03 | 移行 | 完全新規のみ。旧 iwf2b からの移行資料・互換シムは作成しない(設計根拠としての旧FW言及は可) | 全文書 |
-| DR-04 | 自動探索 | PHP 8 Attribute(`#[AsPostType]` 等)+クラスマップ走査+ファイルキャッシュ。「app/ に置くだけ」体験を維持。コア名前空間は走査対象外。初期化は WP フックに整合(即時同期初期化の禁止)。決定的ロード順・循環依存検出・探索失敗の明示エラーを必須とする | 02 |
+| DR-04 | 自動探索 | PHP 8 Attribute(`#[AsPostType]` 等)+クラスマップ走査。走査結果は探索コマンド(`wp tmswp discover`)が探索結果ファイルとして生成してコミットし、本番はそのファイルだけを読む(走査は debug 時のみ)。「app/ に置くだけ」体験を維持。コア名前空間は走査対象外。初期化は WP フックに整合(即時同期初期化の禁止)。決定的ロード順・循環依存検出・探索失敗の明示エラーを必須とする | 02 |
 | DR-05 | meta/option 定義 | 非 ACF 時は属性付き定数(`#[MetaSchema]`)+型付きアクセサ(MetaBag)。型指定は文字列でなく公開 enum `TMSWP\Core\Meta\MetaValueType` を属性引数へ直接渡す(不正値は言語/静的解析が実行前に拒否し、ブート時の型文字列検証は持たない)。register_post_meta / register_term_meta / register_user_meta へ自動登録。FW 同梱の PHPStan 拡張でスキーマから型ナローイング。頻出フィールドは明示アクセサメソッドを書く規約を rules/ に明記 | 04 |
 | DR-06 | ACF 統合 | acf-json が存在する場合は acf-json が真実源。tmswp/acf-bridge のコードジェネレータが型付きアクセサクラス(app/Acf/*Fields.php、@generated)を生成。return_format から戻り値型を決定、repeater は PHPDoc array shape。AcfMetaStorage が読み書きを get_field / update_field へ委譲。ACF 管理下フィールドは register_*_meta を発行しない。CI でドリフト検知。PHP 手書き宣言との同一キー重複はエラー | 09 |
 | DR-07 | フォーム | Form オブジェクトにライフサイクル(バインド/検証/CSRF/状態遷移)を集約。確認画面は署名付き hidden 再 POST(HMAC、改ざん防止)、ファイルはトークン付き一時保管(ユーザ入力からのパス再構築は全面禁止)。CSRF(wp_nonce)は自動埋込み・自動検証。レンダリングは純関数(echo 書き味は維持)。3層コールバック合成(旧 FormRenderer)は廃止 | 05 |
@@ -170,7 +170,7 @@ tmswp/
 
 | モジュール | 構成クラス | 担当文書 |
 |----------|----------|---------|
-| Kernel | `Kernel\Kernel`, `Kernel\KernelConfig`, `Kernel\Discovery`, `Kernel\ComponentCache` | 02 |
+| Kernel | `Kernel\Kernel`, `Kernel\KernelConfig`, `Kernel\Discovery`, `Kernel\DiscoveryFile`, `Kernel\DiscoverCommand` | 02 |
 | Container | `Container\Container`(PSR-11 実装) | 02 |
 | Attribute | `Attribute\AsPostType`, `AsTaxonomy`, `AsUserRole`, `AsModel`, `AsHook`, `AsOptionGroup`, `Action`(メソッドレベル), `Filter`(メソッドレベル), `MetaSchema`, `OptionSchema`, `UseMetaStorage`, `WithMetaRevisions` | 02(探索仕様)+ 各機能文書(意味論) |
 | Post | `Post\PostType`(基底), `Post\PostTypeDefinition`, `Post\PostQuery` | 03 |
@@ -288,7 +288,7 @@ InquiryModel::query()->where('email', $email)->orderByDesc('id')->limit(10)->get
 |---|---------|------|---------|---------|
 | 00 | `00-overview.md` | 全体概要(本書) | 全DR | なし |
 | 01 | `01-architecture.md` | monorepo 構成、各パッケージの composer.json 仕様、依存関係、read-only split 配布、SemVer/リリース運用、ディレクトリレイアウト | DR-01, 02, 11, 14, 15 | 00 |
-| 02 | `02-kernel.md` | Kernel / KernelConfig / Discovery / ComponentCache / Container(PSR-11)/ Attribute 探索仕様(キャッシュ・決定的ロード順・循環検出・WP フック整合)、Hook 基底と `#[Action]` / `#[Filter]` | DR-04, 09 | 00, 01 |
+| 02 | `02-kernel.md` | Kernel / KernelConfig / Discovery / DiscoveryFile / Container(PSR-11)/ Attribute 探索仕様(探索結果ファイル・決定的ロード順・循環検出・WP フック整合)、Hook 基底と `#[Action]` / `#[Filter]` | DR-04, 09 | 00, 01 |
 | 03 | `03-entities.md` | PostType / Taxonomy / UserRole の宣言層(Definition オブジェクト、PostQuery / TermQuery / UserQuery、ラベル自動生成 ja/en) | DR-17 | 00, 02 |
 | 04 | `04-meta-options.md` | MetaSchema / MetaValueType / MetaBag / MetaSchemaRegistry / MetaStorageInterface / `#[WithMetaRevisions]`、オプショングループ(backed enum + OptionAccess trait)/ OptionRepository、PHPStan 型ナローイング拡張 | DR-05, 18 | 00, 02, 03 |
 | 05 | `05-form.md` | Form ライフサイクル、FormDefinition / Field / Rule 群、確認画面(ConfirmToken / HMAC)、UploadedFile / TempFileStore、FormHtml 純関数レンダラ | DR-07 | 00, 02 |
@@ -322,8 +322,8 @@ InquiryModel::query()->where('email', $email)->orderByDesc('id')->limit(10)->get
 | **app 層** | 各テーマ・プラグインの `app/` ディレクトリ配下に置くプロジェクト固有コード(デフォルト名前空間 `App\`)。Discovery の走査対象。FW 本体(vendor/)と明確に分離される。 |
 | **Kernel** | FW のブートストラップ装置(`TMSWP\Core\Kernel\Kernel`)。`Kernel::boot(KernelConfig)` の1呼び出しで起動し、WP フックライフサイクルに沿って Discovery → コンポーネント初期化を実行する。 |
 | **KernelConfig** | ブート設定の値オブジェクト。`KernelConfig::theme()` / `KernelConfig::plugin()` の名前付きコンストラクタでテーマ/プラグイン文脈を表現する。 |
-| **Discovery** | app/ のクラスマップを走査し、TMSWP Attribute(`#[AsPostType]` 等)が付与されたクラス(および `#[AsHook]` クラス内の `#[Action]` / `#[Filter]` メソッド属性)を発見・登録する機構。コア名前空間は走査対象外。結果は ComponentCache にキャッシュされる。 |
-| **ComponentCache** | Discovery 結果のファイルキャッシュ。本番で走査コストをゼロに近づける。無効化条件は文書02が定義する。 |
+| **Discovery** | app/ のクラスマップを走査し、TMSWP Attribute(`#[AsPostType]` 等)が付与されたクラス(および `#[AsHook]` クラス内の `#[Action]` / `#[Filter]` メソッド属性)を発見・登録する機構。コア名前空間は走査対象外。走査結果は探索結果ファイルに生成され、本番はそれを読む。 |
+| **探索結果ファイル** | Discovery の結果を探索コマンド `wp tmswp discover` が生成する PHP ファイル(テーマ・プラグインのルート直下の `tmswp-discovery.php`。`DiscoveryFile` が読み書きする)。コードと一緒にコミット・デプロイし、本番(debug=false)の boot はこれだけを読んで走査しない。無い・構成と合わない場合は起動時に例外。形式と検証は文書02が定義する。 |
 | **Container** | PSR-11 準拠の軽量 DI コンテナ(`TMSWP\Core\Container\Container`)。FW 内部の依存解決に使う。テンプレート向けには静的ファサードを別途提供する(二層構成、DR-09)。 |
 | **静的ファサード** | テンプレートから FQCN で呼べる静的 API(例: `ProductPost::permalink()`)。内部実装は Container 管理のインスタンスに委譲され、テスト時に差し替え可能。`__callStatic` は使わない。 |
 | **Definition オブジェクト** | エンティティ登録パラメータを表す型付きビルダ(`PostTypeDefinition` / `TaxonomyDefinition` / `UserRoleDefinition` / `TableDefinition` / `FormDefinition`)。旧FWの static プロパティ羅列を置き換える。 |

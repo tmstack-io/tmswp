@@ -26,7 +26,7 @@
 |---|---|---|---|---|
 | 00 | [`00-overview.md`](./00-overview.md) | 全体概要。背景・ゴール/非ゴール・設計原則 5 箇条・確定済み設計判断 DR-01〜DR-20・エラー方針・文書マップ・用語集 | 全 DR | なし(起点) |
 | 01 | [`01-architecture.md`](./01-architecture.md) | monorepo 構成、各パッケージの composer.json 仕様、依存関係、read-only split 配布、SemVer/リリース運用、ディレクトリレイアウト | DR-01, 02, 11, 14, 15 | 00 |
-| 02 | [`02-kernel.md`](./02-kernel.md) | Kernel / KernelConfig / KernelContext / Discovery / ComponentCache / Container(PSR-11)/ Attribute 探索(キャッシュ・決定的ロード順・循環検出・WP フック整合)。`ComponentAttributeInterface` 契約と全属性の初期化タイミング表、Hook 基底と `#[Action]` / `#[Filter]` | DR-04, 09 | 00, 01 |
+| 02 | [`02-kernel.md`](./02-kernel.md) | Kernel / KernelConfig / KernelContext / Discovery / DiscoveryFile / Container(PSR-11)/ Attribute 探索(探索結果ファイル・決定的ロード順・循環検出・WP フック整合)。`ComponentAttributeInterface` 契約と全属性の初期化タイミング表、Hook 基底と `#[Action]` / `#[Filter]` | DR-04, 09 | 00, 01 |
 | 03 | [`03-entities.md`](./03-entities.md) | PostType / Taxonomy / UserRole 宣言層(Definition オブジェクト、PostQuery / TermQuery / UserQuery、ラベル自動生成 ja/en) | DR-17 | 00, 02 |
 | 04 | [`04-meta-options.md`](./04-meta-options.md) | MetaSchema / MetaBag / MetaSchemaRegistry / MetaStorageInterface(has/get 分離)/ `#[WithMetaRevisions]`、OptionGroup / OptionRepository、PHPStan 型ナローイング拡張 | DR-05, 18 | 00, 02, 03 |
 | 05 | [`05-form.md`](./05-form.md) | Form ライフサイクル(バインド/CSRF/検証/状態遷移)、FormDefinition / Field / Rule 群、確認画面(ConfirmToken / HMAC)、UploadedFile / TempFileStore、FormHtml 純関数レンダラ | DR-07 | 00, 02 |

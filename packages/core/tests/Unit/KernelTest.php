@@ -11,8 +11,10 @@ use Closure;
 use Mockery;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use RuntimeException;
-use TMSWP\Core\Kernel\ComponentCache;
+use TMSWP\Core\Exception\DiscoveryException;
+use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\DiscoveredHookMethod;
+use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
@@ -39,7 +41,6 @@ final class KernelTest extends UnitTestCase
     public function testThemeBootRegistersLifecycleHooksAndActionRouter(): void
     {
         $appDir = $this->createTempDirectory('kernel-app');
-        $cacheDir = $this->createTempDirectory('kernel-cache');
         $namespace = 'Example\\Tests\\KernelApp' . uniqid();
 
         Actions\expectAdded('init')->once()->with(Mockery::type(Closure::class), 99, 0);
@@ -54,7 +55,7 @@ final class KernelTest extends UnitTestCase
             1,
         );
 
-        $kernel = Kernel::boot(KernelConfig::theme($appDir, $namespace, $cacheDir, true, true));
+        $kernel = Kernel::boot(KernelConfig::theme($appDir, $namespace, true, true));
 
         self::assertSame($kernel, Kernel::get($namespace));
         self::assertSame([], $kernel->components());
@@ -63,19 +64,17 @@ final class KernelTest extends UnitTestCase
     public function testThemeBootCanDisableActionRouter(): void
     {
         $appDir = $this->createTempDirectory('kernel-no-actions-app');
-        $cacheDir = $this->createTempDirectory('kernel-no-actions-cache');
         $namespace = 'Example\\Tests\\KernelNoActionsApp' . uniqid();
 
         Filters\expectAdded('template_include')->never();
         Actions\expectAdded('init')->once()->with(Mockery::type(Closure::class), 1, 0);
 
-        Kernel::boot(KernelConfig::theme($appDir, $namespace, $cacheDir, true, false));
+        Kernel::boot(KernelConfig::theme($appDir, $namespace, true, false));
     }
 
     public function testTextdomainLoaderLoadsCoreMoFileForDeterminedLocale(): void
     {
         $appDir = $this->createTempDirectory('kernel-textdomain-app');
-        $cacheDir = $this->createTempDirectory('kernel-textdomain-cache');
         $namespace = 'Example\\Tests\\KernelTextdomainApp' . uniqid();
         $loader = null;
 
@@ -84,7 +83,7 @@ final class KernelTest extends UnitTestCase
                 $loader = $callback;
             });
 
-        Kernel::boot(KernelConfig::theme($appDir, $namespace, $cacheDir, true, false));
+        Kernel::boot(KernelConfig::theme($appDir, $namespace, true, false));
 
         self::assertInstanceOf(Closure::class, $loader);
 
@@ -97,31 +96,138 @@ final class KernelTest extends UnitTestCase
         $loader();
     }
 
-    public function testBootUsesWarmCacheWithoutLoadingAppClasses(): void
+    public function testBootLoadsDiscoveryFileWithoutScanningWhenDebugIsDisabled(): void
     {
-        $appDir = $this->createTempDirectory('warm-kernel-app');
-        $cacheDir = $this->createTempDirectory('warm-kernel-cache');
-        $namespace = 'Example\\Tests\\WarmKernelApp' . uniqid();
-        $cachedClass = $namespace . '\\Hooks\\CachedHook';
-        $config = KernelConfig::theme($appDir, $namespace, $cacheDir, false, false);
-        $cache = new ComponentCache($cacheDir . '/components-' . $config->instanceId() . '.php', false);
+        $appDir = $this->createTempDirectory('discovery-file-kernel-app');
+        $namespace = 'Example\\Tests\\DiscoveryFileKernelApp' . uniqid();
+        $fileOnlyClass = $namespace . '\\Hooks\\FileOnlyHook';
+        $config = KernelConfig::theme($appDir, $namespace, false, false);
 
-        self::assertTrue($cache->store(new DiscoveryResult(
+        // 走査すれば見つかる app/ のクラスと、探索結果ファイルにだけ書いたクラスを用意し、ファイルの方が使われることを示す
+        $this->writeFile($appDir . '/Hooks/ScannedHook.php', $this->hookClass($namespace, 'ScannedHook', 'tmswp_scanned_hook'));
+        (new DiscoveryFile($config))->write(new DiscoveryResult(
             [],
             [
-                new DiscoveredHookMethod($cachedClass, 'handle', 'tmswp_cached_hook', 7, 1),
+                new DiscoveredHookMethod($fileOnlyClass, 'handle', 'tmswp_file_only_hook', 7, 1),
             ],
-            [],
-            [$appDir => $this->mtime($appDir)],
-        )));
-        self::assertFalse(class_exists($cachedClass, false));
+        ));
 
-        Filters\expectAdded('tmswp_cached_hook')->once()->with(Mockery::type(Closure::class), 7, 1);
+        Filters\expectAdded('tmswp_file_only_hook')->once()->with(Mockery::type(Closure::class), 7, 1);
+        Filters\expectAdded('tmswp_scanned_hook')->never();
         Actions\expectAdded('init')->once()->with(Mockery::type(Closure::class), 1, 0);
 
         Kernel::boot($config);
 
-        self::assertFalse(class_exists($cachedClass, false));
+        self::assertFalse(class_exists($fileOnlyClass, false));
+        self::assertFalse(class_exists($namespace . '\\Hooks\\ScannedHook', false));
+    }
+
+    public function testBootFailsWhenDiscoveryFileIsMissingAndDebugIsDisabled(): void
+    {
+        $appDir = $this->createTempDirectory('missing-discovery-file-app');
+        $namespace = 'Example\\Tests\\MissingDiscoveryFileApp' . uniqid();
+        $config = KernelConfig::theme($appDir, $namespace, false, false);
+
+        try {
+            Kernel::boot($config);
+            self::fail('DiscoveryException was not thrown');
+        } catch (DiscoveryException $exception) {
+            self::assertStringContainsString($config->discoveryFile(), $exception->getMessage());
+            self::assertStringContainsString('wp tmswp discover', $exception->getMessage());
+        }
+
+        self::assertSame([], Kernel::all());
+    }
+
+    public function testDebugBootScansAppDirectoryAndIgnoresDiscoveryFile(): void
+    {
+        $appDir = $this->createTempDirectory('debug-scan-kernel-app');
+        $namespace = 'Example\\Tests\\DebugScanKernelApp' . uniqid();
+        $config = KernelConfig::theme($appDir, $namespace, true, false);
+        $this->writeFile($appDir . '/Hooks/ScannedHook.php', $this->hookClass($namespace, 'ScannedHook', 'tmswp_debug_scanned_hook'));
+        (new DiscoveryFile($config))->write(new DiscoveryResult(
+            [],
+            [
+                new DiscoveredHookMethod($namespace . '\\Hooks\\FileOnlyHook', 'handle', 'tmswp_debug_file_only_hook', 10, 1),
+            ],
+        ));
+        $autoload = $this->registerAppAutoloader($namespace, $appDir);
+
+        Filters\expectAdded('tmswp_debug_scanned_hook')->once()->with(Mockery::type(Closure::class), 10, 1);
+        Filters\expectAdded('tmswp_debug_file_only_hook')->never();
+
+        try {
+            Kernel::boot($config);
+        } finally {
+            spl_autoload_unregister($autoload);
+        }
+    }
+
+    public function testFailedScanLeavesNoRegistrations(): void
+    {
+        $appDir = $this->createTempDirectory('failed-scan-kernel-app');
+        $namespace = 'Example\\Tests\\FailedScanKernelApp' . uniqid();
+
+        // 先に走査される AlphaHook は正しく、後の ZuluHook が誤り(#[AsHook] なしのメソッド属性)
+        $this->writeFile($appDir . '/Hooks/AlphaHook.php', $this->hookClass($namespace, 'AlphaHook', 'tmswp_alpha_hook'));
+        $this->writeFile($appDir . '/Hooks/ZuluHook.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Hooks;
+
+use TMSWP\\Core\\Attribute\\Action;
+
+final class ZuluHook
+{
+    #[Action('tmswp_zulu_hook')]
+    public function handle(): void
+    {
+    }
+}
+PHP);
+        $autoload = $this->registerAppAutoloader($namespace, $appDir);
+
+        Filters\expectAdded('tmswp_alpha_hook')->never();
+        Actions\expectAdded('init')->never();
+
+        try {
+            Kernel::boot(KernelConfig::theme($appDir, $namespace, true, false));
+            self::fail('DiscoveryException was not thrown');
+        } catch (DiscoveryException $exception) {
+            self::assertStringContainsString("{$namespace}\\Hooks\\ZuluHook", $exception->getMessage());
+        } finally {
+            spl_autoload_unregister($autoload);
+        }
+
+        self::assertSame([], Kernel::all());
+    }
+
+    public function testBootRejectsKernelSharingDiscoveryFile(): void
+    {
+        $root = $this->createTempDirectory('shared-discovery-file-root');
+        $this->writeFile($root . '/app-a/.keep', '');
+        $this->writeFile($root . '/app-b/.keep', '');
+        $first = KernelConfig::theme($root . '/app-a', 'Example\\Tests\\SharedDiscoveryA' . uniqid(), false, false);
+        $second = KernelConfig::theme($root . '/app-b', 'Example\\Tests\\SharedDiscoveryB' . uniqid(), false, false);
+        $firstFile = new DiscoveryFile($first);
+        $firstFile->write(new DiscoveryResult([], []));
+        $contents = file_get_contents($first->discoveryFile());
+
+        Kernel::boot($first);
+
+        try {
+            Kernel::boot($second);
+            self::fail('KernelException was not thrown');
+        } catch (KernelException $exception) {
+            self::assertStringContainsString("share the discovery file {$first->discoveryFile()}", $exception->getMessage());
+        }
+
+        // 衝突した Kernel は登録されないため、探索コマンドが同じファイルを2つの Kernel の内容で上書きすることもない
+        self::assertSame([$first->appNamespace], array_keys(Kernel::all()));
+        self::assertSame($contents, file_get_contents($first->discoveryFile()));
+        self::assertTrue($firstFile->isUpToDate(new DiscoveryResult([], [])));
     }
 
     #[RunInSeparateProcess]
@@ -130,7 +236,6 @@ final class KernelTest extends UnitTestCase
         \define('WP_SANDBOX_SCRAPING', true);
 
         $appDir = $this->createTempDirectory('kernel-plugin-activation-app');
-        $cacheDir = $this->createTempDirectory('kernel-plugin-activation-cache');
         $pluginFile = $this->writeFile($this->createTempDirectory('kernel-plugin-activation-root') . '/plugin.php', "<?php\n");
         $namespace = 'Example\\Tests\\PluginActivationApp' . uniqid();
         $hookFile = $appDir . '/Hook/ActivationHook.php';
@@ -181,7 +286,7 @@ PHP);
         Functions\expect('did_action')->never();
 
         try {
-            $kernel = Kernel::boot(KernelConfig::plugin($pluginFile, $appDir, $namespace, $cacheDir, true));
+            $kernel = Kernel::boot(KernelConfig::plugin($pluginFile, $appDir, $namespace, true));
         } finally {
             spl_autoload_unregister($autoload);
         }
@@ -203,15 +308,50 @@ PHP);
         return $callback[1] === 'dispatch';
     }
 
-    private function mtime(string $path): int
+    private function hookClass(string $namespace, string $class, string $hook): string
     {
-        $mtime = filemtime($path);
+        return <<<PHP
+<?php
 
-        if ($mtime === false) {
-            self::fail("mtime を取得できません: {$path}");
-        }
+declare(strict_types=1);
 
-        return $mtime;
+namespace {$namespace}\\Hooks;
+
+use TMSWP\\Core\\Attribute\\Action;
+use TMSWP\\Core\\Attribute\\AsHook;
+use TMSWP\\Core\\Hook\\Hook;
+
+#[AsHook]
+final class {$class} extends Hook
+{
+    #[Action('{$hook}')]
+    public function handle(mixed \$value): void
+    {
+    }
+}
+PHP;
+    }
+
+    /** @return Closure(string): void */
+    private function registerAppAutoloader(string $namespace, string $appDir): Closure
+    {
+        $autoload = static function (string $class) use ($namespace, $appDir): void {
+            $prefix = $namespace . '\\';
+
+            if (!str_starts_with($class, $prefix)) {
+                return;
+            }
+
+            $file = $appDir . '/' . str_replace('\\', '/', substr($class, \strlen($prefix))) . '.php';
+
+            if (is_file($file)) {
+                require $file;
+            }
+        };
+
+        spl_autoload_register($autoload);
+
+        return $autoload;
     }
 
     private function writeFile(string $path, string $contents): string

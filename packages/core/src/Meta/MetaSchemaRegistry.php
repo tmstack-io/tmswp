@@ -59,18 +59,6 @@ final class MetaSchemaRegistry
         $this->registerEntry($entityClass, $objectType, $subtype, $schemas, $storageClass, $revisions);
     }
 
-    /**
-     * @param class-string $entityClass
-     */
-    public function registerEntityFromCache(
-        string $entityClass,
-        ObjectType $objectType,
-        string $subtype,
-        MetaSchemaSet $schemas,
-    ): void {
-        $this->registerEntry($entityClass, $objectType, $subtype, $schemas, WpMetaStorage::class, false);
-    }
-
     public function schemasFor(string $entityClass): MetaSchemaSet
     {
         if (!\array_key_exists($entityClass, $this->entities)) {

@@ -5,7 +5,7 @@
 TMStack WordPress Framework の起動機構を定義する。本文書が確定させるのは次の4点である。
 
 1. **Kernel** — テーマ・プラグインから呼ばれる唯一のエントリポイント `Kernel::boot()` の完全仕様。多重boot・複数Kernel共存(テーマ+プラグイン併用)時の独立性を含む。
-2. **Discovery / ComponentCache** — `app/` 配下に置かれたクラス/enum を PHP8 Attribute で発見し(クラスレベルのコンポーネント属性と、`#[AsHook]` クラスのメソッドレベル `#[Action]` / `#[Filter]` の両方)、ファイルキャッシュで毎リクエストの走査コストをゼロにする機構。決定的ロード順・探索失敗の明示エラーを保証する。
+2. **Discovery / DiscoveryFile** — `app/` 配下に置かれたクラス/enum を PHP8 Attribute で発見し(クラスレベルのコンポーネント属性と、`#[AsHook]` クラスのメソッドレベル `#[Action]` / `#[Filter]` の両方)、その結果を探索コマンド `wp tmswp discover` が探索結果ファイルとして生成する機構。探索結果ファイルはコードと一緒にコミット・デプロイし、本番の boot はそれを読むだけで走査しない。決定的ロード順・探索失敗の明示エラーを保証する。
 3. **コンポーネント初期化スケジューリング** — 各コンポーネント種別(`#[AsPostType]` 等)をどのWPフック・どのpriorityで初期化するかの正準タイミング表。即時同期初期化は全面禁止する(DR-04)。
 4. **Container** — PSR-11準拠の軽量DIコンテナと、テンプレート向け静的ファサードとの接続方法(DR-09)。
 
@@ -21,7 +21,8 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
   - `src/Kernel/DiscoveryResult.php` — `TMSWP\Core\Kernel\DiscoveryResult` (本文書で新設定義)
   - `src/Kernel/DiscoveredComponent.php` — `TMSWP\Core\Kernel\DiscoveredComponent` (本文書で新設定義)
   - `src/Kernel/DiscoveredHookMethod.php` — `TMSWP\Core\Kernel\DiscoveredHookMethod` (本文書で新設定義)
-  - `src/Kernel/ComponentCache.php` — `TMSWP\Core\Kernel\ComponentCache`
+  - `src/Kernel/DiscoveryFile.php` — `TMSWP\Core\Kernel\DiscoveryFile`(探索結果ファイルの生成と読み込み。§6)
+  - `src/Kernel/DiscoverCommand.php` — `TMSWP\Core\Kernel\DiscoverCommand`(WP-CLI `wp tmswp discover`。§3.6)
   - `src/Kernel/ComponentInitializerInterface.php` — `TMSWP\Core\Kernel\ComponentInitializerInterface` (本文書で新設定義)
   - `src/Attribute/ComponentAttributeInterface.php` — `TMSWP\Core\Attribute\ComponentAttributeInterface` (本文書で新設定義)
   - `src/Attribute/Action.php` — `TMSWP\Core\Attribute\Action` (メソッドレベルフック属性。本文書で新設定義。§5)
@@ -55,13 +56,13 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
 │  1. KernelConfig 検証・正規化(ファクトリ内で実施済み)                │
 │  2. Container 生成・コアサービス登録                                  │
 │  3. Discovery::discover()                                             │
-│       ├─ ComponentCache::load() … ヒット時: ファイルincludeのみ      │
-│       └─ ミス時: Discovery::scan() → ComponentCache::store()          │
+│       ├─ debug時: Discovery::scan() … appDir を毎回走査              │
+│       └─ 本番: DiscoveryFile::load() … 探索結果ファイルのincludeのみ │
 │  4. scheduleAll() … #[Action]/#[Filter] メソッドを add_filter で直接  │
 │     登録し、コンポーネント初期化を (フック名, priority) ごとに         │
 │     add_action 登録                                                    │
 │       ※ ここでは一切インスタンス化しない(即時同期初期化の禁止)       │
-│  5. コンテキスト別の運用フック登録(有効化フック・キャッシュ自動クリア)│
+│  5. コンテキスト別の運用フック登録(有効化・無効化フック)            │
 └────────────────────────────────────────┘
         │ WPライフサイクル進行
         ▼
@@ -73,7 +74,7 @@ init(10) … #[AsPostType] / #[AsUserRole]
 宣言フック発火時 … #[Action]/#[Filter] メソッド(Hookクラスはここで初ロード)
 ```
 
-boot() 時点で発生する副作用は **add_action / add_filter(`#[Action]`/`#[Filter]` メソッドの直接登録、テーマ形態の ActionRouter の `template_include` 登録) / register_activation_hook / WP-CLIコマンド登録 / (コールド時のみ)キャッシュファイル書込** に限定される。`register_post_type` 等のWP登録系APIはすべて上記フック発火時に実行される。
+boot() 時点で発生する副作用は **add_action / add_filter(`#[Action]`/`#[Filter]` メソッドの直接登録、テーマ形態の ActionRouter の `template_include` 登録) / register_activation_hook / WP-CLIコマンド登録** に限定される。boot はファイルを書かない(探索結果ファイルを書くのは探索コマンドだけ。§3.6)。`register_post_type` 等のWP登録系APIはすべて上記フック発火時に実行される。
 
 Kernel はコアの翻訳(テキストドメイン `tmswp`)を `init`(priority 1)でロードする(ロード手順の正準は 01-architecture §7.3)。CPT/Taxラベル生成は gettext 非依存のテンプレート方式(DR-17)であり、コアの例外・ログメッセージは翻訳対象外の開発者向け英語で固定する。
 
@@ -85,7 +86,7 @@ Kernel はコアの翻訳(テキストドメイン `tmswp`)を `init`(priority 1
 
 ### 役割
 
-Kernel が「テーマとして動いているか、プラグインとして動いているか」を表す。コンテキストによって変わるのは (a) ブート用最速フック名 (b) 有効化フックの有無 (c) キャッシュ自動クリアの契機、の3点のみ。
+Kernel が「テーマとして動いているか、プラグインとして動いているか」を表す。コンテキストによって変わるのは (a) ブート用最速フック名 (b) 有効化・無効化フックの契機、の2点のみ。
 
 ### シグネチャ
 
@@ -138,8 +139,7 @@ final readonly class KernelConfig
      * @param string        $appDir      app/ の絶対実パス(realpath済み・末尾スラッシュなし)
      * @param string        $appNamespace アプリ名前空間ルート(先頭・末尾の \ を除去した正規形。例: 'App')
      * @param string|null   $pluginFile  プラグイン本体ファイルの絶対実パス。Themeコンテキストでは必ずnull
-     * @param string        $cacheDir    探索キャッシュ配置ディレクトリ(絶対パス・末尾スラッシュなし)
-     * @param bool          $debug       デバッグモード(キャッシュ検証・例外化の挙動を切替)
+     * @param bool          $debug       デバッグモード(app/ の走査と探索結果ファイルの読み込みの切替・例外化の挙動を切替)
      * @param bool          $actions     テーマ形態のテンプレート前処理(ActionRouter)を有効化するか(既定 true)。Pluginコンテキストでは常に false へ正規化される(§3.7)
      */
     private function __construct(
@@ -147,7 +147,6 @@ final readonly class KernelConfig
         public string $appDir,
         public string $appNamespace,
         public ?string $pluginFile,
-        public string $cacheDir,
         public bool $debug,
         public bool $actions,
     ) {
@@ -156,7 +155,6 @@ final readonly class KernelConfig
     public static function theme(
         string $appDir,
         string $appNamespace = 'App',
-        ?string $cacheDir = null,
         ?bool $debug = null,
         bool $actions = true,
     ): self;
@@ -165,12 +163,18 @@ final readonly class KernelConfig
         string $file,
         string $appDir,
         string $appNamespace = 'App',
-        ?string $cacheDir = null,
         ?bool $debug = null,
     ): self;
 
     /**
-     * このアプリ構成を一意に識別するID。キャッシュファイル名等に使用する。
+     * 探索結果ファイルの絶対パス。appDir の親ディレクトリ(テーマ・プラグインのルート)直下に固定する。
+     * 形式: dirname(appDir) . '/tmswp-discovery.php'
+     * 例: '/path/to/wp-content/themes/my-theme/tmswp-discovery.php'
+     */
+    public function discoveryFile(): string;
+
+    /**
+     * このアプリ構成を一意に識別するID。rewrite flush フラグのオプション名等に使用する。
      * 形式: strtolower(str_replace('\\', '-', appNamespace)) . '-' . substr(md5(appDir), 0, 12)
      * 例: 'app-3f9a2b1c0d4e'
      */
@@ -185,21 +189,22 @@ final readonly class KernelConfig
 1. `$appNamespace` を `trim($appNamespace, '\\')` で正規化し、`/^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*(\\\\[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)*$/` に一致しなければ例外。`TMSWP` または `TMSWP\` で始まる名前空間は予約済みとして例外(コア名前空間の走査を構成段階で遮断する)。
 2. `realpath($appDir)` が `false`、またはディレクトリでない、または読取不可なら例外。メッセージには渡されたパスをそのまま含める(例: `app directory not found: {path}`)。
 3. `plugin()` のみ: `realpath($file)` が `false` またはファイルでないなら例外。さらに `$appDir` が `$file` の属するディレクトリ配下にあることは要求しない(シンボリックリンク構成を許容)。
-4. `$cacheDir` が null の場合は `WP_CONTENT_DIR . '/cache/tmswp'` を採用する。`WP_CONTENT_DIR` 未定義(WP外でのユニットテスト等)の場合は `sys_get_temp_dir() . '/tmswp-cache'` にフォールバックする。ディレクトリの存在チェック・作成はこの時点では行わない(書込時に行う。§6参照)。
+4. 探索結果ファイルの置き場は `discoveryFile()` が返す `dirname(appDir) . '/tmswp-discovery.php'` に固定し、引数では変えない(テーマなら `<theme>/tmswp-discovery.php`、プラグインなら `<plugin>/tmswp-discovery.php`)。コードと一緒にコミット・デプロイされる場所に置くためである(§6)。探索結果ファイルは Kernel ごとに1つで、同じ親ディレクトリに複数の appDir を置く構成(`<root>/app-a` と `<root>/app-b`)は同じファイルを共有してしまうため、2つ目の boot が `KernelException` になる(§3 手順2-c)。
 5. `$debug` が null の場合は `defined('WP_DEBUG') && WP_DEBUG` を採用する。
 
 `theme()` は `pluginFile = null`、`context = KernelContext::Theme`、`actions` は引数値(既定 true)で構築する。`plugin()` は `context = KernelContext::Plugin`、`actions = false`(プラグイン形態は ActionRouter を持たない。§3.7)で構築する。
 
 ### エッジケース
 
-- `appDir` がシンボリックリンク: realpath により実体パスへ解決される。`instanceId()` も実体パス基準となり、リンク経路が変わってもキャッシュは同一となる。
-- WP外(純ユニットテスト)での生成: 手順4・5のフォールバックにより WP定数なしで構築可能。WP関数は一切呼ばない(`untrailingslashit` 等のWP関数は使用禁止。正規化は `rtrim($path, '/\\')` で行う)。
+- `appDir` がシンボリックリンク: realpath により実体パスへ解決される。`instanceId()` と `discoveryFile()` も実体パス基準となる。
+- 1つのテーマ・プラグインのルートに複数の appDir を置く: ファクトリは受け付けるが、`discoveryFile()` が同じになるため、2つ目の Kernel の boot が例外になる(§3 手順2-c)。
+- WP外(純ユニットテスト)での生成: 手順5の既定値により WP定数なしで構築可能。WP関数は一切呼ばない(`untrailingslashit` 等のWP関数は使用禁止。正規化は `rtrim($path, '/\\')` で行う)。
 
 ## 3. Kernel
 
 ### 役割
 
-FWの起動・コンポーネント初期化スケジューリング・Kernelインスタンスレジストリ(複数共存管理)を担う。1つの Kernel は1つのアプリ(=1テーマ or 1プラグインの `app/`)に対応し、専用の Container と ComponentCache を持つ。
+FWの起動・コンポーネント初期化スケジューリング・Kernelインスタンスレジストリ(複数共存管理)を担う。1つの Kernel は1つのアプリ(=1テーマ or 1プラグインの `app/`)に対応し、専用の Container と探索結果ファイル(`DiscoveryFile`)を持つ。
 
 ### シグネチャ
 
@@ -222,7 +227,6 @@ final class Kernel
 
     private readonly KernelConfig $config;
     private readonly Container $container;
-    private readonly ComponentCache $cache;
 
     /** @var list<DiscoveredComponent> 発見済みコンポーネント(FQCN昇順) */
     private array $components;
@@ -236,7 +240,7 @@ final class Kernel
      * FWを起動する。テーマはfunctions.php直下、プラグインは本体ファイル直下で呼ぶこと。
      *
      * @throws \TMSWP\Core\Exception\KernelException 多重boot・名前空間/ディレクトリ衝突・遅延boot(debug時)
-     * @throws \TMSWP\Core\Exception\DiscoveryException 探索失敗(debug時)
+     * @throws \TMSWP\Core\Exception\DiscoveryException 探索失敗(debug時)、探索結果ファイルが無い・構成と合わない(本番)
      */
     public static function boot(KernelConfig $config): self;
 
@@ -268,9 +272,6 @@ final class Kernel
 
     /** @return list<DiscoveredComponent> FQCN昇順 */
     public function components(): array;
-
-    /** 自Kernelの探索キャッシュを削除する。成功(または元々不在)でtrue */
-    public function clearCache(): bool;
 }
 ```
 
@@ -288,6 +289,11 @@ boot(config):
            → throw KernelException(入れ子名前空間の禁止)
         b. config.appDir と k.config.appDir が同一、または一方が他方の配下
            → throw KernelException(appDirの共有・入れ子の禁止)
+        c. config.discoveryFile() と k.config.discoveryFile() が同一(同じ親ディレクトリに
+           置いた兄弟の appDir。§2)
+           → throw KernelException("app directories {appDir} and {k.appDir} share the discovery
+             file {path}; ...")。探索コマンドが同じファイルを2つの Kernel の内容で
+             上書きし合うのを防ぐ
   3. kernel = new self(config)
      container = new Container()
      以下のコアサービスを登録:
@@ -295,23 +301,21 @@ boot(config):
         container->set(KernelConfig::class, config)                 // 即値
         container->set(Container::class, container)                 // 即値(自己参照)
         container->alias(\Psr\Container\ContainerInterface::class, Container::class)
-        container->set(ComponentCache::class, fn() => new ComponentCache(
-            config.cacheDir . '/components-' . config.instanceId() . '.php',
-            config.debug,
-        ))
+        container->set(DiscoveryFile::class, new DiscoveryFile(config))  // 即値
         container->set(Discovery::class, fn(Container c) => new Discovery(
-            config, c->get(ComponentCache::class),
+            config, c->get(DiscoveryFile::class),
         ))
   4. result = container->get(Discovery::class)->discover()
      kernel.components = result.components
      kernel.hookMethods = result.hookMethods
-     // キャッシュヒット時: PHPファイル1つのincludeのみ。Reflectionゼロ・appクラスのロードゼロ
+     // 本番(debug=false): 探索結果ファイル1つのincludeのみ。Reflectionゼロ・appクラスのロードゼロ
+     // 探索結果ファイルが無い・構成と合わない場合は DiscoveryException(§6)
   5. kernel.scheduleAll()      // §7。add_filter/add_actionの登録のみ
   6. kernel.registerLifecycleHooks()  // コンテキスト別運用フック(下記)
   7. kernel.registerActionRouter()    // §3.7。Themeかつconfig.actions=trueのときのみ
   8. self::$kernels[ns] = kernel      // 手順1〜7がすべて成功してから登録(例外時に半端な状態を残さない)
   9. WP-CLI環境(defined('WP_CLI') && WP_CLI)かつ未登録なら
-        WP_CLI::add_command('tmswp cache clear', クロージャ) を登録(§3.6)
+        WP_CLI::add_command('tmswp discover', new DiscoverCommand()) を登録(§3.6)
         self::$cliRegistered = true
   10. return kernel
 ```
@@ -329,9 +333,9 @@ boot(config):
 | 共有されるもの | 共有されないもの |
 |---|---|
 | `Kernel::$kernels` レジストリ(プロセス内static) | Container(コアサービス含め完全に別インスタンス) |
-| `tmswp/core` のコード自体(後述の注意参照) | ComponentCache(ファイル名が `instanceId()` で分離) |
-| WP-CLI `tmswp cache clear`(全Kernel横断で1回登録) | Discovery・components / hookMethods リスト |
-| Log層(グローバル。Log文書参照) | 有効化フック・キャッシュ自動クリアの契機 |
+| `tmswp/core` のコード自体(後述の注意参照) | 探索結果ファイル(Kernel ごとに appDir の親ディレクトリに置く) |
+| WP-CLI `tmswp discover`(全Kernel横断で1回登録) | Discovery・components / hookMethods リスト |
+| Log層(グローバル。Log文書参照) | 有効化・無効化フック |
 
 - **appNamespace の一意性は boot 時に強制される。** スターター既定の `App` のまま複数のテーマ・プラグインを併用すると2つ目の boot が `KernelException` で停止する。これはPHPレベルでも必然である: 同名 FQCN `App\Foo` が複数の vendor/autoload に登録されると先勝ちで誤ったファイルがロードされるため、FWで救済できない。**rules/ に「配布・併用前提のプラグインは appNamespace を固有名(例: `MyShopPlugin`)へ変更すること」を必須規約として記載する。**
 - 同一 (フック, priority) に複数Kernelのグループランナーが並ぶ場合、実行順は `add_action` の登録順=boot順=WPのロード順(プラグイン → テーマ)となる。**Kernel間でコンポーネントの初期化順に依存してはならない**(規約)。あるKernelのapp/クラスが別Kernelのapp/クラスを参照する構成は禁止し、連携が必要な場合はWPフック(do_action/apply_filters)経由とする。
@@ -353,15 +357,15 @@ boot(config):
 | ブート用最速フック | `after_setup_theme` | `plugins_loaded` |
 | 有効化契機 | `after_switch_theme` アクション | `register_activation_hook(pluginFile, ...)` |
 | 無効化契機 | `switch_theme` アクション(切替元テーマ側で発火) | `register_deactivation_hook(pluginFile, ...)` |
-| 有効化時処理 | キャッシュclear + rewrite flushフラグ設定 | キャッシュclear + rewrite flushフラグ設定 + Migrator実行通知 |
-| 無効化時処理 | キャッシュclear | キャッシュclear + `flush_rewrite_rules()` 即時実行 |
+| 有効化時処理 | rewrite flushフラグ設定 + Migrator実行通知 | rewrite flushフラグ設定 + Migrator実行通知 |
+| 無効化時処理 | `tmswp/deactivated` の発火 | `flush_rewrite_rules()` 即時実行 + `tmswp/deactivated` の発火 |
 
 具体仕様:
 
-1. **Plugin コンテキスト**: `register_activation_hook($config->pluginFile, $callback)` を登録する。callback は (a) `clearCache()` (b) オプション `tmswp_flush_rewrite_{instanceId}` に `1` を保存 (c) `do_action('tmswp/activated', $kernel)` を発火する。(c) は Model文書の Migrator が購読してスキーマ適用を行うための契約フックである(Kernel自身はマイグレーションの中身を知らない)。`register_deactivation_hook` の callback は `clearCache()` と `flush_rewrite_rules()` と `do_action('tmswp/deactivated', $kernel)` を行う。
-2. **Theme コンテキスト**: `add_action('after_switch_theme', ...)` で (a) `clearCache()` (b) flushフラグ保存 (c) `do_action('tmswp/activated', $kernel)`。`add_action('switch_theme', ...)`(切替「元」テーマの最終リクエストで発火)で `clearCache()` と `do_action('tmswp/deactivated', $kernel)` を行う。
+1. **Plugin コンテキスト**: `register_activation_hook($config->pluginFile, $callback)` を登録する。callback は (a) オプション `tmswp_flush_rewrite_{instanceId}` に `1` を保存 (b) `do_action('tmswp/activated', $kernel)` を発火する。(b) は Model文書の Migrator が購読してスキーマ適用を行うための契約フックである(Kernel自身はマイグレーションの中身を知らない)。`register_deactivation_hook` の callback は `flush_rewrite_rules()` と `do_action('tmswp/deactivated', $kernel)` を行う。
+2. **Theme コンテキスト**: `add_action('after_switch_theme', ...)` で (a) flushフラグ保存 (b) `do_action('tmswp/activated', $kernel)`。`add_action('switch_theme', ...)`(切替「元」テーマの最終リクエストで発火)で `do_action('tmswp/deactivated', $kernel)` を行う。
 3. **rewrite flush の遅延実行**: 有効化フック時点ではCPT/Taxが未登録のため、その場で `flush_rewrite_rules()` を呼んでも新ルールが反映されない。そこで両コンテキスト共通で `add_action('init', $callback, 99)` を登録し、callback はフラグオプションが存在する場合のみ `flush_rewrite_rules()` 実行 + フラグ削除を行う(CPT登録は init 10 までに完了しているため99で安全)。フラグオプションは `autoload = false` で保存する。
-4. **mu-plugin**: `KernelConfig::plugin()` で動作するが、mu-plugin には有効化フックが発火しない。この場合キャッシュclearとマイグレーションは (a) WP-CLI `tmswp cache clear` / `wp tmswp migrate`(Model文書) (b) Migrator の admin_init 版数比較、で代替される。rules/ にこの注意を記載する。
+4. **mu-plugin**: `KernelConfig::plugin()` で動作するが、mu-plugin には有効化フックが発火しない。この場合マイグレーションは (a) WP-CLI `wp tmswp migrate`(Model文書) (b) Migrator の admin_init 版数比較、で代替される。rules/ にこの注意を記載する。
 
 #### 3.5 get() / forClass() / all() / reset()
 
@@ -375,10 +379,17 @@ boot(config):
 boot 時、`WP_CLI` 環境であれば次の1コマンドを登録する(プロセス内1回のみ)。
 
 ```
-wp tmswp cache clear
+wp tmswp discover [--check]
 ```
 
-実装はクロージャで、`Kernel::all()` を走査し各 `clearCache()` を呼び、`WP_CLI::success()` で削除件数を報告する。失敗(削除不能ファイル)があれば `WP_CLI::error()` で非0終了する。マイグレーション系コマンド(`wp tmswp migrate` 等)は Model 文書が同じ `tmswp` トップレベル名前空間配下に定義する。
+実装は `TMSWP\Core\Kernel\DiscoverCommand` で、`Kernel::all()` の全 Kernel について、debug に関係なく `Discovery::scan()`(§4)で appDir を走査し、各 Kernel の探索結果ファイル(§6)を書く。
+
+- 全 Kernel の走査を終えてから書く(後の Kernel の走査の失敗で、前の Kernel のファイルだけが更新された状態を作らない)。内容が同じファイルは書き換えない。
+- 走査の失敗・書き込みの失敗は `WP_CLI::error()` で非0終了する。起動中の Kernel が1つも無い場合も `WP_CLI::error()` にする(照合が何も比べずに成功しないようにする)。
+- `--check` はファイルを書かず、メモリ上で生成した内容と各 Kernel のファイルをバイト単位で比べる。ファイルが無い、または内容が違う Kernel があれば、その appNamespace とファイルパスを列挙して `WP_CLI::error()` で非0終了する。CI はこれで探索結果ファイルが最新かを照合する(10-quality §5)。
+- 本番(debug=false)で探索結果ファイルが無い・構成と合わない場合は boot が例外になる(§4)ため、そのサイトでは WP-CLI のコマンドも動かない。探索結果ファイルは debug の環境(開発環境)で生成し、コードと一緒にデプロイする。
+
+マイグレーション系コマンド(`wp tmswp migrate` 等)は Model 文書が同じ `tmswp` トップレベル名前空間配下に定義する。
 
 #### 3.7 ActionRouter の生成・登録(テーマ形態のテンプレート前処理)
 
@@ -392,7 +403,7 @@ registerActionRouter():
   add_filter('template_include', [router, 'dispatch'], 100, 1)
 ```
 
-- **ActionRouter は Discovery の発見対象ではない。** `ComponentAttributeInterface` を実装する属性を持たず、`app/` の走査・ComponentCache・初期化タイミング表のいずれにも現れない。テーマルート直下の `actions/` ディレクトリに置かれた**ファイルの存在**だけで動作する(完全オプトイン: `actions/` を1つも置かないテーマも全機能が動く)。boot が生成・登録するのは `dispatch` フィルタ1本のみで、この登録自体は `actions/` ディレクトリの有無に依存しない(ディレクトリ探索は dispatch 発火時に行う)。
+- **ActionRouter は Discovery の発見対象ではない。** `ComponentAttributeInterface` を実装する属性を持たず、`app/` の走査・探索結果ファイル・初期化タイミング表のいずれにも現れない。テーマルート直下の `actions/` ディレクトリに置かれた**ファイルの存在**だけで動作する(完全オプトイン: `actions/` を1つも置かないテーマも全機能が動く)。boot が生成・登録するのは `dispatch` フィルタ1本のみで、この登録自体は `actions/` ディレクトリの有無に依存しない(ディレクトリ探索は dispatch 発火時に行う)。
 - **プラグイン形態では ActionRouter を生成しない。** プラグインはトップレベルテンプレートを供給する機構を持たないため `template_include` への介入が意味を持たない。プラグイン側のテンプレート前処理に相当するロジックは `#[AsHook]` クラスの `#[Action]`/`#[Filter]` メソッド(§5)へ書く。
 - `actions/` ディレクトリ名は **`'actions'` 固定**(テーマルート直下。リネーム不可)。配置決定木・静的検査・rules/ が無設定で同一前提を共有するための決定的規約である。
 - dispatch の正準手順(子→親テーマ解決、static クロージャ内 include、戻り値契約 `array`→View変数バッグ / `ActionRouter::notFound()`→404強制 / `null`→no-op、`$template` の無加工返却原則)・`actions` ファイル規約・`View` 変数バッグ・グローバルヘルパ `tms_var()` は View/Support/Log 文書が定義する。本文書が確定するのは「いつ・どの形態で生成し、どのフックへ登録するか」のみである。
@@ -401,13 +412,13 @@ registerActionRouter():
 
 ### 役割
 
-`appDir` 配下のPSR-4クラス/enumを列挙し、(a) コンポーネント属性(`ComponentAttributeInterface` 実装属性)が付与されたクラス/enumを `DiscoveredComponent` のリストとして、(b) `#[AsHook]` クラスのメソッドレベルフック属性(`#[Action]` / `#[Filter]`。§5)を `DiscoveredHookMethod` のリストとして収集する。キャッシュ管理を内包し、`discover()` が正面玄関となる。
+`appDir` 配下のPSR-4クラス/enumを列挙し、(a) コンポーネント属性(`ComponentAttributeInterface` 実装属性)が付与されたクラス/enumを `DiscoveredComponent` のリストとして、(b) `#[AsHook]` クラスのメソッドレベルフック属性(`#[Action]` / `#[Filter]`。§5)を `DiscoveredHookMethod` のリストとして収集する。`discover()` が正面玄関で、debug 時は `scan()` で appDir を走査し、本番(debug=false)は探索結果ファイル(§6)を読む。
 
 ### 走査対象の原則
 
 1. **走査対象は `config.appDir` 配下の `.php` ファイルのみ。** コア(`TMSWP\`)・拡張パッケージ・vendor/ は決して走査しない。
    - 旧iwf2bのLoaderは自分自身(`src/Iwf2b`)を自己スキャンし、コア同梱の具象クラス(Post/PagePost/CategoryTax/PostTagTax、abstract修飾漏れのAbstractUser)まで毎リクエスト自動インスタンス化していた。本FWではコア側にコンポーネント属性を持つ具象クラスを置かないことに加え、**走査範囲を構成上 appDir に限定することで構造的に再発を防ぐ**。`KernelConfig` ファクトリの `TMSWP` 名前空間予約(§2)が二重の防壁となる。
-2. app/ のクラスは利用側 composer の PSR-4 オートロード(`"App\\": "app/"`)で解決可能でなければならない。Discovery は **ファイルを自前で require しない**。コールド走査時も `class_exists()` 経由(=オートローダ経由)でロードする。理由: 本番のランタイムと同一のロード機構で検証することで「走査では見えるが実行時にロードできない」乖離を排除する。オートロード未設定の場合は全クラスが探索失敗として明示エラーになる(後述)。
+2. app/ のクラスは利用側 composer の PSR-4 オートロード(`"App\\": "app/"`)で解決可能でなければならない。Discovery は **ファイルを自前で require しない**。走査では `class_exists()` 経由(=オートローダ経由)でロードする。理由: 本番のランタイムと同一のロード機構で検証することで「走査では見えるが実行時にロードできない」乖離を排除する。オートロード未設定の場合は全クラスが探索失敗として明示エラーになる(後述)。
 3. 属性はクラス自身に付与されたもののみを見る。**PHPの属性は継承されないため、基底クラスに付与しても子クラスは発見されない**。各具象クラスに付与する(rules/ に明記)。メソッドレベルの `#[Action]` / `#[Filter]`(§5)は `ReflectionClass::getMethods()` が返す public インスタンスメソッド(継承メソッドを含む)を対象とする。
 
 ### シグネチャ
@@ -423,22 +434,20 @@ final class Discovery
 {
     public function __construct(
         private readonly KernelConfig $config,
-        private readonly ComponentCache $cache,
-    ) {
-    }
+        private readonly DiscoveryFile $file,
+    ) {}
 
     /**
-     * キャッシュ込みの探索。ヒット時は走査を行わない。
-     * ミス時は scan() を実行し、結果をキャッシュへ保存してから返す。
+     * debug 時は appDir を走査し、それ以外は探索結果ファイルを読む(走査しない)。
      *
-     * @throws \TMSWP\Core\Exception\DiscoveryException debug時の探索失敗
+     * @throws \TMSWP\Core\Exception\DiscoveryException 走査の失敗、または探索結果ファイルが無い・構成と合わない場合
      */
     public function discover(): DiscoveryResult;
 
     /**
-     * キャッシュを介さない実走査。
+     * appDir を走査する。失敗は debug に関係なく DiscoveryException にし、途中までの結果は返さない。
      *
-     * @throws \TMSWP\Core\Exception\DiscoveryException debug時の探索失敗
+     * @throws \TMSWP\Core\Exception\DiscoveryException
      */
     public function scan(): DiscoveryResult;
 }
@@ -454,18 +463,13 @@ namespace TMSWP\Core\Kernel;
 final readonly class DiscoveryResult
 {
     /**
-     * @param list<DiscoveredComponent>  $components  FQCN昇順
+     * @param list<DiscoveredComponent>  $components  (class, attributeClass) 複合キー昇順
      * @param list<DiscoveredHookMethod> $hookMethods (class, method, hook, priority) 複合キー昇順
-     * @param array<string, int>         $files       走査対象とした全PHPファイル(実パス => filemtime)。キー昇順
-     * @param array<string, int>         $dirs        走査した全ディレクトリ(実パス => filemtime)。appDir自身を含む。キー昇順
      */
     public function __construct(
         public array $components,
         public array $hookMethods,
-        public array $files,
-        public array $dirs,
-    ) {
-    }
+    ) {}
 }
 ```
 
@@ -484,22 +488,17 @@ final readonly class DiscoveredComponent
      * @param class-string         $class              コンポーネントクラスFQCN
      * @param class-string         $attributeClass     付与されていたコンポーネント属性のFQCN
      * @param array<array-key, mixed> $attributeArguments ReflectionAttribute::getArguments() の生値(スカラー/配列/enumのみ)
-     * @param string               $file               定義ファイルの絶対実パス
-     * @param int                  $fileMtime          走査時点の filemtime
      */
     public function __construct(
         public string $class,
         public string $attributeClass,
         public array $attributeArguments,
-        public string $file,
-        public int $fileMtime,
-    ) {
-    }
+    ) {}
 
     /**
      * 属性インスタンスを再構築する。呼び出しごとに新規生成(軽量・readonlyのためメモ化しない)。
      * 属性クラスが存在しない/ComponentAttributeInterface非実装の場合は DiscoveryException
-     * (キャッシュ陳腐化シナリオ。例外化/ログの分岐は呼出側=Kernelが行うため、本メソッドは常に投げる)。
+     * (探索結果ファイルが古いシナリオ。例外化/ログの分岐は呼出側=Kernelが行うため、本メソッドは常に投げる)。
      */
     public function attribute(): ComponentAttributeInterface;
 }
@@ -540,25 +539,33 @@ DR-04 の「クラスマップ走査」とは、旧Loaderのような「発見�
 scan():
   1. 列挙: RecursiveDirectoryIterator(appDir, SKIP_DOTS) で再帰列挙。
      - basename が '.' で始まるディレクトリ、'vendor'/'node_modules' ディレクトリは枝刈り(防御的)
-     - dirs[実パス] = filemtime を全ディレクトリ(appDir含む)について記録
-     - ファイルはbasenameが /^[A-Z][A-Za-z0-9]*\.php$/ に一致するもののみクラス候補とし
-       files[実パス] = filemtime を記録。一致しない .php(例: helpers.php)は走査対象外
-       (エラーにもしない。関数定義ファイル等を置く余地を残す)
-  2. files をキー(実パス)昇順にソート ※決定性確保。dirs も同様にソート
-  3. 各候補ファイル file について:
-     a. FQCN導出(PSR-4): appNamespace . '\\' . (appDirからの相対ディレクトリを'\\'区切りに変換)
-        . '\\' . basename(file, '.php')
-     b. class_exists(fqcn, true) を評価(オートローダ経由ロード)。falseの場合、
-        interface_exists/trait_exists/enum_exists(fqcn) も false なら探索失敗
+     - ファイルはbasenameが /^[A-Z][A-Za-z0-9]*\.php$/ に一致するもののみクラス候補とし、
+       appDirからの相対パス => 実パス を記録。一致しない .php(例: helpers.php)は走査対象外
+       (エラーにもしない。関数定義ファイル等を置く余地を残す)。実パスを解決できないファイルは探索失敗
+  2. 候補を相対パスの strcmp 昇順に並べる ※決定性確保
+  3. 各候補ファイル file について(手順 b〜g の処理全体で起きた DiscoveryException 以外の
+     \Throwable は、元の例外を previous に持ち、クラスとファイルを含む探索失敗に変換する
+     ("failed to read {fqcn}: {元のメッセージ}")。getAttributes(..., IS_INSTANCEOF) による
+     属性クラスの autoload の ParseError や、getArguments() で評価する定数式の未定義のクラス定数等):
+     a. FQCN導出(PSR-4): appNamespace . '\\' . (相対パスから '.php' を除き、区切りを '\\' に変換)
+     b. class_exists(fqcn, true) を評価(オートローダ経由ロード)。オートロード中に起きた
+        \Throwable(ParseError・未定義の親クラス等の Error を含む)は探索失敗としてラップする
+        ("failed to autoload {fqcn}: {元のメッセージ}"。元の例外を previous に持つ)。
+        falseの場合、interface_exists/trait_exists/enum_exists(fqcn, false) も false なら探索失敗
         ("file {file} is expected to define class {fqcn}; check the PSR-4 autoload
           mapping '{appNamespace}\\' => '{appDir}' in composer.json and run
           'composer dump-autoload' if the mapping looks correct")。
+        2つ目以降は再オートロードしない(読み込んだファイルが別の名前を定義していた場合に、
+        同じファイルを二重に読み込んで致命的エラーにしないため)。
         interface/trait であれば候補から黙ってスキップ(正当な配置)
      c. ref = new ReflectionClass(fqcn)
-        - debug時: ref->getName() !== fqcn(大文字小文字の不一致。macOS等の
+        - ref->getName() !== fqcn(大文字小文字の不一致。macOS等の
           大文字小文字非区別FSで顕在化)なら探索失敗
-        - debug時: realpath(ref->getFileName()) !== file(同名クラスが別ファイルから
+        - realpath(ref->getFileName()) !== file(同名クラスが別ファイルから
           ロードされた=オートロード設定の不整合)なら探索失敗
+        - #[AsHook] が付いているのに Hook 基底(TMSWP\Core\Hook\Hook)を継承していなければ探索失敗
+          ("#[AsHook] class must extend TMSWP\Core\Hook\Hook")。register() という名前の
+          メソッドの有無とは無関係に検査する
      d. attrs = ref->getAttributes(ComponentAttributeInterface::class,
                                    ReflectionAttribute::IS_INSTANCEOF)
         - attrs が空: コンポーネントではない普通のクラス。手順 3-f へ進む
@@ -570,7 +577,7 @@ scan():
      e. 各 attr について:
         - args = attr->getArguments()。args を再帰検査し、スカラー・配列・enumケース
           以外(オブジェクト等。PHP8.1+のnew式初期化子)が含まれれば探索失敗
-          ("attribute arguments must be cache-safe (scalar/array/enum)")
+          ("attribute arguments must be exportable to the discovery file (scalar/array/enum)")
         - attr->newInstance() を実行(属性コンストラクタの検証を発火させる)。
           \Throwable は探索失敗としてラップ
         - 属性が AsHook の場合: クラスが register() をオーバーライドしている
@@ -578,8 +585,7 @@ scan():
           ときのみ components[] へ追加する(register() 例外手段の priority 0
           初期化対象。§7)。オーバーライドなしの #[AsHook] クラスは components に
           現れず、フック発火まで決してロードされない(遅延ロードの構造的保証)
-        - それ以外の属性: components[] = new DiscoveredComponent(fqcn, 属性FQCN,
-          args, file, files[file])
+        - それ以外の属性: components[] = new DiscoveredComponent(fqcn, 属性FQCN, args)
         ※1クラスに異種のコンポーネント属性が複数付与されている場合は属性ごとに
           1レコード生成する(同一属性の重複付与はIS_REPEATABLE未指定のためPHPが拒否する)
      f. メソッドレベルフック属性(#[Action] / #[Filter]。§5)の収集:
@@ -599,35 +605,58 @@ scan():
      g. #[AsHook] クラスに #[Action]/#[Filter] メソッドも register() オーバーライドも
         1つも無い場合: 探索失敗("hook class {fqcn} registers no hooks")
         (何も登録しないHookクラスは構成ミス。黙殺しない)
-  4. components を (class, attributeClass) の複合キー昇順(strcmp)でソート
+  4. components を (class, attributeClass) の複合キー昇順でソート(どちらも strcmp)
   5. hookMethods を (class, method, hook, priority) の複合キー昇順でソート
-  6. return new DiscoveryResult(components, hookMethods, files, dirs)
+     (class・method・hook は strcmp、priority は整数の比較)
+     ※文字列の比較に配列の <=> は使わない。数字だけの文字列(例: フック名 '10' と '9')を
+       数値として比べ、strcmp と違う順になるため
+  6. 環境に依存する絶対パスの検査(結果全体に対して、ここ1か所で行う):
+     - 対象は探索結果ファイルに書き出す文字列のうち、components の attributeArguments
+       (配列は再帰的に見て、キーと値の両方)と、hookMethods の hook(フック名)。
+       class・attributeClass・method は PHP の識別子のため対象外
+     - 既知のルートは Kernel のルート(dirname(appDir))と、定義されていれば ABSPATH・
+       WP_CONTENT_DIR。Kernel のルートは実パスに正規化し、解決できなければ探索失敗。
+       ABSPATH・WP_CONTENT_DIR は設定された値そのものと、realpath() で解決できればその
+       実パスの両方をルートにする(値が文字列でなければ探索失敗)。いずれも末尾の区切り文字を
+       除き、空になるもの('/' 等)と重複は除く
+     - ABSPATH・WP_CONTENT_DIR のディレクトリが存在しなくても探索失敗にしない。WP_CONTENT_DIR は、
+       プラグイン・テーマ等を外に置く構成ではディレクトリが無くても WordPress が起動する。
+       ABSPATH は存在しなければ WordPress 自体が起動しないが、両定数の扱いを揃えるため、
+       存在を探索の前提にしない
+     - 文字列の中にルート R が現れ、その直後が文字列の終わりか '/' または '\' のときだけ
+       環境に依存するとみなす(R が /srv/a なら /srv/a・/srv/a/x.php・file:///srv/a/x は
+       該当し、/srv/abc・/srv/a-b は該当しない)
+     - 該当すれば探索失敗。メッセージにクラス(フック名なら class::method)と該当した値を含める
+       ("attribute argument of {class} contains the environment-dependent path {R}: '{値}'; ..."、
+        "hook name of {class}::{method} contains the environment-dependent path {R}: '{値}'")
+  7. return new DiscoveryResult(components, hookMethods)
 ```
 
 **Composer最適化クラスマップとの突合は行わない(確定判断)**: `spl_autoload_functions()` から `Composer\Autoload\ClassLoader` を探り当て `getClassMap()` とPSR-4導出FQCNを突合する検査は持たない。Composer内部実装への暗黙結合であり、別オートローダ併用環境(Bedrock系カスタムローダ等)で破綻し得るためである。このため「機能破綻を伴わない最適化クラスマップの陳腐化(`composer dump-autoload -o` の実行忘れで古いエントリが残存するが、PSR-4フォールバックで正常動作するケース)」は名指しでは検出しない。これは次回 dump-autoload で自己治癒する一過性の開発時ハイジーンに留まり、**機能破綻を伴う不整合はすべて手順3-b(class_exists 失敗)・3-c(getName/getFileName 突合)が「ファイルパス・期待FQCN・是正ヒント(dump-autoload 含む)」付きの明示エラーで検出する**。
 
+**属性の引数とフック名は環境に依存しない値にする**: コンポーネント属性の引数(配列のキーと値)と `#[Action]` / `#[Filter]` のフック名は、探索結果ファイルにそのまま書き出される(§6)。`__DIR__` 等で絶対パスにすると、探索結果ファイルが環境ごとに変わり、照合(§3.6)が成り立たない。パスはテーマ・プラグインのルートからの相対パスで書く(既知のルートを区切り文字の境界で含む文字列は手順6で探索失敗になる)。コアと拡張パッケージのコンポーネント属性に、絶対パスを引数に取るものは無い。
+
 **探索失敗時の挙動(全箇所共通・正準)**:
 
-- `config.debug === true`: その場で `TMSWP\Core\Exception\DiscoveryException` を投げ、走査を中断する。メッセージには必ず「対象ファイルの絶対パス」「期待FQCN(導出できた場合)」「是正方法のヒント」を含める。
-- `config.debug === false`(本番): `Log::error('tmswp.discovery: ' . 同メッセージ, ['file' => ..., 'class' => ...])` を記録し、**当該ファイル/クラスをスキップして走査を継続する**。スキップされたコンポーネントは存在しないものとして動作する(サイトは縮退稼働)。
-- 旧Loaderの `catch (ReflectionException) { continue; }`(完全黙殺)は全面禁止。スキップする場合も必ずログを残す。
+- `config.debug` に関係なく、その場で `TMSWP\Core\Exception\DiscoveryException` を投げ、走査を中断する。メッセージには必ず「対象ファイルの絶対パス」「期待FQCN(導出できた場合)」「是正方法のヒント」を含める。
+- 途中まで収集した components / hookMethods は返さない。結果は全候補の走査を終えてから組み立てて返すため、例外のときに一部だけ登録された状態は生じない(boot は例外で止まり、フックも Kernel のレジストリも登録しない)。
+- 走査は debug 時の boot と探索コマンド(§3.6)でだけ行う。探索の失敗は開発時・ビルド時のエラーになり、本番の boot には持ち込まれない。
+- 旧Loaderの `catch (ReflectionException) { continue; }`(完全黙殺)は全面禁止。失敗をスキップして走査を続ける分岐を持たない。
 
-**決定的ロード順**: 手順2・4・5のソートにより、走査結果(components / hookMethods / files / dirs)は OS・ファイルシステムの列挙順に依存しない。同一のapp/に対して何度実行しても、どの環境で実行しても、`DiscoveryResult` はバイト単位で同一になる(受け入れ基準で検証)。
+**決定的ロード順**: 手順2・4・5のソートにより、走査結果(components / hookMethods)は OS・ファイルシステムの列挙順に依存しない。探索結果ファイル(§6)は絶対パス・mtime・生成時刻を含まないため、同一のapp/からは、どの環境(ホストと wp-env のコンテナのように絶対パスが違う環境を含む)で生成してもバイト単位で同一になる(受け入れ基準で検証)。
 
 ### discover() のアルゴリズム
 
 ```
 discover():
-  result = cache.load()            // null = 不在/無効
-  if result === null:
-      result = scan()
-      if !cache.store(result):
-          Log::warning('tmswp.discovery: failed to write component cache to {file}.
-                        Discovery will run on every request.', [...])  // リクエスト内1回
-  return result
+  if config.debug:
+      return scan()          // 毎リクエスト走査し、探索結果ファイルは読まない
+  return file.load()         // 走査しない。ファイルが無い・構成と合わなければ DiscoveryException(§6)
 ```
 
-コールドパス(キャッシュミス)は「初回リクエスト」「キャッシュclear直後」「debug時のmtime不一致」でのみ発生する。コールド走査は対象クラスを全ロードするが、これは1回限りであり、ウォームパスでは **Reflectionゼロ・appクラスのロードゼロ** を保証する(クラスはコンポーネント初期化フック、または `#[Action]`/`#[Filter]` が宣言したフックの発火で初めてロードされる)。
+- 本番(debug=false)の boot は探索結果ファイルの include 1回だけで、**Reflectionゼロ・appクラスのロードゼロ** を保証する(クラスはコンポーネント初期化フック、または `#[Action]`/`#[Filter]` が宣言したフックの発火で初めてロードされる)。探索結果ファイルが無い場合に走査へ切り替える経路は持たない(設定の誤りは起動時に常に例外。00-overview §5.6)。
+- debug 時は毎リクエスト走査するため、app/ のクラスの追加・変更はすぐに反映される。走査は対象クラスを全ロードする。
+- app/ を変えたら `wp tmswp discover` で探索結果ファイルを作り直してコミットする。CI は `wp tmswp discover --check` でファイルが最新かを照合する(§3.6)。
 
 ## 5. ComponentAttributeInterface / ComponentInitializerInterface
 
@@ -796,16 +825,16 @@ final class HookInitializer implements ComponentInitializerInterface
 
 振る舞い仕様:
 
-- `#[AsHook]` は引数を持たないクラスマーカーである。app 側の Hook クラスは `Hook\Hook` を継承し、`app/Hook/` に置く。
+- `#[AsHook]` は引数を持たないクラスマーカーである。app 側の Hook クラスは `Hook\Hook` を継承し、`app/Hook/` に置く。継承しない `#[AsHook]` クラスは走査時の探索失敗になる(§4 手順3-c)。
 - Discovery は、`register()` を Hook 基底以外のクラスで宣言している `#[AsHook]` クラスだけを components に含める(§4 手順3-e)。`#[Action]` / `#[Filter]` メソッドだけを持つクラスは components に現れない。
-- `HookInitializer::initialize()` は Kernel の Container から `$component->class` を解決する。解決結果が `Hook` のインスタンスでなければ `DiscoveryException`(`hook component must extend Hook: {fqcn}`)を投げる。`Hook` のインスタンスであれば `register()` を1回だけ呼ぶ。
+- `HookInitializer::initialize()` は Kernel の Container から `$component->class` を解決する。解決結果が `Hook` のインスタンスでなければ `DiscoveryException`(`hook component must extend Hook: {fqcn}`)を投げる(探索結果ファイルが古い場合の防御。走査では継承を検査済み)。`Hook` のインスタンスであれば `register()` を1回だけ呼ぶ。
 - 初期化のタイミングは §7 の初期化タイミング表(`#[AsHook]` 行)に従う。
 
-## 6. ComponentCache
+## 6. DiscoveryFile(探索結果ファイル)
 
 ### 役割
 
-`DiscoveryResult` をPHPファイル(`<?php return [...];`)として永続化する。PHPファイル形式の理由: OPcacheに乗るため本番ウォームパスのコストが実質ゼロになり、unserialize系の脆弱性も持たない。
+`DiscoveryResult` を探索結果ファイル(`<?php return [...];`)として生成し、本番の boot で読み込む。ファイルは探索コマンド `wp tmswp discover`(§3.6)だけが書き、コードと一緒にコミットして FTP 等でデプロイする。CI は `wp tmswp discover --check` でファイルが最新かを照合する(10-quality §5)。PHPファイル形式の理由: OPcacheに乗るため本番の読み込みコストが実質ゼロになり、unserialize系の脆弱性も持たない。
 
 ### シグネチャ
 
@@ -816,103 +845,103 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Kernel;
 
-final class ComponentCache
+final class DiscoveryFile
 {
-    /** キャッシュスキーマバージョン。DiscoveredComponent/格納形式の変更時にインクリメント(2: hookMethods追加) */
-    public const SCHEMA_VERSION = 2;
+    /** 探索結果ファイルの形式の版。格納形式の変更時にインクリメントする */
+    public const SCHEMA_VERSION = 3;
+
+    public function __construct(
+        private readonly KernelConfig $config,
+    ) {}
+
+    /** KernelConfig::discoveryFile() と同じ絶対パス */
+    public function path(): string;
 
     /**
-     * @param string $file           キャッシュファイル絶対パス
-     * @param bool   $validateMtimes trueの場合(=debug)、load時にfilemtime検証を行う
+     * 探索結果ファイルを読み込む。ファイルが無い・壊れている・この Kernel の構成と合わない場合は例外を投げる。
+     *
+     * @throws \TMSWP\Core\Exception\DiscoveryException
      */
-    public function __construct(
-        private readonly string $file,
-        private readonly bool $validateMtimes,
-    ) {
-    }
+    public function load(): DiscoveryResult;
 
-    /** 有効なキャッシュがあれば復元して返す。不在・無効・破損は null(例外にしない) */
-    public function load(): ?DiscoveryResult;
+    /** 探索結果をファイルの内容(PHP コード)にする。同じ探索結果からは常に同じバイト列を返す。 */
+    public function render(DiscoveryResult $result): string;
 
-    /** 原子的に書き込む。書込不可なら false(例外にしない。呼出側がログする) */
-    public function store(DiscoveryResult $result): bool;
+    /** ファイルの内容が探索結果と一致するか。ファイルが無ければ false。 */
+    public function isUpToDate(DiscoveryResult $result): bool;
 
-    /** キャッシュファイルを削除する。不在でも true */
-    public function clear(): bool;
-
-    public function file(): string;
+    /**
+     * 探索結果をファイルに書く。一時ファイルに書いてから rename で置き換える。
+     *
+     * @throws \TMSWP\Core\Exception\DiscoveryException 書き込みに失敗した場合
+     */
+    public function write(DiscoveryResult $result): void;
 }
 ```
 
 ### ファイル形式と配置
 
-- 配置: `{KernelConfig::cacheDir}/components-{KernelConfig::instanceId()}.php`
-  - 既定で `wp-content/cache/tmswp/components-app-3f9a2b1c0d4e.php` のような実パスになる。instanceId に名前空間スラッグとappDirハッシュを含むため、複数Kernel間・複数環境間で衝突しない。
-- 内容(正準スキーマ):
+- 配置: `KernelConfig::discoveryFile()` = `dirname(appDir) . '/tmswp-discovery.php'`(テーマなら `<theme>/tmswp-discovery.php`、プラグインなら `<plugin>/tmswp-discovery.php`)。Kernel ごとに1ファイルで、置き場を変える設定は持たない。
+- 内容(正準スキーマ。fixture のプラグインの実際の生成物):
 
 ```php
-<?php return [
-    'schema'      => 2,                      // ComponentCache::SCHEMA_VERSION
-    'appDir'      => '/abs/path/to/app',     // 生成元appDir(取り違え検出)
-    'generated'   => 1718160000,             // 生成時刻(デバッグ用情報。検証には使わない)
-    'dirs'        => ['/abs/path/to/app' => 1718150000, /* キー昇順 */],
-    'files'       => ['/abs/path/to/app/Post/ProductPost.php' => 1718150000, /* キー昇順 */],
-    'components'  => [
-        [
-            'class'              => 'App\Post\ProductPost',
-            'attributeClass'     => 'TMSWP\Core\Attribute\AsPostType',
-            'attributeArguments' => [],
-            'file'               => '/abs/path/to/app/Post/ProductPost.php',
-            'fileMtime'          => 1718150000,
-        ],
-        // (class, attributeClass) 昇順
-    ],
+<?php
+
+// @generated by 'wp tmswp discover'. Do not edit.
+
+declare(strict_types=1);
+
+return [
+    'schema' => 3,
+    'appNamespace' => 'TmswpFixturePlugin',
+    'appDir' => 'app',
+    'components' => [],
     'hookMethods' => [
         [
-            'class'        => 'App\Hook\ProductHook',
-            'method'       => 'onSave',
-            'hook'         => 'save_post_product',
-            'priority'     => 10,
-            'acceptedArgs' => 2,               // メソッド宣言引数数から自動導出(§5)
+            'class' => 'TmswpFixturePlugin\\Hook\\PluginProbeHook',
+            'method' => 'filter',
+            'hook' => 'tmswp_fixture_plugin/filter',
+            'priority' => 10,
+            'acceptedArgs' => 1,
         ],
-        // (class, method, hook, priority) 昇順
+        [
+            'class' => 'TmswpFixturePlugin\\Hook\\PluginProbeHook',
+            'method' => 'handle',
+            'hook' => 'tmswp_fixture_plugin/action',
+            'priority' => 10,
+            'acceptedArgs' => 0,
+        ],
     ],
 ];
 ```
 
-書出しは `var_export()` による(enumケースは var_export で有効なPHPコードとして出力される。属性引数をスカラー/配列/enumに制限している(§4手順3-e)のはこのため)。ファイルは `return` 文のみで構成され、Webから直接アクセスされても何も出力しない。
+- `components` の各要素は `class`・`attributeClass`・`attributeArguments` を持つ((class, attributeClass) 昇順)。`hookMethods` の各要素は `class`・`method`・`hook`・`priority`・`acceptedArgs` を持つ((class, method, hook, priority) 昇順。§4)。
+- `appDir` は探索結果ファイルのディレクトリからの相対パス(ファイルを appDir の親ディレクトリに置くため、appDir のディレクトリ名になる)。
+- **絶対パス・mtime・生成時刻・ファイル一覧を載せない。** ホストと wp-env のコンテナのように絶対パスが違う環境で生成しても、バイト単位で同一になる(CI の照合が環境に依存しない)。
+- 配列は短縮構文で書き、スカラー・enumケースの値は `var_export()` で書く(enumケースは有効なPHPコードとして出力される。属性引数をスカラー/配列/enumに制限している(§4手順3-e)のはこのため)。配列に `var_export()` を使わないのは、行末に空白が残り、空白を削るエディタで内容が変わって照合が失敗するためである。
+- ファイルは `return` 文のみで構成され、Webから直接アクセスされても何も出力しない。
 
-### store() のアルゴリズム
+### write() のアルゴリズム
 
 ```
-store(result):
-  1. dirname(file) が無ければ mkdir(dir, 0775, recursive: true)。失敗なら return false
-  2. payload = var_export(スキーマ配列, true) を '<?php return ' . ... . ';' に整形
-  3. tmp = file . '.' . uniqid('', true) . '.tmp' へ file_put_contents(LOCK_EXなし、別名のため不要)
-     書込バイト数不一致なら tmp を削除して return false
-  4. rename(tmp, file)   // 同一FS内の原子的置換。失敗なら tmp 削除して return false
-  5. function_exists('opcache_invalidate') なら opcache_invalidate(file, true)
-  6. return true
+write(result):
+  1. contents = render(result)
+  2. tmp = path . '.' . uniqid('', true) . '.tmp' へ file_put_contents
+     書込バイト数不一致なら tmp を削除して DiscoveryException
+  3. rename(tmp, path)   // 同一FS内の原子的置換。失敗なら tmp を削除して DiscoveryException
+  4. function_exists('opcache_invalidate') なら opcache_invalidate(path, true)
 ```
 
-並行リクエストが同時に store しても、走査が決定的(§4)であるため内容は同一であり、rename の原子性により読み手が破損ファイルを観測することはない。ロックは行わない。
+### load() の検証
 
-### load() の検証(無効化条件)
+以下のいずれかに該当すれば `DiscoveryException` を投げる。メッセージにはファイルのパスと「`wp tmswp discover` で生成し、コードと一緒にデプロイする」という案内を含める。走査に切り替える経路は持たない(§4)。
 
-以下のいずれかに該当すれば `null` を返す(=再走査される)。
-
-1. ファイル不在、または `include` が配列以外を返す/throwする(`\Throwable` をcatchして null。破損キャッシュで本番を止めない。debug時は `Log::warning` を残す)
-2. `schema !== ComponentCache::SCHEMA_VERSION`
-3. `appDir` が KernelConfig の appDir と不一致(キャッシュファイルの取り違え・環境移送)
-4. **`validateMtimes === true`(debug)の場合のみ**:
-   - `dirs` の各エントリ: `is_dir()` が false、または `filemtime()` が記録値と不一致 → null(ファイル追加・削除・リネームはディレクトリmtimeの変化として検出される)
-   - `files` の各エントリ: `is_file()` が false、または `filemtime()` が記録値と不一致 → null(**属性なしファイルも全件記録しているため、「既存クラスに後から #[AsPostType] を付けた」変更も検出できる**)
-
-本番(`validateMtimes === false`)ではmtime検証を行わず、キャッシュを信頼する。本番でキャッシュが再構築される契機は:
-
-- 有効化フック / テーマ切替(§3.4 で自動 clear)
-- `wp tmswp cache clear`(§3.6)
-- デプロイスクリプトでの `wp-content/cache/tmswp/` 削除(rules/ にデプロイ手順として明記)
+1. ファイルが無い
+2. `include` が throw する(元の例外を previous に持つ)、または配列以外を返す
+3. `schema !== DiscoveryFile::SCHEMA_VERSION`
+4. `appNamespace` が KernelConfig の appNamespace と違う
+5. `appDir`(相対パス)を探索結果ファイルのディレクトリから解決した実パスが、KernelConfig の appDir と違う(ファイルの取り違え)
+6. `components` / `hookMethods` の要素の型が違う(破損)
 
 ## 7. コンポーネント初期化スケジューリング
 
@@ -959,7 +988,7 @@ scheduleAll():
      for c in this.components (FQCN昇順で格納済み):
         try:
             attr = c.attribute()
-        catch DiscoveryException e:        // キャッシュ陳腐化(属性クラス消滅等)
+        catch DiscoveryException e:        // 探索結果ファイルの陳腐化(属性クラス消滅等)
             debug ? throw e : (Log::error; continue)
         key = attr->hookName(config.context) . "\n" . attr->hookPriority()
         groups[key][] = [c, attr]
@@ -1177,7 +1206,7 @@ class KernelException extends \RuntimeException
 {
 }
 
-/** app/走査・キャッシュ復元の失敗を表す */
+/** app/走査・探索結果ファイルの読み書きの失敗を表す */
 class DiscoveryException extends KernelException
 {
 }
@@ -1386,15 +1415,15 @@ final class ContainerTest extends TestCase
 
 | 旧Loader/AbstractSingletonの問題(実コードで確認) | 本設計での逆転 |
 |---|---|
-| 毎リクエスト、対象ディレクトリ全 .php を `new ReflectionClass` で実ロード(キャッシュなし) | Attributeメタデータを ComponentCache へ永続化。ウォームパスはinclude 1回・Reflectionゼロ・appクラスロードゼロ(§4・§6) |
+| 毎リクエスト、対象ディレクトリ全 .php を `new ReflectionClass` で実ロード(キャッシュなし) | Attributeメタデータを探索コマンドが探索結果ファイルに生成してコミットする。本番の boot はinclude 1回・Reflectionゼロ・appクラスロードゼロ(§4・§6) |
 | Loaderコンストラクタが `src/Iwf2b` を自己スキャンし、コア同梱具象(Post/PagePost/CategoryTax/PostTagTax、abstract漏れのAbstractUser)を無条件初期化 | 走査範囲を appDir に構成上限定+`TMSWP` 名前空間を予約として boot 時に拒否(§2・§4)。コアに自動初期化される具象を置かない |
 | ロード順が RecursiveDirectoryIterator の列挙順(OS・FS依存・非決定) | files/components を strcmp ソート。環境非依存の決定的順序を受け入れ基準で保証(§4) |
 | `get_dependencies()` の間接循環(A→B→A)が無限再帰でクラッシュ。直接自己依存しか検出しない | 静的依存宣言そのものを廃止(初期化順はタイミング表で固定)。インスタンス依存はコンテナの解決スタックで間接循環まで検出し、チェーン付き `CircularDependencyException`(§7・§8) |
-| 依存先が auto_init=false / 走査対象外だと初期化を黙ってスキップ。`ReflectionException` も `continue` で黙殺 | 探索失敗・初期化失敗は debug=例外 / 本番=`Log::error`+縮退で必ず可視化。黙殺経路ゼロ(§4・§7) |
+| 依存先が auto_init=false / 走査対象外だと初期化を黙ってスキップ。`ReflectionException` も `continue` で黙殺 | 探索失敗は常に例外、初期化失敗は debug=例外 / 本番=`Log::error`+縮退で必ず可視化。黙殺経路ゼロ(§4・§7) |
 | `bootstrap()` 呼出位置で `initialize()` が即時同期実行され、フック登録が早すぎ/遅すぎる事故 | boot は add_action のみ。全初期化をWPフックに整合させ、正準タイミング表で固定。遅延bootは検出して例外/ログ+キャッチアップ(§3.3・§7) |
 | `AbstractSingleton` の `final private __construct` + `static::$instances` でDI・モック・テスト不能。`func_get_args` 転送はデッドコード | PSR-11コンテナ+コンストラクタ注入。ファサードは無状態の薄い皮で、`Kernel::reset()` によりテスト隔離可能(§8) |
 | 起動規約が未文書化(リポジトリ内に bootstrap 呼び出し例ゼロ)で、利用側は暗黙知のコピペ | `Kernel::boot()` + `KernelConfig` ファクトリを正準ブートAPIとして文書化し、スターターに同梱(DR-13) |
-| Loaderコンストラクタが `load_textdomain` / `untrailingslashit` 等のWP関数へ密結合し単体テスト不能 | Kernel/Discovery/Container はWP関数依存を `add_action` / `did_action` / 定数参照の最小限に限定。KernelConfig/Container/ComponentCache はWP関数ゼロでユニットテスト可能(§2・§6・§8) |
+| Loaderコンストラクタが `load_textdomain` / `untrailingslashit` 等のWP関数へ密結合し単体テスト不能 | Kernel/Discovery/Container はWP関数依存を `add_action` / `did_action` / 定数参照の最小限に限定。KernelConfig/Container/DiscoveryFile はWP関数ゼロでユニットテスト可能(§2・§6・§8) |
 
 ---
 
@@ -1406,41 +1435,46 @@ final class ContainerTest extends TestCase
 
 - [ ] `KernelConfig::theme()/plugin()` が不正入力(不在ディレクトリ・不正名前空間・`TMSWP` 予約・プラグインファイル不在)で `KernelException` を投げ、メッセージに対象パス/名前空間を含む
 - [ ] 同一 appNamespace への2回目の `Kernel::boot()` が `KernelException` になる(多重boot禁止)
-- [ ] 入れ子の appNamespace(`App` と `App\Sub`)・入れ子/同一の appDir の boot が `KernelException` になる
+- [ ] 入れ子の appNamespace(`App` と `App\Sub`)・入れ子/同一の appDir・探索結果ファイルが同じになる兄弟の appDir の boot が `KernelException` になり、先に boot した Kernel の探索結果ファイルは上書きされない
 - [ ] `Kernel::forClass()` が最長一致でKernelを返し、未該当FQCNで `KernelException` を投げる(null返しのサイレント失敗がない)
 - [ ] Container: `set`(Closure/object/string束縛)・単段 `alias`・autowire が共有(シングルトン)スコープで動作し、公開APIが `set` / `alias` / `get` / `has` のみである(`factory()` / `make()` / 多段aliasが存在しない)
 - [ ] Container: 間接循環依存(A→B→A、3クラス以上の循環含む)が**無限再帰せず** `CircularDependencyException` となり、メッセージに解決チェーン全体(`A -> B -> A`)を含む
 - [ ] Container: 未解決idの `get()` が `NotFoundException`、解決不能なコンストラクタ引数が `ContainerException`、解決済みidへの再登録・自己参照alias・alias済みidを指す `alias()`(連鎖の試み)が `ContainerException` になる
-- [ ] Discovery: 同一のapp/ファイル群に対し、ファイル作成順・列挙順を入れ替えても(テストでイテレータ順をシャッフルしても)`DiscoveryResult` が完全一致する(決定的ロード順=components のFQCNソート+hookMethods の (class, method, hook, priority) ソート)
-- [ ] Discovery: クラス名とファイル名/名前空間の不一致が debug時 `DiscoveryException`(ファイルパス・期待FQCN入り)、非debug時 `Log::error` + スキップになる。黙殺される分岐が存在しない
+- [ ] Discovery: 同一のapp/ファイル群に対し、ファイル作成順・列挙順を入れ替えても(テストでイテレータ順をシャッフルしても)`DiscoveryResult` が完全一致する(決定的ロード順=components の (class, attributeClass) の strcmp ソート+hookMethods の (class, method, hook, priority) ソート。数字だけのフック名も strcmp の順になる)
+- [ ] Discovery: クラス名とファイル名/名前空間の不一致が debug に関係なく `DiscoveryException`(ファイルパス・期待FQCN入り)になる。黙殺・スキップされる分岐が存在しない
+- [ ] Discovery: 走査中のオートロードで起きた Error(ParseError・未定義の親クラスを含む)と、属性の読み取りで起きた Error(属性クラスの ParseError・属性引数の未定義のクラス定数)が、元の例外を previous に持ち、クラス名とファイルを含む `DiscoveryException` になる
+- [ ] Discovery: 属性引数(配列のキーと値。入れ子を含む)とフック名に、Kernel のルート・ABSPATH・WP_CONTENT_DIR が区切り文字の境界で現れると探索失敗になる(ルート /srv/a に対し /srv/a・/srv/a/x.php・file:///srv/a/x は失敗、/srv/abc・/srv/a-b は通る)。ABSPATH・WP_CONTENT_DIR は設定された値の表記と実パスのどちらで現れても失敗になり(symlink のときは両方、末尾に区切り文字を付けた定義も同じ)、ディレクトリが存在しないときは環境パスを含まない app の探索が成功する。同じソースを絶対パスの違う2つのルートに置いて生成した探索結果ファイルが、バイト単位で一致する
+- [ ] Discovery: Hook 基底を継承しない `#[AsHook]` クラス(`register()` という名前のメソッドを持つ場合を含む)が探索失敗になる
+- [ ] Discovery: 探索失敗のときに途中まで収集した登録が残らない(boot が例外になり、先に走査したクラスのフックも Kernel のレジストリも登録されない)
 - [ ] Discovery: 属性なしクラス・interface・trait・小文字始まりファイル(`helpers.php`)はエラーなくスキップされ、abstractクラスへのコンポーネント属性付与は探索失敗として扱われ、backed enum への付与(`#[AsOptionGroup]`)は正常に収集される
 - [ ] Discovery: `#[AsHook]` クラスの `#[Action]`/`#[Filter]` メソッドが (class, method, hook, priority, acceptedArgs=宣言引数数) の `DiscoveredHookMethod` として収集され、`register()` をオーバーライドしない `#[AsHook]` クラスは components に現れない
 - [ ] Discovery: `#[Action]`/`#[Filter]` の誤用(`#[AsHook]` なしクラスへの付与・static/非public/可変長引数メソッドへの付与・フックを1つも宣言しない `#[AsHook]` クラス)が探索失敗として扱われる
-- [ ] Discovery: 属性引数にオブジェクト(new式)を渡した場合に探索失敗となる(キャッシュ安全性)
-- [ ] ComponentCache: store→load の往復で `DiscoveryResult` が完全復元される(enum引数・hookMethods 含む)。schema不一致・appDir不一致・破損ファイルで `null` を返す
-- [ ] ComponentCache: `validateMtimes=true` で「ファイル編集」「ファイル追加」「ファイル削除」「属性なしファイルへの属性追記」のすべてが無効化を引き起こす。`validateMtimes=false` ではmtime変更後もキャッシュが使われる
+- [ ] Discovery: 属性引数にオブジェクト(new式)を渡した場合に探索失敗となる(探索結果ファイルに書き出せる値に限る)
+- [ ] DiscoveryFile: write→load の往復で `DiscoveryResult` が完全復元される(enum引数・hookMethods 含む)。ファイルが無い・`include` が throw する/配列以外を返す・schema不一致・appNamespace不一致・appDir不一致・破損エントリで、ファイルパスと `wp tmswp discover` の案内を含む `DiscoveryException` を投げる
+- [ ] DiscoveryFile: 同じ探索結果からは、絶対パスの違う場所でもバイト単位で同一の内容を生成し、内容に絶対パス・mtime・生成時刻を含まない。書き込みの失敗は `DiscoveryException` になる
+- [ ] Kernel: debug=false の boot が探索結果ファイルだけを読み、app/ を走査しない。ファイルが無ければ boot が `DiscoveryException`(ファイルパス入り)になる。debug=true の boot は毎回走査し、探索結果ファイルを読まない
+- [ ] `wp tmswp discover` が全 Kernel の探索結果ファイルを書き、走査の失敗ではどのファイルも書かずに非0で終わる。`--check` はファイルが無い・内容が違う Kernel を appNamespace とファイルパスで列挙して非0で終わり、すべて最新なら成功する。起動中の Kernel が無い場合は非0で終わる
 - [ ] `Kernel::reset()` 後に同一名前空間で再bootできる(テスト隔離)
 
 ## 統合(wp-env + WordPress のテストライブラリ(WP_TESTS_DIR)で検証)
 
-- [ ] ウォームキャッシュ時のリクエストで、Discovery起因の `ReflectionClass` 生成とapp/クラスのロードが発生しない(`get_declared_classes()` の差分、またはDiscoveryへのスパイで検証)
+- [ ] 本番相当(debug=false)で、探索結果ファイルが無いと boot が例外になる。ファイルがあれば走査せずに起動する(app/ を走査すれば見つかるクラスのフックが登録されず、そのクラスもロードされず、ファイルにだけ書いたフックが登録される)
 - [ ] `boot()` 直後(フック発火前)の時点で `register_post_type` / `register_taxonomy` / `add_role` / DB書込が一切発生していない(即時同期初期化の禁止)
 - [ ] init 完走後、`#[AsTaxonomy]`(init 9)→`#[AsPostType]`(init 10)の順で登録され、`PostTypeDefinition` の taxonomies 連携が機能する
 - [ ] `#[Action]`/`#[Filter]` メソッドが宣言どおりの(フック, priority, acceptedArgs=宣言引数数)で `add_filter` 登録され、フック発火時に Container 経由で1回だけインスタンス化されて呼ばれる。属性宣言のみ(`register()` 非オーバーライド)の `#[AsHook]` クラスは宣言フックの発火までロードされない(`get_declared_classes()` の差分で検証)
 - [ ] Kernel が各コンポーネントの Initializer(エンティティ基底の `register()` を含む)を1リクエスト内で正確に1回だけ呼ぶ(Initializerへのスパイで検証。register() 側に再入ガードは存在しない)
-- [ ] テーマ(`App`)+プラグイン(`MyShopPlugin`)の2 Kernel併用で、Container・キャッシュファイル・components が相互に独立し、`Kernel::all()` が2件を返す
-- [ ] プラグイン有効化で キャッシュclear + 次リクエスト init 99 での `flush_rewrite_rules()` が1回だけ実行され、フラグが消える。テーマ切替(`after_switch_theme`)でも同様
+- [ ] テーマ(`App`)+プラグイン(`MyShopPlugin`)の2 Kernel併用で、Container・探索結果ファイル・components が相互に独立し、`Kernel::all()` が2件を返す
+- [ ] プラグイン有効化で 次リクエスト init 99 での `flush_rewrite_rules()` が1回だけ実行され、フラグが消える。テーマ切替(`after_switch_theme`)でも同様
 - [ ] `did_action` 済みフックに対する遅延bootが、WP_DEBUG時に `KernelException`、本番相当でログ+キャッチアップ実行になる
 - [ ] テーマ形態の boot で `template_include`(priority 100)へ `ActionRouter::dispatch` が1本登録される。`KernelConfig::theme(actions: false)` では登録されない。プラグイン形態(`KernelConfig::plugin()`)では `actions` が false に正規化され ActionRouter は生成されない
-- [ ] `wp tmswp cache clear` が全Kernelのキャッシュを削除し、次リクエストで再構築される
-- [ ] キャッシュディレクトリが書込不可の場合、`Log::warning` が記録された上でサイトが正常動作する(毎リクエスト走査の縮退)
+- [ ] コミット済みの fixture のテーマ・プラグインの探索結果ファイルが、走査結果と一致する(統合テストと `composer discover:check`。10-quality §5)
 
 ## 品質
 
 - [ ] `composer analyse`: PHPStan level max・baselineなしで通過(szepeviktor/phpstan-wordpress)
 - [ ] `composer lint`: PSR-12 + `declare(strict_types=1)` 全ファイル適用
-- [ ] Kernel/Discovery/Container/ComponentCache/KernelConfig に `__callStatic` / `extract()` / グローバル可変状態(`Kernel::$kernels` と `$cliRegistered` を除く)が存在しない
-- [ ] KernelConfig・Container・ComponentCache・DiscoveryResult・DiscoveredComponent のユニットテストがWP関数のスタブなし(または Brain Monkey の最小スタブのみ)で動作する
+- [ ] Kernel/Discovery/Container/DiscoveryFile/KernelConfig に `__callStatic` / `extract()` / グローバル可変状態(`Kernel::$kernels` と `$cliRegistered` を除く)が存在しない
+- [ ] KernelConfig・Container・DiscoveryFile・DiscoveryResult・DiscoveredComponent のユニットテストがWP関数のスタブなし(または Brain Monkey の最小スタブのみ)で動作する
 
 ## 検証コマンド
 
@@ -1451,4 +1485,5 @@ composer test     # PHPUnit 11 ユニット層(Brain Monkey)
 composer qa       # 上記一括
 # 統合層
 composer wp:start && composer test:integration   # 正式コマンド名はQA文書に従う
+composer discover:check                            # fixture の探索結果ファイルの照合(wp-env)
 ```

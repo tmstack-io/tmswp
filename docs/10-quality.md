@@ -70,8 +70,10 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 | `composer test:coverage:check` | 2 つの clover を行単位で合算し、閾値を判定(`bin/coverage-check.php`。4.8) | 不要 |
 | `composer test:integration` | 統合テスト(wp-env の `cli` コンテナ内で PHPUnit 9.6 実行) | **必要** |
 | `composer test` | `test:unit` → `test:integration` | 必要 |
+| `composer discover:build` | fixture のテーマ・プラグインの探索結果ファイルを `wp tmswp discover` で生成する(wp-env の `cli` コンテナ内。4.6) | **必要** |
+| `composer discover:check` | fixture の探索結果ファイルが最新かを `wp tmswp discover --check` で照合する(古ければ非 0) | **必要** |
 | `composer qa:fast` | `lint` → `analyse` → `test:unit`(Docker 不要の全 QA) | 不要 |
-| `composer qa` | `lint` → `analyse` → `test`(全 QA) | 必要 |
+| `composer qa` | `lint` → `analyse` → `discover:check` → `test`(全 QA) | 必要 |
 | `composer monorepo:validate` | パッケージ間バージョン整合検査 | 不要 |
 | `composer wp:start` / `wp:stop` | wp-env の起動 / 停止(`npm ci` で入れたローカルの @wordpress/env を使う。1.1 補足) | 必要 |
 | `composer wp:start:coverage` | Xdebug をカバレッジのモードで有効にして wp-env を起動(`--xdebug=coverage`。4.8) | 必要 |
@@ -153,6 +155,8 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
             "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/ja-toolkit/languages",
             "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/ja-toolkit/languages"
         ],
+        "discover:build": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover",
+        "discover:check": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --check",
         "test:unit": "phpunit -c phpunit.unit.xml.dist",
         "test:coverage": [
             "@test:coverage:unit",
@@ -168,7 +172,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
         "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
         "test": ["@test:unit", "@test:integration"],
         "qa:fast": ["@lint", "@analyse", "@test:unit"],
-        "qa": ["@lint", "@analyse", "@test"],
+        "qa": ["@lint", "@analyse", "@discover:check", "@test"],
         "monorepo:validate": "monorepo-builder validate",
         "monorepo:merge": "monorepo-builder merge",
         "wp:start": "node node_modules/@wordpress/env/bin/wp-env start",
@@ -585,14 +589,18 @@ tests/
 ├── wp-tests-config.php
 ├── Unit/                                  # bin/・tools/ のユニットテスト(testsuite tools。名前空間 TMSWP\Tests\Unit\)
 └── fixtures/
-    ├── _boot.php                          # fixture と無料版 ACF を有効化する
+    ├── _activate.php                      # fixture と無料版 ACF を有効にするフィルタ(_boot.php と _wp-cli.php が共有)
+    ├── _boot.php                          # 統合テストで fixture と無料版 ACF を有効化する
+    ├── _wp-cli.php                        # wp tmswp discover で fixture を有効化する(WP-CLI の --require)
     ├── themes/tmswp-fixture-theme/        # Kernel 名前空間 TmswpFixtureTheme
     │   ├── style.css / functions.php      # functions.php の直下で Kernel::boot()
+    │   ├── tmswp-discovery.php            # 探索結果ファイル(composer discover:build で生成してコミット)
     │   ├── index.php / contact.php        # template_include の確認用テンプレート
     │   ├── actions/ / parts/              # ActionRouter・Template の確認用
     │   └── app/                           # Hook・Post・Tax・User・Option・Model・Acf 等
     └── plugins/tmswp-fixture-plugin/      # Kernel 名前空間 TmswpFixturePlugin
         ├── tmswp-fixture-plugin.php       # 本体ファイルの直下で Kernel::boot()
+        ├── tmswp-discovery.php            # 探索結果ファイル(composer discover:build で生成してコミット)
         ├── app/                           # Hook
         └── templates/                     # プラグインのテンプレートのフォールバック確認用
 ```
@@ -731,7 +739,7 @@ abstract class UnitTestCase extends TestCase
 
 - 全パッケージのユニットテストはこれを継承する(`abstract` のため final_class ルールと両立)。
 - WP 関数のモックは Brain Monkey の `Functions\when()` / `Functions\expect()` を使用する。`Filters\expectAdded()` / `Actions\expectAdded()` でフック登録を検証する。
-- ファイル I/O を伴うテスト(SimpleLogger / TempFileStore / ComponentCache)は vfsStream を使用する(旧 iwf2b の作法を踏襲)。
+- ファイル I/O を伴うテスト(SimpleLogger / TempFileStore)は vfsStream を使用する(旧 iwf2b の作法を踏襲)。探索結果ファイル(DiscoveryFile)は `include` で読み込み、`rename` で置き換えるため、一時ディレクトリの実ファイルで確かめる。
 
 ### 4.5 phpunit.integration.xml.dist(PHPUnit 9.6 スキーマ、完全版)
 
@@ -846,17 +854,25 @@ restore_error_handler();
 
 `tests/fixtures/_boot.php` は、WordPress の読み込み前に次を登録するだけで、`Kernel::boot()` を自分では呼ばない。
 
-1. `pre_option_active_plugins` で、無料版 ACF(`advanced-custom-fields/acf.php`)と fixture のプラグインを有効なプラグインにする。
-2. `muplugins_loaded` で `tests/fixtures/themes` をテーマの置き場に登録し、`pre_option_template` / `pre_option_stylesheet` で fixture のテーマを有効なテーマにする。
-3. fixture の Kernel の探索キャッシュの置き場(定数 `TMSWP_TESTS_CACHE_DIR`、一時ディレクトリ配下)を実行ごとに空にする。boot は毎回 app/ を走査した結果でキャッシュを書く。
-4. `init`(priority 0)で 2 つの Kernel が boot 済みかを確かめ、欠けていれば例外にする。
-5. `wp_loaded` で登録済みメタキーを控える(下記の IntegrationTestCase が使う)。
+1. `tests/fixtures/_activate.php` のフィルタを `tests_add_filter()` で登録する。`pre_option_active_plugins` で、無料版 ACF(`advanced-custom-fields/acf.php`)と fixture のプラグインを有効なプラグインにし、`muplugins_loaded` で `tests/fixtures/themes` をテーマの置き場に登録し、`pre_option_template` / `pre_option_stylesheet` で fixture のテーマを有効なテーマにする。
+2. `init`(priority 0)で 2 つの Kernel が boot 済みかを確かめ、欠けていれば例外にする。
+3. `wp_loaded` で登録済みメタキーを控える(下記の IntegrationTestCase が使う)。
 
-boot は WordPress 自身が行う。fixture のプラグイン本体ファイルはプラグインの読み込み時(`plugins_loaded` の前)に、fixture のテーマの `functions.php` は `after_setup_theme` の前に、それぞれ直下で `Kernel::boot()` を呼ぶ。どちらも `init` より前であり、実際のテーマ・プラグインと同じ経路である。fixture の Kernel は debug の既定値(`WP_DEBUG` = true)で boot する。debug 時は遅延 boot が例外になる(02 文書 §3.3)ため、`init` 発火後に boot する経路は統合テストの起動では通らない。fixture の app/ は、各本体ファイルが Composer の `ClassLoader` で PSR-4 登録する。
+boot は WordPress 自身が行う。fixture のプラグイン本体ファイルはプラグインの読み込み時(`plugins_loaded` の前)に、fixture のテーマの `functions.php` は `after_setup_theme` の前に、それぞれ直下で `Kernel::boot()` を呼ぶ。どちらも `init` より前であり、実際のテーマ・プラグインと同じ経路である。fixture の Kernel は debug の既定値(`WP_DEBUG` = true)で boot する。debug 時は遅延 boot が例外になる(02 文書 §3.3)ため、`init` 発火後に boot する経路は統合テストの起動では通らない。fixture の app/ は、各本体ファイルが Composer の `ClassLoader` で PSR-4 登録する。debug 時の boot は毎回 app/ を走査し、探索結果ファイルを読まない(02 文書 §4)。
+
+#### fixture の探索結果ファイル
+
+fixture のテーマとプラグインの探索結果ファイル(`tmswp-discovery.php`。02 文書 §6)は、利用者と同じ `wp tmswp discover` で生成してコミットする。
+
+- `composer discover:build` / `discover:check` は、wp-env の `cli` コンテナで `wp --require=tests/fixtures/_wp-cli.php tmswp discover`(照合は `--check` 付き)を実行する。WP-CLI は wp-env の開発用サイト(接頭辞 `wp_`)を読み込み、統合テストのテーブル(`wptests_`)には触れない。
+- `_wp-cli.php` は `_activate.php` のフィルタを `WP_CLI::add_wp_hook()` で登録し、そのプロセスの中だけ fixture のテーマとプラグインを有効にする。有効化はオプションの読み出しの上書きで、これ自体は DB に書かない。boot は WordPress が fixture を読み込むときに fixture 自身が行い、コマンドは利用者と同じ `Kernel::all()` の Kernel を走査する。
+- fixture は利用者と同じ経路で起動するため、fixture のコンポーネントの実行時の登録(`#[AsUserRole]` の `add_role` / `add_cap` 等)は開発用サイトの `wp_` のテーブルに反映されうる。開発用サイトはこのリポジトリの開発専用のため、これを許容し、隔離はしない。
+- ルートの Composer のオートローダは、実際のテーマ・プラグインと同じくプラグインの読み込み時(`muplugins_loaded`)に登録する。WP-CLI の phar は `--require` の後に自身の依存(古い psr/container を含む)のオートローダを先頭に登録するため、`--require` の時点で登録すると psr/container が phar 側から読まれ、`Container` の宣言と合わずに止まる。
+- fixture の app/ を変えるタスクは `composer discover:build` で探索結果ファイルを作り直してコミットする。`composer qa` と CI の `coverage` ジョブは `discover:check` で照合し、古ければ失敗する(§5)。統合テスト(`KernelBootIntegrationTest`)も、コミット済みの探索結果ファイルが走査結果と一致することを確かめる。
 
 #### IntegrationTestCase
 
-全パッケージの統合テストは `TMSWP\Core\Tests\Support\IntegrationTestCase`(`WP_UnitTestCase` を継承する抽象クラス)を継承し、テストの中で `Kernel::boot()` を呼ばない。
+全パッケージの統合テストは `TMSWP\Core\Tests\Support\IntegrationTestCase`(`WP_UnitTestCase` を継承する抽象クラス)を継承し、テストの中で `Kernel::boot()` を呼ばない。例外は `KernelBootIntegrationTest` の本番相当(debug=false)の起動の確認だけで、一時ディレクトリに作ったプラグイン形態の Kernel を、fixture と重ならない名前空間で boot する(テーマ形態にしないのは、他のテストが発火させるテーマ切替のフックにその Kernel を登録しないため)。`init` の後の boot になるため、遅延 boot のログは Log の出力先を一時的に差し替えて捕まえる。
 
 - `themeKernel()` / `pluginKernel()` で fixture の Kernel を得る。
 - fixture のクラスは PHPStan の解析対象外のため、テストからは FQCN の文字列で参照し、`fixtureClass($fqcn, $parent)` で親クラスを確かめた class-string として使う。
@@ -1161,6 +1177,9 @@ jobs:
             echo "::error::untracked translation files: ${untracked}"
             exit 1
           fi
+      # コミット済みの探索結果ファイル(fixture のテーマ・プラグイン)が、wp tmswp discover で走査した結果と一致するかを確かめる
+      - name: Check discovery files are up to date
+        run: composer discover:check
       - name: Run unit tests with coverage
         run: composer test:coverage:unit
       - name: Run integration tests with coverage
@@ -1190,6 +1209,7 @@ jobs:
 - `lint` ジョブが baseline ファイルの不存在を機械的に強制する。
 - 合算カバレッジの判定は `coverage` ジョブ(PHP 8.3 / WordPress 最新版の 1 セル)だけで行う(4.8)。このジョブは pcov で unit を、`wp:start:coverage` で起動した wp-env の Xdebug で integration を計測し、2 つの clover を artifact `coverage-clover` に保存してから `test:coverage:check` で判定する。clover はジョブ内で生成して使うため、ジョブ間の受け渡しは無い。`unit` と `integration` の各セルはカバレッジを計測しない。
 - `coverage` ジョブは wp-env の起動後に `composer i18n:build` を実行し、`packages/*/languages` に差分や未追跡のファイルが出ないことを確かめる(コミット済みの翻訳ファイルが、ソースと .po から作り直したものと一致すること。01 文書 §7.2)。WP-CLI は wp-env の cli コンテナのものを使うため、このジョブで行う。
+- 同じく `coverage` ジョブは `composer discover:check` で、コミット済みの fixture の探索結果ファイルが `wp tmswp discover` で走査した結果とバイト単位で一致するかを照合する(02 文書 §3.6・§6)。ファイルが無い、または古い Kernel があれば、その名前空間とファイルパスを出して失敗する。探索結果ファイルは絶対パスを含まないため、手元(ホスト)と CI のどちらで生成しても内容は同じになる。
 - `integration` と `coverage` は `unit` 成功後に起動し、Docker 起動コストを失敗時に節約する。
 - 外部アクションはコミットの SHA で固定する(5.3)。
 
@@ -1409,7 +1429,7 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 | `Form`(ライフサイクル) | Unit | バインド → 検証 → `FormStep` 遷移、CSRF 自動検証(Brain Monkey で wp_nonce モック) |
 | `ConfirmToken` | Unit | HMAC 署名生成 / 検証、改ざん検知、期限切れ |
 | `UploadedFile` / `TempFileStore` | Unit | トークン発行 / 取出し、**ユーザー入力からのパス再構築が不可能であること**(パストラバーサル試行の拒否) |
-| `Kernel` / `Discovery` / `ComponentCache` | Unit + Integration | Attribute 走査、決定的ロード順、循環依存検出エラー、キャッシュ無効化(vfsStream) |
+| `Kernel` / `Discovery` / `DiscoveryFile` | Unit + Integration | Attribute 走査、決定的ロード順、循環依存検出エラー、探索結果ファイルの読み込みの検証と照合(`wp tmswp discover --check`) |
 | `Container` | Unit | PSR-11 準拠(has/get、未登録時 `NotFoundExceptionInterface`) |
 | `MetaBag` / `MetaSchemaRegistry` / `WpMetaStorage` | Unit + Integration | 型付きアクセサの変換規則、`has()`/`get()` 分離(DR-18)、`register_*_meta` 自動登録 |
 | `View\Template` | Unit + Integration | パス解決(テーマ → プラグイン fallback)、`extract()` 不使用の変数受け渡し |
@@ -1530,7 +1550,8 @@ final class EmailRuleTest extends UnitTestCase
 ### チェックリスト
 
 - [ ] `composer install` 一発で `vendor/` と `vendor-bin/wp-tests/vendor/` の両方が揃う
-- [ ] `composer lint` / `fix` / `analyse` / `test:unit` / `test:integration` / `test` / `test:coverage`(`:unit` / `:integration` / `:check`)/ `qa:fast` / `qa` / `monorepo:validate` / `wp:start:coverage` が本書 1 章の表どおりに動作する
+- [ ] `composer lint` / `fix` / `analyse` / `test:unit` / `test:integration` / `test` / `test:coverage`(`:unit` / `:integration` / `:check`)/ `discover:build` / `discover:check` / `qa:fast` / `qa` / `monorepo:validate` / `wp:start:coverage` が本書 1 章の表どおりに動作する
+- [ ] fixture のテーマ・プラグインの探索結果ファイルがコミットされ、探索対象(fixture の app/)だけを変えて探索結果ファイルを更新しない場合に `composer discover:check`・`composer qa`・CI の `coverage` ジョブが失敗する
 - [ ] `phpstan.neon.dist` が level max で、`packages/core/phpstan/extension.neon`(04 文書の FW 拡張)と szepeviktor/phpstan-wordpress を include している
 - [ ] リポジトリに `phpstan-baseline*` が存在せず、qa.yml がその存在を fail にする
 - [ ] `parameters.ignoreErrors` が空で、`reportUnmatchedIgnoredErrors: true`
@@ -1559,6 +1580,7 @@ npm ci && npm ls @wordpress/env                 # package.json で固定した�
 composer qa:fast                                # lint + analyse + unit(Docker 不要)
 ls phpstan-baseline* 2>/dev/null && echo NG || echo OK   # baseline 不在
 composer wp:start && composer test:integration  # 統合
+composer discover:check                         # fixture の探索結果ファイルの照合
 composer wp:start:coverage && composer test:coverage   # 合算カバレッジゲート(>= その版の閾値)
 grep -nE "uses:" .github/workflows/*.yml | grep -vE "uses: [^@]+@[0-9a-f]{40} # "   # 0 件(SHA 固定)
 composer monorepo:validate                      # パッケージ整合

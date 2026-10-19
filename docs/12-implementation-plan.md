@@ -175,10 +175,10 @@ TMSWP の主な利用形態は、1 サイト用のテーマ(必要に応じて�
 - debug の判定は `KernelConfig::$debug` に一本化する(既定値は `WP_DEBUG` の真偽)。拡張は、自分を登録した Kernel の debug に従う。`WP_DEBUG` を直接参照して分岐する箇所は残さない。
 - 反映先: `02-kernel.md` §2、`08-extensions.md`、`09-acf-bridge.md`。担当: v0.2.0-T5・T6、v0.6.0-T1、v0.7.0-T1〜T3。
 
-## 1.8 ログのチャネルと psr/log の非互換
+## 1.8 ログのチャネルと psr/log・psr/container の非互換
 
 - ログのチャネルを Kernel ごとに分け、呼び出し元の Kernel で出力先を決める(`Log::set` の後勝ちを無くす)。
-- 他のプラグインが先に読み込んだ psr/log が非互換な場合は、起動時に検出して明確なエラーにし、利用条件を packages/core/README.md と `01-architecture.md` に記す。
+- 他のプラグイン(または WP-CLI の phar)が先に読み込んだ psr/log・psr/container が非互換な場合は、起動時に検出して明確なエラーにし、利用条件を packages/core/README.md と `01-architecture.md` に記す。WP-CLI の phar は psr/container 1.0 を含み、これが先に読み込まれると `Container` の宣言と合わずに致命的エラーになる(wp-cli.yml の require で autoload を早く登録した場合や、phar 側の interface を読み込む先行プラグインがある場合)。
 - 反映先: `01-architecture.md`、`02-kernel.md`、`07-support.md` §5、packages/core/README.md。担当: v0.2.0-T6。
 
 ## 1.9 メタ・設定の使い分け
@@ -376,13 +376,13 @@ v0.1.0
 
 #### v0.2.0-T1: 探索コマンドと探索結果ファイル
 
-- 対象ファイル領域: packages/core/src/Kernel/{Discovery,DiscoveryResult,DiscoveredComponent,DiscoveredHookMethod,ComponentCache}.php、探索コマンド(新設ファイル)、packages/core/tests/Unit/{DiscoveryTest,ComponentCacheTest}.php、tests/fixtures/(fixture のテーマ・プラグインの探索結果ファイル)、composer.json(ルートの qa スクリプト)、.github/workflows/qa.yml、docs/02 §4・§6、docs/10 §5(CI の照合)
+- 対象ファイル領域: packages/core/src/Kernel/{Discovery,DiscoveryResult,DiscoveredComponent,DiscoveredHookMethod}.php、packages/core/src/Kernel/DiscoveryFile.php(ComponentCache.php を置き換え)、packages/core/src/Kernel/DiscoverCommand.php(新設)、packages/core/src/Kernel/{Kernel,KernelConfig}.php(探索とキャッシュに関わる部分)、packages/core/src/Meta/{MetaSchemaDefinition,MetaSchemaRegistry}.php・packages/core/src/Option/OptionSchemaDefinition.php(使われていない復元用メソッドの削除)、packages/core/tests/Unit/{DiscoveryTest,DiscoveryFileTest,DiscoverCommandTest}.php、packages/core/tests/Unit/{KernelTest,KernelConfigTest}.php(該当部分)、packages/core/tests/Integration/KernelBootIntegrationTest.php、tests/fixtures/(fixture のテーマ・プラグインの探索結果ファイル、boot の引数、_boot.php・_activate.php・_wp-cli.php)、composer.json(ルートの scripts)、.github/workflows/qa.yml、docs/02 §1〜§7・受け入れ基準、docs/10 §1・§4・§5・§8・受け入れ基準、docs/00・docs/01・docs/04(§4.18 を除く)・docs/11・docs/README.md の探索キャッシュの記述、packages/core/rules/post-type.md、AGENTS.md(品質確認の行)、docs/12 §1.8・v0.2.0-T6(psr/container の非互換の検出を加える)
 - 完了条件:
   - 探索コマンドが探索結果をファイルに生成し、照合モードで「ファイルが最新でない」ことを検出して非 0 で終わる。
   - 走査時に autoload の Error と `#[AsHook]` の継承違反を明示エラーにし、途中まで追加した登録を残さない。
   - 探索結果ファイルの読み込みは `KernelConfig` の appDir と照合し、本番でファイルが無ければエラー、走査は debug 時のみ。
   - fixture のテーマ・プラグインの探索結果ファイルをコミットし、`composer qa` と CI の qa が照合モードを実行する。探索対象だけを変更して生成物を更新しない場合に qa(CI を含む)が失敗することを確認した。
-  - docs/02 §4・§6 と docs/10 §5 が §1.4 の方式に改訂されている。
+  - docs/02 §2〜§6 と docs/10 §4.6・§5 が §1.4 の方式に改訂され、docs/00〜11 と rules/ に探索キャッシュ(ComponentCache・`wp tmswp cache clear`・cacheDir)の記述が残っていない。
 - 検証コマンド: `composer test:unit`、`composer analyse`、探索コマンドの生成と照合モードの実行、探索対象だけを変えた状態での `composer qa`(失敗すること)
 
 #### v0.2.0-T2: Log・Support・ヘルパ
@@ -430,13 +430,13 @@ v0.1.0
   - `KernelConfig` で拡張を Kernel ごとに登録でき、拡張がこの入口だけで有効化される仕組みがある(各拡張の移行は v0.6.0・v0.7.0)。
   - `Kernel::VERSION` があり、起動時に installed.php と照合して食い違いを検出する(統合テスト)。
   - 拡張は自分を登録した Kernel の debug を受け取る(§1.7)。
-  - ログのチャネルが Kernel ごとに分かれ、呼び出し元の Kernel で出力先が決まる(`Log::set` の後勝ちが無い)。他のプラグインが先に読み込んだ psr/log の非互換を起動時に検出して明確なエラーにし、利用条件を packages/core/README.md と docs/01 に記している(§1.8)。
+  - ログのチャネルが Kernel ごとに分かれ、呼び出し元の Kernel で出力先が決まる(`Log::set` の後勝ちが無い)。他のプラグイン(または WP-CLI の phar)が先に読み込んだ psr/log・psr/container の非互換を起動時に検出して明確なエラーにし、利用条件を packages/core/README.md と docs/01 に記している(§1.8)。
   - ラベル言語の既定を `KernelConfig` で指定でき、例がそれに合っている(§1.13)。
 - 検証コマンド: `composer test:unit`、`composer test:integration`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`
 
 #### v0.2.0-T7: 受け入れテストの網羅
 
-- 対象ファイル領域: packages/core/tests/Unit/{KernelTest,ContainerTest,DiscoveryTest,ComponentCacheTest}.php、packages/core/tests/Integration/(Kernel 関連)
+- 対象ファイル領域: packages/core/tests/Unit/{KernelTest,ContainerTest,DiscoveryTest,DiscoveryFileTest,DiscoverCommandTest}.php、packages/core/tests/Integration/(Kernel 関連)
 - 完了条件: docs/02 の受け入れ基準の 1 項目ごとにテストがあり、全セルで通る。
 - 検証コマンド: `composer test:unit`、`composer test:integration`
 
@@ -448,8 +448,8 @@ v0.1.0
 
 ### 並列化
 
-- 順序: {T1 ∥ T2 ∥ T3} → T4 → T5 → T6 → T7 → T8
-- T1・T2・T3 はファイル領域が重ならない(Kernel/ の Discovery 系・qa.yml・ルートの composer.json・tests/fixtures・docs/02・docs/10 §5/Log・Support・docs/07/Label・phpstan・docs/03 §2.2・docs/04 §4.18)。T5 の phpstan/(`Kernel::reset()` のルール)は T3 の後なので重ならない。
+- 順序: {T1 ∥ T2} → T3 → T4 → T5 → T6 → T7 → T8
+- T1 と T2 はファイル領域が重ならない(Kernel/ の Discovery 系・qa.yml・ルートの composer.json・tests/fixtures・docs/00・01・02・04・10・11/Log・Support・docs/07)。T3 は docs/04 を T1 と共に触るため T1 の後に置く。T5 の phpstan/(`Kernel::reset()` のルール)は T3 の後なので重ならない。
 - T4 は src 全体の例外を触るため単独。T5・T6 は Kernel.php を共有するため逐次。
 
 ### 受け入れ条件
@@ -902,7 +902,7 @@ v0.2.0〜v0.7.0
 - 対象ファイル領域: starters/(.php-cs-fixer の設定を除く)、docs/11 §10
 - 完了条件:
   - setup.php がスラッグから名前空間を生成し、composer.json の psr-4・name(`local/<slug>`)、本体ファイル、app/、AGENTS.md を書き換え、post-create-project-cmd を除去して自己削除し、次の手順を案内する(docs/11 §10.2)。
-  - スターターのラベル言語の既定が日本語(§1.13)。テーマスターターに blocks/ と、npm のビルドと探索コマンドの連結がある(§1.11)。探索結果ファイルの生成がビルド手順にある(§1.4)。
+  - スターターのラベル言語の既定が日本語(§1.13)。テーマスターターに blocks/ と、npm のビルドと探索コマンドの連結がある(§1.11)。探索結果ファイルの生成がビルド手順にあり、各スターターの探索結果ファイル(`tmswp-discovery.php`)を生成してコミットしている。setup.php が名前空間を書き換えた後に探索結果ファイルを作り直す(または作り直す手順を案内する)(§1.4)。
   - スターター由来のプラグイン 2 本とテーマを同じサイトで起動できる(統合テストまたは wp-env 上の確認)。
   - スターターの `composer qa` が探索結果ファイルの照合(§1.4)を含む。CLAUDE.md を置いていない(§1.18)。
 - 検証コマンド: スターターから create-project 相当で 2 つ生成して `composer qa`、wp-env 上でフロントが 200 を返すことの確認

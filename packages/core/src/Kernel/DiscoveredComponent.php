@@ -18,8 +18,6 @@ final readonly class DiscoveredComponent
         public string $class,
         public string $attributeClass,
         public array $attributeArguments,
-        public string $file,
-        public int $fileMtime,
     ) {}
 
     public function attribute(): ComponentAttributeInterface

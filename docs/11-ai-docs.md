@@ -23,7 +23,7 @@ PHPクラスの新規定義は行わない。本文書が参照するFWのAPIは
 
 - 00-overview.md(設計原則・DR・用語)
 - 01-architecture.md(全体アーキテクチャ・monorepo構成)
-- 02-kernel.md(Kernel::boot / KernelConfig / Discovery / キャッシュ)
+- 02-kernel.md(Kernel::boot / KernelConfig / Discovery / 探索結果ファイル)
 - 03-entities.md(PostType / Taxonomy / UserRole 定義層)
 - 04-meta-options.md(MetaSchema / MetaBag / オプショングループ(backed enum + OptionAccess))
 - 05-form.md(Form / FormDefinition / Rule群)
@@ -119,7 +119,7 @@ WP-CLIコマンド名も各担当文書の正準名に固定する。本文書�
 
 | WP-CLIコマンド | 内容 | 正準定義 |
 |---|---|---|
-| `wp tmswp cache clear` | 探索キャッシュ(ComponentCache)の破棄・再生成 | 02-kernel |
+| `wp tmswp discover` | 探索結果ファイル(`tmswp-discovery.php`)の生成。`--check` はファイルが最新かの照合(古ければexit 1) | 02-kernel |
 | `wp tmswp migrate` | Model(独自テーブル)のマイグレーション実行 | 06-model |
 | `wp tmswp acf sync` | acf-jsonから型付きアクセサクラスを再生成 | 09-acf-bridge |
 | `wp tmswp acf check` | acf-jsonと生成クラスのドリフト検査(差分があればexit 1) | 09-acf-bridge |
@@ -140,7 +140,7 @@ WP-CLIコマンド名も各担当文書の正準名に固定する。本文書�
 ## アーキテクチャ要約
 
 - 対象: PHP 8.3〜8.5 / WordPress 7.0以上。コアのruntime依存は psr/log ^3 と psr/container ^2 のみ。
-- 思想: 「app/ にクラスを置くだけ」の規約ベース自動探索(PHP8 Attribute + クラスマップ + ファイルキャッシュ)。
+- 思想: 「app/ にクラスを置くだけ」の規約ベース自動探索(PHP8 Attribute + クラスマップ + ビルド時に生成する探索結果ファイル)。
   ビューはWordPress標準のテンプレート階層を一切壊さない(絶対原則)。
   外部プラグイン(ACF/CF7等)依存コードはコアに置かない(ACFは packages/acf-bridge のみ)。
 - 配布: monorepo開発 + Packagistへread-only split。SemVer。
@@ -303,9 +303,11 @@ composer fix                # コードスタイル自動修正
 1. `app/` 配下の該当ディレクトリに `final class` を1ファイル1クラスで作る(PSR-4: `App\Post\NewsPost` → `app/Post/NewsPost.php`)。
 2. クラスに対応するAttribute(`#[AsPostType]` 等)を付け、FWの基底クラスを継承する。
 3. **登録コードは書かない。** app/ に置くだけでKernelが探索・登録する(functions.phpへの追記は不要)。
-4. `composer qa` を実行して通す。
-5. 反映確認はWP上で行う(各レシピの「確認方法」参照)。クラスを追加してもWPに現れない場合は
-   `wp tmswp cache clear` で探索キャッシュを破棄して再確認する。
+4. `wp tmswp discover` で探索結果ファイル(テーマ/プラグインのルート直下の `tmswp-discovery.php`)を
+   作り直し、クラスと一緒にコミットする。開発環境(`WP_DEBUG` = true)は毎回 app/ を走査するため
+   作り直す前でも反映されるが、本番は探索結果ファイルだけを読む。
+5. `composer qa` を実行して通す。
+6. 反映確認はWP上で行う(各レシピの「確認方法」参照)。
 
 ## 必須コマンド
 
@@ -338,15 +340,15 @@ composer test      # ユニットテスト
 4. **登録系WP関数の直接呼び出し**。`register_post_type` / `register_taxonomy` / `register_post_meta` / `add_role` をapp/やfunctions.phpで直接呼ばない。必ずFWの定義クラスを使う(該当レシピ参照)。
 5. **$wpdb の直接利用**。独自テーブルはModel経由(rules/model.md)。WP標準テーブルへのクエリはWP_Query/get_posts等の標準APIを使う。
 6. **functions.php へのロジック追加**。functions.phpはFWブートのみ。フックは app/Hook/(rules/hooks.md)へ。
-7. **探索キャッシュファイルの手動編集・依存**。探索キャッシュ(ComponentCache)はプロジェクト外の
-   `wp-content/cache/tmswp/` に生成される。内容を手で編集・コミットせず、デプロイ時は
-   `wp tmswp cache clear` で破棄・再生成する。
+7. **探索結果ファイルの手動編集**。`tmswp-discovery.php` は `wp tmswp discover` の生成物である。
+   手で編集せず、app/ を変えたら作り直してコミットする。本番はこのファイルが無いと起動時に例外になり、
+   古いと追加・変更したクラスが反映されない。
 
 ## デバッグ
 
 - ログ: `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`(チャンネル分割は `Log::channel('mail')->error(...)`)。
   出力先・閾値はfunctions.phpのブート設定で構成済み。`var_dump`/`print_r` をコミットに残さない。
-- 探索まわりの不調(クラスを置いたのに有効化されない)は、まずクラス名とファイルパスのPSR-4整合、次にAttribute付け忘れ、最後に `wp tmswp cache clear` の順で確認する。
+- 探索まわりの不調(クラスを置いたのに有効化されない)は、まずクラス名とファイルパスのPSR-4整合、次にAttribute付け忘れ、最後に `wp tmswp discover --check` で探索結果ファイルが最新か(古ければ `wp tmswp discover` で作り直す)の順で確認する。
 ````
 
 ### 5.2 plugin版(starters/plugin/AGENTS.md)— theme版との差分
@@ -715,9 +717,8 @@ composer create-project tmswp/starter-theme my-theme
 .phpunit.result.cache
 ```
 
-- Kernelの探索キャッシュ(ComponentCache)の既定出力先はプロジェクト外の `wp-content/cache/tmswp/`
-  (02-kernel.mdの正準既定。WP外フォールバックは `sys_get_temp_dir() . '/tmswp-cache'`)のため、
-  .gitignoreでの除外は不要。デプロイ時は `wp tmswp cache clear` で破棄・再生成する。
+- 探索結果ファイル `tmswp-discovery.php`(テーマのルート直下。02-kernel.md §6)はコミットしてデプロイする
+  生成物のため、.gitignore で除外しない。
 
 ---
 

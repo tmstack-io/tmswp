@@ -70,6 +70,8 @@
       "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/ja-toolkit/languages",
       "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/ja-toolkit/languages"
     ],
+    "discover:build": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover",
+    "discover:check": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --check",
     "test:unit": "phpunit -c phpunit.unit.xml.dist",
     "test:coverage": [
       "@test:coverage:unit",
@@ -95,6 +97,7 @@
     "qa": [
       "@lint",
       "@analyse",
+      "@discover:check",
       "@test"
     ],
     "monorepo:validate": "monorepo-builder validate",

@@ -8,12 +8,13 @@ use TMSWP\Core\Exception\KernelException;
 
 final readonly class KernelConfig
 {
+    private const DISCOVERY_FILE_NAME = 'tmswp-discovery.php';
+
     private function __construct(
         public KernelContext $context,
         public string $appDir,
         public string $appNamespace,
         public ?string $pluginFile,
-        public string $cacheDir,
         public bool $debug,
         public bool $actions,
     ) {}
@@ -21,7 +22,6 @@ final readonly class KernelConfig
     public static function theme(
         string $appDir,
         string $appNamespace = 'App',
-        ?string $cacheDir = null,
         ?bool $debug = null,
         bool $actions = true,
     ): self {
@@ -30,7 +30,6 @@ final readonly class KernelConfig
             self::resolveAppDir($appDir),
             self::normalizeNamespace($appNamespace),
             null,
-            self::resolveCacheDir($cacheDir),
             self::resolveDebug($debug),
             $actions,
         );
@@ -40,7 +39,6 @@ final readonly class KernelConfig
         string $file,
         string $appDir,
         string $appNamespace = 'App',
-        ?string $cacheDir = null,
         ?bool $debug = null,
     ): self {
         $pluginFile = realpath($file);
@@ -54,10 +52,17 @@ final readonly class KernelConfig
             self::resolveAppDir($appDir),
             self::normalizeNamespace($appNamespace),
             $pluginFile,
-            self::resolveCacheDir($cacheDir),
             self::resolveDebug($debug),
             false,
         );
+    }
+
+    /**
+     * 探索結果ファイルの絶対パス。appDir の親ディレクトリ(テーマ・プラグインのルート)直下に固定する。
+     */
+    public function discoveryFile(): string
+    {
+        return \dirname($this->appDir) . '/' . self::DISCOVERY_FILE_NAME;
     }
 
     public function instanceId(): string
@@ -93,19 +98,6 @@ final readonly class KernelConfig
         }
 
         return rtrim($realPath, '/\\');
-    }
-
-    private static function resolveCacheDir(?string $cacheDir): string
-    {
-        if ($cacheDir !== null) {
-            return rtrim($cacheDir, '/\\');
-        }
-
-        if (\defined('WP_CONTENT_DIR')) {
-            return rtrim(WP_CONTENT_DIR, '/\\') . '/cache/tmswp';
-        }
-
-        return rtrim(sys_get_temp_dir(), '/\\') . '/tmswp-cache';
     }
 
     private static function resolveDebug(?bool $debug): bool

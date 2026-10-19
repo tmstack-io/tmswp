@@ -12,5 +12,5 @@ use TMSWP\Core\Kernel\KernelConfig;
     $loader->addPsr4('TmswpFixtureTheme\\', __DIR__ . '/app');
     $loader->register();
 
-    Kernel::boot(KernelConfig::theme(__DIR__ . '/app', 'TmswpFixtureTheme', TMSWP_TESTS_CACHE_DIR));
+    Kernel::boot(KernelConfig::theme(__DIR__ . '/app', 'TmswpFixtureTheme'));
 })();

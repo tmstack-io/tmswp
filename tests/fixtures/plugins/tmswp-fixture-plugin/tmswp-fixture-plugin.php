@@ -18,7 +18,7 @@ use TMSWP\JaToolkit\JaToolkit;
     $loader->addPsr4('TmswpFixturePlugin\\', __DIR__ . '/app');
     $loader->register();
 
-    Kernel::boot(KernelConfig::plugin(__FILE__, __DIR__ . '/app', 'TmswpFixturePlugin', TMSWP_TESTS_CACHE_DIR));
+    Kernel::boot(KernelConfig::plugin(__FILE__, __DIR__ . '/app', 'TmswpFixturePlugin'));
 
     // ja-toolkit の翻訳ローダー(init の priority 1)を、利用側と同じ enable() の経路で登録する。
     // 統合テストはモジュールの挙動を使わないため、モジュールは列挙しない

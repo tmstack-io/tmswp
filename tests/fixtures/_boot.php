@@ -13,34 +13,10 @@ declare(strict_types=1);
 
 use TMSWP\Core\Kernel\Kernel;
 
-const TMSWP_TESTS_FIXTURE_THEME = 'tmswp-fixture-theme';
-const TMSWP_TESTS_FIXTURE_PLUGIN_FILE = __DIR__ . '/plugins/tmswp-fixture-plugin/tmswp-fixture-plugin.php';
 const TMSWP_TESTS_FIXTURE_NAMESPACES = ['TmswpFixturePlugin', 'TmswpFixtureTheme'];
 
-/*
- * fixture の Kernel が使う探索キャッシュの置き場。実行ごとに空にして、boot が毎回 app/ を走査する
- * (前回の実行のキャッシュに依存しない)状態から始める。
- */
-define('TMSWP_TESTS_CACHE_DIR', sys_get_temp_dir() . '/tmswp-integration-cache');
-
-foreach (glob(TMSWP_TESTS_CACHE_DIR . '/*') ?: [] as $staleCacheFile) {
-    if (!unlink($staleCacheFile)) {
-        throw new RuntimeException("cannot remove stale discovery cache: {$staleCacheFile}");
-    }
-}
-
-// 無料版 ACF(.wp-env.json で導入)と fixture のプラグインを有効なプラグインとして WordPress に読み込ませる
-tests_add_filter('pre_option_active_plugins', static fn(): array => [
-    'advanced-custom-fields/acf.php',
-    plugin_basename(TMSWP_TESTS_FIXTURE_PLUGIN_FILE),
-]);
-
-// fixture のテーマを有効なテーマにする。テーマの置き場は muplugins_loaded(テーマの読み込みより前)で登録する
-tests_add_filter('muplugins_loaded', static function (): void {
-    register_theme_directory(__DIR__ . '/themes');
-});
-tests_add_filter('pre_option_template', static fn(): string => TMSWP_TESTS_FIXTURE_THEME);
-tests_add_filter('pre_option_stylesheet', static fn(): string => TMSWP_TESTS_FIXTURE_THEME);
+// 無料版 ACF と fixture のテーマ・プラグインを有効にする
+(require __DIR__ . '/_activate.php')(tests_add_filter(...));
 
 /*
  * テストのサイトには ja の言語パックが無く、switch_to_locale('ja') は利用可能な言語にない ja を拒否する。

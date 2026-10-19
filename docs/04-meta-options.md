@@ -24,7 +24,7 @@ WordPressのメタデータ(post/term/user meta)とオプション(wp_options)�
 
 ## 依存文書
 
-- Kernel/Discovery 設計書: `Kernel::boot()` のフェーズ、`Discovery` による属性付きクラスの収集、`ComponentCache` のフォーマット。本書の `MetaSchemaRegistry` はDiscoveryの収集結果を受け取る。
+- Kernel/Discovery 設計書: `Kernel::boot()` のフェーズ、`Discovery` による属性付きクラスの収集、コンポーネントの初期化タイミング。本書の `MetaSchemaRegistry` には、Discovery が収集したエンティティの Initializer が初期化時に登録する。
 - エンティティ定義設計書(PostType/Taxonomy/UserRole): エンティティ基底の `meta()` ファサードと `definition()` のスラッグ解決。本書が定義する `MetaSchemaRegistry::registerEntity()` をKernelが呼び出す際のスラッグ(subtype)の供給元。
 - acf-bridge 拡張設計書: `AcfMetaStorage` の実装、acf-json からのコード生成、`MetaSchemaRegistry::markExternallyManaged()` の呼び出しタイミング。
 
@@ -39,8 +39,8 @@ app/Post/ProductPost.php
       public const META_PRICE = 'price';
   }
 
-ブート時(Kernel):
-  Discovery → MetaSchemaRegistry::registerEntity(ProductPost::class, ObjectType::Post, 'product')
+エンティティの初期化時(Kernel が属性ごとに登録したフック。#[AsPostType] は init 10):
+  PostTypeInitializer → MetaSchemaRegistry::registerEntity(ProductPost::class, ObjectType::Post, 'product')
             → 定数リフレクション → MetaSchemaDefinition 群を構築・検証
   init(priority 20) → MetaSchemaRegistry::registerAll()
             → register_post_meta('product', 'price', [...])  ※ACF管理下キーはスキップ
@@ -144,7 +144,7 @@ enum MetaValueType: string
 
 #### 振る舞い仕様
 
-- `from()` / `tryFrom()` はenum標準のまま。属性が `MetaValueType` ケースを直接受けるため、`MetaSchemaDefinition::fromAttribute()` での `tryFrom()` 変換は存在しない。backing value 文字列からの復元は `ComponentCache` 復元パス(`fromArray()`。4.4)のみが `from()` で行う。
+- `from()` / `tryFrom()` はenum標準のまま。属性が `MetaValueType` ケースを直接受けるため、`MetaSchemaDefinition::fromAttribute()` での `tryFrom()` 変換は存在しない。
 - `zeroValue()` の対応表: String→`''`, Boolean→`false`, Integer→`0`, Number→`0.0`, Array→`[]`, Object→`[]`(PHP表現は連想配列)。
 
 ### 4.3 `TMSWP\Core\Meta\ObjectType`
@@ -198,7 +198,7 @@ enum ObjectType: string
 
 #### 役割
 
-`#[MetaSchema]` 属性をブート時に検証・正規化した不変の値オブジェクトと、エンティティ1クラス分のスキーマ集合。`ComponentCache` に載せるため配列との相互変換を持つ。
+`#[MetaSchema]` 属性をエンティティの初期化時に検証・正規化した不変の値オブジェクトと、エンティティ1クラス分のスキーマ集合。
 
 #### シグネチャ
 
@@ -245,12 +245,6 @@ final class MetaSchemaDefinition
     ): self;
 
     public function hasDefault(): bool;          // default !== null
-
-    /** @return array<string, mixed> ComponentCache 保存用(全プロパティをスカラー/配列で表現) */
-    public function toArray(): array;
-
-    /** @param array<string, mixed> $data */
-    public static function fromArray(array $data): self;
 }
 
 final class MetaSchemaSet
@@ -277,7 +271,6 @@ final class MetaSchemaSet
 
 - `fromAttribute()` は 4.1 の検証規則(default互換・single×default禁止・sanitize形式・キー文字列非空)をすべて適用し、違反時は `InvalidSchemaException` にエンティティクラス名・定数名を含めて送出する(type は `MetaValueType` 受けのため検証対象外。4.1)。
 - 同一エンティティ内でのキー重複(異なる定数が同じメタキー文字列を持つ)は `MetaSchemaSet` 構築時ではなく `MetaSchemaRegistry::registerEntity()`(4.9)が検出して `DuplicateMetaKeyException` を送出する。
-- `toArray()`/`fromArray()` は属性が定数式しか持てない(=値は常にスカラー・配列・enum)ことから、`var_export` 可能な配列に常に正規化できる。`type` は backing value 文字列で保存する。
 
 ### 4.5 `TMSWP\Core\Meta\MetaStorageInterface`
 
@@ -559,7 +552,7 @@ final class MetaSchemaRegistry
     }
 
     /**
-     * エンティティ1クラスを登録する。Kernelのブートフェーズ(Discovery直後、initより前)に呼ばれる。
+     * エンティティ1クラスを登録する。エンティティの Initializer(PostTypeInitializer 等)が初期化時に呼ぶ。
      *
      * @param class-string $entityClass #[AsPostType|AsTaxonomy|AsUserRole] が付与されたクラス
      * @param string $subtype Post→投稿タイプスラッグ / Term→タクソノミースラッグ / User→''(固定)
@@ -569,14 +562,6 @@ final class MetaSchemaRegistry
      *         または同一 (ObjectType, subtype, key) の組を別エンティティが二重宣言した場合
      */
     public function registerEntity(string $entityClass, ObjectType $objectType, string $subtype): void;
-
-    /** ComponentCache 復元パス: リフレクションを行わず検証済み定義から登録する */
-    public function registerEntityFromCache(
-        string $entityClass,
-        ObjectType $objectType,
-        string $subtype,
-        MetaSchemaSet $schemas,
-    ): void;
 
     /** 登録済みエンティティのスキーマ集合(未登録クラスは empty セット) */
     public function schemasFor(string $entityClass): MetaSchemaSet;
@@ -633,7 +618,7 @@ final class MetaSchemaRegistry
 ```
 
 - 親クラスから継承した定数も `getConstants()` に含まれるが、**宣言クラス(`ReflectionClassConstant::getDeclaringClass()`)が `$entityClass` 自身であるものだけ**を対象とする。エンティティ継承によるスキーマの暗黙共有は行わない(明示性優先)。
-- 収集結果は `ComponentCache`(Kernel設計書)に `toArray()` 形式で保存可能。キャッシュヒット時は `registerEntityFromCache()` がリフレクションをスキップする。キャッシュの無効化条件・フォーマットはKernel設計書に従う。
+- メタスキーマは探索結果ファイル(Kernel設計書 §6)に載せない。探索結果ファイルが持つのはコンポーネントの属性と引数だけで、メタスキーマは `registerEntity()` が初期化時に定数のリフレクションで毎回構築する。
 
 **bagFor() の処理手順**:
 
@@ -867,12 +852,6 @@ final class OptionSchemaDefinition
     ): self;
 
     public function hasDefault(): bool;
-
-    /** @return array<string, mixed> */
-    public function toArray(): array;
-
-    /** @param array<string, mixed> $data */
-    public static function fromArray(array $data): self;
 }
 
 final class OptionSchemaSet

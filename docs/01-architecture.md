@@ -85,7 +85,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 │   │   ├── composer.json
 │   │   ├── README.md
 │   │   ├── src/                          # TMSWP\Core\ → src/ (PSR-4)
-│   │   │   ├── Kernel/                   # Kernel.php, KernelConfig.php, Discovery.php, ComponentCache.php
+│   │   │   ├── Kernel/                   # Kernel.php, KernelConfig.php, Discovery.php, DiscoveryFile.php, DiscoverCommand.php
 │   │   │   ├── Container/                # Container.php (PSR-11 実装)
 │   │   │   ├── Attribute/                # AsPostType.php, AsTaxonomy.php, AsUserRole.php, AsModel.php,
 │   │   │   │                             #   AsHook.php, AsOptionGroup.php, Action.php, Filter.php,
@@ -274,7 +274,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 
 - 全パッケージ **lockstep バージョニング**(常に同一バージョン番号でリリース)。`tmswp/core 1.3.0` と `tmswp/thumbnail 1.3.0` が同時に出る。パッケージ個別のバージョン進行は行わない(利用側の「揃える」運用(§3.3)を単純化するため)。
 - バージョン番号の意味:
-  - **MAJOR**: 公開 API の破壊的変更(クラス・メソッドシグネチャの変更/削除、Attribute 引数の非互換変更、ComponentCache フォーマットの非互換変更、生成コード(`app/Acf/*Fields.php`)の再生成を必須とする変更)。
+  - **MAJOR**: 公開 API の破壊的変更(クラス・メソッドシグネチャの変更/削除、Attribute 引数の非互換変更、探索結果ファイル(`tmswp-discovery.php`)の形式の非互換変更(利用側で `wp tmswp discover` による再生成を必須とする)、生成コード(`app/Acf/*Fields.php`)の再生成を必須とする変更)。
   - **MINOR**: 後方互換のある機能追加。PHP / WP の下限引き上げも MINOR で行ってよい(下限引き上げは CHANGELOG に必ず明記)。
   - **PATCH**: 後方互換のあるバグ修正のみ。
 - **公開 API の定義**: `@internal` PHPDoc が付いていない public クラス・public メソッド・グローバルヘルパ・Attribute・composer スクリプト名。protected メンバは基底クラス(`PostType`、`Taxonomy`、`UserRole`、`Model`、`Hook`、`Form` 関連)の継承契約に含まれる場合のみ公開 API とみなす(オプショングループは backed enum + `OptionAccess` trait のため継承契約を持たない)。
@@ -481,7 +481,6 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 | Kernel | `add_action` / `add_filter` | 1.2 / 0.71 | フック整合ブート(DR-04) |
 | Kernel | `wp_trigger_error()` | **6.4 ★** | 探索失敗・循環依存の開発時エラー通知 |
 | Kernel / Migrator / acf-bridge | `wp_admin_notice()` | **6.4 ★** | 管理画面通知の標準 API |
-| Kernel / ComponentCache | `wp_get_environment_type()` | 5.5 | production 判定によるキャッシュ方針切替 |
 | Kernel(プラグインモード) | `register_activation_hook()` | 2.0 | 有効化時マイグレーション契機(DR-08) |
 | PostType | `register_post_type()` の `show_in_rest` | 4.7(REST コントローラは 5.0) | Gutenberg 対応 CPT |
 | PostType | `register_post_type()` の `template` / `template_lock` | 5.0 | ブロックテンプレート指定 |

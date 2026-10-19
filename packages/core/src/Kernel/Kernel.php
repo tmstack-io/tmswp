@@ -34,8 +34,6 @@ final class Kernel
 
     private readonly Container $container;
 
-    private readonly ComponentCache $cache;
-
     /** @var list<DiscoveredComponent> */
     private array $components = [];
 
@@ -46,16 +44,12 @@ final class Kernel
     {
         $this->config = $config;
         $this->container = new Container();
-        $this->cache = new ComponentCache(
-            $config->cacheDir . '/components-' . $config->instanceId() . '.php',
-            $config->debug,
-        );
 
         $this->container->set(self::class, $this);
         $this->container->set(KernelConfig::class, $config);
         $this->container->set(Container::class, $this->container);
         $this->container->alias(ContainerInterface::class, Container::class);
-        $this->container->set(ComponentCache::class, $this->cache);
+        $this->container->set(DiscoveryFile::class, new DiscoveryFile($config));
         $this->container->set(LoggerRegistry::class, static fn(): LoggerRegistry => Log::registry());
         $this->container->set(Connection::class, static fn(): Connection => Connection::fromGlobal());
         $this->container->set(Migrator::class, static function (Container $container): Migrator {
@@ -70,13 +64,13 @@ final class Kernel
         $this->container->set(MetaSchemaRegistry::class, static fn(Container $container): MetaSchemaRegistry => new MetaSchemaRegistry($container));
         $this->container->set(OptionRepositoryFactory::class, static fn(Container $container): OptionRepositoryFactory => new OptionRepositoryFactory($container));
         $this->container->set(Discovery::class, function (Container $container) use ($config): Discovery {
-            $cache = $container->get(ComponentCache::class);
+            $file = $container->get(DiscoveryFile::class);
 
-            if (!$cache instanceof ComponentCache) {
-                throw new KernelException('container entry ComponentCache must resolve to ComponentCache');
+            if (!$file instanceof DiscoveryFile) {
+                throw new KernelException('container entry DiscoveryFile must resolve to DiscoveryFile');
             }
 
-            return new Discovery($config, $cache);
+            return new Discovery($config, $file);
         });
     }
 
@@ -180,11 +174,6 @@ final class Kernel
         return $this->components;
     }
 
-    public function clearCache(): bool
-    {
-        return $this->cache->clear();
-    }
-
     private static function assertCanBoot(KernelConfig $config): void
     {
         $namespace = $config->appNamespace;
@@ -209,6 +198,11 @@ final class Kernel
                 || str_starts_with($bootedDir . DIRECTORY_SEPARATOR, $config->appDir . DIRECTORY_SEPARATOR)
             ) {
                 throw new KernelException("shared or nested app directories are forbidden: {$config->appDir}, {$bootedDir}");
+            }
+
+            // 探索結果ファイルは appDir の親ディレクトリに置くため、同じ親を持つ appDir どうしは同じファイルを上書きし合う
+            if ($config->discoveryFile() === $kernel->config->discoveryFile()) {
+                throw new KernelException("app directories {$config->appDir} and {$bootedDir} share the discovery file {$config->discoveryFile()}; place each app directory in its own theme or plugin root");
             }
         }
     }
@@ -350,12 +344,10 @@ final class Kernel
             }
 
             register_activation_hook($this->config->pluginFile, function (): void {
-                $this->clearCache();
                 add_option($this->flushFlagOption(), '1', '', false);
                 do_action('tmswp/activated', $this);
             });
             register_deactivation_hook($this->config->pluginFile, function (): void {
-                $this->clearCache();
                 flush_rewrite_rules();
                 do_action('tmswp/deactivated', $this);
             });
@@ -364,12 +356,10 @@ final class Kernel
         }
 
         add_action('after_switch_theme', function (): void {
-            $this->clearCache();
             add_option($this->flushFlagOption(), '1', '', false);
             do_action('tmswp/activated', $this);
         }, 10, 0);
         add_action('switch_theme', function (): void {
-            $this->clearCache();
             do_action('tmswp/deactivated', $this);
         }, 10, 0);
     }
@@ -447,25 +437,7 @@ final class Kernel
             return;
         }
 
-        WP_CLI::add_command('tmswp cache clear', function (): void {
-            $failed = [];
-            $cleared = 0;
-
-            foreach (self::all() as $kernel) {
-                if ($kernel->clearCache()) {
-                    ++$cleared;
-                    continue;
-                }
-
-                $failed[] = $kernel->config()->appNamespace;
-            }
-
-            if ($failed !== []) {
-                WP_CLI::error('failed to clear TMSWP cache for: ' . implode(', ', $failed));
-            }
-
-            WP_CLI::success("cleared TMSWP cache for {$cleared} kernel(s)");
-        });
+        WP_CLI::add_command('tmswp discover', new DiscoverCommand());
 
         self::$cliRegistered = true;
     }

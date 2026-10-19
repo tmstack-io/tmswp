@@ -190,6 +190,9 @@ jobs:
             echo "::error::untracked translation files: ${untracked}"
             exit 1
           fi
+      # コミット済みの探索結果ファイル(fixture のテーマ・プラグイン)が、wp tmswp discover で走査した結果と一致するかを確かめる
+      - name: Check discovery files are up to date
+        run: composer discover:check
       - name: Run unit tests with coverage
         run: composer test:coverage:unit
       - name: Run integration tests with coverage

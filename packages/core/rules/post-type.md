@@ -126,4 +126,4 @@ final class ThumbnailFallbackHook extends Hook
 
 1. `composer qa` が通ること。
 2. 管理画面に投稿タイプが表示されること。
-3. 表示されない場合は `wp tmswp cache clear` を実行して再確認する。
+3. 本番で表示されない場合は `wp tmswp discover --check` で探索結果ファイルが最新かを確かめ、古ければ `wp tmswp discover` で作り直してコミットする。
