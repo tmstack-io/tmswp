@@ -12,6 +12,7 @@ use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\DiscoveredHookMethod;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
+use TMSWP\Core\Kernel\HookMethodKind;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Tests\Support\UnitTestCase;
@@ -146,6 +147,14 @@ final class DiscoveryFileTest extends UnitTestCase
         $this->expectLoadFailure($root, 'invalid priority or acceptedArgs');
     }
 
+    public function testLoadRejectsUnknownHookMethodKind(): void
+    {
+        $root = $this->createTempDirectory('hook-kind');
+        $this->writePayload($root, ['hookMethods' => [['class' => 'Example\\Hook', 'method' => 'handle', 'hook' => 'init', 'priority' => 10, 'acceptedArgs' => 0, 'kind' => 'listener']]] + $this->payload());
+
+        $this->expectLoadFailure($root, "invalid 'kind'");
+    }
+
     private function expectLoadFailure(string $root, string $reason): void
     {
         $file = new DiscoveryFile($this->config($root));
@@ -177,7 +186,8 @@ final class DiscoveryFileTest extends UnitTestCase
                 new DiscoveredComponent('Example\\DiscoveryFile\\Post\\ProductPost', AsPostType::class, ['type' => MetaValueType::Integer, 'list' => [1, 'two']]),
             ],
             [
-                new DiscoveredHookMethod('Example\\DiscoveryFile\\Hook\\ProductHook', 'onSave', 'save_post_product', 10, 2),
+                new DiscoveredHookMethod('Example\\DiscoveryFile\\Hook\\ProductHook', 'onSave', 'save_post_product', 10, 2, HookMethodKind::Action),
+                new DiscoveredHookMethod('Example\\DiscoveryFile\\Hook\\ProductHook', 'title', 'the_title', 10, 0, HookMethodKind::Filter),
             ],
         );
     }

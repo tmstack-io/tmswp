@@ -48,6 +48,9 @@ return (new Config())
         ],
         'native_function_invocation' => [
             'include' => ['@compiler_optimized'],
+            // `\call_user_func_array()` はコンパイル時に直接の呼び出しへ置き換わり、呼び出し元の strict_types が
+            // コールバックの引数に効く。Kernel はフックメソッドを WordPress と同じ弱い型変換で呼ぶため、名前空間を付けない
+            'exclude' => ['call_user_func_array'],
             'scope' => 'namespaced',
         ],
         'array_syntax' => ['syntax' => 'short'],

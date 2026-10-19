@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Unit;
 
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Kernel\KernelContext;
@@ -47,6 +49,35 @@ final class KernelConfigTest extends UnitTestCase
         $config = KernelConfig::theme($root . '/app/', 'Example\\Theme', false, false);
 
         self::assertSame(realpath($root) . '/tmswp-discovery.php', $config->discoveryFile());
+    }
+
+    /** @return iterable<string, array{mixed, bool}> */
+    public static function wpDebugValues(): iterable
+    {
+        yield 'true' => [true, true];
+        yield '真値の 1' => [1, true];
+        yield '真値の文字列' => ['true', true];
+        yield 'false' => [false, false];
+        yield '偽値の 0' => [0, false];
+    }
+
+    /**
+     * debug を省略すると、WP_DEBUG の真偽を既定値にする(true との厳密比較ではない)。
+     */
+    #[DataProvider('wpDebugValues')]
+    #[RunInSeparateProcess]
+    public function testDebugDefaultsToTruthinessOfWpDebug(mixed $wpDebug, bool $expected): void
+    {
+        \define('WP_DEBUG', $wpDebug);
+
+        self::assertSame($expected, KernelConfig::theme($this->createTempDirectory('debug-default'), 'Example\\DebugDefault')->debug);
+    }
+
+    #[RunInSeparateProcess]
+    public function testDebugDefaultsToFalseWithoutWpDebug(): void
+    {
+        self::assertFalse(\defined('WP_DEBUG'));
+        self::assertFalse(KernelConfig::theme($this->createTempDirectory('debug-undefined'), 'Example\\DebugUndefined')->debug);
     }
 
     public function testItRejectsReservedNamespace(): void

@@ -5,7 +5,7 @@
 declare(strict_types=1);
 
 return [
-    'schema' => 3,
+    'schema' => 4,
     'appNamespace' => 'TmswpFixturePlugin',
     'appDir' => 'app',
     'components' => [],
@@ -16,6 +16,7 @@ return [
             'hook' => 'tmswp_fixture_plugin/filter',
             'priority' => 10,
             'acceptedArgs' => 1,
+            'kind' => 'filter',
         ],
         [
             'class' => 'TmswpFixturePlugin\\Hook\\PluginProbeHook',
@@ -23,6 +24,7 @@ return [
             'hook' => 'tmswp_fixture_plugin/action',
             'priority' => 10,
             'acceptedArgs' => 0,
+            'kind' => 'action',
         ],
     ],
 ];

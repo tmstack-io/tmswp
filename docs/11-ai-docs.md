@@ -304,7 +304,7 @@ composer fix                # コードスタイル自動修正
 2. クラスに対応するAttribute(`#[AsPostType]` 等)を付け、FWの基底クラスを継承する。
 3. **登録コードは書かない。** app/ に置くだけでKernelが探索・登録する(functions.phpへの追記は不要)。
 4. `wp tmswp discover` で探索結果ファイル(テーマ/プラグインのルート直下の `tmswp-discovery.php`)を
-   作り直し、クラスと一緒にコミットする。開発環境(`WP_DEBUG` = true)は毎回 app/ を走査するため
+   作り直し、クラスと一緒にコミットする。開発環境(Kernel の debug = true)は毎回 app/ を走査するため
    作り直す前でも反映されるが、本番は探索結果ファイルだけを読む。
 5. `composer qa` を実行して通す。
 6. 反映確認はWP上で行う(各レシピの「確認方法」参照)。

@@ -5,7 +5,7 @@
 declare(strict_types=1);
 
 return [
-    'schema' => 3,
+    'schema' => 4,
     'appNamespace' => 'TmswpFixtureTheme',
     'appDir' => 'app',
     'components' => [
@@ -54,11 +54,20 @@ return [
     ],
     'hookMethods' => [
         [
+            'class' => 'TmswpFixtureTheme\\Hook\\CoercionProbeHook',
+            'method' => 'addOne',
+            'hook' => 'tmswp_fixture_theme/int_filter',
+            'priority' => 10,
+            'acceptedArgs' => 1,
+            'kind' => 'filter',
+        ],
+        [
             'class' => 'TmswpFixtureTheme\\Hook\\ThemeProbeHook',
             'method' => 'filter',
             'hook' => 'tmswp_fixture_theme/filter',
             'priority' => 10,
             'acceptedArgs' => 1,
+            'kind' => 'filter',
         ],
         [
             'class' => 'TmswpFixtureTheme\\Hook\\ThemeProbeHook',
@@ -66,6 +75,7 @@ return [
             'hook' => 'tmswp_fixture_theme/action',
             'priority' => 10,
             'acceptedArgs' => 0,
+            'kind' => 'action',
         ],
     ],
 ];

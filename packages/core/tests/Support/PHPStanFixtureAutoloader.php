@@ -27,6 +27,13 @@ final class PHPStanFixtureAutoloader
         'TMSWP\Core\Tests\Unit\PHPStanOverriddenGetOption',
     ];
 
+    private const KERNEL_RESET_CLASSES = [
+        'TMSWP\Core\Tests\Unit\PHPStanKernelResetProductionService',
+        'TMSWP\Core\Tests\Unit\PHPStanKernelResetDirectTest',
+        'TMSWP\Core\Tests\Unit\PHPStanKernelResetIndirectTest',
+        'TMSWP\Core\Tests\Unit\PHPStanKernelResetOtherReset',
+    ];
+
     private function __construct() {}
 
     public static function register(): void
@@ -38,6 +45,10 @@ final class PHPStanFixtureAutoloader
 
             if (\in_array($class, self::SIDE_EFFECT_CLASSES, true)) {
                 require __DIR__ . '/../fixtures/phpstan/side-effect-classes.php';
+            }
+
+            if (\in_array($class, self::KERNEL_RESET_CLASSES, true)) {
+                require __DIR__ . '/../fixtures/phpstan/kernel-reset-rule.php';
             }
         });
     }

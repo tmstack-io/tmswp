@@ -65,11 +65,6 @@ final readonly class KernelConfig
         return \dirname($this->appDir) . '/' . self::DISCOVERY_FILE_NAME;
     }
 
-    public function instanceId(): string
-    {
-        return strtolower(str_replace('\\', '-', $this->appNamespace)) . '-' . substr(md5($this->appDir), 0, 12);
-    }
-
     private static function normalizeNamespace(string $appNamespace): string
     {
         $namespace = trim($appNamespace, '\\');
@@ -106,6 +101,7 @@ final readonly class KernelConfig
             return $debug;
         }
 
-        return \defined('WP_DEBUG') && WP_DEBUG === true;
+        // && は真偽値を返すため、WP_DEBUG が 1 や 'true' 等の真値でも true になる(true との厳密比較はしない)
+        return \defined('WP_DEBUG') && WP_DEBUG;
     }
 }

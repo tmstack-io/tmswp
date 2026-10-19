@@ -15,7 +15,7 @@ use TMSWP\Core\Exception\DiscoveryException;
  */
 final class DiscoveryFile
 {
-    public const SCHEMA_VERSION = 3;
+    public const SCHEMA_VERSION = 4;
 
     private const REGENERATE_HINT = "regenerate it with 'wp tmswp discover' and deploy it together with the code";
 
@@ -94,6 +94,7 @@ final class DiscoveryFile
                     'hook' => $hookMethod->hook,
                     'priority' => $hookMethod->priority,
                     'acceptedArgs' => $hookMethod->acceptedArgs,
+                    'kind' => $hookMethod->kind->value,
                 ],
                 $result->hookMethods,
             ),
@@ -241,12 +242,20 @@ final class DiscoveryFile
             throw $this->invalid('discovery file hookMethods entry has invalid priority or acceptedArgs');
         }
 
+        $kind = $entry['kind'] ?? null;
+        $kind = \is_string($kind) ? HookMethodKind::tryFrom($kind) : null;
+
+        if ($kind === null) {
+            throw $this->invalid("discovery file hookMethods entry has invalid 'kind'");
+        }
+
         return new DiscoveredHookMethod(
             $this->nonEmptyString($entry, 'class', 'hookMethods'),
             $this->nonEmptyString($entry, 'method', 'hookMethods'),
             $this->nonEmptyString($entry, 'hook', 'hookMethods'),
             $priority,
             $acceptedArgs,
+            $kind,
         );
     }
 

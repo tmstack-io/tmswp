@@ -24,12 +24,14 @@ final class DiscoverCommandTest extends UnitTestCase
         parent::setUp();
 
         $GLOBALS['wpdb'] = WpdbTestDouble::create();
+        $GLOBALS['wp_version'] = '7.0';
+        $GLOBALS['wp_actions'] = [];
         $GLOBALS['tmswp_test_wp_cli'] = [];
     }
 
     protected function tearDown(): void
     {
-        unset($GLOBALS['wpdb'], $GLOBALS['tmswp_test_wp_cli']);
+        unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions'], $GLOBALS['tmswp_test_wp_cli']);
         Kernel::reset();
         parent::tearDown();
     }

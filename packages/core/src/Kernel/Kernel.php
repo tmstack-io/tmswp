@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Kernel;
 
+use Closure;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use TMSWP\Core\Attribute\ComponentAttributeInterface;
@@ -23,6 +24,9 @@ use WP_CLI;
 
 final class Kernel
 {
+    /** 対応する WordPress の下限の版(D-09) */
+    private const string MIN_WORDPRESS_VERSION = '7.0';
+
     /** @var array<string, self> */
     private static array $kernels = [];
 
@@ -68,6 +72,7 @@ final class Kernel
 
     public static function boot(KernelConfig $config): self
     {
+        self::assertSupportedWordPress();
         self::assertCanBoot($config);
 
         $kernel = new self($config);
@@ -86,7 +91,6 @@ final class Kernel
         }
 
         $kernel->scheduleAll();
-        $kernel->registerMetaSchemaHooks();
         $kernel->registerTemplateFallback();
         $kernel->registerLifecycleHooks();
         $kernel->registerModelMigrator();
@@ -162,6 +166,30 @@ final class Kernel
         return $this->components;
     }
 
+    /**
+     * WordPress の版が下限未満なら起動を拒否する。設定の誤りなので、debug に関係なく常に例外にする。
+     *
+     * 版は WordPress が wp-includes/version.php で公開する `$wp_version` から取る。WordPress 自身の
+     * 「Requires at least」の判定(is_wp_version_compatible())と同じく、`-` 以降の接尾辞(`-RC1`・`-beta2`・
+     * `-alpha-12345-src` 等)を除いて比べるため、7.0 のリリース候補・開発版は 7.0 として扱う。
+     *
+     * @throws KernelException 版が取れない、または下限未満の場合
+     */
+    private static function assertSupportedWordPress(): void
+    {
+        $version = $GLOBALS['wp_version'] ?? null;
+
+        if (!\is_string($version) || $version === '') {
+            throw new KernelException('cannot determine the WordPress version: global $wp_version is not set');
+        }
+
+        $release = explode('-', $version, 2)[0];
+
+        if (version_compare($release, self::MIN_WORDPRESS_VERSION, '<')) {
+            throw new KernelException('TMSWP requires WordPress ' . self::MIN_WORDPRESS_VERSION . " or later (running {$version})");
+        }
+    }
+
     private static function assertCanBoot(KernelConfig $config): void
     {
         $namespace = $config->appNamespace;
@@ -195,35 +223,81 @@ final class Kernel
         }
     }
 
+    /**
+     * コンポーネントの初期化・MetaSchema の登録・`#[Action]` / `#[Filter]` のメソッドを、WordPress のフックに登録する(§7)。
+     *
+     * 遅延 boot の検査(発火済みのフックがあるか)は、どのフックを登録するよりも先に行う。debug では何も登録・
+     * 実行しないまま例外を投げ、本番では発火済みのフックの処理をその場で実行する(キャッチアップ。§3.3)。
+     */
     private function scheduleAll(): void
     {
+        $groups = $this->componentGroups();
+        // MetaSchema の登録(init 20)も、コンポーネントの初期化と同じ順序の規則で扱う
+        $groups[] = [
+            'hook' => 'init',
+            'priority' => 20,
+            'runner' => $this->container->get(MetaSchemaRegistry::class)->registerAll(...),
+        ];
+
+        $firedOrder = self::firedHookOrder();
+        $pending = [];
+        $missed = [];
+
+        foreach ($groups as $group) {
+            if (\array_key_exists($group['hook'], $firedOrder)) {
+                $missed[] = $group;
+            } else {
+                $pending[] = $group;
+            }
+        }
+
+        // 発火済みのグループは、WordPress でフックが最初に発火した順に、同じフックの中では priority の昇順に並べる
+        usort($missed, static function (array $a, array $b) use ($firedOrder): int {
+            $byFiredOrder = $firedOrder[$a['hook']] <=> $firedOrder[$b['hook']];
+
+            return $byFiredOrder !== 0 ? $byFiredOrder : $a['priority'] <=> $b['priority'];
+        });
+
+        if ($missed !== [] && $this->config->debug) {
+            throw new KernelException(self::lateBootMessage($missed[0]['hook']));
+        }
+
         foreach ($this->hookMethods as $hookMethod) {
             add_filter(
                 $hookMethod->hook,
                 fn(mixed ...$args): mixed => $this->invokeHookMethod($hookMethod, $args),
                 $hookMethod->priority,
-                $hookMethod->acceptedArgs,
+                $hookMethod->kind->registeredArgs($hookMethod->acceptedArgs),
             );
         }
 
+        // 未発火のフックの実行順は WordPress が priority で決めるため、登録の順序に意味は無い
+        foreach ($pending as $group) {
+            add_action($group['hook'], $group['runner'], $group['priority'], 0);
+        }
+
+        // 本番の遅延 boot は、発火済みのフックの処理をその場で実行して縮退動作させる(キャッチアップ。§3.3)
+        foreach ($missed as $group) {
+            Log::error(self::lateBootMessage($group['hook']));
+            ($group['runner'])();
+        }
+    }
+
+    /**
+     * コンポーネントを (フック, priority) ごとのグループにまとめる。グループの実行は、FQCN 昇順に並んだ
+     * コンポーネントを1つのクロージャで順に初期化する。
+     *
+     * @throws DiscoveryException 探索結果ファイルの属性を復元できない場合(設定の誤り。debug に関係なく投げる)
+     *
+     * @return list<array{hook: string, priority: int, runner: Closure(): void}>
+     */
+    private function componentGroups(): array
+    {
         /** @var array<string, array{hook: string, priority: int, items: list<array{DiscoveredComponent, ComponentAttributeInterface}>}> $groups */
         $groups = [];
 
         foreach ($this->components as $component) {
-            try {
-                $attribute = $component->attribute();
-            } catch (DiscoveryException $exception) {
-                if ($this->config->debug) {
-                    throw $exception;
-                }
-
-                Log::error('tmswp.kernel: failed to restore component attribute', [
-                    'class' => $component->class,
-                    'exception' => $exception,
-                ]);
-                continue;
-            }
-
+            $attribute = $component->attribute();
             $hook = $attribute->hookName($this->config->context);
             $priority = $attribute->hookPriority();
             $key = $hook . "\n" . $priority;
@@ -235,115 +309,143 @@ final class Kernel
             $groups[$key]['items'][] = [$component, $attribute];
         }
 
-        uasort(
+        return array_values(array_map(
+            fn(array $group): array => [
+                'hook' => $group['hook'],
+                'priority' => $group['priority'],
+                'runner' => function () use ($group): void {
+                    foreach ($group['items'] as [$component, $attribute]) {
+                        $this->runInitializer($component, $attribute);
+                    }
+                },
+            ],
             $groups,
-            static fn(array $a, array $b): int => [$a['hook'], $a['priority']] <=> [$b['hook'], $b['priority']],
-        );
+        ));
+    }
 
-        foreach ($groups as $group) {
-            $runner = function () use ($group): void {
-                foreach ($group['items'] as [$component, $attribute]) {
-                    $this->runInitializer($component, $attribute);
-                }
-            };
-
-            if (did_action($group['hook']) > 0) {
-                $message = "Kernel::boot() was called after the '{$group['hook']}' hook had fired. Boot from the top level of functions.php or the plugin main file.";
-
-                if ($this->config->debug) {
-                    throw new KernelException($message);
-                }
-
-                Log::error($message);
-                $runner();
-                continue;
-            }
-
-            add_action($group['hook'], $runner, $group['priority'], 0);
-        }
+    private static function lateBootMessage(string $hook): string
+    {
+        return "Kernel::boot() was called after the '{$hook}' hook had fired. Boot from the top level of functions.php or the plugin main file.";
     }
 
     /**
-     * @param array<int|string, mixed> $args
+     * 発火済みのフックと、それが最初に発火した順位を返す。
+     *
+     * WordPress の do_action() / do_action_ref_array() は、フックが初めて発火したときに `$wp_actions` へキーを足し、
+     * 2回目以降は値を増やすだけなので、キーの並びが最初に発火した順になる(PHP の配列は挿入順を保つ)。
+     *
+     * @throws KernelException `$wp_actions` が無い場合
+     *
+     * @return array<string, int> フック名 => 最初に発火した順位(0 始まり)
+     */
+    private static function firedHookOrder(): array
+    {
+        $actions = $GLOBALS['wp_actions'] ?? null;
+
+        if (!\is_array($actions)) {
+            throw new KernelException('cannot determine fired hooks: global $wp_actions is not set');
+        }
+
+        $order = [];
+
+        foreach (array_keys($actions) as $position => $hook) {
+            $order[(string) $hook] = $position;
+        }
+
+        return $order;
+    }
+
+    /**
+     * `#[Action]` / `#[Filter]` のメソッドを呼ぶ。
+     *
+     * WordPress の WP_Hook と同じく call_user_func_array() で呼び、strict_types に関係なく WordPress 本来の弱い
+     * 型変換(数値文字列から int への変換等)を効かせる。名前空間を付けずに呼ぶこと: `\call_user_func_array()` と
+     * 書くと PHP がコンパイル時に直接の呼び出しへ置き換え、このファイルの strict_types が効いて TypeError になる
+     * (php-cs-fixer の native_function_invocation からも除外している)。
+     *
+     * Filter は引数を宣言しないメソッドでも第1引数を受け取って登録する(HookMethodKind::registeredArgs())ため、
+     * メソッドには宣言した引数の数に切り詰めて渡す。
+     *
+     * 失敗はエラー方針(00-overview.md §5.6)で隔離する。debug では例外をそのまま投げ、本番では Log::error() に
+     * 記録してこのメソッドだけをスキップし、第1引数をそのまま返す(filter の値を変えない。action の戻り値は使われない)。
+     *
+     * @param array<int|string, mixed> $args WordPress から受け取った引数
      */
     private function invokeHookMethod(DiscoveredHookMethod $hookMethod, array $args): mixed
     {
-        $callback = [$this->container->get($hookMethod->class), $hookMethod->method];
+        try {
+            $callback = [$this->container->get($hookMethod->class), $hookMethod->method];
 
-        if (!\is_callable($callback)) {
-            throw new KernelException("hook handler '{$hookMethod->class}::{$hookMethod->method}' is not callable");
-        }
-
-        return $callback(...$args);
-    }
-
-    private function runInitializer(DiscoveredComponent $component, ComponentAttributeInterface $attribute): void
-    {
-        $initializer = $this->container->get($attribute->initializerClass());
-
-        if (!$initializer instanceof ComponentInitializerInterface) {
-            $message = "initializer '{$attribute->initializerClass()}' must implement ComponentInitializerInterface";
-
-            if ($this->config->debug) {
-                throw new DiscoveryException($message);
+            if (!\is_callable($callback)) {
+                throw new KernelException("hook handler '{$hookMethod->class}::{$hookMethod->method}' is not callable");
             }
 
-            Log::error($message, ['class' => $component->class]);
-
-            return;
-        }
-
-        try {
-            $initializer->initialize($component, $this);
+            return call_user_func_array($callback, \array_slice($args, 0, $hookMethod->acceptedArgs));
         } catch (Throwable $exception) {
             if ($this->config->debug) {
                 throw $exception;
             }
 
-            Log::error('tmswp.kernel: failed to initialize {class}', [
-                'class' => $component->class,
+            Log::error('tmswp.kernel: hook method {class}::{method} failed on {hook}', [
+                'class' => $hookMethod->class,
+                'method' => $hookMethod->method,
+                'hook' => $hookMethod->hook,
                 'exception' => $exception,
             ]);
+
+            return $args[0] ?? null;
         }
     }
 
+    /**
+     * コンポーネント1件を初期化する。初期化は投稿タイプ・タクソノミー・メタスキーマ・オプション等の登録そのもので、
+     * そこで起きる失敗は設定の誤り(00-overview.md §5.6)なので、debug に関係なく例外をそのまま投げる。
+     *
+     * @throws DiscoveryException initializer が ComponentInitializerInterface を実装していない場合
+     */
+    private function runInitializer(DiscoveredComponent $component, ComponentAttributeInterface $attribute): void
+    {
+        $initializer = $this->container->get($attribute->initializerClass());
+
+        if (!$initializer instanceof ComponentInitializerInterface) {
+            throw new DiscoveryException("initializer '{$attribute->initializerClass()}' must implement ComponentInitializerInterface (component {$component->class})");
+        }
+
+        $initializer->initialize($component, $this);
+    }
+
+    /**
+     * 有効化・無効化のフックを登録する(§3.4)。
+     *
+     * どちらも `rewrite_rules` のオプションを消すだけで、その場では作り直さない。WordPress は `rewrite_rules` が
+     * 空なら次にルールが必要になったときに作り直し、`wp_loaded` より前なら保存を `wp_loaded` まで遅らせる
+     * (WP_Rewrite::refresh_rewrite_rules())。そのため有効化の次のリクエストでは CPT 等の登録後のルールになり、
+     * 無効化の次のリクエストでは無効にしたテーマ・プラグインのルールが残らない。毎リクエストの確認は行わない。
+     */
     private function registerLifecycleHooks(): void
     {
-        add_action('init', function (): void {
-            $option = $this->flushFlagOption();
-
-            if (get_option($option) === false) {
-                return;
-            }
-
-            flush_rewrite_rules();
-            delete_option($option);
-        }, 99, 0);
+        $activate = function (): void {
+            delete_option('rewrite_rules');
+            do_action('tmswp/activated', $this);
+        };
+        $deactivate = function (): void {
+            delete_option('rewrite_rules');
+            do_action('tmswp/deactivated', $this);
+        };
 
         if ($this->config->context === KernelContext::Plugin) {
             if ($this->config->pluginFile === null) {
                 throw new KernelException('plugin context requires pluginFile');
             }
 
-            register_activation_hook($this->config->pluginFile, function (): void {
-                add_option($this->flushFlagOption(), '1', '', false);
-                do_action('tmswp/activated', $this);
-            });
-            register_deactivation_hook($this->config->pluginFile, function (): void {
-                flush_rewrite_rules();
-                do_action('tmswp/deactivated', $this);
-            });
+            register_activation_hook($this->config->pluginFile, $activate);
+            register_deactivation_hook($this->config->pluginFile, $deactivate);
 
             return;
         }
 
-        add_action('after_switch_theme', function (): void {
-            add_option($this->flushFlagOption(), '1', '', false);
-            do_action('tmswp/activated', $this);
-        }, 10, 0);
-        add_action('switch_theme', function (): void {
-            do_action('tmswp/deactivated', $this);
-        }, 10, 0);
+        add_action('after_switch_theme', $activate, 10, 0);
+        add_action('switch_theme', $deactivate, 10, 0);
     }
 
     private function isPluginActivationSandbox(): bool
@@ -351,28 +453,6 @@ final class Kernel
         return $this->config->context === KernelContext::Plugin
             && \defined('WP_SANDBOX_SCRAPING')
             && WP_SANDBOX_SCRAPING === true;
-    }
-
-    private function registerMetaSchemaHooks(): void
-    {
-        $registry = $this->container->get(MetaSchemaRegistry::class);
-
-        $runner = $registry->registerAll(...);
-
-        if (did_action('init') > 0) {
-            $message = "Kernel::boot() was called after the 'init' hook had fired. Boot from the top level of functions.php or the plugin main file.";
-
-            if ($this->config->debug) {
-                throw new KernelException($message);
-            }
-
-            Log::error($message);
-            $runner();
-
-            return;
-        }
-
-        add_action('init', $runner, 20, 0);
     }
 
     private function registerActionRouter(): void
@@ -428,10 +508,5 @@ final class Kernel
         }, 1, 0);
 
         self::$textdomainRegistered = true;
-    }
-
-    private function flushFlagOption(): string
-    {
-        return 'tmswp_flush_rewrite_' . $this->config->instanceId();
     }
 }

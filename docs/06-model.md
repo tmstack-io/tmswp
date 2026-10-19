@@ -917,7 +917,7 @@ final class Migrator
          try {
              $this->migrateAll();
          } catch (MigrationException $e) {
-             if (defined('WP_DEBUG') && WP_DEBUG) {
+             if ($debug) {   // このMigratorを起動したKernelのKernelConfig::$debug(00-overview.md §5.6)
                  wp_trigger_error(self::class . '::migrateAll', $e->getMessage(), E_USER_WARNING);
              }
              add_action('admin_notices', static fn() => wp_admin_notice(
@@ -935,7 +935,7 @@ final class Migrator
 
 - `admin_init`での`migrateAll()`は差分なし時「モデル数ぶんの文字列構築+`get_option` 1回」のみで、実DBクエリはoption読込(autoload対象外のため1クエリ)に限られる。フロントエンドのリクエストではフック自体が発火しない。
 - 有効化フック/テーマ切替は`force: true`で必ずdbDeltaを通す(再有効化時にテーブルが手動DROPされていても復旧できるようにするため)。
-- **admin_init契機のエラー処理(非致死)**: WPフックコールバック内の未捕捉例外はリクエストを致死させ、失敗テーブルのハッシュは未更新のため毎`admin_init`で再fatal=管理画面全体の恒久ロックアウトに転化する。これを防ぐため、`admin_init`契機に限り`MigrationException`を捕捉し、(a) `wp_admin_notice()`(WP 6.4+、`type: error`。01-architecture.mdの正準API棚卸しどおり)で管理者へ**無条件**に通知、(b) `WP_DEBUG`時はさらに`wp_trigger_error(..., E_USER_WARNING)`でログへ可視化する(07-support.mdの既定パターンと同じ発火条件)。捕捉してもハッシュは未更新のままなので、原因解消後の次回`admin_init`で自動的に再試行・回復する(migrate()手順8の「次回契機で自動リトライ」の設計意図と整合)。
+- **admin_init契機のエラー処理(非致死)**: WPフックコールバック内の未捕捉例外はリクエストを致死させ、失敗テーブルのハッシュは未更新のため毎`admin_init`で再fatal=管理画面全体の恒久ロックアウトに転化する。これを防ぐため、`admin_init`契機に限り`MigrationException`を捕捉し、(a) `wp_admin_notice()`(WP 6.4+、`type: error`。01-architecture.mdの正準API棚卸しどおり)で管理者へ**無条件**に通知、(b) このMigratorを起動したKernelの`KernelConfig::$debug`がtrueのときはさらに`wp_trigger_error(..., E_USER_WARNING)`でログへ可視化する(debugの判定は00-overview.md §5.6のとおりKernelConfig::$debugに一本化する)。捕捉してもハッシュは未更新のままなので、原因解消後の次回`admin_init`で自動的に再試行・回復する(migrate()手順8の「次回契機で自動リトライ」の設計意図と整合)。
 - 有効化フック・`after_switch_theme`・WP-CLIの各契機は現行どおり例外を伝播させる(失敗を即座に顕在化すべき文脈)。契機ごとにエラー方針が2種(admin_init=非致死捕捉/それ以外=伝播)となる旨はrules/に1行記載する。
 
 #### エッジケース
@@ -1357,7 +1357,7 @@ $migrator->dropTable(\App\Model\InquiryModel::class);
 - [ ] dbDelta後の残差分検出(検証2)が機能し、失敗時はハッシュ未更新のまま`MigrationException`が投げられる
 - [ ] optionが`tmswp_schema_hashes`単一キー・autoload=falseで保存される
 - [ ] プラグイン有効化フック/`after_switch_theme`/`admin_init`で移行が走り、フロントエンドのリクエストではマイグレーション関連処理が一切実行されない
-- [ ] `admin_init`契機の`migrateAll()`で`MigrationException`が発生しても管理画面はfatalにならず、`wp_admin_notice()`(`type: error`)が無条件で表示され、`WP_DEBUG`時は`wp_trigger_error`(E_USER_WARNING)も発火する。ハッシュは未更新のままで、原因解消後の次回`admin_init`で移行が自動再試行される(統合テスト)
+- [ ] `admin_init`契機の`migrateAll()`で`MigrationException`が発生しても管理画面はfatalにならず、`wp_admin_notice()`(`type: error`)が無条件で表示され、Kernelのdebugがtrueのときは`wp_trigger_error`(E_USER_WARNING)も発火する。ハッシュは未更新のままで、原因解消後の次回`admin_init`で移行が自動再試行される(統合テスト)
 - [ ] 有効化フック/`after_switch_theme`/WP-CLI契機では`MigrationException`が捕捉されず伝播する
 - [ ] `wp tmswp migrate` / `--force` / `--dry-run`が仕様どおり動作する(wp-env統合テスト)
 - [ ] 利用例2(キュー)・例3(自己結合JOIN/LEFT JOIN+集計)のコードが動作する統合テストが存在する(旧生SQLフォールバック事例の置換実証)

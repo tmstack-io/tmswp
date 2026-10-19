@@ -469,7 +469,7 @@ CI は PHP 8.3 / 8.5 でテストし、PHPStan は 8.3〜8.5 を解析範囲と�
 対応範囲は WordPress 7.0 以上(DR-02)。FW が使う WP API はすべて 7.0 より前に導入済みであり(§5.3)、7.0 を下限とすれば引数互換の心配なく使える。導入が比較的新しく、FW の機能が前提とする API は次の 3 つ:
 
 1. `register_post_meta()` の `revisions_enabled` 引数(**6.4**)— `#[WithMetaRevisions]`(プレビュー時メタ保存)はリビジョンへのメタ保存機構の上に実装する。
-2. `wp_trigger_error()`(**6.4**)— Discovery の探索失敗・循環依存検出(DR-04)の開発時通知を WP 標準作法(`WP_DEBUG` 連動)で出すために使用。
+2. `wp_trigger_error()`(**6.4**)— Log(SimpleLogger)がファイルの書き込み・ローテーションに失敗したときの初回の通知(07-support)、Migrator の `admin_init` での移行失敗の開発時の通知(06-model)、View・ActionRouter の開発時の警告(07-support)に使用。`WP_DEBUG` が偽なら WordPress は何も出さない。Discovery の探索失敗と Container の循環依存は通知ではなく、`DiscoveryException`・`CircularDependencyException` として投げる(02-kernel)。
 3. `wp_admin_notice()`(**6.4**)— Migrator の移行失敗通知、acf-bridge のドリフト検知通知等の管理画面表示に使用。
 
 ### 5.3 WP API 下限棚卸し表
@@ -479,7 +479,7 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 | FW 機能(担当文書) | WP API / 引数 | 導入 WP | 用途・備考 |
 |---|---|---|---|
 | Kernel | `add_action` / `add_filter` | 1.2 / 0.71 | フック整合ブート(DR-04) |
-| Kernel | `wp_trigger_error()` | **6.4 ★** | 探索失敗・循環依存の開発時エラー通知 |
+| Log / Migrator / View | `wp_trigger_error()` | **6.4 ★** | Log の書き込み・ローテーションの失敗の初回の通知、Migrator(`admin_init`)の移行失敗と View・ActionRouter の開発時の警告 |
 | Kernel / Migrator / acf-bridge | `wp_admin_notice()` | **6.4 ★** | 管理画面通知の標準 API |
 | Kernel(プラグインモード) | `register_activation_hook()` | 2.0 | 有効化時マイグレーション契機(DR-08) |
 | PostType | `register_post_type()` の `show_in_rest` | 4.7(REST コントローラは 5.0) | Gutenberg 対応 CPT |

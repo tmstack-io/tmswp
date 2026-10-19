@@ -14,6 +14,7 @@ use TMSWP\Core\Hook\Hook;
 use TMSWP\Core\Kernel\Discovery;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
+use TMSWP\Core\Kernel\HookMethodKind;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Tests\Support\UnitTestCase;
 
@@ -76,8 +77,10 @@ PHP);
         self::assertSame('init', $result->hookMethods[0]->hook);
         self::assertSame(5, $result->hookMethods[0]->priority);
         self::assertSame(0, $result->hookMethods[0]->acceptedArgs);
+        self::assertSame(HookMethodKind::Action, $result->hookMethods[0]->kind);
         self::assertSame('the_title', $result->hookMethods[1]->hook);
         self::assertSame(1, $result->hookMethods[1]->acceptedArgs);
+        self::assertSame(HookMethodKind::Filter, $result->hookMethods[1]->kind);
     }
 
     public function testItTreatsHookRegisterOverrideAsComponent(): void

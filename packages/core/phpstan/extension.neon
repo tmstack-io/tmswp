@@ -1,5 +1,7 @@
 services:
     -
+        class: TMSWP\Core\PHPStan\KernelResetCallChecker
+    -
         class: TMSWP\Core\PHPStan\MetaSchemaReflector
     -
         class: TMSWP\Core\PHPStan\MetaBagGetterReturnTypeExtension
@@ -11,4 +13,7 @@ services:
             - phpstan.broker.dynamicMethodReturnTypeExtension
 
 rules:
+    - TMSWP\Core\PHPStan\KernelResetMethodCallableOutsideTestRule
+    - TMSWP\Core\PHPStan\KernelResetOutsideTestRule
+    - TMSWP\Core\PHPStan\KernelResetStaticCallableOutsideTestRule
     - TMSWP\Core\PHPStan\MetaKeyOwnershipRule

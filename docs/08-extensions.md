@@ -426,8 +426,8 @@ Kernelの初期化スケジューラから `admin_menu`(priority 10)の発火中
 ```
 1. SettingsPages::isRegistered() が false
    → LogicException('SettingsPages::register() を Kernel::boot() 直後に呼ぶこと')
-   (「拡張は自動では何もしない」共通規約のゲート。例外の扱いはKernelの
-    runInitializerポリシーに従う: debug=throw / 本番=Log::error+当該のみスキップ)
+   (「拡張は自動では何もしない」共通規約のゲート。設定の誤りなので、Kernelの
+    runInitializerはdebugに関係なく例外をそのまま投げる)
 2. $component->class が SettingsPage 非継承 → LogicException
 3. definition()->slug を内部レジストリへ登録。重複slugは LogicException
 4. new PageRegistrar($component->class) を生成し registerMenu() を即時実行
@@ -865,7 +865,7 @@ FormDefinition::create('contact')
 ## tmswp/settings-page
 
 - [ ] `#[AsSettingsPage]` クラスがapp/に置くだけでメニュー登録される(wp-env統合テスト。コアDiscoveryの `ComponentAttributeInterface` instanceof収集経由であり、本パッケージ独自の探索コードが存在しないことをコードレビューで確認)
-- [ ] `SettingsPages::register()` 未呼び出し時、`#[AsSettingsPage]` クラスが初期化されない(debugでは `LogicException`、本番では `Log::error` +スキップ)
+- [ ] `SettingsPages::register()` 未呼び出し時、`#[AsSettingsPage]` クラスの初期化がdebugに関係なく `LogicException` になる
 - [ ] nonce欠落・不正nonceのPOSTで `onSubmit` が呼ばれない(CSRFテスト=本パッケージ最重要)
 - [ ] `capability` を満たさないユーザーがページ表示・POSTの両方を拒否される
 - [ ] 送信成功時に302(PRG)が返り、リダイレクト先で成功noticeが表示される

@@ -86,7 +86,10 @@ final class Discovery
                 }
             }
 
-            return $a->priority <=> $b->priority;
+            $order = $a->priority <=> $b->priority;
+
+            // 1つのメソッドに同じフックの #[Action] と #[Filter] を付けた場合も順序を決める
+            return $order !== 0 ? $order : strcmp($a->kind->value, $b->kind->value);
         });
 
         return new DiscoveryResult($components, $hookMethods);
@@ -176,6 +179,7 @@ final class Discovery
                     $hookAttribute->hook,
                     $hookAttribute->priority,
                     $method->getNumberOfParameters(),
+                    $hookAttribute instanceof Filter ? HookMethodKind::Filter : HookMethodKind::Action,
                 );
             }
         }
