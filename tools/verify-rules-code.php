@@ -136,7 +136,7 @@ function writePhpstanConfig(string $target): void
     $config = <<<'NEON'
 includes:
   - ../../vendor/szepeviktor/phpstan-wordpress/extension.neon
-  - ../../packages/core/extension.neon
+  - ../../packages/core/phpstan/extension.neon
 
 parameters:
   level: max
