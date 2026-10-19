@@ -6,7 +6,7 @@ require_once __DIR__ . '/vendor/autoload.php';
 
 TMSWP\Core\Log\Log::set(
     'default',
-    new TMSWP\Core\Log\SimpleLogger(WP_CONTENT_DIR . '/logs'),
+    new TMSWP\Core\Log\SimpleLogger(),
 );
 
 TMSWP\Core\Kernel\Kernel::boot(

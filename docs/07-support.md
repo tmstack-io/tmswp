@@ -496,31 +496,28 @@ actions/テンプレート/パーツは PHP ファイル include 規約である
 
 ### 1D.3 グローバルヘルパ tms_var()
 
-`packages/core/src/functions.php`(composer.json の `autoload.files` で読み込み):
+`packages/core/src/functions.php`(composer.json の `autoload.files` で読み込み。ファイル全体は §5.6)の `tms_var()`:
 
 ```php
-<?php
-
-declare(strict_types=1);
-
-use TMSWP\Core\View\View;
-
-if (!function_exists('tms_var')) {
-    /**
-     * View 変数バッグへのグローバルアクセサ。View::get への1メソッド委譲。
-     *
-     * テンプレート側(@var 注釈で型を明示する規約。§1D.2):
-     *   $form = tms_var('form');           // actions が return ['form' => $form] で用意
-     *   $related = tms_var('related', []); // 省略可能な変数はデフォルトを明示(未定義警告を抑止)
-     */
-    function tms_var(string $key, mixed $default = null): mixed
-    {
-        return View::get($key, $default);
-    }
+/**
+ * View 変数バッグの値を取得する。View::get() への委譲。
+ *
+ * テンプレートでは @var 注釈で型を明示する:
+ *   $form = tms_var('form');           // actions が return ['form' => $form] で用意した値
+ *   $related = tms_var('related', []); // 省略可能な変数は既定値を明示する(未定義の警告を出さない)
+ *
+ * @param string $key actions ファイルが返した配列のキー
+ * @param mixed $default キーが無いときに返す値
+ *
+ * @return mixed キーの値。キーが無ければ $default
+ */
+function tms_var(string $key, mixed $default = null): mixed
+{
+    return View::get($key, $default);
 }
 ```
 
-- `function_exists` ガード付き(プラグイン+テーマで core が二重ロードされ得る環境対策。防御的に付与する)。
+- `function_exists` ガードで囲まずに定義する(理由は §5.6)。
 - `tms_` 接頭辞ヘルパ予約表(00-overview.md / AGENTS.md)に `tms_var` を追加する。
 - 第二層(パーツ)からは呼ばない(§1B.4 の禁止事項)。
 
@@ -666,7 +663,7 @@ final class Str
 
 - **プレースホルダ構文は `{key}` の1種類に固定**する(区切り文字の実行時パラメータ化は行わない)。PSR-3 プレースホルダ補間(§5.5)・`SimpleLogger` の `fileNameFormat`(§5.5)・フォーム検証メッセージ(05-form.md の「`{name}` 固定」)と FW 内で同一構文に統一するための設計判断であり、旧 `Iwf2b\Text::replace` の `%key%` 既定+`$bounds` 切替は採用しない(DR-03: 完全新規のため移行互換は不要)。
 - 実装の正準形: `foreach ($vars as $key => $value) { $map['{' . $key . '}'] = self::stringify($value); } return strtr($text, $map);`
-- **実装メモ**: `strtr()` はキーの最長一致・単一パスで置換するため、逐次 `str_replace` と異なり**置換値が別のプレースホルダを含んでも再置換されない**(再置換バグの構造的排除)。`'{level}/{date}.log'` 等の通常ケース(§5.5 の fileNameFormat)では逐次置換と出力は同一である。
+- **実装メモ**: `strtr()` はキーの最長一致・単一パスで置換するため、逐次 `str_replace` と異なり**置換値が別のプレースホルダを含んでも再置換されない**(再置換バグの構造的排除)。`'{level}/{date}'` 等の通常ケース(§5.5 の fileNameFormat)では逐次置換と出力は同一である。
 - `{` / `}` をリテラルとして含むテキストのエスケープ手段は設けない(`$vars` に含まれないプレースホルダ風文字列はそのまま残る)。
 
 ### 3.3 stringify() の変換規則(確定・この順で評価)
@@ -695,6 +692,10 @@ final class Str
 - `pascal()`: `_`/`-` を空白化 → `ucwords` → 空白除去。
 - `camel()`: `lcfirst(pascal($text))`。
 
+### 3.5 convertEol() の確定仕様
+
+- `strtr($text, ["\r\n" => $to, "\r" => $to, "\n" => $to])` の1回の走査で置換する。CRLF は1つの改行として扱い、置換後の `$to` に含まれる CR / LF は再び置換しない(`$to = "\r\n"` でも `"\r\n\n"` にならない)。
+
 ---
 
 ## 4. Support\Html — HTML 属性レンダラ
@@ -703,7 +704,7 @@ final class Str
 
 `attributes(array): string` の **純関数1本** を中核とする属性レンダラ。`Form\FormHtml` の唯一の HTML 生成依存先であり、テンプレートでの直接利用も想定する。旧 `Iwf2b\Html` の流暢ビルダ(`__call`、約185行のデッドコード)は DR-16 により完全廃止。タグ自体の組み立て(`tag()`)も収載しない — タグはテンプレートに素の HTML として書く(絶対原則)。
 
-エスケープは WP の `esc_attr()` を使用する(本クラスは WP 境界。ユニットテストでは Brain Monkey でスタブする)。
+エスケープは WP の `esc_attr()` を使用し、URL を値に取る属性には `esc_url()` を使用する(§4.3。本クラスは WP 境界。ユニットテストでは Brain Monkey でスタブする)。
 
 ### 4.2 クラスシグネチャと出力規約
 
@@ -726,7 +727,8 @@ final class Html
      * (FormHtml はこの規約に依存する)。
      *
      * @param array<int|string, mixed> $attributes
-     * @throws \TMSWP\Core\Exception\InvalidArgumentException 属性名が §4.3 の形式違反のとき
+     * @throws \TMSWP\Core\Exception\InvalidArgumentException 属性名が §4.3 の形式違反のとき、
+     *         または URL 属性の値が許可されないプロトコルのとき(§4.3 の8)
      */
     public static function attributes(array $attributes): string;
 
@@ -756,8 +758,15 @@ final class Html
    - それ以外: `true` → bare 属性(`disabled`)、`false` → 省略。
 6. **array(class 以外)**: 各要素を `Str::stringify` し空白で連結した値として扱う(`'data-ids' => [1,2]` → `data-ids="1 2"`)。
 7. **その他のスカラー・オブジェクト**: `Str::stringify($value)` で文字列化。
-8. **値のレンダリング**: bare 属性は属性名のみ。値付きは `name="' . esc_attr($value) . '"`。値が空文字でも `name=""` として出力する(省略しない。`value=""` 等が意味を持つため)。
-9. 全トークンを `' ' . implode(' ', $tokens)` で返す(トークンゼロなら `''`)。
+8. **URL 属性**: 属性名を小文字にして `Html` の private 定数と照合し、一致すれば `esc_attr()` の代わりに `esc_url()` で値をエスケープする。
+   - `Html::URL_ATTRIBUTES`(1つの URL を取る): `href` / `src` / `action` / `formaction` / `poster` / `cite` / `data` / `background` / `longdesc` / `manifest` / `codebase` / `icon` / `xlink:href`
+   - `Html::URL_LIST_ATTRIBUTES`(空白区切りの URL のリストを取る): `ping`。空白で分割し、URL ごとに `esc_url()` を適用して半角スペース1つで連結する。
+   - 空でない値が `esc_url()` で空文字になった場合(`javascript:` や `data:` など、`wp_allowed_protocols()` に無いプロトコル)は、空の属性として出力せず `TMSWP\Core\Exception\InvalidArgumentException` を投げる。
+   - 値が空文字なら `esc_url()` を呼ばずに `name=""` として出力する(`Form::open()` の `action=""` 等)。
+   - `esc_url()` は `/`・`#`・`?` で始まらずプロトコルも無い値に `http://` を補う(`images/a.png` は `http://images/a.png` になる)。相対パスはルートからのパスで渡す。
+   - `srcset` など、URL に記述子が付く属性は対象外(`esc_attr()` でエスケープする)。
+9. **値のレンダリング**: bare 属性は属性名のみ。URL 属性以外の値付きは `name="' . esc_attr($value) . '"`。値が空文字でも `name=""` として出力する(省略しない。`value=""` 等が意味を持つため)。
+10. 全トークンを `' ' . implode(' ', $tokens)` で返す(トークンゼロなら `''`)。
 
 旧 `HtmlTag::parse_attrs` の「standalone 属性ホワイトリスト(checked/disabled/...13種)」は廃止し、**値の型(bool)で bare/省略を制御する** 方式に統一する。`required` / `hidden` / `open` 等の新しい boolean 属性にもリスト更新なしで対応できる。
 
@@ -973,93 +982,151 @@ use Psr\Log\LoggerTrait;
 
 /**
  * 依存ゼロのファイルロガー(PSR-3 v3)。
- * WP 境界: wp_date / wp_mkdir_p / trailingslashit を使用(ユニットテストでは Brain Monkey)。
+ * WP 境界: wp_date / wp_mkdir_p / wp_hash / wp_trigger_error を使用(ユニットテストでは Brain Monkey)。
  */
 final class SimpleLogger implements LoggerInterface
 {
     use LoggerTrait;
 
-    private readonly string $dir;
-
+    /**
+     * @param string|null $dir 出力先ディレクトリ。null なら WP_CONTENT_DIR . '/tmswp-logs'
+     * @param string $fileNameFormat 拡張子を除いたファイル名。{date} と {level} を展開し、/ はサブディレクトリになる
+     * @param int $maxFiles ディレクトリごとに残す自分のファイル数。0 ならローテーションしない
+     *
+     * @throws \TMSWP\Core\Exception\InvalidArgumentException 引数が不正なとき、または dir を省略して WP_CONTENT_DIR が無いとき
+     */
     public function __construct(
-        ?string $dir = null,                    // 既定: WP_CONTENT_DIR . '/tmswp-logs'
-        private readonly string $fileNameFormat = '{date}.log',
+        ?string $dir = null,
+        private readonly string $fileNameFormat = '{date}',
         private readonly string $dateFormat = 'Y-m-d H:i:s',
-        private readonly int $maxFiles = 30,    // 0 = ローテーション無効
+        private readonly int $maxFiles = 30,
     ) {}
-    // コンストラクタ実装: $dir 既定値解決と末尾スラッシュ正規化のみ。
-    // ディレクトリ作成は行わない(初回書き込みまで遅延)。
-    // $maxFiles < 0 は TMSWP\Core\Exception\InvalidArgumentException。
+    // コンストラクタは引数の検証、$dir の既定値の解決、末尾の区切り文字の除去だけを行う。
+    // ディレクトリの作成は初回の書き込みまで遅らせる。
+    // 次の場合は TMSWP\Core\Exception\InvalidArgumentException を投げる(設定の誤り):
+    //   $maxFiles < 0、$fileNameFormat が空文字、$fileNameFormat が '..' のセグメントを含む、
+    //   $dir を省略して WP_CONTENT_DIR が未定義。
 
     /** @param mixed $level */
     public function log($level, string|\Stringable $message, array $context = []): void;
 }
 ```
 
-#### ファイル名プレースホルダ
+#### 既定の出力先
 
-`fileNameFormat` は `Str::replace($format, $vars)` で展開する(プレースホルダ構文は `{key}` 固定。§3.2A)。
+`$dir` を省略したときの出力先は `WP_CONTENT_DIR . '/tmswp-logs'` であり、Web の公開領域にある。公開領域外を既定にしないのは、WordPress が書き込める非公開のディレクトリを決める手段を持たないためである。
+
+- `ABSPATH` の親ディレクトリは、Bedrock のような構成(WordPress 本体を `web/wp/` に置く)では公開領域になる。
+- 公開領域外のディレクトリは、ホスティングによっては `open_basedir` の外にあるか、PHP のユーザーから書き込めない。既定の出力先に書けないと、すべてのログが PHP の `error_log` へ回る(後述の書き込み手順)。
+
+このため既定の出力先は公開領域に置いたまま、次の3つで URL からの取得を防ぐ。
+
+1. ファイル名に `wp_hash()` 由来の接尾辞を付け、URL を推測できなくする(後述のファイル名)。
+2. ベースディレクトリに `.htaccess`(`Require all denied`)を置く(Apache 2.4)。
+3. ベースディレクトリとログファイルを置く各ディレクトリに `index.php`(`<?php // Silence is golden.`)を置き、ディレクトリの一覧表示を防ぐ。
+
+2と3の保護は、Apache が次の2つを満たすときにだけ成り立つ。これを運用の前提とする。
+
+- **`.htaccess` が読まれること**: ログのディレクトリに `AllowOverride None` が効いていると `.htaccess` は無視される。`Require` を使えるように `AllowOverride AuthConfig`(または `All`)が許可されている必要がある。
+- **`index.php` が `DirectoryIndex` に含まれること**: 含まれず、`Options +Indexes` が有効だと、ディレクトリの一覧が表示されてファイル名が分かる。
+
+前提を満たさない環境(nginx を含む。nginx は `.htaccess` を読まない)では、次のどちらかを行う(rules/ に明記する)。
+
+- `dir:` 引数で公開領域外のディレクトリを指定する。
+- サーバの設定で、ログのディレクトリへの直接の取得と一覧表示を拒否する(Apache の `<Directory>` で `Require all denied`、nginx の `location` で `deny all` 等)。
+
+公開領域外に書ける環境では、前提を満たしていても `dir:` で公開領域外を指定することを推奨する。
+
+#### ファイル名
+
+ログファイルのパスは次のとおり。
+
+```
+{$dir}/{fileNameFormat の展開結果}-{wp_hash('tmswp-simple-logger:' . $fileNameFormat)}.log
+```
+
+- `fileNameFormat` は拡張子を含めない。`Str::replace($format, $vars)` で展開する(プレースホルダ構文は `{key}` 固定。§3.2A)。
+- 接尾辞は `wp_hash()`(サイトの認証用ソルトによる HMAC)の16進文字列であり、サイトごとに異なり、外部からは計算できない。拡張子 `.log` は常に付ける。
+- `wp_hash()` の入力に展開前の `fileNameFormat` 全体を含めるため、接尾辞は `fileNameFormat` ごとに異なる。ローテーションはこの接尾辞で自身のファイルを見分ける(後述)。
 
 | プレースホルダ | 値 |
 |---|---|
-| `{date}` | `wp_date('Ymd')`(**WP タイムゾーン**。旧 `current_time()` ではなく `wp_date()` を使う) |
+| `{date}` | `wp_date('Ymd')`(**WP タイムゾーン**。`current_time()` ではなく `wp_date()` を使う) |
 | `{level}` | レベル文字列小文字(例 `error`) |
 
-`/` を含むフォーマット(例 `'{level}/{date}.log'`)はサブディレクトリとして解釈し、書き込み時に `wp_mkdir_p(dirname($path))` する。これにより旧 `split_dir` オプションはフォーマット指定だけで代替できる(bool オプションは廃止)。展開後のパスが `..` セグメントを含む場合は書き込みを拒否する(no-op)。
+`/` を含むフォーマット(例 `'{level}/{date}'`)はサブディレクトリとして解釈し、書き込み時に `wp_mkdir_p(dirname($path))` する。`split_dir` のような bool オプションは設けず、フォーマットの指定だけで分ける。`..` のセグメントを含むフォーマットはコンストラクタで例外にする。
 
-#### 書き込み手順(擬似コード)
+#### 書き込み手順
 
 ```
 log($level, $message, $context):
-  1. $level を文字列smallcase化し8レベル検証(不正 => Psr\Log\InvalidArgumentException)
-  2. ベースディレクトリ未作成なら wp_mkdir_p($this->dir) し、保護ファイルを生成(後述)
-  3. $line = formatLine($level, $message, $context)   // 後述
-  4. $path = $this->dir . Str::replace($this->fileNameFormat, ['date' => wp_date('Ymd'), 'level' => $level])
-  5. $isNewFile = !file_exists($path)
-  6. サブディレクトリ未作成なら wp_mkdir_p(dirname($path))
-  7. error_log($line, 3, $path)    // 失敗しても例外は投げない(ロガーはアプリを止めない)
-  8. $isNewFile かつ $this->maxFiles > 0 ならローテーション実行(後述)
+  1. $level を8レベルで検証する(不正 => Psr\Log\InvalidArgumentException)
+  2. $line = formatLine($level, $message, $context)            // 後述の行フォーマット
+  3. $failure = writeToFile($level, $line)                     // 失敗した理由。成功なら null
+  4. $failure !== null なら:
+       error_log($line)                                        // PHP 標準のエラーログへ必ず出す
+       初回の失敗だけ wp_trigger_error(SimpleLogger::class . '::log', 理由, E_USER_WARNING)
+
+writeToFile($level, $line):
+  1. wp_hash() が未定義なら失敗(pluggable.php の読み込み前。プラグインのファイルを読み込む間に書いた場合)
+  2. ベースディレクトリを用意する: 無ければ wp_mkdir_p(失敗なら失敗)、書き込めなければ失敗、
+     .htaccess と index.php が無ければ作成(作成できなければ失敗)
+  3. $path を組み立てる(前述のファイル名)
+  4. dirname($path) がベースディレクトリと異なれば、同様に用意する(index.php のみ)
+  5. 既存のファイルに書き込めなければ失敗
+  6. error_log($line . "\n", 3, $path) が false なら失敗
+  7. 新規のファイルを作成し、$this->maxFiles > 0 ならローテーション(後述)。ローテーションが失敗したら:
+       error_log(SimpleLogger::class . ': ログのローテーションに失敗しました。' . 理由)
+       初回の失敗だけ wp_trigger_error(SimpleLogger::class . '::log', 同じメッセージ, E_USER_WARNING)
 ```
+
+- 本番でエラー方針(00-overview.md §5.6)が `Log::error()` に頼るため、ファイルに書けない行も捨てずに PHP の `error_log` へ出す。
+- `wp_trigger_error()` は WordPress 側で `WP_DEBUG` が偽なら何もしない。可視化は SimpleLogger のインスタンスごとに初回の失敗の1回だけとし(書き込みとローテーションの失敗で共通)、同じ原因で毎回通知しない。
+- 書き込みの失敗で例外は投げない(ロガーがアプリの処理を止めない)。
 
 #### 行フォーマット
 
 ```
-{timestamp} [{LEVEL}] {message} {context_json}\n
+{timestamp} [{LEVEL}] {message} {context_json} {exception}\n
 ```
 
 - `{timestamp}` = `wp_date($this->dateFormat)`(WP タイムゾーン整合)。
 - `{LEVEL}` = レベル大文字。
 - `{message}` = `(string) $message` に対し PSR-3 プレースホルダ補間を適用: `{key}` 形式(`/\{([A-Za-z0-9_.]+)\}/`)を、`$context[key]` が scalar / null / `\Stringable` / `\BackedEnum` の場合のみ `Str::stringify` 値で置換する。補間済みキーも context JSON には残す(損失なし)。
-- `{context_json}` = `$context` から `exception` キーを除いたものを `json_encode(..., JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR)`。context が空なら本項とその前のスペースごと省略。
-- `$context['exception']` が `\Throwable` の場合、本行の直後に以下を追記する:
+- `{context_json}` = `$context`(`exception` キーの値が `\Throwable` ならそのキーを除く)を `json_encode(..., JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR)`。context が空なら本項とその前のスペースごと省略。
+- `{exception}` = `$context['exception']` が `\Throwable` の場合に、previous のチェーンをたどって次の形で連ねる。`\Throwable` でなければ本項とその前のスペースごと省略。
 
 ```
 {ExceptionClass}: {getMessage} in {getFile}:{getLine}
 {getTraceAsString}
+Caused by: {PreviousClass}: {getMessage} in {getFile}:{getLine}
+{getTraceAsString}
 ```
+
+- **1記録を必ず1行にする**: 組み立てた行の CR を `\r`、LF を `\n` の2文字に置き換えてから書く。メッセージ・context の値・例外のメッセージとトレースに含まれる改行で、別の記録に見える行を作れない。
+- 末尾の改行は、ファイルへ書くときだけ付ける(`error_log($line)` へは付けない)。
 
 #### ローテーション
 
-新規ファイル作成時のみ実行(日付ファイルなら日に1回)。対象は **作成したファイルと同じディレクトリ** の `*.log`:
+新規ファイル作成時のみ実行(日付ファイルなら日に1回)。対象は **作成したファイルと同じディレクトリにある、このロガー自身のファイル** だけとする。自身のファイルは、`fileNameFormat` の最後のセグメントの `{date}` を8桁の数字、`{level}` を8レベルのいずれかとみなし、自身の接尾辞を使った `-{接尾辞}.log` で終わる名前に一致するもので判定する。
 
 ```
-$files = glob(dirname($path) . '/*.log')
+$entries = scandir(dirname($path))                 // false なら失敗
+$files = $entries のうち、自身のファイル名のパターンに一致し、シンボリックリンクではない通常ファイル
+                                                   // このロガーはディレクトリやリンクを作らないため、それらは自身のファイルではない
+各 $file の filemtime を取得する                     // false なら失敗(何も削除しない)
 if count($files) > $maxFiles:
-    filemtime 昇順にソートし、古い方から (count - $maxFiles) 件を unlink(失敗は無視)
+    filemtime 昇順にソートし、古い方から (count - $maxFiles) 件を unlink
+                                                   // false を返したファイルを失敗として集める
 ```
 
-#### ログディレクトリの保護(旧 FW からの改善)
-
-既定の `WP_CONTENT_DIR/tmswp-logs/` は Web 公開領域である。ベースディレクトリ作成時に次の2ファイルを生成する(既存なら触らない・失敗は無視):
-
-- `.htaccess` … 内容 `Require all denied`(Apache 2.4)
-- `index.php` … 内容 `<?php // Silence is golden.`
-
-nginx 環境では `.htaccess` が無効なため、rules/ に「公開領域外ディレクトリを `dir:` 引数で指定するか、nginx 側で deny 設定を行う」ことを明記する(AGENTS.md 担当文書への申し送り)。
+- ディレクトリの列挙には `glob()` を使わず `scandir()` を使う。`glob()` は出力先のパスの `[` `]` `*` `?` をパターンとして解釈し、出力先が `logs[ab]` なら隣の `logsa` のファイルまで対象にしてしまう。
+- 同じディレクトリに `fileNameFormat` の異なる SimpleLogger があっても、接尾辞が異なるため互いのファイルを数えず、削除しない。名前の形が重なる場合(例 `'{level}-{date}'` と `'error-{date}'` の `error-20260613-….log`)も同じ。他のツールの `*.log` も対象にしない。
+- 列挙・更新日時の取得・削除の失敗は、理由を PHP の `error_log` へ出し、初回だけ `wp_trigger_error()` で知らせる(前述の書き込み手順の7)。ログの行はすでにファイルへ書けているため、行は `error_log` へ出さない。
 
 ### 5.6 tms_log() ヘルパ
 
-`packages/core/src/functions.php`(composer.json の `autoload.files` で読み込み):
+`packages/core/src/functions.php`(composer.json の `autoload.files` で読み込み)の全体:
 
 ```php
 <?php
@@ -1068,23 +1135,42 @@ declare(strict_types=1);
 
 use TMSWP\Core\Log\Log;
 use TMSWP\Core\Log\LoggerRegistry;
+use TMSWP\Core\View\View;
 
-if (!function_exists('tms_log')) {
-    /**
-     * ロガーへのグローバルアクセサ(旧 iwf_log() と同型の使い味)。
-     *
-     * tms_log()->info('imported', ['count' => $n]);
-     * tms_log()->scope('mail')->error('send failed', ['exception' => $e]);
-     * tms_log()->channel('audit')->info('user updated');
-     */
-    function tms_log(): LoggerRegistry
-    {
-        return Log::registry();
-    }
+/**
+ * View 変数バッグの値を取得する。View::get() への委譲。
+ *
+ * テンプレートでは @var 注釈で型を明示する:
+ *   $form = tms_var('form');           // actions が return ['form' => $form] で用意した値
+ *   $related = tms_var('related', []); // 省略可能な変数は既定値を明示する(未定義の警告を出さない)
+ *
+ * @param string $key actions ファイルが返した配列のキー
+ * @param mixed $default キーが無いときに返す値
+ *
+ * @return mixed キーの値。キーが無ければ $default
+ */
+function tms_var(string $key, mixed $default = null): mixed
+{
+    return View::get($key, $default);
+}
+
+/**
+ * ログのレジストリを取得する。Log::registry() への委譲。
+ *
+ *   tms_log()->info('imported', ['count' => $n]);
+ *   tms_log()->scope('mail')->error('send failed', ['exception' => $e]);
+ *   tms_log()->channel('audit')->info('user updated');
+ *
+ * @return LoggerRegistry 共有のレジストリ(PSR-3 のロガー)
+ */
+function tms_log(): LoggerRegistry
+{
+    return Log::registry();
 }
 ```
 
-- `function_exists` ガード付き(プラグイン+テーマで core が二重ロードされ得る環境対策。tmswp 同士は同一 vendor/ を共有する構成が原則だが防御的に付与する)。
+- ヘルパは `function_exists` ガードで囲まずに定義する。同名の関数が先に定義されていれば、PHP の「Cannot redeclare」で明示エラーになり、別の実装が黙って使われることはない。
+- 同じファイルが二重に読み込まれることはない。Composer の `autoload.files` は、パッケージ名とパスから作る識別子(`md5('tmswp/core:src/functions.php')`)を `$GLOBALS['__composer_autoload_files']` に記録し、同じ識別子のファイルを1回だけ読む。テーマとプラグインがそれぞれの vendor/ に tmswp/core を持つ場合も識別子は同じになる。
 - 戻り値は `LoggerRegistry`(`LoggerInterface` 実装)なので `->info()` / `->error()` 等がそのまま型安全に呼べる。旧 `iwf_log()->info(...)` の書き味は完全に維持される。
 - PSR-3 v3 により `$message` は `string|\Stringable` のみ。旧 FW で見られた配列メッセージは `$context` に渡す(rules/ にレシピを明記)。
 
@@ -1360,9 +1446,9 @@ use TMSWP\Core\Log\Log;
 use TMSWP\Core\Log\SimpleLogger;
 
 Log::set('default', new SimpleLogger());
-Log::set('errors', new SimpleLogger(fileNameFormat: 'errors/{date}.log'),
+Log::set('errors', new SimpleLogger(fileNameFormat: 'errors/{date}'),
     levels: [LogLevel::ERROR, LogLevel::CRITICAL, LogLevel::ALERT, LogLevel::EMERGENCY]);
-Log::set('mail', new SimpleLogger(fileNameFormat: 'mail-{date}.log'), scopes: ['mail']);
+Log::set('mail', new SimpleLogger(fileNameFormat: 'mail-{date}'), scopes: ['mail']);
 
 // 利用側
 try {
@@ -1438,20 +1524,23 @@ $lead    = Str::excerpt(get_the_content(), 120);
 - [ ] `Str::stringify` が §3.3 の全行(enum / DateTimeInterface / Traversable / 再帰配列 / Closure 含む)を網羅するテストを持つ
 - [ ] `Str::truncate` がマルチバイト文字列で文字数どおり切り詰める(バイト破断なし)
 - [ ] `Html::attributes` が「空配列 → `''`」「非空 → 先頭スペース1つ」「`class` 条件マップ」「bool true/false/null」「`aria-*` の true/false 文字列化」「int キー bare 属性」「不正属性名 → 例外」を網羅するテストを持つ
-- [ ] `Html::attributes` の値が必ず `esc_attr()` を通過する(`"` を含む値の出力テスト)
+- [ ] `Html::attributes` の値が必ず `esc_attr()` を通過する(`"` を含む値の出力テスト)。URL 属性(§4.3 の8)の値は `esc_url()` を通過し、許可されないプロトコルの URL は例外になる
 - [ ] `Arr` / `Str`(`excerpt` を除く)が WP 関数を一切呼ばない(ユニットテストが Brain Monkey のスタブなしで通る)
 
 **Log**
-- [ ] `tms_log()->info('msg')` が設定ゼロで `WP_CONTENT_DIR/tmswp-logs/{Ymd}.log` に `{timestamp} [INFO] msg` 形式で追記される(統合テスト)
+- [ ] `tms_log()->info('msg')` が設定ゼロで `WP_CONTENT_DIR/tmswp-logs/{Ymd}-{wp_hash 由来の接尾辞}.log` に `{timestamp} [INFO] msg` 形式で追記される(統合テスト)
 - [ ] `Log::set()` を一度でも呼んだ後は遅延デフォルトチャンネルが生成されない
 - [ ] levels / scopes フィルタが §5.4 のマッチング規則(スコープなしレコードは scopes 制限チャンネルに届かない)どおり動作する
 - [ ] `Log::scope('x')->error(...)` 後に別のログ呼び出しへスコープが残留しない(`ScopedLog` の不変性)
 - [ ] `Log` / `LoggerRegistry` に既定スコープ系 API(`defaultScope` / `setDefaultScope`)が存在せず、スコープ付与経路が `ScopedLog` のみである(scope 指定なしの `log()` は常に scope = null で dispatch される)
 - [ ] 未知レベルで `\Psr\Log\InvalidArgumentException`、未登録 `channel()` で `UnknownLogChannelException`
-- [ ] `context['exception']` の Throwable がクラス名・メッセージ・file:line・スタックトレース付きで追記される
+- [ ] `context['exception']` の Throwable が previous のチェーンを含めて、クラス名・メッセージ・file:line・スタックトレース付きで同じ行に追記される
+- [ ] メッセージ・context・例外に含まれる CR / LF がエスケープされ、1記録が必ず1行になる
 - [ ] `{key}` プレースホルダ補間が scalar/Stringable/BackedEnum/null の context 値でのみ行われる
-- [ ] `maxFiles` 超過時に mtime の古い `*.log` から削除される/`maxFiles: 0` で削除されない
-- [ ] ベースディレクトリ作成時に `.htaccess`(`Require all denied`)と `index.php` が生成される
+- [ ] `maxFiles` 超過時に、同じディレクトリにある自身のファイルだけを数え、mtime の古いものから削除される(名前の形が重なるものを含む他の `fileNameFormat` のファイル、他の `*.log`、出力先のパスを glob のパターンとみなしたときに一致する隣のディレクトリのファイルは削除されない)/`maxFiles: 0` で削除されない
+- [ ] ローテーションの列挙・更新日時の取得・削除に失敗したとき、理由が PHP の `error_log` へ出て、`wp_trigger_error` は初回の失敗の1回だけ呼ばれる
+- [ ] ファイルに書き込めないとき(ディレクトリを作成できない・書き込めない・`wp_hash()` が未定義)、その行が PHP の `error_log` へ出て、`wp_trigger_error` は初回の失敗の1回だけ呼ばれる
+- [ ] ベースディレクトリに `.htaccess`(`Require all denied`)と `index.php` が、ログファイルを置くサブディレクトリに `index.php` が生成される
 - [ ] タイムスタンプと `{date}` が `wp_date()` 由来である(タイムゾーン `Asia/Tokyo` 設定の統合テストで UTC とずれることを確認)
 - [ ] `Log` / `LoggerRegistry` / `ScopedLog` / `SimpleLogger` に `__call` / `__callStatic` が存在しない
 

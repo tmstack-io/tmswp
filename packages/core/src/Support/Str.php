@@ -99,9 +99,8 @@ final class Str
 
     public static function convertEol(string $text, string $to = "\n"): string
     {
-        return str_replace(["\r\n", "\r"], "\n", $text) === $text
-            ? str_replace("\n", $to, $text)
-            : str_replace("\n", $to, str_replace(["\r\n", "\r"], "\n", $text));
+        // strtr は最長一致の1回の走査で置換するため、CRLF を1つの改行として扱い、置換後の文字列を再び置換しない。
+        return strtr($text, ["\r\n" => $to, "\r" => $to, "\n" => $to]);
     }
 
     public static function snake(string $text): string
