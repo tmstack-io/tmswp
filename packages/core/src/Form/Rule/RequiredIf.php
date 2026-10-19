@@ -49,6 +49,6 @@ final class RequiredIf extends Rule
 
     public function defaultMessage(): string
     {
-        return $this->translate('{label} is required.');
+        return __('{label} is required.', 'tmswp');
     }
 }

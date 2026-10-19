@@ -180,6 +180,16 @@ jobs:
             fi
             sleep 10
           done
+      # コミット済みの翻訳ファイルが、ソースと .po から WP-CLI で作り直したものと一致するかを確かめる
+      - name: Check translation files are up to date
+        run: |
+          composer i18n:build
+          git diff --exit-code -- 'packages/*/languages/*'
+          untracked=$(git ls-files --others --exclude-standard -- 'packages/*/languages/*')
+          if [ -n "$untracked" ]; then
+            echo "::error::untracked translation files: ${untracked}"
+            exit 1
+          fi
       - name: Run unit tests with coverage
         run: composer test:coverage:unit
       - name: Run integration tests with coverage

@@ -53,7 +53,7 @@ final class Form
 
         if (!$this->verifyNonce($request)) {
             $this->bind($request);
-            $this->formErrors[] = $this->translate('Your session has expired. Please submit the form again.');
+            $this->formErrors[] = __('Your session has expired. Please submit the form again.', 'tmswp');
 
             return $this->finish(FormStep::Input);
         }
@@ -190,27 +190,27 @@ final class Form
 
             if ($token->status === ConfirmTokenStatus::Invalid) {
                 $this->values = $this->defaultValues();
-                $this->formErrors[] = $this->translate('The form could not be resubmitted. Please start again.');
+                $this->formErrors[] = __('The form could not be resubmitted. Please start again.', 'tmswp');
 
                 return $this->finish(FormStep::Input);
             }
 
             if ($token->status === ConfirmTokenStatus::Expired) {
                 $this->restoreValues($token->values);
-                $this->formErrors[] = $this->translate('The confirmation screen has expired. Please review your entries and continue again.');
+                $this->formErrors[] = __('The confirmation screen has expired. Please review your entries and continue again.', 'tmswp');
 
                 return $this->finish(FormStep::Input);
             }
 
             if (!$this->consumeJti($token->jti, $this->definition->ttl() + 60)) {
                 $this->values = $this->defaultValues();
-                $this->formErrors[] = $this->translate('This form has already been submitted.');
+                $this->formErrors[] = __('This form has already been submitted.', 'tmswp');
 
                 return $this->finish(FormStep::Input);
             }
 
             if (!$this->restoreFileTokens($token->values)) {
-                $this->formErrors[] = $this->translate('The confirmation screen has expired. Please review your entries and continue again.');
+                $this->formErrors[] = __('The confirmation screen has expired. Please review your entries and continue again.', 'tmswp');
 
                 return $this->finish(FormStep::Input);
             }
@@ -493,11 +493,6 @@ final class Form
         $this->result = new FormResult($step, $this->values, $this->fieldErrors, $this->formErrors);
 
         return $this->result;
-    }
-
-    private function translate(string $message): string
-    {
-        return \function_exists('__') ? __($message, 'tmswp') : $message;
     }
 
     private function verifyNonce(FormRequest $request): bool

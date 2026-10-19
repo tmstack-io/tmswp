@@ -54,7 +54,6 @@ final class FormRuntimeTest extends UnitTestCase
 
     public function testCsrfFailureBindsValuesAndReturnsFormError(): void
     {
-        $this->stubTranslations();
         Functions\when('wp_verify_nonce')->justReturn(false);
 
         $form = new Form(FormDefinition::create('contact')->text('name', '名前'));
@@ -226,16 +225,10 @@ final class FormRuntimeTest extends UnitTestCase
 
     private function stubRuntimeFunctions(): void
     {
-        $this->stubTranslations();
         Functions\when('wp_verify_nonce')->justReturn(1);
         Functions\when('wp_create_nonce')->justReturn('nonce');
         Functions\when('wp_salt')->justReturn('secret');
         Functions\when('esc_attr')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
-    }
-
-    private function stubTranslations(): void
-    {
-        Functions\when('__')->alias(static fn(string $message): string => $message);
     }
 
     private function confirmToken(string $html): string

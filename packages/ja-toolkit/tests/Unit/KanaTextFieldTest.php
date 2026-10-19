@@ -19,7 +19,6 @@ final class KanaTextFieldTest extends UnitTestCase
     {
         parent::setUp();
 
-        Functions\when('__')->alias(static fn(string $message): string => $message);
         Functions\when('wp_verify_nonce')->justReturn(1);
         Functions\when('wp_salt')->justReturn('secret');
     }

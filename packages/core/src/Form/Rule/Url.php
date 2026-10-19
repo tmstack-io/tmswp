@@ -35,6 +35,6 @@ final class Url extends Rule
 
     public function defaultMessage(): string
     {
-        return $this->translate('Please enter a valid URL for {label}.');
+        return __('Please enter a valid URL for {label}.', 'tmswp');
     }
 }

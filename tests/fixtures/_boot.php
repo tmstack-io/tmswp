@@ -42,6 +42,13 @@ tests_add_filter('muplugins_loaded', static function (): void {
 tests_add_filter('pre_option_template', static fn(): string => TMSWP_TESTS_FIXTURE_THEME);
 tests_add_filter('pre_option_stylesheet', static fn(): string => TMSWP_TESTS_FIXTURE_THEME);
 
+/*
+ * テストのサイトには ja の言語パックが無く、switch_to_locale('ja') は利用可能な言語にない ja を拒否する。
+ * 利用可能な言語は WordPress の読み込み時(WP_Locale_Switcher の生成時)に決まるため、ここで ja を加える。
+ * FW の訳は言語パックではなく、FW のローダーが packages/<pkg>/languages/ から読む。
+ */
+tests_add_filter('get_available_languages', static fn(array $languages): array => [...$languages, 'ja']);
+
 // fixture のどちらかが読み込まれなかった場合は、個々のテストの失敗ではなく起動時のエラーとして止める
 tests_add_filter('init', static function (): void {
     $missing = array_diff(TMSWP_TESTS_FIXTURE_NAMESPACES, array_keys(Kernel::all()));

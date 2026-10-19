@@ -113,7 +113,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 │   │   │   ├── extension.neon
 │   │   │   └── src/                      # TMSWP\Core\PHPStan\ → phpstan/src/ (PSR-4)
 │   │   ├── rules/                        # 利用側 AI 向け機能別レシピ(§2.1)
-│   │   ├── languages/                    # tmswp-ja.mo / tmswp-ja.l10n.php / .po / tmswp.pot(§7)
+│   │   ├── languages/                    # tmswp-core.pot / tmswp-ja.po / tmswp-ja.mo / tmswp-ja.l10n.php(§7.2)
 │   │   └── tests/
 │   │       ├── Unit/                     # WP 非依存(Brain Monkey)
 │   │       └── Integration/              # wp-env + WP_TESTS_DIR
@@ -551,19 +551,27 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 - FW 全パッケージのテキストドメインは **`tmswp`** で統一する(DR-17)。
 - gettext の対象となるのは FW がエンドユーザー・管理者に直接見せる文字列のみ: バリデーションエラーメッセージ(Form/Rule)、管理画面通知(Migrator、acf-bridge ドリフト検知等)、WP-CLI 出力の人間向け説明文。
 - ソース文字列は**英語**で書き、`__('...', 'tmswp')` 形式で参照する。日本語は翻訳ファイルとして同梱する(日本製 FW だが、ソース=英語・ja=同梱訳とすることで gettext エコシステムの標準に乗る)。
+- 翻訳対象の文字列は、gettext 関数(`__()`・`_x()`・`_n()` 等)の引数に文字列リテラルで直接書く。`wp i18n make-pot` が抽出するのはこの形だけであり、変数や独自のラッパー関数を経由して渡した文字列は `.pot` に入らない(§7.2 の `update-po` が `.po` からその訳を消す)。
 - **CPT/Taxonomy ラベル自動生成は gettext を使わない**(DR-17)。ja/en の文字列テンプレートを FW 内蔵し、定義側の `labelLanguage` 設定(デフォルト en、日本語サイトでは `LabelLanguage::Ja` を明示)で切り替える。翻訳ファイルの有無・ロケール設定に依存せず決定的に動作する(仕様詳細は PostType / Taxonomy 設計書)。
 
 ### 7.2 翻訳ファイルの配置と命名
 
 | ファイル | 配置 | 備考 |
 |---|---|---|
-| POT(テンプレート) | `packages/<pkg>/languages/tmswp-<pkg>.pot` | 例: `tmswp-core.pot`。wp-cli の `wp i18n make-pot` で生成 |
-| PO / MO | `packages/<pkg>/languages/tmswp-<locale>.mo` | 例: `tmswp-ja.mo`。初期同梱は ja のみ |
-| L10N PHP | `packages/<pkg>/languages/tmswp-<locale>.l10n.php` | 例: `tmswp-ja.l10n.php`。`wp i18n make-php` で **.po から生成**(WP 6.5+ Performant Translations)。`.mo` と並べて同梱し、初期同梱は ja のみ |
+| POT(テンプレート) | `packages/<pkg>/languages/tmswp-<pkg>.pot` | 例: `tmswp-core.pot`・`tmswp-ja-toolkit.pot`。`wp i18n make-pot` が `packages/<pkg>/src` から生成 |
+| PO | `packages/<pkg>/languages/tmswp-<locale>.po` | 例: `tmswp-ja.po`。翻訳の元データで、訳文は手で管理する。msgid の増減は `wp i18n update-po` で POT に揃える。初期同梱は ja のみ |
+| MO | `packages/<pkg>/languages/tmswp-<locale>.mo` | 例: `tmswp-ja.mo`。`wp i18n make-mo` で PO から生成 |
+| L10N PHP | `packages/<pkg>/languages/tmswp-<locale>.l10n.php` | 例: `tmswp-ja.l10n.php`。`wp i18n make-php` で PO から生成 |
 
-- 同一ドメイン `tmswp` に対して複数パッケージが MO を持つが、WP の `load_textdomain()` は既ロードドメインへ**マージ**するため衝突しない。msgid の重複を避けるため、拡張パッケージの文字列にはパッケージ文脈が分かる文言を使う(機械的接頭辞は付けない)。
-- ビルド手順は `wp i18n make-pot` →(翻訳して .po 更新)→ `wp i18n make-mo` + `wp i18n make-php` の順(make-php の入力は PO であり、MO からは生成しない)。WP-CLI が無い開発環境では `composer i18n:build` が `.po` から `.mo` と `.l10n.php` を生成する。
-- `.l10n.php` 併載による高速化(gettext バイナリパースの除去・OPcache 共有)は WP 6.5 で入った挙動で、下限の WP 7.0 を含む全対応版で発現する(条件分岐・フォールバックは一切書かない=§5.3 の禁止規定を遵守)。成果物が PHP 配列テキストになるため diff レビュー・静的解析も可能になる。
+- 同一ドメイン `tmswp` に対して複数パッケージが翻訳ファイルを持つが、WP の `load_textdomain()` は既ロードドメインへ**マージ**するため衝突しない。msgid の重複を避けるため、拡張パッケージの文字列にはパッケージ文脈が分かる文言を使う(機械的接頭辞は付けない)。
+- 生成は `composer i18n:build` で行う。wp-env を起動した状態(`composer wp:start`)で、cli コンテナの WP-CLI がパッケージごとに次を実行する(作業ディレクトリは `wp-content/plugins/tmswp`)。
+    1. `wp i18n make-pot packages/<pkg>/src packages/<pkg>/languages/tmswp-<pkg>.pot --domain=tmswp --package-name=tmswp-<pkg> --headers='{"POT-Creation-Date":""}'`(作成日時を空にし、ソースが同じなら POT が変わらないようにする)
+    2. `wp i18n update-po packages/<pkg>/languages/tmswp-<pkg>.pot`(languages/ の全 PO の msgid を POT に揃える。POT に無い msgid は PO から消え、新しい msgid は訳が空の項目として加わる)
+    3. `wp i18n make-mo packages/<pkg>/languages`
+    4. `wp i18n make-php packages/<pkg>/languages`
+- 新しい文字列を足したときは、`composer i18n:build` → PO に訳を書く → もう一度 `composer i18n:build` の順で行う。ソースと PO が変わらなければ、再実行しても生成物に差分は出ない。生成物(POT・MO・L10N PHP)は PO と一緒にコミットする。
+- `.l10n.php` は `WP_Translation_File_PHP` が読む形式で、`return [ヘッダ…, 'messages' => [キー => 訳]];` の配列を返す。ヘッダは `domain`・`language`・`plural-forms` 等の小文字のキーで、トップレベルに置く。キーは msgid(文脈があれば `文脈 . "\4" . msgid`)、複数形は単数形の msgid をキーにして各形の訳を `"\0"` で連結した値を持つ。
+- `.l10n.php` は WP-CLI の出力のままコミットし、php-cs-fixer の整形対象から外す(`.php-cs-fixer.dist.php` の `notPath`)。PHPStan の解析範囲にも languages/ は含めない。形式と PO・POT との整合は L10nTest(ユニット)で検査する。
 
 ### 7.3 ロード手順
 
@@ -574,9 +582,10 @@ $locale = determine_locale();                       // WP 5.0+
 load_textdomain('tmswp', <pkg>/languages/"tmswp-{$locale}.mo");
 ```
 
-- 上記ロードコードは `.l10n.php` 併載(§7.2)後も**一字も変更しない**。`load_textdomain()` は引数の `.mo` パスから同名の `.l10n.php` を自動導出して優先ロードする(WP 6.5 で入った挙動で、全対応版で有効)。FW 側に分岐・フォールバックは書かない。
+- ロードコードは `.mo` のパスを渡すだけで、`.l10n.php` を直接指定しない。下限の WP 7.0 を含む全対応版で、`load_textdomain()` は引数の `.mo` パスから同名の `.l10n.php` を導出して先に読み、読めた場合は `.mo` を読まない(`.mo` を読むのは、`translation_file_format` フィルタで `mo` を選んだサイトと、`.l10n.php` を読めない場合)。FW 側に WP の版による分岐・フォールバックは書かない。
+- このため `.l10n.php` の形式が §7.2 と異なると、WordPress は読み込みに成功したものとして扱い、訳は 1 件も返らず `.mo` にも進まない。`switch_to_locale('ja')` の後に Kernel と ja-toolkit のローダーを実行して `__()` が日本語を返すことを、統合テスト(TranslationIntegrationTest)で全セルについて確かめる。
 - `init` より前に FW 内で `__()` / `_x()` 等を呼ぶことを全パッケージで禁止する(WP 6.7+ の just-in-time translation loading が `_doing_it_wrong` を出すため。§5.4)。翻訳済み文字列が必要な値(バリデーションメッセージ等)は遅延評価(クロージャまたは取得時解決)で持つ。この拘束は各担当文書の実装要件とする。
-- ja 以外のロケールで MO が無い場合はソース文字列(英語)がそのまま表示される。これを正常動作とする(フォールバック処理を書かない)。
+- ja 以外のロケールで翻訳ファイルが無い場合はソース文字列(英語)がそのまま表示される。これを正常動作とする(フォールバック処理を書かない)。
 
 ### 7.4 利用側(app/)の i18n
 

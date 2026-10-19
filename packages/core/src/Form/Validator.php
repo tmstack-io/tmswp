@@ -33,7 +33,7 @@ final class Validator
             }
 
             if ($field->isChoiceField() && !self::isEmpty($value) && !$this->isValidChoice($field, $value)) {
-                $errors[$name] = [strtr($this->translate('{label} has an invalid choice.'), ['{label}' => $field->label])];
+                $errors[$name] = [strtr(__('{label} has an invalid choice.', 'tmswp'), ['{label}' => $field->label])];
                 continue;
             }
 
@@ -210,10 +210,5 @@ final class Validator
         $candidate = self::stringValue($value);
 
         return $candidate !== null && \in_array($candidate, $candidates, true);
-    }
-
-    private function translate(string $message): string
-    {
-        return \function_exists('__') ? __($message, 'tmswp') : $message;
     }
 }

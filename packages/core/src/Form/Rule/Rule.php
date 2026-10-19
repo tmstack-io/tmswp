@@ -40,9 +40,4 @@ abstract class Rule implements RuleInterface
     {
         return $this->message;
     }
-
-    protected function translate(string $message): string
-    {
-        return \function_exists('__') ? __($message, 'tmswp') : $message;
-    }
 }

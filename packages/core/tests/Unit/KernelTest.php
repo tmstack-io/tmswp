@@ -72,6 +72,31 @@ final class KernelTest extends UnitTestCase
         Kernel::boot(KernelConfig::theme($appDir, $namespace, $cacheDir, true, false));
     }
 
+    public function testTextdomainLoaderLoadsCoreMoFileForDeterminedLocale(): void
+    {
+        $appDir = $this->createTempDirectory('kernel-textdomain-app');
+        $cacheDir = $this->createTempDirectory('kernel-textdomain-cache');
+        $namespace = 'Example\\Tests\\KernelTextdomainApp' . uniqid();
+        $loader = null;
+
+        Actions\expectAdded('init')->once()->with(Mockery::type(Closure::class), 1, 0)
+            ->whenHappen(static function (Closure $callback) use (&$loader): void {
+                $loader = $callback;
+            });
+
+        Kernel::boot(KernelConfig::theme($appDir, $namespace, $cacheDir, true, false));
+
+        self::assertInstanceOf(Closure::class, $loader);
+
+        // ローダーは .mo のパスを渡し、同名の .l10n.php の優先読み込みは WordPress の load_textdomain() が行う
+        $moFile = \dirname(__DIR__, 2) . '/languages/tmswp-ja.mo';
+        self::assertFileExists($moFile);
+        Functions\expect('determine_locale')->once()->withNoArgs()->andReturn('ja');
+        Functions\expect('load_textdomain')->once()->with('tmswp', $moFile)->andReturn(true);
+
+        $loader();
+    }
+
     public function testBootUsesWarmCacheWithoutLoadingAppClasses(): void
     {
         $appDir = $this->createTempDirectory('warm-kernel-app');

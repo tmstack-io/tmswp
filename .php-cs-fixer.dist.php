@@ -17,6 +17,8 @@ $finder = (new Finder())
     ->name('*.php')
     ->notPath('#^core/src/Exception/#')
     ->notPath('#tests/(.+/)?fixtures/#')
+    // packages/*/languages/ の .l10n.php は `wp i18n make-php` の生成物で、出力をそのままコミットする
+    ->notPath('#^[^/]+/languages/#')
     ->append([__FILE__, __DIR__ . '/monorepo-builder.php']);
 
 return (new Config())

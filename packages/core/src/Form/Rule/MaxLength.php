@@ -28,7 +28,7 @@ final class MaxLength extends Rule
 
     public function defaultMessage(): string
     {
-        return $this->translate('{label} must be {length} characters or fewer.');
+        return __('{label} must be {length} characters or fewer.', 'tmswp');
     }
 
     public function messageParams(): array

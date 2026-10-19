@@ -195,7 +195,7 @@ final class FieldView
 
     public function display(?string $separator = null): string
     {
-        $separator ??= \function_exists('__') ? __(', ', 'tmswp') : ', ';
+        $separator ??= __(', ', 'tmswp');
 
         if ($this->field instanceof CompositeField) {
             return FormHtml::escHtml($this->field->display($this->stringValue()));

@@ -41,7 +41,7 @@ final class MaxFileSize extends Rule
 
     public function defaultMessage(): string
     {
-        return $this->translate('{label} must be {size} or smaller.');
+        return __('{label} must be {size} or smaller.', 'tmswp');
     }
 
     public function messageParams(): array

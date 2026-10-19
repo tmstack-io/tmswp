@@ -175,7 +175,6 @@ final class FormViewAndFileTest extends UnitTestCase
     public function testUploadedFileRequiresRealUploadedFile(): void
     {
         Functions\when('TMSWP\\Core\\Form\\is_uploaded_file')->justReturn(false);
-        Functions\when('__')->alias(static fn(string $message): string => $message);
 
         $path = $this->createTempDirectory('uploaded-file') . '/local.txt';
         file_put_contents($path, 'local');
@@ -192,7 +191,6 @@ final class FormViewAndFileTest extends UnitTestCase
     {
         Functions\when('esc_attr')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
         Functions\when('esc_html')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
-        Functions\when('__')->alias(static fn(string $message): string => $message);
     }
 
     private function createStoredFile(string $baseDir, string $token, string $name, string $mime, string $contents, int $created): void

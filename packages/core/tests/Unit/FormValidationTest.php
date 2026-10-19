@@ -33,13 +33,6 @@ use TMSWP\Core\Tests\Support\UnitTestCase;
 
 final class FormValidationTest extends UnitTestCase
 {
-    protected function setUp(): void
-    {
-        parent::setUp();
-
-        Functions\when('__')->alias(static fn(string $message): string => $message);
-    }
-
     public function testScalarRulesValidateAndSkipOptionalEmptyValues(): void
     {
         $definition = FormDefinition::create('contact')
@@ -223,7 +216,7 @@ final class ValidationTestDateField extends CompositeField
 
     public function invalidPartsMessage(): string
     {
-        return $this->translate('{label}が正しい日付ではありません。');
+        return __('{label}が正しい日付ではありません。', 'tmswp');
     }
 
     /** @return array<array-key, string> */

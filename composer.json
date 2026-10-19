@@ -60,7 +60,16 @@
     "lint": "php-cs-fixer fix --dry-run --diff --show-progress=none",
     "fix": "php-cs-fixer fix",
     "analyse": "phpstan analyse -c phpstan.neon.dist --memory-limit=1G",
-    "i18n:build": "php tools/build-l10n.php packages/core/languages/tmswp-ja.po packages/ja-toolkit/languages/tmswp-ja.po",
+    "i18n:build": [
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/core/src packages/core/languages/tmswp-core.pot --domain=tmswp --package-name=tmswp-core --headers='{\"POT-Creation-Date\":\"\"}'",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/core/languages/tmswp-core.pot",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/core/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/core/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/ja-toolkit/src packages/ja-toolkit/languages/tmswp-ja-toolkit.pot --domain=tmswp --package-name=tmswp-ja-toolkit --headers='{\"POT-Creation-Date\":\"\"}'",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/ja-toolkit/languages/tmswp-ja-toolkit.pot",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/ja-toolkit/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/ja-toolkit/languages"
+    ],
     "test:unit": "phpunit -c phpunit.unit.xml.dist",
     "test:coverage": [
       "@test:coverage:unit",

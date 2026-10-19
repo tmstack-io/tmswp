@@ -42,16 +42,14 @@ final readonly class UploadedFile
 
     public function errorMessage(): string
     {
-        $message = match ($this->error) {
-            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'The uploaded file is too large.',
-            UPLOAD_ERR_PARTIAL => 'The file was only partially uploaded.',
-            UPLOAD_ERR_NO_FILE => 'Please select a file.',
-            UPLOAD_ERR_NO_TMP_DIR => 'The temporary upload folder is missing.',
-            UPLOAD_ERR_CANT_WRITE => 'The file could not be written.',
-            UPLOAD_ERR_EXTENSION => 'A PHP extension stopped the file upload.',
-            default => 'The file upload failed.',
+        return match ($this->error) {
+            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => __('The uploaded file is too large.', 'tmswp'),
+            UPLOAD_ERR_PARTIAL => __('The file was only partially uploaded.', 'tmswp'),
+            UPLOAD_ERR_NO_FILE => __('Please select a file.', 'tmswp'),
+            UPLOAD_ERR_NO_TMP_DIR => __('The temporary upload folder is missing.', 'tmswp'),
+            UPLOAD_ERR_CANT_WRITE => __('The file could not be written.', 'tmswp'),
+            UPLOAD_ERR_EXTENSION => __('A PHP extension stopped the file upload.', 'tmswp'),
+            default => __('The file upload failed.', 'tmswp'),
         };
-
-        return \function_exists('__') ? __($message, 'tmswp') : $message;
     }
 }

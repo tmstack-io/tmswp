@@ -34,14 +34,9 @@ final class UploadFile implements RuleInterface
         }
 
         if ($value instanceof StoredFile) {
-            return $value->exists() ? null : ($this->message ?? $this->translate('The file upload failed.'));
+            return $value->exists() ? null : ($this->message ?? __('The file upload failed.', 'tmswp'));
         }
 
-        return $this->message ?? $this->translate('The file upload failed.');
-    }
-
-    private function translate(string $message): string
-    {
-        return \function_exists('__') ? __($message, 'tmswp') : $message;
+        return $this->message ?? __('The file upload failed.', 'tmswp');
     }
 }

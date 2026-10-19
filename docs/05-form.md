@@ -286,13 +286,13 @@ abstract class CompositeField
     abstract public function decompose(string $value): array;
 
     /** 一部のパーツのみ入力された状態のエラーメッセージ */
-    public function incompleteMessage(): string; // 既定: __('{label}をすべて入力してください。', 'tmswp')
+    public function incompleteMessage(): string; // 既定: __('Please complete all parts of {label}.', 'tmswp')
 
     /** 全パーツ入力後の組み合わせ検証。暦日・郵便番号分割などの整合性をここで検証する */
     public function validateParts(array $partValues): bool; // 既定: true
 
     /** validateParts() が false を返したときのエラーメッセージ */
-    public function invalidPartsMessage(): string; // 既定: __('{label}の入力値が不正です。', 'tmswp')
+    public function invalidPartsMessage(): string; // 既定: __('{label} is invalid.', 'tmswp')
 
     /** 確認画面・display()用の表示文字列(エスケープ前の生文字列を返す) */
     public function display(string $value): string; // 既定: $value をそのまま返す
@@ -450,7 +450,7 @@ for (name, field) in definition.fields():
         else:
             ok = in_array((string) value, candidates, strict: true)
         if not ok:
-            errors[name][] = __('{label}の選択値が不正です。', 'tmswp') を置換したもの
+            errors[name][] = __('{label} has an invalid choice.', 'tmswp') を置換したもの
             continue   # 以降のルールは実行しない
 
     # --- ルール実行(フィールドごとに最初の違反で停止) ---
@@ -509,7 +509,7 @@ abstract class Rule implements RuleInterface
     /** 検証本体 */
     abstract protected function passes(mixed $value, ValidationContext $context): bool;
 
-    /** ja標準メッセージ(__('...', 'tmswp')) */
+    /** 既定メッセージ(英語ソースを __('...', 'tmswp') にリテラルで渡して返す) */
     abstract public function defaultMessage(): string;
 
     /** {placeholder} 置換パラメータ({label}はMessagesが自動付与) */
@@ -598,7 +598,7 @@ final class Messages
 }
 ```
 
-- デフォルトメッセージは英語ソースを `__('...', 'tmswp')` でラップして内蔵し、日本語は同梱翻訳ファイルで提供する(DR-17/01 §7)。
+- デフォルトメッセージは英語ソースを `__('...', 'tmswp')` にリテラルで渡して内蔵し(`wp i18n make-pot` が抽出できる形。01 §7.1)、日本語は同梱翻訳ファイルで提供する(DR-17/01 §7)。`__()` は `defaultMessage()` 等のメソッドの中で呼び、ルールを作った時点では評価しない。
 - プレースホルダ書式は `{name}` 固定(旧 `%name%` から変更。sprintf `%s` との衝突事故=旧UploadFileRule未展開バグの再発防止)。
 - 上書き層は「ルール単位(コンストラクタ `message:`)」と「サイト全体(`tmswp/form/rule_message` フィルタ)」の2層のみ。フォーム単位の層は設けない(必要ならルール単位で足りる)。フィルタ名はKernel文書のフック命名規約(`tmswp/` 始まりのスラッシュ区切り)に従う。
 - 静的可変レジストリ(`override()`/`reset()` のような静的な上書きAPI)は持たない。グローバル可変状態のアンチパターンでありテスト間の状態リークを生むため、サイト全体の上書きはWP標準フィルタに一本化する。
@@ -763,7 +763,7 @@ final readonly class UploadedFile
     /** クライアント名の拡張子(小文字)。なければ '' */
     public function clientExtension(): string;
 
-    /** UPLOAD_ERR_* に対応するja文言(Messagesの{label}置換対象) */
+    /** UPLOAD_ERR_* に対応するメッセージ(英語ソースを __('...', 'tmswp') で翻訳したもの) */
     public function errorMessage(): string;
 }
 
@@ -933,7 +933,7 @@ handle(request = null):
   # --- 1. CSRF(全POSTで無条件・自動) ---
   if wp_verify_nonce(request.post(FIELD_NONCE), 'tmswp_form_' . def.id) == false:
       bind(request)                                    # 値は再表示用に保持(処理には使わない)
-      formErrors[] = __('セッションの有効期限が切れました。お手数ですが再度送信してください。', 'tmswp')
+      formErrors[] = __('Your session has expired. Please submit the form again.', 'tmswp')
       return finish(FormStep::Input)
 
   action = FormAction::tryFrom((string) request.post(FIELD_STEP))
@@ -957,14 +957,14 @@ handle(request = null):
           r = ConfirmToken::verify(def.id, (string) request.post(FIELD_CONFIRM_TOKEN), def.ttl())
           if r.status == Invalid:
               this.values = 全フィールドのdefault       # 改ざん: 値は一切信頼しない
-              formErrors[] = __('フォームの再送信に失敗しました。お手数ですが最初から入力してください。', 'tmswp')
+              formErrors[] = __('The form could not be resubmitted. Please start again.', 'tmswp')
               return finish(FormStep::Input)
           if r.status == Expired:
               restoreValues(r.values)                  # 署名は正当: 再表示には使える
-              formErrors[] = __('確認画面の有効期限が切れました。内容を確認のうえ再度お進みください。', 'tmswp')
+              formErrors[] = __('The confirmation screen has expired. Please review your entries and continue again.', 'tmswp')
               return finish(FormStep::Input)
           if !consumeJti(r.jti, def.ttl() + 60):       # アトミック獲得失敗 = 再送(リロード/二重クリック/並行二重POST)
-              formErrors[] = __('このフォームは既に送信されています。', 'tmswp')
+              formErrors[] = __('This form has already been submitted.', 'tmswp')
               this.values = 全フィールドのdefault
               return finish(FormStep::Input)
           this.values = resolveFileTokens(r.values)    # ['__tmsfile'=>token] → StoredFile

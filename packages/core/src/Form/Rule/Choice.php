@@ -34,6 +34,6 @@ final class Choice extends Rule
 
     public function defaultMessage(): string
     {
-        return $this->translate('{label} has an invalid choice.');
+        return __('{label} has an invalid choice.', 'tmswp');
     }
 }

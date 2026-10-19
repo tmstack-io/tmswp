@@ -10,6 +10,7 @@ declare(strict_types=1);
 use Composer\Autoload\ClassLoader;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
+use TMSWP\JaToolkit\JaToolkit;
 
 // 実際のプラグインと同じく、本体ファイルの直下(plugins_loaded より前)で boot する
 (static function (): void {
@@ -18,4 +19,8 @@ use TMSWP\Core\Kernel\KernelConfig;
     $loader->register();
 
     Kernel::boot(KernelConfig::plugin(__FILE__, __DIR__ . '/app', 'TmswpFixturePlugin', TMSWP_TESTS_CACHE_DIR));
+
+    // ja-toolkit の翻訳ローダー(init の priority 1)を、利用側と同じ enable() の経路で登録する。
+    // 統合テストはモジュールの挙動を使わないため、モジュールは列挙しない
+    JaToolkit::enable([]);
 })();

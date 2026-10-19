@@ -174,7 +174,7 @@ final class BirthDateField extends CompositeField
 
     public function invalidPartsMessage(): string
     {
-        return $this->translate('{label}が正しい日付ではありません。');
+        return __('{label}が正しい日付ではありません。', 'tmswp');
     }
 
     /** @return array<string, string> */

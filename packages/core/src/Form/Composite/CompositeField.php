@@ -32,7 +32,7 @@ abstract class CompositeField
 
     public function incompleteMessage(): string
     {
-        return $this->translate('Please complete all parts of {label}.');
+        return __('Please complete all parts of {label}.', 'tmswp');
     }
 
     /** @param array<string, string> $partValues */
@@ -43,16 +43,11 @@ abstract class CompositeField
 
     public function invalidPartsMessage(): string
     {
-        return $this->translate('{label} is invalid.');
+        return __('{label} is invalid.', 'tmswp');
     }
 
     public function display(string $value): string
     {
         return $value;
-    }
-
-    protected function translate(string $message): string
-    {
-        return \function_exists('__') ? __($message, 'tmswp') : $message;
     }
 }

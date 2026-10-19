@@ -58,7 +58,7 @@ final class FileExtension extends Rule
 
     public function defaultMessage(): string
     {
-        return $this->translate('Please upload {label} as one of these file types: {extensions}.');
+        return __('Please upload {label} as one of these file types: {extensions}.', 'tmswp');
     }
 
     public function messageParams(): array

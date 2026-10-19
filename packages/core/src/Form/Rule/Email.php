@@ -18,6 +18,6 @@ final class Email extends Rule
 
     public function defaultMessage(): string
     {
-        return $this->translate('Please enter a valid email address for {label}.');
+        return __('Please enter a valid email address for {label}.', 'tmswp');
     }
 }

@@ -33,7 +33,7 @@ final class Retype implements RuleInterface
             return null;
         }
 
-        $message = $this->message ?? $this->translate('{label} must match {otherLabel}.');
+        $message = $this->message ?? __('{label} must match {otherLabel}.', 'tmswp');
 
         if (\function_exists('apply_filters')) {
             $filtered = apply_filters('tmswp/form/rule_message', $message, $this, $context);
@@ -47,10 +47,5 @@ final class Retype implements RuleInterface
             '{label}' => $context->label($context->currentField),
             '{otherLabel}' => $context->label($this->field),
         ]);
-    }
-
-    private function translate(string $message): string
-    {
-        return \function_exists('__') ? __($message, 'tmswp') : $message;
     }
 }

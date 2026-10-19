@@ -1,80 +1,119 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: tmswp-core\n"
+"Report-Msgid-Bugs-To: \n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: \n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"X-Generator: WP-CLI 2.12.0\n"
+"X-Domain: tmswp\n"
 
-msgid ", "
-msgstr ""
-
+#: Form/Composite/CompositeField.php:35
 msgid "Please complete all parts of {label}."
 msgstr ""
 
+#: Form/Composite/CompositeField.php:46
+#: Form/Rule/Callback.php:40
 msgid "{label} is invalid."
 msgstr ""
 
+#: Form/FieldView.php:198
+msgid ", "
+msgstr ""
+
+#: Form/Form.php:56
 msgid "Your session has expired. Please submit the form again."
 msgstr ""
 
+#: Form/Form.php:193
 msgid "The form could not be resubmitted. Please start again."
 msgstr ""
 
+#: Form/Form.php:200
+#: Form/Form.php:213
 msgid "The confirmation screen has expired. Please review your entries and continue again."
 msgstr ""
 
+#: Form/Form.php:207
 msgid "This form has already been submitted."
 msgstr ""
 
-msgid "The uploaded file is too large."
-msgstr ""
-
-msgid "The file was only partially uploaded."
-msgstr ""
-
-msgid "Please select a file."
-msgstr ""
-
-msgid "The temporary upload folder is missing."
-msgstr ""
-
-msgid "The file could not be written."
-msgstr ""
-
-msgid "A PHP extension stopped the file upload."
-msgstr ""
-
-msgid "The file upload failed."
-msgstr ""
-
-msgid "{label} is required."
-msgstr ""
-
-msgid "Please enter a valid email address for {label}."
-msgstr ""
-
-msgid "{label} must be {length} characters or fewer."
-msgstr ""
-
-msgid "{label} must be at least {length} characters."
-msgstr ""
-
-msgid "{label} has an invalid format."
-msgstr ""
-
-msgid "{label} must be between {min} and {max}."
-msgstr ""
-
+#: Form/Rule/Choice.php:37
+#: Form/Validator.php:36
 msgid "{label} has an invalid choice."
 msgstr ""
 
-msgid "{label} must match {otherLabel}."
+#: Form/Rule/Email.php:21
+msgid "Please enter a valid email address for {label}."
 msgstr ""
 
+#: Form/Rule/FileExtension.php:61
 msgid "Please upload {label} as one of these file types: {extensions}."
 msgstr ""
 
+#: Form/Rule/MaxFileSize.php:44
 msgid "{label} must be {size} or smaller."
 msgstr ""
 
+#: Form/Rule/MaxLength.php:31
+msgid "{label} must be {length} characters or fewer."
+msgstr ""
+
+#: Form/Rule/MinLength.php:31
+msgid "{label} must be at least {length} characters."
+msgstr ""
+
+#: Form/Rule/Range.php:40
+msgid "{label} must be between {min} and {max}."
+msgstr ""
+
+#: Form/Rule/Regex.php:50
+msgid "{label} has an invalid format."
+msgstr ""
+
+#: Form/Rule/Required.php:29
+#: Form/Rule/RequiredIf.php:52
+msgid "{label} is required."
+msgstr ""
+
+#: Form/Rule/Retype.php:36
+msgid "{label} must match {otherLabel}."
+msgstr ""
+
+#: Form/Rule/UploadFile.php:37
+#: Form/Rule/UploadFile.php:40
+#: Form/UploadedFile.php:52
+msgid "The file upload failed."
+msgstr ""
+
+#: Form/Rule/Url.php:38
 msgid "Please enter a valid URL for {label}."
+msgstr ""
+
+#: Form/UploadedFile.php:46
+msgid "The uploaded file is too large."
+msgstr ""
+
+#: Form/UploadedFile.php:47
+msgid "The file was only partially uploaded."
+msgstr ""
+
+#: Form/UploadedFile.php:48
+msgid "Please select a file."
+msgstr ""
+
+#: Form/UploadedFile.php:49
+msgid "The temporary upload folder is missing."
+msgstr ""
+
+#: Form/UploadedFile.php:50
+msgid "The file could not be written."
+msgstr ""
+
+#: Form/UploadedFile.php:51
+msgid "A PHP extension stopped the file upload."
 msgstr ""

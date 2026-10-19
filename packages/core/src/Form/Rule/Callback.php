@@ -37,11 +37,6 @@ final class Callback implements RuleInterface
             return $result;
         }
 
-        return strtr($this->message ?? $this->translate('{label} is invalid.'), ['{label}' => $context->label($context->currentField)]);
-    }
-
-    private function translate(string $message): string
-    {
-        return \function_exists('__') ? __($message, 'tmswp') : $message;
+        return strtr($this->message ?? __('{label} is invalid.', 'tmswp'), ['{label}' => $context->label($context->currentField)]);
     }
 }

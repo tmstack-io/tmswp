@@ -143,7 +143,16 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
         "lint": "php-cs-fixer fix --dry-run --diff --show-progress=none",
         "fix": "php-cs-fixer fix",
         "analyse": "phpstan analyse -c phpstan.neon.dist --memory-limit=1G",
-        "i18n:build": "php tools/build-l10n.php packages/core/languages/tmswp-ja.po packages/ja-toolkit/languages/tmswp-ja.po",
+        "i18n:build": [
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/core/src packages/core/languages/tmswp-core.pot --domain=tmswp --package-name=tmswp-core --headers='{\"POT-Creation-Date\":\"\"}'",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/core/languages/tmswp-core.pot",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/core/languages",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/core/languages",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/ja-toolkit/src packages/ja-toolkit/languages/tmswp-ja-toolkit.pot --domain=tmswp --package-name=tmswp-ja-toolkit --headers='{\"POT-Creation-Date\":\"\"}'",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/ja-toolkit/languages/tmswp-ja-toolkit.pot",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/ja-toolkit/languages",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/ja-toolkit/languages"
+        ],
         "test:unit": "phpunit -c phpunit.unit.xml.dist",
         "test:coverage": [
             "@test:coverage:unit",
@@ -374,7 +383,10 @@ $finder = (new Finder())
         __DIR__ . '/tools',
     ])
     ->name('*.php')
+    ->notPath('#^core/src/Exception/#')
     ->notPath('#tests/(.+/)?fixtures/#')
+    // packages/*/languages/ の .l10n.php は `wp i18n make-php` の生成物で、出力をそのままコミットする
+    ->notPath('#^[^/]+/languages/#')
     ->append([__FILE__, __DIR__ . '/monorepo-builder.php']);
 
 return (new Config())
@@ -1139,6 +1151,16 @@ jobs:
             fi
             sleep 10
           done
+      # コミット済みの翻訳ファイルが、ソースと .po から WP-CLI で作り直したものと一致するかを確かめる
+      - name: Check translation files are up to date
+        run: |
+          composer i18n:build
+          git diff --exit-code -- 'packages/*/languages/*'
+          untracked=$(git ls-files --others --exclude-standard -- 'packages/*/languages/*')
+          if [ -n "$untracked" ]; then
+            echo "::error::untracked translation files: ${untracked}"
+            exit 1
+          fi
       - name: Run unit tests with coverage
         run: composer test:coverage:unit
       - name: Run integration tests with coverage
@@ -1167,6 +1189,7 @@ jobs:
 - `integration` と `coverage` は `timeout-minutes: 20` で打ち切る。wp-env の起動(`wp:start` / `wp:start:coverage`)は Docker イメージ取得の一時的な失敗に備えて 10 秒間隔で 3 回まで再試行し、3 回目の失敗でジョブを失敗させる。失敗時は wp-env のログ(`logs development --no-watch`)を出力する。
 - `lint` ジョブが baseline ファイルの不存在を機械的に強制する。
 - 合算カバレッジの判定は `coverage` ジョブ(PHP 8.3 / WordPress 最新版の 1 セル)だけで行う(4.8)。このジョブは pcov で unit を、`wp:start:coverage` で起動した wp-env の Xdebug で integration を計測し、2 つの clover を artifact `coverage-clover` に保存してから `test:coverage:check` で判定する。clover はジョブ内で生成して使うため、ジョブ間の受け渡しは無い。`unit` と `integration` の各セルはカバレッジを計測しない。
+- `coverage` ジョブは wp-env の起動後に `composer i18n:build` を実行し、`packages/*/languages` に差分や未追跡のファイルが出ないことを確かめる(コミット済みの翻訳ファイルが、ソースと .po から作り直したものと一致すること。01 文書 §7.2)。WP-CLI は wp-env の cli コンテナのものを使うため、このジョブで行う。
 - `integration` と `coverage` は `unit` 成功後に起動し、Docker 起動コストを失敗時に節約する。
 - 外部アクションはコミットの SHA で固定する(5.3)。
 
