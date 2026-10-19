@@ -206,7 +206,7 @@ final class Connection
 
 #### 振る舞い仕様
 
-- `tableName()`: ベアテーブル名をR1で検証し、`$wpdb->prefix . $bareName`を返す。マルチサイトでは`$wpdb->prefix`がサイト毎prefixを返すため、独自テーブルは**サイト毎に作成される**(ネットワーク共有テーブルは本層の非対象。必要なら利用側が`wpdb()`で実装する)。
+- `tableName()`: ベアテーブル名をR1で検証し、`$wpdb->prefix . $bareName`を返す(マルチサイトは対象外。00-overview §2.2)。
 - `select`系: 内部は`prepare()`を通した後、`$wpdb->get_results($sql, ARRAY_A)` / `get_row` / `get_var` / `get_col`へ委譲。実行後に`$wpdb->last_error`が非空なら`QueryException`。
 - `insert/update/delete`: format配列はR3写像から導出して`$wpdb->insert/update/delete`に渡す。`$where`に配列値が含まれる場合は`InvalidQueryException`(IN条件は`QueryBuilder`を使う)。
 - wpdbの戻り値は数値もstringで返るが、Connectionはこの段階では変換しない(型の正規化はDTOハイドレーションの責務)。
@@ -490,7 +490,7 @@ SELECT/UPDATE/DELETE文の組み立てと実行。**すべての値は`Connectio
 
 #### クエリ語彙enum(`TMSWP\Core\Query\`、正準定義)
 
-閉集合のクエリ引数(比較演算子・キャスト型・並び順)はbacked enumで表現する。本文書が以下の3 enumを正準定義し、Model層の`QueryBuilder`(並び順)に加えて、エンティティクエリビルダ3種(03-entities.md §7の`PostQuery`/`TermQuery`/`UserQuery`)が共有する。「文字列許可リスト照合+実行時例外」という旧契約を型システムへ移すことで、typoは静的解析(PHPStan level max、DR-12)とIDE補完の段階で検出され、補完で全候補が可視化される。
+閉集合のクエリ引数(比較演算子・キャスト型・並び順)はbacked enumで表現する。本文書が以下の3 enumを正準定義し、Model層の`QueryBuilder`(並び順)に加えて、エンティティクエリビルダ3種(03-entities.md §7の`PostQuery`/`TermQuery`/`UserQuery`)が共有する。文字列の許可リスト照合と実行時例外ではなく型システムで表すことで、typoは静的解析(PHPStan level max、DR-12)とIDE補完の段階で検出され、補完で全候補が可視化される。
 
 ```php
 <?php
@@ -1321,12 +1321,6 @@ $migrator->dropTable(\App\Model\InquiryModel::class);
 | stdClass直返しのみで型情報なし | stdClassを既定としつつ`as(Dto::class)`/`rowClass()`の任意DTOハイドレーション(コンストラクタ引数マッピング+型強制)を追加 |
 
 旧APIの「テーブル名を書かない静的CRUD」「条件配列のIN句展開」「count等の戻り値形状別ショートカット」という筋肉記憶価値は、`Model::insert/update/delete/count`と`QueryBuilder`の対応メソッドとして継承した。旧`__OR__`/`__AND__`ネストはClosureグループに、整数キー生SQL断片は`whereRaw`(プレースホルダ強制)に置き換え、無検証の自由度は意図的に残していない。
-
-### モダン化監査による改稿(2026-06-13)
-
-- 閉集合のクエリ引数をbacked enum化。`TMSWP\Core\Query\Compare`/`CastType`/`SortOrder`を本文書で正準定義し(QueryBuilder節)、`QueryBuilder::orderBy()`の`$direction`を`SortOrder`型へ変更。文字列許可リスト+実行時例外による方向検証を型システムへ移した(エンティティクエリビルダ側の適用は03-entities.md参照)。
-- R2規約4(raw断片のコンパイル時定数制約)を`@param literal-string`によるPHPStan静的検査(DR-12の`composer analyse`)へ移行し、未実装だったランタイムSQLトークナイザ構想(旧DECISION)は「実装しない」と確定して削除。
-- `admin_init`契機の`migrateAll()`例外を`wp_admin_notice()`(無条件)+`wp_trigger_error()`(WP_DEBUG時)で非致死に捕捉し、管理画面ロックアウトの恒久ループを除去。「ハッシュ未更新=次回契機で自動リトライ」の既存設計意図と初めて整合させた。
 
 ---
 

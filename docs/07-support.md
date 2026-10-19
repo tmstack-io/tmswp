@@ -13,7 +13,7 @@ TMSWP コアのうち、テンプレート読み込みヘルパ(`View\Template`)
   - `TMSWP\Core\Support\` … `Arr`, `Str`, `Html`
   - `TMSWP\Core\Log\` … `Log`, `LoggerRegistry`, `LogChannel`, `ScopedLog`, `SimpleLogger`
   - `TMSWP\Core\Exception\` のうち本章が定義する例外: `TemplateNotFoundException`, `InvalidTemplateSlugException`, `UnknownLogChannelException`, `InvalidArgumentException`
-  - グローバルヘルパ: `tms_var()`, `tms_log()` (`packages/core/src/helpers.php`)
+  - グローバルヘルパ: `tms_var()`, `tms_log()` (`packages/core/src/functions.php`)
 
 ランタイム依存は `psr/log ^3` のみ(DR-14)。`Support\Arr` / `Support\Str` の大部分と `Log` のディスパッチロジックは WP 非依存の純 PHP とし、WP 関数呼び出し(`esc_attr` / `wp_date` / `wp_mkdir_p` / `get_stylesheet_directory` 等)は本章で明示する箇所に限定する。
 
@@ -225,7 +225,7 @@ ActionRouter の生成・登録(Kernel boot 手順):
 ```
 
 - **`KernelConfig` の新パラメータ `actions: bool = true`**。テーマで actions 規約を使わない・別機構を使う場合は `KernelConfig::theme(actions: false)` で `ActionRouter` の生成自体を抑止できる。
-- **priority 100** は「他プラグインの template フィルタ適用後の確定パスを見る」のに十分であり、9999 のような極端値による無用な順位競争を避ける(ADR-2 相当)。
+- **priority 100** は「他プラグインの template フィルタ適用後の確定パスを見る」のに十分であり、9999 のような極端値による無用な順位競争を避ける。
 - **プラグイン形態では `ActionRouter` を生成しない。** プラグインはトップレベルテンプレートを供給する機構を持たないため `template_include` への介入が意味を持たない。プラグイン側のテンプレート前処理に相当するロジックは `#[AsHook]` クラスへ書く。
 
 ### 1A.3 クラスシグネチャ
@@ -496,7 +496,7 @@ actions/テンプレート/パーツは PHP ファイル include 規約である
 
 ### 1D.3 グローバルヘルパ tms_var()
 
-`packages/core/src/helpers.php`(composer.json の `autoload.files` で読み込み):
+`packages/core/src/functions.php`(composer.json の `autoload.files` で読み込み):
 
 ```php
 <?php
@@ -601,7 +601,7 @@ final class Arr
 
 旧 `Iwf2b\Text`(42参照・9プロジェクト)のうち実利用は `replace` / `stringify` / `truncate` / `convert_eol`、および FW 内部の命名規約変換(`convert_case`)。これらのみをキャメルケース API で収載する。`auto_link` は WP 標準 `make_clickable()` で代替(rules/ に明記)、`reverse_wpautop` / `short_hash` は廃止(署名 URL は thumbnail 拡張が `hash_hmac` を直接使う)。
 
-`excerpt()` を除き全メソッドは WP 非依存・純粋。マルチバイト処理は UTF-8 前提で `mb_*` を使用する(コアの composer.json に `ext-mbstring` を require する)。
+`excerpt()` を除き全メソッドは WP 非依存・純粋。マルチバイト処理は UTF-8 前提で `mb_*` を使用する(`ext-mbstring` はコアの composer.json の `suggest` に記載する。01-architecture §3.2)。
 
 ### 3.2 クラスシグネチャ
 
@@ -1059,7 +1059,7 @@ nginx 環境では `.htaccess` が無効なため、rules/ に「公開領域外
 
 ### 5.6 tms_log() ヘルパ
 
-`packages/core/src/helpers.php`(composer.json の `autoload.files` で読み込み):
+`packages/core/src/functions.php`(composer.json の `autoload.files` で読み込み):
 
 ```php
 <?php
@@ -1396,11 +1396,11 @@ $lead    = Str::excerpt(get_the_content(), 120);
 # 旧 iwf2b からの設計根拠(簡潔に)
 
 - **View / ActionRouter**: 旧 `Iwf2b\View` は `template_include` priority 100 での乗っ取り+`load_global()`(`$wp_query->query_vars` の全グローバル展開)+`extract()`+`exit` という4重の WP 標準破壊を抱えていた(DR-10/DR-16 で廃止確定)。実利用52参照のうちテンプレート分割の本質的価値は `View::element()`(T11 等のパーシャル描画)とテンプレート前処理(`actions/` 規約)であり、前者は WP 5.5+ の `get_template_part($slug, $name, $args)` と同型の `Template::part($slug, $args)`(§1)として、後者は `ActionRouter` + `View` 変数バッグ(§1A・§1B)として再設計した。
-- **ActionRouter(actions/ 規約)**: 旧 `actions/{テンプレート名}.php` 規約(T04・T05・T06 で15案件中に定型化)は、テンプレートからロジックを分離する現場価値が高い一方、その実現手段が上記 View 乗っ取り機構そのものであり、4つの問題(テンプレート階層複製・`$GLOBALS` 展開・`exit` バイパス・`load_global`)を抱えていた。本層はこの価値(ロジック分離)だけを残し害を全廃する: `template_include`(priority 100)を購読するが `$template` を**常に無加工で返す**(404 強制時のみ WP 標準の `get_404_template()` へ差し替える)ため WP 標準解決を一切変更せず、actions が見える変数は `$wp_query` のみ(static クロージャ+`func_get_arg()` include。`Template::includeIsolated` と同一イディオムへ統一。モダン化監査(2026-06-13)で採用)、データは `return array` → `View` 変数バッグ → `tms_var()` の追跡可能な経路で渡す(`extract()`/`load_global()` 廃止)。actions の戻り値の正準形は明示的な連想配列リテラルとし `compact()` を使わない(`extract()` 禁止との対称性。同監査で採用)。404 は `ActionRouter::notFound()` で表明し `set_404()` 直呼びを禁ずる。本機構は当初クラス形式コントローラ(`#[AsController]` を付した `TemplateController` 基底+`current()` 取得)として検討したが、(1) 旧 iwf2b の現場規約が**テンプレート同名ファイル**であり15案件の定着パターンを直接踏襲する方が学習コストが低い、(2) 属性探索・Initializer・Runner・`ControllerNotRunException` という機構がファイル include 規約に対して過大、(3) 参考設計書 Keel が同型の `actions/` ファイル規約(§5.2 Router / §5.3 View / ADR-2 / ADR-9)を採用済みである、の3点から、クラス形式案を退けてファイル規約へ置き換えた(2026-06-13 ユーザー確定。DR-19)。型の担保は `public readonly` プロパティの代わりに、テンプレート側 `@var` 注釈規約+`View::get` 未定義キー警告+`bin/tms-check` 静的検査(§1D)で行う。`actions/common.php`(全テンプレート共通)はサポートしない(Keel 準拠。共通ロジックは `app/Hook` クラスまたはパーツ内モデルヘルパ直読みへ)。
+- **ActionRouter(actions/ 規約)**: 旧 `actions/{テンプレート名}.php` 規約(T04・T05・T06 で15案件中に定型化)は、テンプレートからロジックを分離する現場価値が高い一方、その実現手段が上記 View 乗っ取り機構そのものであり、4つの問題(テンプレート階層複製・`$GLOBALS` 展開・`exit` バイパス・`load_global`)を抱えていた。本層はこの価値(ロジック分離)だけを残し害を全廃する: `template_include`(priority 100)を購読するが `$template` を**常に無加工で返す**(404 強制時のみ WP 標準の `get_404_template()` へ差し替える)ため WP 標準解決を一切変更せず、actions が見える変数は `$wp_query` のみ(static クロージャ+`func_get_arg()` include。`Template::includeIsolated` と同一イディオム)、データは `return array` → `View` 変数バッグ → `tms_var()` の追跡可能な経路で渡す(`extract()`/`load_global()` 廃止)。actions の戻り値の正準形は明示的な連想配列リテラルとし `compact()` を使わない(`extract()` 禁止との対称性)。404 は `ActionRouter::notFound()` で表明し `set_404()` 直呼びを禁ずる。クラス形式のコントローラ(属性付きの基底クラス)ではなくテンプレート同名ファイルの規約とするのは、(1) 旧 iwf2b の現場規約が**テンプレート同名ファイル**であり15案件の定着パターンを直接踏襲する方が学習コストが低い、(2) 属性探索・Initializer・Runner・専用例外という機構がファイル include 規約に対して過大、の2点による(DR-19)。型の担保は `public readonly` プロパティの代わりに、テンプレート側 `@var` 注釈規約+`View::get` 未定義キー警告+`bin/tms-check` 静的検査(§1D)で行う。`actions/common.php`(全テンプレート共通)はサポートしない(共通ロジックは `app/Hook` クラスまたはパーツ内モデルヘルパ直読みへ)。
 - **Arr**: 実利用は `get`(21箇所)のドット記法アクセスが中核。deep merge 系(`merge`/`merge_intersect_key` 9箇所)は旧 FW の「options 連想配列」文化の産物であり、新 FW では named arguments + readonly 定義オブジェクト(`PostTypeDefinition` 等)が代替するため収載しない。
-- **Str**: 旧 `Text` の実利用 4 メソッド+FW 内部で必要な命名変換のみ。`auto_link` は WP 標準 `make_clickable()`、`short_hash` は利用側の `hash_hmac` 直接利用(thumbnail 拡張)で代替。`truncate` は WP 依存(タグ除去)が混入していたため、純関数 `truncate` と WP 境界 `excerpt` に分離した。`replace` は旧 `Text::replace` の `$bounds` パラメータ(`%key%` 既定+区切り文字切替)を撤廃し、`{key}` 構文+`strtr()` 単一パスへ固定した(§3.2A。FW 内のプレースホルダ構文を1種類に統一・再置換バグの構造的排除。モダン化監査(2026-06-13)で採用)。
+- **Str**: 旧 `Text` の実利用 4 メソッド+FW 内部で必要な命名変換のみ。`auto_link` は WP 標準 `make_clickable()`、`short_hash` は利用側の `hash_hmac` 直接利用(thumbnail 拡張)で代替。`truncate` は WP 依存(タグ除去)が混入していたため、純関数 `truncate` と WP 境界 `excerpt` に分離した。`replace` は旧 `Text::replace` の `$bounds` パラメータ(`%key%` 既定+区切り文字切替)を持たず、`{key}` 構文+`strtr()` 単一パスに固定する(§3.2A。FW 内のプレースホルダ構文を1種類に統一し、再置換バグを構造的に排除する)。
 - **Html**: 旧流暢ビルダ(`__call`/`__get`/ノードコレクション約185行)は全プロジェクト参照ゼロの完全デッドコード(DR-16 で廃止確定)。実利用は `Html::tag()` 経由の属性レンダリングのみで、その実体だった `HtmlTag::parse_attrs` を純関数 `attributes()` として再定義。standalone 属性のホワイトリスト方式は HTML の進化に追随できないため bool 値駆動に変更した。
-- **Log**: 全15プロジェクトがブートで同一の `Log::set_logger` 定型を書き、`iwf_log()` は300箇所で利用された最高頻度 API。チャンネル+levels/scopes フィルタの設計は実証済みのためそのまま踏襲し、(1) `__call`/`__callStatic` を明示メソッド+`LoggerTrait` に置換、(2) ワンショット scope の可変インスタンス状態(書き込み後にクリアする実装)を不変 `ScopedLog` に置換、(3) スコープなしレコードが scopes 制限チャンネルに漏れる旧マッチング規則を修正、(4) 定型ブートを遅延デフォルトチャンネルで不要化、(5) 旧 `default_scope()`(永続アンビエントスコープ)は撤廃し、スコープ付与を不変 `ScopedLog` の1経路に統一した(プロセス共有レジストリ上の可変既定スコープは他コンポーネントのスコープなしログ全てに波及する遠隔作用となるため。自スコープ常用は `$log = tms_log()->scope('shop')` の保持で代替。モダン化監査(2026-06-13)で採用)。
+- **Log**: 全15プロジェクトがブートで同一の `Log::set_logger` 定型を書き、`iwf_log()` は300箇所で利用された最高頻度 API。チャンネル+levels/scopes フィルタの設計は実証済みのためそのまま踏襲し、(1) `__call`/`__callStatic` を明示メソッド+`LoggerTrait` に置換、(2) ワンショット scope の可変インスタンス状態(書き込み後にクリアする実装)を不変 `ScopedLog` に置換、(3) スコープなしレコードが scopes 制限チャンネルに漏れる旧マッチング規則を修正、(4) 定型ブートを遅延デフォルトチャンネルで不要化、(5) 旧 `default_scope()`(永続アンビエントスコープ)は撤廃し、スコープ付与を不変 `ScopedLog` の1経路に統一した(プロセス共有レジストリ上の可変既定スコープは他コンポーネントのスコープなしログ全てに波及する遠隔作用となるため。自スコープ常用は `$log = tms_log()->scope('shop')` の保持で代替)。
 - **SimpleLogger**: `current_time()` → `wp_date()` への更新(WP タイムゾーン整合の現行推奨 API)、ローテーション皆無 → `maxFiles` 導入、`WP_CONTENT_DIR/iwf2b-log/` が Web から素通しだった問題 → `.htaccess`/`index.php` 自動生成+公開領域外推奨の明文化。オプション連想配列+動的プロパティ代入(`$this->{$arg_key} = $arg_value`)は readonly プロパティ+named arguments に置換。
 
 ---

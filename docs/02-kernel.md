@@ -26,7 +26,8 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
   - `src/Attribute/ComponentAttributeInterface.php` — `TMSWP\Core\Attribute\ComponentAttributeInterface` (本文書で新設定義)
   - `src/Attribute/Action.php` — `TMSWP\Core\Attribute\Action` (メソッドレベルフック属性。本文書で新設定義。§5)
   - `src/Attribute/Filter.php` — `TMSWP\Core\Attribute\Filter` (メソッドレベルフック属性。本文書で新設定義。§5)
-  - 各コンポーネント属性は本文書の `ComponentAttributeInterface` 契約に従う。コア属性は6種(`AsPostType` / `AsTaxonomy` / `AsUserRole` / `AsModel` / `AsHook` / `AsOptionGroup`)。属性のパラメータ仕様と各 Initializer の中身は各機能文書が定義する。メソッドレベルのフック属性 `#[Action]` / `#[Filter]` は本文書が正準定義する(§5)
+  - `src/Attribute/AsHook.php` / `src/Hook/Hook.php` / `src/Hook/HookInitializer.php` — `#[AsHook]` 属性・Hook 基底・Hook の Initializer(本文書が正準定義。§5)
+  - 各コンポーネント属性は本文書の `ComponentAttributeInterface` 契約に従う。コア属性は6種(`AsPostType` / `AsTaxonomy` / `AsUserRole` / `AsModel` / `AsHook` / `AsOptionGroup`)。属性のパラメータ仕様と各 Initializer の中身は各機能文書が定義する。ただし `AsHook` と Hook 基底・`HookInitializer`、メソッドレベルのフック属性 `#[Action]` / `#[Filter]` は本文書が正準定義する(§5)
   - `src/View/ActionRouter.php` — `TMSWP\Core\View\ActionRouter`(本文書はboot時の生成・登録のみを定義。dispatch の正準仕様・actions ファイル規約・View 変数バッグは View/Support/Log 文書が定義する)
   - `src/Container/Container.php` — `TMSWP\Core\Container\Container`
   - `src/Exception/KernelException.php` / `DiscoveryException.php` / `ContainerException.php` / `NotFoundException.php` / `CircularDependencyException.php`
@@ -39,7 +40,6 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
 - エンティティ定義文書(PostType / Taxonomy / UserRole) — `AsPostType` / `AsTaxonomy` / `AsUserRole` 属性と各 Initializer の定義元
 - Meta / Option 文書 — `AsOptionGroup` 属性と OptionGroup Initializer の定義元
 - Model 文書 — `AsModel` 属性・`Migrator`(有効化時/admin_init 版数比較・WP-CLI)の定義元
-- Hook 文書(`Hook\Hook` 薄い基底) — `AsHook` 属性・Hook 基底・Hook Initializer(`register()` 例外手段の初期化)の定義元。メソッドレベル `#[Action]` / `#[Filter]` 属性と登録機構は本文書が正準(§5)
 - Log 文書 — `Log::error()` 等の静的ファサード(本文書は PSR-3 レベル名の静的メソッド `Log::error(string|\Stringable $message, array $context = []): void` が存在することを前提とする)
 - QA 文書 — `composer test` / `composer qa` 等の検証コマンド定義元
 
@@ -75,7 +75,7 @@ init(10) … #[AsPostType] / #[AsUserRole]
 
 boot() 時点で発生する副作用は **add_action / add_filter(`#[Action]`/`#[Filter]` メソッドの直接登録、テーマ形態の ActionRouter の `template_include` 登録) / register_activation_hook / WP-CLIコマンド登録 / (コールド時のみ)キャッシュファイル書込** に限定される。`register_post_type` 等のWP登録系APIはすべて上記フック発火時に実行される。
 
-Kernel はコアのテキストドメインをロードしない。CPT/Taxラベル生成は gettext 非依存のテンプレート方式(DR-17)であり、コアの例外・ログメッセージは開発者向け英語で固定する。
+Kernel はコアの翻訳(テキストドメイン `tmswp`)を `init`(priority 1)でロードする(ロード手順の正準は 01-architecture §7.3)。CPT/Taxラベル生成は gettext 非依存のテンプレート方式(DR-17)であり、コアの例外・ログメッセージは翻訳対象外の開発者向け英語で固定する。
 
 ---
 
@@ -604,7 +604,7 @@ scan():
   6. return new DiscoveryResult(components, hookMethods, files, dirs)
 ```
 
-**Composer最適化クラスマップとの突合は行わない(確定判断)**: 旧版の本節には `spl_autoload_functions()` から `Composer\Autoload\ClassLoader` を探り当て `getClassMap()` とPSR-4導出FQCNを突合するdebug検査(旧手順3・4-b)が存在したが、Composer内部実装への暗黙結合であり、別オートローダ併用環境(Bedrock系カスタムローダ等)で破綻し得るため削除した。これにより「機能破綻を伴わない最適化クラスマップの陳腐化(`composer dump-autoload -o` の実行忘れで古いエントリが残存するが、PSR-4フォールバックで正常動作するケース)」を名指しで早期検出する能力は失われる。この検出力低下は次回 dump-autoload で自己治癒する一過性の開発時ハイジーンに留まり、**機能破綻を伴う不整合はすべて手順3-b(class_exists 失敗)・3-c(getName/getFileName 突合)が「ファイルパス・期待FQCN・是正ヒント(dump-autoload 含む)」付きの明示エラーで検出する**。
+**Composer最適化クラスマップとの突合は行わない(確定判断)**: `spl_autoload_functions()` から `Composer\Autoload\ClassLoader` を探り当て `getClassMap()` とPSR-4導出FQCNを突合する検査は持たない。Composer内部実装への暗黙結合であり、別オートローダ併用環境(Bedrock系カスタムローダ等)で破綻し得るためである。このため「機能破綻を伴わない最適化クラスマップの陳腐化(`composer dump-autoload -o` の実行忘れで古いエントリが残存するが、PSR-4フォールバックで正常動作するケース)」は名指しでは検出しない。これは次回 dump-autoload で自己治癒する一過性の開発時ハイジーンに留まり、**機能破綻を伴う不整合はすべて手順3-b(class_exists 失敗)・3-c(getName/getFileName 突合)が「ファイルパス・期待FQCN・是正ヒント(dump-autoload 含む)」付きの明示エラーで検出する**。
 
 **探索失敗時の挙動(全箇所共通・正準)**:
 
@@ -732,7 +732,74 @@ final readonly class Filter
 - 両属性は `ComponentAttributeInterface` を**実装しない**(コンポーネント属性ではなく、`#[AsHook]` クラスの public インスタンスメソッドにのみ付与できるフック宣言)。クラスマーカーとしての `#[AsHook]` は維持され、Discovery は `#[AsHook]` クラスのメソッドのみを収集対象とする(`#[AsHook]` なしクラスへの付与は探索失敗。§4手順3-f)。
 - **acceptedArgs はメソッドの宣言引数数(`ReflectionMethod::getNumberOfParameters()`)から自動導出する。属性引数での手書きは提供しない**(手書きを許すと引数個数バグの根絶という主目的が失われる)。
 - `#[Action]` と `#[Filter]` に機構上の差はない(WPの `add_action()` は `add_filter()` の別名であり、登録はどちらも `add_filter()` で行う。§7)。意味の区別を宣言として残すために2クラスへ分ける。`#[Filter]` メソッドは必ず値を返すこと(rules/ に記載)。
-- 真に動的な登録(ループでフック名を生成する等、メソッド属性で表現できないケース)に限り、Hook 基底の `register()` オーバーライドを例外手段として使う(Hook文書)。`register()` をオーバーライドしたクラスのみが初期化タイミング表(§7)の priority 0 でインスタンス化される。rules/・利用例の第一級の書き方は `#[Action]` / `#[Filter]` に一本化する。
+- 真に動的な登録(ループでフック名を生成する等、メソッド属性で表現できないケース)に限り、Hook 基底の `register()` オーバーライドを例外手段として使う(次項)。`register()` をオーバーライドしたクラスのみが初期化タイミング表(§7)の priority 0 でインスタンス化される。rules/・利用例の第一級の書き方は `#[Action]` / `#[Filter]` に一本化する。
+
+### #[AsHook] / Hook 基底 / HookInitializer(本文書が正準定義)
+
+```php
+<?php
+// src/Attribute/AsHook.php
+
+declare(strict_types=1);
+
+namespace TMSWP\Core\Attribute;
+
+use TMSWP\Core\Hook\HookInitializer;
+use TMSWP\Core\Kernel\KernelContext;
+
+#[\Attribute(\Attribute::TARGET_CLASS)]
+final readonly class AsHook implements ComponentAttributeInterface
+{
+    /** テーマ=after_setup_theme / プラグイン=plugins_loaded($context->bootHook()) */
+    public function hookName(KernelContext $context): string;
+
+    /** 常に 0 */
+    public function hookPriority(): int;
+
+    /** @return class-string<HookInitializer> */
+    public function initializerClass(): string;
+}
+```
+
+```php
+<?php
+// src/Hook/Hook.php
+
+declare(strict_types=1);
+
+namespace TMSWP\Core\Hook;
+
+abstract class Hook
+{
+    /** 真に動的な登録のための例外手段。既定の実装は何もしない */
+    public function register(): void {}
+}
+```
+
+```php
+<?php
+// src/Hook/HookInitializer.php
+
+declare(strict_types=1);
+
+namespace TMSWP\Core\Hook;
+
+use TMSWP\Core\Kernel\ComponentInitializerInterface;
+use TMSWP\Core\Kernel\DiscoveredComponent;
+use TMSWP\Core\Kernel\Kernel;
+
+final class HookInitializer implements ComponentInitializerInterface
+{
+    public function initialize(DiscoveredComponent $component, Kernel $kernel): void;
+}
+```
+
+振る舞い仕様:
+
+- `#[AsHook]` は引数を持たないクラスマーカーである。app 側の Hook クラスは `Hook\Hook` を継承し、`app/Hook/` に置く。
+- Discovery は、`register()` を Hook 基底以外のクラスで宣言している `#[AsHook]` クラスだけを components に含める(§4 手順3-e)。`#[Action]` / `#[Filter]` メソッドだけを持つクラスは components に現れない。
+- `HookInitializer::initialize()` は Kernel の Container から `$component->class` を解決する。解決結果が `Hook` のインスタンスでなければ `DiscoveryException`(`hook component must extend Hook: {fqcn}`)を投げる。`Hook` のインスタンスであれば `register()` を1回だけ呼ぶ。
+- 初期化のタイミングは §7 の初期化タイミング表(`#[AsHook]` 行)に従う。
 
 ## 6. ComponentCache
 
@@ -855,7 +922,7 @@ store(result):
 
 | 属性 | フック (Theme) | フック (Plugin) | priority | 初期化内容(概要。詳細は各文書) |
 |---|---|---|---|---|
-| `#[AsHook]` | `after_setup_theme` | `plugins_loaded` | 0 | **`register()` をオーバーライドするクラスのみ**: Containerからインスタンス化し `register()`(真に動的な登録の例外手段。§5)を呼ぶ。`#[Action]`/`#[Filter]` メソッドの登録はこの表の外(boot手順5で直接 `add_filter`。下表)(Hook文書) |
+| `#[AsHook]` | `after_setup_theme` | `plugins_loaded` | 0 | **`register()` をオーバーライドするクラスのみ**: Containerからインスタンス化し `register()`(真に動的な登録の例外手段。§5)を呼ぶ。`#[Action]`/`#[Filter]` メソッドの登録はこの表の外(boot手順5で直接 `add_filter`。下表)(§5) |
 | `#[AsModel]` | `after_setup_theme` | `plugins_loaded` | 1 | TableDefinition をモデルレジストリへ登録。**DBスキーマ適用はここでは行わない**(下記) |
 | `#[AsOptionGroup]` | `init` | `init` | 5 | OptionSchema の register_setting 等(Option文書) |
 | `#[AsTaxonomy]` | `init` | `init` | 9 | register_taxonomy + register_term_meta(Tax/Meta文書) |
@@ -1064,7 +1131,7 @@ instantiate(class):
 | `set()` 登録 + `get()` | 共有(シングルトン) |
 | 未登録class-string + `get()`(autowire) | 共有(シングルトン) |
 
-非共有(都度生成)の機構はコンテナ本体に持たない(確定判断)。旧版の `factory()` / `make()` / 多段aliasは設計書全体(00〜12)に実利用が1件も存在せず、「実利用が実証された機能だけを最小のAPIサーフェスで」(原則3・DR-14)に従い収載しない。PSR-11の必須は `get` / `has` のみであり実装として過小にならない。都度生成が将来必要になればファクトリ自体をサービスとして `set()` し `$c->get(FooFactory::class)->create()` で表現する(コンテナ本体にスコープ概念を持ち込まない)。テストでの引数上書き付き生成は `new` 直書きで足りる(コンストラクタ注入のテスト戦略と一致)。
+非共有(都度生成)の機構はコンテナ本体に持たない(確定判断)。`factory()` / `make()` / 多段aliasは設計書全体(00〜11)に実利用が1件も存在せず、「実利用が実証された機能だけを最小のAPIサーフェスで」(原則3・DR-14)に従い収載しない。PSR-11の必須は `get` / `has` のみであり実装として過小にならない。都度生成が将来必要になればファクトリ自体をサービスとして `set()` し `$c->get(FooFactory::class)->create()` で表現する(コンテナ本体にスコープ概念を持ち込まない)。テストでの引数上書き付き生成は `new` 直書きで足りる(コンストラクタ注入のテスト戦略と一致)。
 
 ### 静的ファサードとの接続(DR-09 二層構成)
 
@@ -1147,7 +1214,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/vendor/autoload.php';
 
-\TMSWP\Core\Kernel::boot(
+\TMSWP\Core\Kernel\Kernel::boot(
     \TMSWP\Core\Kernel\KernelConfig::theme(
         appDir: __DIR__ . '/app',
         appNamespace: 'App',
@@ -1176,7 +1243,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/vendor/autoload.php';
 
-\TMSWP\Core\Kernel::boot(
+\TMSWP\Core\Kernel\Kernel::boot(
     \TMSWP\Core\Kernel\KernelConfig::plugin(
         file: __FILE__,
         appDir: __DIR__ . '/app',
@@ -1280,7 +1347,7 @@ final class PriceCalculator
 
 ```php
 // 利用側(テンプレート外のコード)
-$calculator = \TMSWP\Core\Kernel::get('App')->container()->get(\App\Service\PriceCalculator::class);
+$calculator = \TMSWP\Core\Kernel\Kernel::get('App')->container()->get(\App\Service\PriceCalculator::class);
 ```
 
 ### テスト(ユニット層: WP非依存 + Brain Monkey)
@@ -1300,7 +1367,7 @@ final class ContainerTest extends TestCase
 {
     protected function tearDown(): void
     {
-        \TMSWP\Core\Kernel::reset(); // テスト間のKernelレジストリ隔離
+        \TMSWP\Core\Kernel\Kernel::reset(); // テスト間のKernelレジストリ隔離
         parent::tearDown();
     }
 
@@ -1328,13 +1395,6 @@ final class ContainerTest extends TestCase
 | `AbstractSingleton` の `final private __construct` + `static::$instances` でDI・モック・テスト不能。`func_get_args` 転送はデッドコード | PSR-11コンテナ+コンストラクタ注入。ファサードは無状態の薄い皮で、`Kernel::reset()` によりテスト隔離可能(§8) |
 | 起動規約が未文書化(リポジトリ内に bootstrap 呼び出し例ゼロ)で、利用側は暗黙知のコピペ | `Kernel::boot()` + `KernelConfig` ファクトリを正準ブートAPIとして文書化し、スターターに同梱(DR-13) |
 | Loaderコンストラクタが `load_textdomain` / `untrailingslashit` 等のWP関数へ密結合し単体テスト不能 | Kernel/Discovery/Container はWP関数依存を `add_action` / `did_action` / 定数参照の最小限に限定。KernelConfig/Container/ComponentCache はWP関数ゼロでユニットテスト可能(§2・§6・§8) |
-
-## モダン化監査による改稿(2026-06-13)
-
-- `#[AsHook]` の命令的 `register()` 列挙に代えて、メソッドレベル `#[Action]` / `#[Filter]` 属性による宣言的登録を第一級の正準手段とした(§4・§5・§6・§7)。Hookクラスはフック発火まで未ロードとなり、acceptedArgs の手書きバグが構造的に消える。`register()` は真に動的な登録のみの例外手段として残置。DR-04 は実現方式の拡張(走査対象をクラス属性のみ→クラス+メソッド属性へ)であり大枠は維持。
-- 「Kernelは収集リストの1巡走査で各初期化を正確に1回呼ぶ」を本文書の正準契約として明文化し、エンティティ基底 `register()` 側の再入ガードを前提としない(§7。エンティティ文書側の撤廃と対になる)。
-- Container を `set` / 単段 `alias` / `get` / `has` の最小サーフェスへ縮小。`factory()` / `make()` / 多段aliasは設計書全体で実利用ゼロのため収載しない(原則3・DR-14。§8)。
-- `scan()` の Composer 最適化クラスマップ突合(`getClassMap()` 探り)を削除し、`class_exists` / Reflection 突合を唯一の整合性検査に正準化(Composer内部実装への暗黙結合の排除。§4)。
 
 ---
 

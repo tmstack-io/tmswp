@@ -11,7 +11,7 @@
 5. 文書マップ(01〜12 の読書順と依存関係)
 6. 用語集(全文書で共通使用する正準用語)
 
-読者は「この設計書群だけを渡されて TMSWP をゼロから実装する LLM」である。本書は実装対象の API を定義しない。API の正準定義は各担当文書(01〜12)が持つ。本書と各文書が矛盾する場合、個別 API の詳細は担当文書が優先し、設計原則・DR・用語は本書が優先する。
+読者は「この設計書群だけを渡されて TMSWP をゼロから実装する LLM」である。本書は実装対象の API を定義しない。API の正準定義は各担当文書(01〜11)が持つ。本書と各文書が矛盾する場合、個別 API の詳細は担当文書が優先し、設計原則・DR・用語は本書が優先する。
 
 ## スコープ(対象パッケージ)
 
@@ -19,9 +19,7 @@
 
 ## 依存文書
 
-なし(本書が読書順の起点)。設計根拠の一次資料は以下:
-
-- 旧FW実ソース: `htdocs/iwf2b/src/`
+なし(本書が読書順の起点)。
 
 ---
 
@@ -84,6 +82,8 @@ TMSWP は、開発者が約10年・15プロジェクト(テーマ11+プラグイ
 6. **HTML 流暢ビルダ・HTTP クライアント・デバッグダンプ**: 旧FWで未使用が実証されたサーフェスは作らない(DR-16)。
 7. **CSVインポート基盤**: 公式拡張として提供しない(DR-20)。データ投入の仕様(列定義・検証・保存先)は案件固有性が高く、必要な案件が app 側で WP-CLI コマンド等として実装する。
 8. **WordPress 7.0 未満・PHP 8.3 未満のサポート**: 行わない(DR-02)。
+9. **ブロックテーマ対応・ACF Blocks 向けコード生成**: ブロックテーマ(FSE)には対応しない。対象はクラシックテーマ(PHP テンプレート階層)である。acf-bridge は ACF Blocks 向けのコードを生成しない。
+10. **マルチサイト対応**: マルチサイト(ネットワーク)環境には対応しない。全パッケージは単一サイトでの動作のみを仕様とし、マルチサイト向けの分岐(ネットワーク有効化・`switch_to_blog()`・ネットワーク共有テーブル等の考慮)を持たない。
 
 ---
 
@@ -94,6 +94,11 @@ TMSWP は、開発者が約10年・15プロジェクト(テーマ11+プラグイ
 ### 原則1: WP標準を壊さない(絶対原則)
 
 ビューテンプレートに特殊処理を行わない。WordPress 標準のテーマ構築手法(テンプレート階層・The Loop・get_template_part・条件分岐タグ)をそのまま使えること。FW がテンプレートに要求するのは「型付きヘルパを呼べる」ことだけであり、テンプレートローダの乗っ取り・`exit`・`extract()`・グローバル変数の暗黙展開は全面禁止。初期化も WP のフックライフサイクル(`after_setup_theme` / `init` 等)に整合させ、即時同期初期化を行わない。
+
+`exit` 禁止の例外は次の 2 つに限る。いずれもリダイレクト応答を確定させるためのもので、テンプレートローダの乗っ取りには当たらない。
+
+- PRG(Post/Redirect/Get)でフォーム送信を処理した後の `wp_safe_redirect()` の直後
+- 設定ページ(tmswp/settings-page)の保存処理の後の `wp_safe_redirect()` の直後
 
 ### 原則2: コアは外部プラグイン非依存
 
@@ -137,7 +142,7 @@ tmswp/core は WordPress コアと PSR インターフェース(psr/log ^3、psr
 | DR-16 | 廃止 | View 乗っ取り機構、Html 流暢ビルダ、Http、Debug(iwf_dump)、CF7/Yoast 連携、AbstractCsvImport の echo HTML ログ、旧 Form/FormChoice/FormRendererCollection | 全文書 |
 | DR-17 | i18n | テキストドメイン=`tmswp`。ソース文字列は英語で書き、日本語は同梱翻訳ファイルで提供する。翻訳成果物は `.mo` と `.l10n.php`(WP 6.5+ Performant Translations。`wp i18n make-php` または `composer i18n:build` で `.po` から生成)を併載し、ロードコードは不変(WP 6.4 では従来どおり `.mo` を読む)。CPT/Tax ラベル自動生成は ja/en テンプレートを内蔵し、定義側の labelLanguage 設定で切替(デフォルト en。日本語サイトでは Ja を明示) | 03 |
 | DR-18 | ストレージ差し替え | 旧FWで機能していなかった ACF 差し替えフィルタの教訓: null センチネル全廃。MetaStorageInterface は has()/get() 分離。ストレージ差し替えはグローバルフィルタでなくエンティティ単位の明示オプトイン(`#[UseMetaStorage]`) | 04, 09 |
-| DR-19 | テンプレート前処理 | クラス形式コントローラ(旧#[AsController]案)を廃し、テンプレート同名ファイル規約 actions/{テンプレート相対パス}.php を採用。template_include(priority 100)でstaticクロージャinclude(可視変数=$wp_queryのみ)、戻り値契約 array→View変数バッグ / ActionRouter::notFound()→404 / null→no-op。$templateは常に無加工(404強制時のみWP標準のget_404_template()差し替え)。actions/common.phpは持たない(共通ロジックはapp/Hookまたはパーツ内モデルヘルパ直読み)。テーマ形態専用。型はテンプレート側@var注釈規約+未定義キーWP_DEBUG警告+静的検査(出力検査・set_404検査=FW同梱PHPStan拡張のカスタムルール、孤児actions検査=bin/tms-check軽量スクリプト)で担保 | 07 |
+| DR-19 | テンプレート前処理 | テンプレート単位の前処理は、テンプレート同名ファイル規約 actions/{テンプレート相対パス}.php で行う(クラス形式のコントローラは持たない)。template_include(priority 100)でstaticクロージャinclude(可視変数=$wp_queryのみ)、戻り値契約 array→View変数バッグ / ActionRouter::notFound()→404 / null→no-op。$templateは常に無加工(404強制時のみWP標準のget_404_template()差し替え)。actions/common.phpは持たない(共通ロジックはapp/Hookまたはパーツ内モデルヘルパ直読み)。テーマ形態専用。型はテンプレート側@var注釈規約+未定義キーWP_DEBUG警告+静的検査(出力検査・set_404検査=FW同梱PHPStan拡張のカスタムルール、孤児actions検査=bin/tms-check軽量スクリプト)で担保 | 07 |
 | DR-20 | CSVインポート | CSV インポート基盤は公式拡張に収載しない。列定義・検証・保存先といったデータ投入の仕様は案件固有性が高く、FW 側で汎用基盤として抽象化する価値が薄いため、必要な案件が app 側で実装する(WP-CLI コマンド+ league/csv 等の直接利用) | 08 |
 
 ---
@@ -167,18 +172,18 @@ tmswp/
 |----------|----------|---------|
 | Kernel | `Kernel\Kernel`, `Kernel\KernelConfig`, `Kernel\Discovery`, `Kernel\ComponentCache` | 02 |
 | Container | `Container\Container`(PSR-11 実装) | 02 |
-| Attribute | `Attribute\AsPostType`, `AsTaxonomy`, `AsUserRole`, `AsModel`, `AsHook`, `AsOptionGroup`, `Action`(メソッドレベル), `Filter`(メソッドレベル), `MetaSchema`, `OptionSchema`, `UseMetaStorage` | 02(探索仕様)+ 各機能文書(意味論) |
+| Attribute | `Attribute\AsPostType`, `AsTaxonomy`, `AsUserRole`, `AsModel`, `AsHook`, `AsOptionGroup`, `Action`(メソッドレベル), `Filter`(メソッドレベル), `MetaSchema`, `OptionSchema`, `UseMetaStorage`, `WithMetaRevisions` | 02(探索仕様)+ 各機能文書(意味論) |
 | Post | `Post\PostType`(基底), `Post\PostTypeDefinition`, `Post\PostQuery` | 03 |
 | Tax | `Tax\Taxonomy`(基底), `Tax\TaxonomyDefinition`, `Tax\TermQuery` | 03 |
 | User | `User\UserRole`(基底), `User\UserRoleDefinition`, `User\UserQuery` | 03 |
-| Meta | `Meta\MetaBag`, `Meta\ObjectType`(enum: Post/Term/User), `Meta\MetaValueType`(backed enum: スキーマ型指定の公開API), `Meta\MetaStorageInterface`, `Meta\WpMetaStorage`, `Meta\MetaSchemaRegistry`, `Meta\PreviewMetaSupport`(オプトイン: プレビュー時メタ保存) | 04 |
+| Meta | `Meta\MetaBag`, `Meta\ObjectType`(enum: Post/Term/User), `Meta\MetaValueType`(backed enum: スキーマ型指定の公開API), `Meta\MetaStorageInterface`, `Meta\WpMetaStorage`, `Meta\MetaSchemaRegistry`(`#[WithMetaRevisions]` によるプレビュー時メタ保存のオプトインを含む) | 04 |
 | Option | `Option\OptionAccess`(trait: backed enum グループ用アクセサ), `Option\OptionRepository`, `Option\OptionStorageInterface`, `Option\WpOptionStorage` | 04 |
 | Form | `Form\Form`, `Form\FormDefinition`, `Form\FormResult`, `Form\FormStep`(enum: Input/Confirm/Complete), `Form\Field`, `Form\FieldView`, `Form\FormHtml`(純関数レンダラ), `Form\Validator`, `Form\ValidationContext`, `Form\ConfirmToken`, `Form\UploadedFile`, `Form\TempFileStore`, `Form\Rule\RuleInterface` ほか Rule 群 | 05 |
 | Model | `Model\Model`(基底), `Model\TableDefinition`, `Model\QueryBuilder`, `Model\Migrator`, `Model\Connection`(wpdb ラッパ) | 06 |
 | Log | `Log\Log`(ファサード), `Log\SimpleLogger`, `Log\LoggerRegistry` | 07 |
 | View | `View\Template`(part()/render()), `View\ActionRouter`(template_include ディスパッチャ), `View\View`(actions→テンプレート変数バッグ), `View\NotFound`(404シグナル) | 07(ActionRouter のboot時生成・登録は02) |
 | Support | `Support\Arr`, `Support\Str`, `Support\Html` | 07 |
-| Hook | `Hook\Hook`(薄い基底: app 側が WP フック登録をまとめる置き場) | 07 |
+| Hook | `Hook\Hook`(薄い基底: app 側が WP フック登録をまとめる置き場), `Hook\HookInitializer` | 02 |
 | Exception | `Exception\` 配下(全例外の名前空間) | 各文書 |
 
 ### 5.3 ブート API とライフサイクル(正準形)
@@ -186,7 +191,7 @@ tmswp/
 テーマ `functions.php`:
 
 ```php
-\TMSWP\Core\Kernel::boot(
+\TMSWP\Core\Kernel\Kernel::boot(
     \TMSWP\Core\Kernel\KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App')
 );
 ```
@@ -194,7 +199,7 @@ tmswp/
 プラグイン本体:
 
 ```php
-\TMSWP\Core\Kernel::boot(
+\TMSWP\Core\Kernel\Kernel::boot(
     \TMSWP\Core\Kernel\KernelConfig::plugin(file: __FILE__, appDir: __DIR__ . '/app', appNamespace: 'App')
 );
 ```
@@ -260,27 +265,40 @@ InquiryModel::query()->where('email', $email)->orderByDesc('id')->limit(10)->get
 - WP 関数呼び出しはユニットテスト可能性のため薄い境界(Storage / Connection 等)に寄せる
 - テキストドメインは `tmswp`(DR-17)。グローバルヘルパは `tms_` 接頭辞(DR-01)
 
+### 5.6 エラー方針(全モジュール共通)
+
+全パッケージの例外・ログ処理は次の表に従う。各担当文書が個々の失敗の扱いを定めるときは、この表のどの分類に当たるかに沿って決める。
+
+| 分類 | 例 | 扱い |
+|------|------|------|
+| 設定の誤り | 属性・Definition オブジェクトの宣言の誤り、存在しないクラスの指定、不正な設定値 | debug の有無に関係なく、起動時(登録時)に必ず例外を投げる |
+| 実行時のデータ取得失敗 | DB エラー、`WP_Error` の返却、ファイルの読み書き失敗 | debug 時は例外を投げる。本番は `Log::error()` に記録したうえで既定値を返す |
+| データが無いこと | アイキャッチ未設定、メタ未保存、該当行なし | エラーにしない。正常な結果(`null`・空配列・`has()` が false 等)として返す |
+
+- debug 時か本番かは、そのモジュールを起動した Kernel の `KernelConfig::$debug`(既定値は `WP_DEBUG` の真偽。文書02)で判定する。各モジュールが `WP_DEBUG` を直接参照して分岐することはしない。
+- 本番で既定値を返す場合も、失敗を黙って捨てない。`Log::error()` への記録を省略してはならない。
+
 ---
 
 ## 6. 文書マップ(読書順と依存関係)
 
-設計書は本書(00)を起点に以下の 01〜12 で構成する。番号順がそのまま推奨読書順である。実装順も原則この順(コア基盤 → コア機能 → 拡張 → QA/AI資料)に従い、実装の段取り(マイルストーン分割)は文書12(実装計画)が確定する。
+設計書は本書(00)を起点に以下の 01〜12 で構成する。番号順がそのまま推奨読書順である。実装順も原則この順(コア基盤 → コア機能 → 拡張 → QA/AI資料)に従い、版ごとの実装計画は文書12(ロードマップ)が定める。
 
 | # | ファイル | 内容 | 対応 DR | 依存文書 |
 |---|---------|------|---------|---------|
 | 00 | `00-overview.md` | 全体概要(本書) | 全DR | なし |
 | 01 | `01-architecture.md` | monorepo 構成、各パッケージの composer.json 仕様、依存関係、read-only split 配布、SemVer/リリース運用、ディレクトリレイアウト | DR-01, 02, 11, 14, 15 | 00 |
-| 02 | `02-kernel.md` | Kernel / KernelConfig / Discovery / ComponentCache / Container(PSR-11)/ Attribute 探索仕様(キャッシュ・決定的ロード順・循環検出・WP フック整合) | DR-04, 09 | 00, 01 |
+| 02 | `02-kernel.md` | Kernel / KernelConfig / Discovery / ComponentCache / Container(PSR-11)/ Attribute 探索仕様(キャッシュ・決定的ロード順・循環検出・WP フック整合)、Hook 基底と `#[Action]` / `#[Filter]` | DR-04, 09 | 00, 01 |
 | 03 | `03-entities.md` | PostType / Taxonomy / UserRole の宣言層(Definition オブジェクト、PostQuery / TermQuery / UserQuery、ラベル自動生成 ja/en) | DR-17 | 00, 02 |
-| 04 | `04-meta-options.md` | MetaSchema / MetaValueType / MetaBag / MetaSchemaRegistry / MetaStorageInterface / PreviewMetaSupport、オプショングループ(backed enum + OptionAccess trait)/ OptionRepository、PHPStan 型ナローイング拡張 | DR-05, 18 | 00, 02, 03 |
+| 04 | `04-meta-options.md` | MetaSchema / MetaValueType / MetaBag / MetaSchemaRegistry / MetaStorageInterface / `#[WithMetaRevisions]`、オプショングループ(backed enum + OptionAccess trait)/ OptionRepository、PHPStan 型ナローイング拡張 | DR-05, 18 | 00, 02, 03 |
 | 05 | `05-form.md` | Form ライフサイクル、FormDefinition / Field / Rule 群、確認画面(ConfirmToken / HMAC)、UploadedFile / TempFileStore、FormHtml 純関数レンダラ | DR-07 | 00, 02 |
 | 06 | `06-model.md` | Model / TableDefinition / QueryBuilder / Migrator / Connection(マイグレーション契機、prepare 必須化、DTO ハイドレーションオプション) | DR-08 | 00, 02 |
-| 07 | `07-support.md` | View\Template(part/render、プラグイン同梱 fallback)、ActionRouter / View 変数バッグ(actions 規約・dispatch 正準仕様)、Support\Arr / Str / Html、Log(PSR-3 v3 自前実装)、Hook 基底の合冊 | DR-14, 16, 19 | 00, 02 |
+| 07 | `07-support.md` | View\Template(part/render、プラグイン同梱 fallback)、ActionRouter / View 変数バッグ(actions 規約・dispatch 正準仕様)、Support\Arr / Str / Html、Log(PSR-3 v3 自前実装)の合冊 | DR-14, 16, 19 | 00, 02 |
 | 08 | `08-extensions.md` | tmswp/thumbnail(署名付き URL 仕様含む)/ settings-page / ja-toolkit(日本語サイト対応のオプトインモジュール群)の3拡張 | DR-10, 15, 20 | 00, 01, 02, 05(settings-page が Form 層に依存) |
 | 09 | `09-acf-bridge.md` | acf-json 真実源、コードジェネレータ、AcfMetaStorage、CI ドリフト検知、重複キーエラー | DR-06, 18 | 00, 02, 04 |
 | 10 | `10-quality.md` | PHPStan / php-cs-fixer / PHPUnit 2層 / wp-env / GitHub Actions / composer スクリプト体系 | DR-12 | 00, 01 |
 | 11 | `11-ai-docs.md` | AGENTS.md 仕様、rules/ レシピ体系、app/ スケルトン、starter-theme / starter-plugin | DR-13 | 00〜10(全文書の規約を参照する) |
-| 12 | `12-implementation-plan.md` | 実装計画(マイルストーン分割・実装順序・各文書とマイルストーンの対応) | 全DR(実装順序への写像) | 00〜11(全文書を参照する) |
+| 12 | `12-implementation-plan.md` | ロードマップ(v0.1.0〜v0.9.0 の版構成・タスク・完了条件・受け入れ条件・依存関係) | 全DR(実装順序への写像) | 00〜11(全文書を参照する) |
 
 依存関係の要点:
 
@@ -288,7 +306,7 @@ InquiryModel::query()->where('email', $email)->orderByDesc('id')->limit(10)->get
 - **04(Meta)と 09(acf-bridge)は DR-18 のコントラクト(MetaStorageInterface、`#[UseMetaStorage]`)で結合する**。インターフェース定義は 04 が持ち、09 はその実装者。09 が 04 の API を変更することはできない。
 - **08 の settings-page は 05(Form)のクライアント**。Form 層の公開 API のみを使い、内部 API に依存しない。
 - **11(AI 資料)は全文書の写像**。各文書の利用例・規約を rules/ レシピとスターターに落とし込むため、終盤に読む・書く。
-- **12(実装計画)は全文書を実装順序(マイルストーン)へ写像する**。全文書の確定後に最後に読む・書く。
+- **12(ロードマップ)は全文書を版ごとの実装順序へ写像する**。最後に読む。
 
 ---
 
@@ -388,7 +406,7 @@ my-theme/
 - [ ] DR-01〜DR-20 が全件、欠落なく表に収載されている
 - [ ] 文書マップ 01〜12 の番号・ファイル名・担当範囲が、実在する各設計文書のタイトルと一致している
 - [ ] 各 DR に主担当文書が割り当てられ、その文書が該当 DR の詳細仕様を実際に定義している
-- [ ] 用語集の用語が他文書(01〜12)で同一の意味・同一の正準クラス名で使われている(`grep -r "MetaBag\|MetaStorageInterface\|ConfirmToken" docs/tmswp/` で表記ゆれがない)
+- [ ] 用語集の用語が他文書(01〜12)で同一の意味・同一の正準クラス名で使われている(`grep -r "MetaBag\|MetaStorageInterface\|ConfirmToken" docs/` で表記ゆれがない)
 - [ ] 本書に記載した正準コード例(ブート/エンティティ/フォーム/Model)が、文書02/03/04/05/06 の API 定義とシグネチャレベルで矛盾しない(MetaSchema の type 引数は MetaValueType enum であること)
 - [ ] 「非ゴール」に列挙した項目(移行シム・フル ORM・テンプレートエンジン・CF7/Yoast 連携等)を実装する記述が、いずれの文書にも存在しない
 
@@ -396,9 +414,9 @@ my-theme/
 
 ```bash
 # 文書マップとファイル実在の突合
-ls docs/tmswp/*.md
+ls docs/*.md
 # 正準クラス名の表記ゆれ検査(例)
-grep -rn "MetaBag\b" docs/tmswp/ | grep -v "Meta\\\\MetaBag\|MetaBag"
+grep -rn "MetaBag\b" docs/ | grep -v "Meta\\\\MetaBag\|MetaBag"
 # 非ゴール混入の検査(例: 互換シム・CF7)
-grep -rni "iwf2b互換\|互換シム\|cf7連携\|FormRendererCollection" docs/tmswp/ --include="*.md" | grep -v "00-overview\|廃止\|作らない\|禁止"
+grep -rni "iwf2b互換\|互換シム\|cf7連携\|FormRendererCollection" docs/ --include="*.md" | grep -v "00-overview\|廃止\|作らない\|禁止"
 ```

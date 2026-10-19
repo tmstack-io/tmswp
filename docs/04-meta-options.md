@@ -52,7 +52,7 @@ app/Post/ProductPost.php
               └→ MetaStorageInterface::has()/get() → ValueCaster で型キャスト
 ```
 
-オプション側も値解決・キャスト規則は同型だが、宣言の器が異なる: `#[AsOptionGroup]` を付与した backed enum の `#[OptionSchema]` 付きケース(`OptionAccess` trait)→ `OptionRepository` → `OptionStorageInterface`。meta=属性付きクラス定数 / option=属性付き enum ケースという宣言形の非対称は意図的トレードオフである(4.12・設計根拠8)。
+オプション側も値解決・キャスト規則は同型だが、宣言の器が異なる: `#[AsOptionGroup]` を付与した backed enum の `#[OptionSchema]` 付きケース(`OptionAccess` trait)→ `OptionRepository` → `OptionStorageInterface`。meta=属性付きクラス定数 / option=属性付き enum ケースという宣言形の非対称は意図的トレードオフである(4.12)。
 
 ---
 
@@ -107,7 +107,7 @@ final class MetaSchema
 #### 振る舞い仕様
 
 - 属性自体は純粋なデータホルダで、検証ロジックを持たない。検証は `MetaSchemaDefinition::fromAttribute()`(4.4)がブート時に行う。
-- `type` は `MetaValueType` enum(4.2)で受ける。enumケースは定数式のため属性引数に直接記述でき、不正値はIDE補完・PHPStan・PHPの属性インスタンス化が実行前に拒否する。旧設計の「許容6種以外の文字列はブート時 `InvalidSchemaException`」という type 文字列検証は不要となり存在しない。
+- `type` は `MetaValueType` enum(4.2)で受ける。enumケースは定数式のため属性引数に直接記述でき、不正値はIDE補完・PHPStan・PHPの属性インスタンス化が実行前に拒否するため、ブート時の type 検証は持たない。
 - `default` は `type` とキャスト互換でなければならない(例: `type: MetaValueType::Integer` に `default: 'abc'` は `InvalidSchemaException`)。互換判定は `ValueCaster::accepts()`(4.7)で行う。
 - `single: false` と `default` 非null の併用は `InvalidSchemaException`(WPの register_meta はsingle=falseのdefaultを単一値として扱い混乱の元のため、FWでは禁止する)。
 - `sanitize` にクロージャや存在しない callable を指定した場合: 配列/文字列形式チェックはブート時、callable 実在チェックは `registerAll()` 時に `is_callable()` で行い、不成立なら `InvalidSchemaException`。
@@ -117,7 +117,7 @@ final class MetaSchema
 
 #### 役割
 
-`MetaSchema::$type` / `OptionSchema::$type` が直接受け取る公開APIのbacked enum。enumケースは定数式であるため、利用側は属性引数に `type: MetaValueType::Integer` のように直接記述する。キャスト・PHPStan型マップ・register_meta 引数生成の分岐にも使う(内部enumから公開APIへ昇格)。
+`MetaSchema::$type` / `OptionSchema::$type` が直接受け取る公開APIのbacked enum。enumケースは定数式であるため、利用側は属性引数に `type: MetaValueType::Integer` のように直接記述する。キャスト・PHPStan型マップ・register_meta 引数生成の分岐にも使う。
 
 #### シグネチャ
 
@@ -380,7 +380,7 @@ final class WpMetaStorage implements MetaStorageInterface
 | `setAll()` | `delete_metadata(...)` 後に `$values` を順に `add_metadata(...)`。途中失敗時は false を返す(ロールバックはしない。wpdbにトランザクション保証がないため) |
 | `delete()` | `delete_metadata($type->metaType(), $objectId, $key)`。WPは行が無いと false を返すが、本実装は冪等性のため「行が無い場合」は true に正規化する(`has()` を先行確認) |
 
-- `get_metadata_raw()`(WP 5.5+)はコアの default 注入層(`get_metadata_default()` / `filter_default_metadata`)を経由しないため、`register_meta` の default 介在が原理的に起きない。旧設計の「default 介在を避けるため必ず `has()` を先行させる」という実装内順序契約(2段呼び出し)はモダン化監査で廃止し、コアAPI 1呼び出しの保証に置き換えた。同関数は `_` 接頭辞なし・`@access private` 注記なしの正規の公開関数(`@since 5.5.0`)で、コア自身が default 機構の土台として安定使用している。なおこの最適化はWP実装(`WpMetaStorage`)固有であり、`AcfMetaStorage` 等の外部ストレージ実装には適用されない。
+- `get_metadata_raw()`(WP 5.5+)はコアの default 注入層(`get_metadata_default()` / `filter_default_metadata`)を経由しないため、`register_meta` の default 介在が原理的に起きない。default 介在の回避は実装内の順序契約(`has()` の先行呼び出し)ではなく、コアAPI 1呼び出しの保証による。同関数は `_` 接頭辞なし・`@access private` 注記なしの正規の公開関数(`@since 5.5.0`)で、コア自身が default 機構の土台として安定使用している。なおこの最適化はWP実装(`WpMetaStorage`)固有であり、`AcfMetaStorage` 等の外部ストレージ実装には適用されない。
 - `update_metadata` を経由するため、`register_meta` で登録した `sanitize_callback` は `sanitize_meta()` フィルタとしてWPコアが自動適用する。FW側で二重適用しない。
 - slash 処理: `update_metadata` は `wp_unslash` 前提の生値を期待する。本クラスは受け取った値をそのまま渡す(呼び出し側=Form層等がunslash済みの値を渡す規約。rules/ に明記)。
 
@@ -722,7 +722,7 @@ final class ProductPost extends PostType { /* ... */ }
 
 #### 役割
 
-「プレビュー時にメタの変更が反映されない」というWPの古典的問題への、ACF非依存のオプトイン対応。旧FWでは `AbstractHook::save_preview_post`(`wp_insert_post` フックでリビジョン保存を検知し独自アクション `save_preview_postmeta` を発火、ACF実装が `$_POST['acf']` をリビジョンへ書き込む)が担っていたが、本FWの下限であるWP 7.0はメタのリビジョン保存をコア機能として持つ(`register_post_meta` の `revisions_enabled` 引数)。よって独自のフック連鎖も命令的な有効化サービスも実装せず、`register_post_meta` の引数と1:1対応する**クラス属性による宣言**として設計する(当初設計の `PreviewMetaSupport::enableFor()` サービスは廃止)。
+「プレビュー時にメタの変更が反映されない」というWPの古典的問題への、ACF非依存のオプトイン対応。旧FWでは `AbstractHook::save_preview_post`(`wp_insert_post` フックでリビジョン保存を検知し独自アクション `save_preview_postmeta` を発火、ACF実装が `$_POST['acf']` をリビジョンへ書き込む)が担っていたが、本FWの下限であるWP 7.0はメタのリビジョン保存をコア機能として持つ(`register_post_meta` の `revisions_enabled` 引数)。よって独自のフック連鎖も命令的な有効化サービスも実装せず、`register_post_meta` の引数と1:1対応する**クラス属性による宣言**として設計する。
 
 #### シグネチャ
 
@@ -749,9 +749,9 @@ final class WithMetaRevisions
 
 - `MetaSchemaRegistry::registerEntity()`(4.9)が読み取り、(1) エンティティの `ObjectType` が `ObjectType::Post` であること、(2) エンティティの `PostTypeDefinition` が `supports` に `'revisions'` を含むことをブート時に検証する。違反は `InvalidSchemaException`。`supports` は `#[AsPostType]` 属性ではなく runtime メソッド `definition()` が保持する(エンティティ設計書)ため、検証は `registerEntity()` が `definition()` を参照して行う。
 - 付与されたエンティティのメタは `register_post_meta(..., ['revisions_enabled' => true])` で登録され(4.9)、以降の保存・プレビュー・リビジョン復元はすべてWPコアが処理する: 投稿保存/オートセーブ時にメタがリビジョンへ複製され、プレビュー表示時はWPコアの `_wp_preview_meta_filter`(`get_post_metadata` フィルタ)がオートセーブリビジョンの値へ読み替える。FW独自のフックは一切追加しない。
-- 宣言は属性であるため「いつ有効化するか」という時間軸の概念が存在しない。宣言は `registerAll()`(init 20)実行前に構造上確定しており、旧設計の「`registerAll()` より前に呼ぶ」という順序契約・手遅れ時の `LogicException`・レジストリの可変メソッド(`enableRevisionsFor()`/`isEnabledFor()`)はすべて不要となった(設計根拠6)。
+- 宣言は属性であるため「いつ有効化するか」という時間軸の概念が存在しない。宣言は `registerAll()`(init 20)実行前に構造上確定しているため、呼び出し順序の契約・手遅れ時の例外・レジストリの可変メソッドを持たない(設計根拠6)。
 - ACF管理下キー(`isExternallyManaged()` = true)はそもそも `register_post_meta` されないため本機構の対象外。ACFフィールドのプレビュー対応はacf-bridge側の責務とする(本書はスコープ外と明記するに留める)。
-- サイト構成に応じて実行時に要否を切り替える用途には属性は使えないが、旧 `enableFor()` も app コードにエンティティ列をハードコードする形であり、本変更による柔軟性の喪失はない。
+- サイト構成に応じて実行時に要否を切り替える用途には属性は使えない。リビジョン保存の要否はエンティティ単位で静的に決まるものとして扱う。
 
 ### 4.12 `TMSWP\Core\Attribute\AsOptionGroup` / `TMSWP\Core\Attribute\OptionSchema`
 
@@ -759,7 +759,7 @@ final class WithMetaRevisions
 
 オプショングループの宣言属性。`AsOptionGroup` はオプショングループ enum(string backed enum、`OptionAccess` trait を use。4.16)に付与してプレフィックスとストレージを宣言し、`OptionSchema` は各 enum ケースに型・デフォルト・autoloadを宣言する。旧 `AbstractOption` が「ON_定数 + `__callStatic`」のみでプレフィックス管理・デフォルト値・型付きアクセスを欠いた結果、実案件が独自Option/Configクラスを自作した(T16 の `sb_` プレフィックス+`DEFAULTS` 配列、T18 の `Config::API_MODEL()` マジックアクセサ)教訓を直接仕様化したものである。
 
-メタ側(`#[MetaSchema]` 付きクラス定数)を enum 化しないのは、`MetaBag<static>` のジェネリクス伝播(エンティティ基底 `meta()` の `@return MetaBag<static>` 注釈。4.18)が「定数所有クラス=エンティティクラス」という構造に依存するためである。スキーマ宣言の器が meta=クラス定数+属性 / option=enum ケース+属性 と異なるのは、モダン化監査で意図的に受け入れたトレードオフである(設計根拠8)。
+メタ側(`#[MetaSchema]` 付きクラス定数)を enum 化しないのは、`MetaBag<static>` のジェネリクス伝播(エンティティ基底 `meta()` の `@return MetaBag<static>` 注釈。4.18)が「定数所有クラス=エンティティクラス」という構造に依存するためである。スキーマ宣言の器が meta=クラス定数+属性 / option=enum ケース+属性 と異なるのは、意図的に受け入れたトレードオフである。
 
 #### シグネチャ
 
@@ -1051,7 +1051,7 @@ final class OptionRepositoryFactory
 - `OptionRepository` の値解決順は MetaBag と完全に同一: storage(has→get) → 引数default → スキーマdefault → 型ゼロ値(get()はnull)。キャストは `ValueCaster` を共用。同一なのは**値解決・キャスト規則**であり、スキーマの宣言形は meta(クラス定数+属性)と option(enum ケース+属性)で異なる(4.12)。
 - メタと違い `single=false` 相当の概念はない。`list()`/`json()` は保存値(配列/JSON文字列)のキャストのみ。
 - `set()` はスキーマの `autoload` を `storage->set()` の第3引数へ渡す。未宣言キーは `null`(WP既定)を渡す。
-- **未宣言キーの扱い(確定仕様の縮退)**: enum ファサード(4.16)はケースに存在しないキーを表現できないため、旧設計が許容していた「グループ経由の未宣言キー読み取り」はファサードから外れる。グループ名前空間内の未宣言キー(プレフィックス付きで他オプションを読む用途)は、本クラス `OptionRepository::get()` 等の**直接利用が正式経路**である(`SiteOption::repository()->get('legacy_key')` の形。4.16)。未宣言キーは「許可するがスキーマ恩恵なし」で、プレフィックスは**適用される**(グループ経由のアクセスは常にグループの名前空間内)。素のオプション名(他プラグインのオプション等)は `OptionStorageInterface`(`WpOptionStorage`)の直接利用を正とし、`get_option()` 直書きは非推奨に格下げする(この縮退と経路規約は rules/ に明記)。
+- **未宣言キーの扱い**: enum ファサード(4.16)はケースに存在しないキーを表現できないため、「グループ経由の未宣言キー読み取り」はファサードの対象外である。グループ名前空間内の未宣言キー(プレフィックス付きで他オプションを読む用途)は、本クラス `OptionRepository::get()` 等の**直接利用が正式経路**である(`SiteOption::repository()->get('legacy_key')` の形。4.16)。未宣言キーは「許可するがスキーマ恩恵なし」で、プレフィックスは**適用される**(グループ経由のアクセスは常にグループの名前空間内)。素のオプション名(他プラグインのオプション等)は `OptionStorageInterface`(`WpOptionStorage`)の直接利用を正とし、`get_option()` 直書きは非推奨とする(この経路規約は rules/ に明記)。
 - `OptionRepositoryFactory::for()` の構築手順:
 
 ```
@@ -1067,7 +1067,7 @@ final class OptionRepositoryFactory
 5. new OptionRepository(...) をメモ化して返す
 ```
 
-- 旧設計の手順にあった「グループ内キー文字列重複 → `DuplicateOptionKeyException`」は廃止: ケースの backing value 重複は PHP がコンパイル時に Fatal とするため、実行時検出は不要である。
+- グループ内キー文字列の重複検出は行わない: ケースの backing value 重複は PHP がコンパイル時に Fatal とするため、実行時検出は不要である。
 
 - register_setting 等のWP Settings APIへの登録は本層では行わない(設定画面UIは tmswp/settings-page 拡張の責務)。
 
@@ -1077,13 +1077,13 @@ final class OptionRepositoryFactory
 
 app側のオプショングループ enum(string backed・`#[AsOptionGroup]` 付与)が `use` する型付きアクセサtrait。テンプレート・app層から `SiteOption::ContactEmail->string()` の形でアクセスできるようにする(DR-09の二層構成は維持: 外向きは enum ケースのメソッド=静的ファサード層、内部はコンテナ解決の `OptionRepository`)。`__callStatic` は使わず、全メソッドを実シグネチャで定義する。
 
-旧設計の `OptionGroup` 基底クラス(クラス継承+string定数+キー引数付き static ファサード)はモダン化監査で本 trait + backed enum に置換された。旧設計が自前機構で担っていた保証は、すべてPHPの言語機能へ吸収される:
+オプショングループを基底クラス継承+string定数+キー引数付き static ファサードではなく、本 trait + backed enum で表現する。グループに必要な次の保証は、自前の機構を持たずにPHPの言語機能で得られる:
 
 - インスタンス化禁止の `final private __construct` ボイラープレート → enum は言語仕様上 `new` 不能。
-- グループ内キー重複検出(`DuplicateOptionKeyException`)→ backing value の重複はコンパイル時 Fatal。
-- キー所属検査(自前PHPStanルール `OptionKeyOwnershipRule`)→ キー=ケース自身であり、他グループのキー混入は型上表現不能。
+- グループ内キー重複の検出 → backing value の重複はコンパイル時 Fatal。
+- キー所属の検査 → キー=ケース自身であり、他グループのキー混入は型上表現不能。
 
-また全getterからキー引数が消え、旧形 `SiteOptions::bool(SiteOptions::MAINTENANCE)` のクラス名2回書きが `SiteOption::Maintenance->bool()` に解消される。
+また全getterがキー引数を持たず、`SiteOptions::bool(SiteOptions::MAINTENANCE)` のようなクラス名2回書きをせずに `SiteOption::Maintenance->bool()` と書ける。
 
 #### シグネチャ
 
@@ -1180,7 +1180,7 @@ final class InvalidArgumentException extends LogicException {}
 final class StorageException extends RuntimeException {}
 ```
 
-- 旧設計の `DuplicateOptionKeyException`(オプショングループ内キー二重宣言)は廃止: グループが backed enum となり(4.16)、backing value の重複は PHP がコンパイル時に Fatal とするため、実行時例外は不要。
+- オプショングループ内キーの二重宣言を表す例外は持たない: グループは backed enum であり(4.16)、backing value の重複は PHP がコンパイル時に Fatal とするため、実行時例外は不要。
 - ここでの `LogicException`/`RuntimeException` は `TMSWP\Core\Exception\` 配下のFW基底例外を指す(グローバルの `\LogicException` を直接継承するか否かはKernel設計書の例外章の決定に従う)。
 - 方針: スキーマ・宣言系の誤りはすべて「ブート時に LogicException 系で即死」させ、本番実行時の黙殺・フォールスルー(旧FWのフィルタ名不一致が3年以上発覚しなかった原因)を構造的に防ぐ。
 
@@ -1306,7 +1306,7 @@ final class MetaSchemaReflector
    (未宣言キーアクセスは合法。4.8)
 ```
 
-**オプション側のルールについて**: 旧設計の `OptionKeyOwnershipRule` は削除された。所属検査(他グループ定数の混入)はキー=enumケース自身という型表現により表現不能となり、文字列リテラル誤用検査もファサードからキー引数自体が消えたため対象が存在しない。未宣言キー経路(`OptionRepository::get()` 直接利用。4.15)の lint 方針は次のとおり再定義する: 同経路の文字列リテラルキーは合法であり自動検査は行わない。宣言済みキーは enum ケース経由でアクセスする規約を rules/ のレビュー観点として明記する。
+**オプション側のルールについて**: オプション側にはキー所属検査のPHPStanルールを持たない。所属検査(他グループ定数の混入)はキー=enumケース自身という型表現により表現不能であり、文字列リテラル誤用検査もファサードにキー引数が無いため対象が存在しない。未宣言キー経路(`OptionRepository::get()` 直接利用。4.15)の lint 方針は次のとおり: 同経路の文字列リテラルキーは合法であり自動検査は行わない。宣言済みキーは enum ケース経由でアクセスする規約を rules/ のレビュー観点として明記する。
 
 - 誤検知方針: 動的なキー(変数・関数戻り値)は検査しない。baseline は使わない(DR-12)ため、ルールは「確実に誤りと言える場合のみ報告」を厳守する。
 
@@ -1445,7 +1445,7 @@ final class ProductPost extends PostType
 }
 ```
 
-命令的な有効化呼び出し(旧 `PreviewMetaSupport::enableFor()`)は存在しない。宣言は `registerAll()`(init 20)が読み取り、`register_post_meta` へ `revisions_enabled => true` を渡す(4.9/4.11)。
+命令的な有効化呼び出しは存在しない。宣言は `registerAll()`(init 20)が読み取り、`register_post_meta` へ `revisions_enabled => true` を渡す(4.9/4.11)。
 
 ---
 
@@ -1456,9 +1456,8 @@ final class ProductPost extends PostType
 3. **nullセンチネルの全廃(DR-18)**: 旧フィルタは「nullを返したらWP標準へフォールスルー」という規約のため、外部ストレージが正当な null/false/空値を返せなかった。`has()`/`get()` 分離(メタ・オプション両方)で存在判定と値取得を契約レベルで分け、`get_option` の限界は `WpOptionStorage` 内部のセンチネルオブジェクトに閉じ込めた。
 4. **`is_subclass_of` 暗黙分岐 → `ObjectType` enum**: 旧 `DefineMetaTrait` は継承文脈(`AbstractPost`/`Tax`/`User` のどれを継承しているか)でメタ種別を暗黙判定し、トレイト単体利用ではswitch全不成立で未定義値(null)が黙って返った。本層は `ObjectType` を全ストレージAPIの必須引数とし、種別はDiscoveryの属性(`#[AsPostType]` 等)から**明示的に**決定する。
 5. **`AbstractOption` の実質デッドコード化の教訓**: 実案件15プロジェクト中、利用は2クラス(複製テーマのため実質1実装)。一方 T16 は `sb_` プレフィックス+`DEFAULTS` 配列の独自Optionを、T18 は独自Configマジックアクセサを自作した。「プレフィックス管理・デフォルト値・型付きアクセス・autoload制御」という現場の実要求を `AsOptionGroup`/`OptionSchema`/`OptionRepository` として標準装備したのが本設計である。また旧 `__callStatic` setter が `self::set`(遅延静的束縛の誤り)を呼び戻り値nullを返すバグも、マジックメソッド全廃で構造的に解消した。
-6. **プレビュー時メタ保存のACF非依存化**: 旧 `AbstractHook::save_preview_post` は `wp_insert_post` フックから独自アクションを発火し、ACF実装が `$_POST['acf']` を直接リビジョンへ書く密結合構造だった。WP 6.4+ がコア機能(`revisions_enabled`)で同問題を解決済みのため、独自フック連鎖を持たないどころか有効化サービスすら持たず、`register_post_meta` の引数と1:1対応するクラス属性 `#[WithMetaRevisions]` の宣言へ縮退させ、ACF依存を完全に断った。当初設計の命令的有効化サービス(`PreviewMetaSupport::enableFor()`)はモダン化監査で廃止: 属性宣言は `registerAll()`(init 20)実行前に構造上確定するため、「registerAll() より前に呼ぶ」という時間軸の順序契約・手遅れ時の `LogicException`・レジストリの可変状態そのものが消滅した。
+6. **プレビュー時メタ保存のACF非依存化**: 旧 `AbstractHook::save_preview_post` は `wp_insert_post` フックから独自アクションを発火し、ACF実装が `$_POST['acf']` を直接リビジョンへ書く密結合構造だった。WP 6.4+ がコア機能(`revisions_enabled`)で同問題を解決済みのため、独自フック連鎖を持たないどころか有効化サービスすら持たず、`register_post_meta` の引数と1:1対応するクラス属性 `#[WithMetaRevisions]` の宣言へ縮退させ、ACF依存を完全に断った。属性宣言は `registerAll()`(init 20)実行前に構造上確定するため、時間軸の順序契約・手遅れ時の例外・レジストリの可変状態そのものを持たない。
 7. **`register_*_meta` 自動登録の新設**: 旧FWはメタキーを宣言してもWPコアへ一切登録せず、REST公開・スキーマ検証・default供給のコア機構を使えなかった。新FWは宣言=登録とし、`insert_default_meta`(空文字の自動挿入)のような回避策を不要にした。
-8. **モダン化監査による改稿(2026-06-13)**: オプショングループを基底クラス継承+定数+キー引数付きファサードから backed enum + `OptionAccess` trait へ置換。インスタンス化禁止ボイラープレート・グループ内キー重複検出(`DuplicateOptionKeyException`)・キー所属検査(自前PHPStanルール `OptionKeyOwnershipRule`)をPHPの言語機能へ吸収した。meta 側は `MetaBag<static>` のジェネリクス伝播を維持するため定数+属性のままとし、宣言形の非対称は意図的トレードオフ(4.12)。未宣言キー読み取りはファサードから外れ `OptionRepository::get()` 直接利用へ正式化(確定仕様の縮退。4.15)。プレビュー時メタ有効化をクラス属性 `#[WithMetaRevisions]` へ(項目6)。スキーマ属性の `type` を文字列から `MetaValueType` enum 受けへ変更し、type 文字列検証・`tryFrom()` 変換・phpdoc文字列リテラルユニオンを撤廃。不正値はIDE・PHPStan・PHP自体が実行前に拒否する。`WpMetaStorage::get()`/`getAll()` を WP 5.5+ の `get_metadata_raw()` 1呼び出しへ。default 介在の回避が「has() を必ず先行させる」自前の順序契約からコアAPIの保証になった(4.6)。
 
 ---
 

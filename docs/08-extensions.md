@@ -50,7 +50,7 @@ tmswp/acf-bridge は本書のスコープ外(専用文書が定義)。CSVイン�
 拡張は自動では何もしない。`Kernel::boot()` の直後(functions.php / プラグイン本体)で明示的にブートする。
 
 ```php
-\TMSWP\Core\Kernel::boot(KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App'));
+\TMSWP\Core\Kernel\Kernel::boot(KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App'));
 
 \TMSWP\Thumbnail\Thumbnail::register();                       // (1)
 \TMSWP\SettingsPage\SettingsPages::register();                // (2)
@@ -623,7 +623,7 @@ final class SiteSettingsPage extends SettingsPage
 - `View::load_global()` + `extract()` 依存の画面描画 → `View\Template::part()`(extract禁止、明示変数渡し)へ(DR-16)。
 - `%template_dir%` プレースホルダ・`generate_file_name()` 命名規則ディスパッチ → 廃止。描画は `render()` にコードで書く。
 - 5プロジェクト16クラスの利用実態(設定値保存+一覧表示が大半)から、必要十分なのは「メニュー登録+フォーム+オプション保存」の3点と判断し、それ以外(タブ・複数action画面)はapp側で `$_GET` 分岐して `render()` 内で実装する方針とする。
-- `SettingsPageDefinition` は当初コア `PostTypeDefinition` と同一の流暢ビルダだったが、疎args意味論を持たない純粋な7スカラ値オブジェクトであるため、隣接する `ThumbnailConfig`/`BridgeConfig` と同じreadonly+named argumentsへ統一した(`PostTypeDefinition` は `toArgs()` の疎args意味論があるためビルダのまま据え置く)。
+- `SettingsPageDefinition` は疎args意味論を持たない純粋な7スカラ値オブジェクトであるため、コア `PostTypeDefinition` のような流暢ビルダにはせず、隣接する `ThumbnailConfig`/`BridgeConfig` と同じreadonly+named argumentsで構成する(`PostTypeDefinition` は `toArgs()` の疎args意味論があるためビルダとする)。
 
 ---
 
@@ -824,7 +824,7 @@ FormDefinition::create('contact')
 | `init` → `filter_search_keyword()` | `$_GET['s']` の全角スペース正規化 | **FullwidthSearchNormalizer**(pre_get_posts方式へ刷新) |
 | `wp_unique_post_slug` → `auto_post_slug()` | 日本語スラッグ→`{post_type}-{id}` 変換 | **JapaneseSlug**(visibility欠落バグ修正・format設定可) |
 | `remove_filter wptexturize` ×4 | テクスチャライズ無効化 | **DisableTexturize**(run_wptexturizeへ一本化) |
-| `wp_insert_post` → `save_preview_post()` / `save_preview_postmeta` アクション発火 | プレビュー時メタ保存の基盤 | コアへ移管: `Meta\PreviewMetaSupport`(オプトイン。Meta設計書が定義) |
+| `wp_insert_post` → `save_preview_post()` / `save_preview_postmeta` アクション発火 | プレビュー時メタ保存の基盤 | コアへ移管: `#[WithMetaRevisions]`(オプトイン。Meta設計書が定義) |
 | `class_exists('ACF')` ブロック一式: `acf_load_config`/`acf_activated`/`acf/settings/path`/`acf/settings/dir`/`acf/load_field`/`acf_field_auto_export`/`acf_save_preview_postmeta`/`acf/settings/show_admin` | **ACF連携**(同梱パス・JSON自動書出し・表示トグル) | **廃止→acf-bridgeへ移管**(DR-06。acf-json真実源化により自前JSON書出し`acf_field_auto_export`は役割消滅。詳細はacf-bridge設計書) |
 | `iwf2b/meta/*`・`iwf2b/option/*` フィルタ → `*_with_acf()` ×6 | nullセンチネルのメタ/オプションACF委譲(**フィルタ名不一致で実際は機能していなかった**) | **廃止**(DR-18。後継は `MetaStorageInterface` + `#[UseMetaStorage]` の明示オプトイン。acf-bridgeの `AcfMetaStorage` が実装) |
 

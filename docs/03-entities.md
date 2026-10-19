@@ -23,13 +23,13 @@ WordPressの3種のエンティティ(投稿タイプ・タクソノミー・ユ
 | `Query\` | `PageResult` |
 | `Exception\` | `EntityDefinitionException`, `EntityPersistenceException`, `QueryException` |
 
-`Label\`・`Query\`・`Thumbnail`・例外3種はCONTRACT未掲載の新設APIであり、本文書が完全定義する(他文書は本文書の定義に従う)。
+`Label\`・`Query\`・`Thumbnail`・例外3種は本文書が完全定義する(他文書は本文書の定義に従う)。
 
 ## 依存文書
 
 - **Kernel/Discovery設計書(02想定)**: `#[AsPostType]` / `#[AsTaxonomy]` / `#[AsUserRole]` 属性の定義と探索。本文書は「Kernelが各クラスの `register()` をいつ・どの順で呼ぶか」の契約(後述)のみを規定する。
 - **meta/option設計書(04想定)**: `Meta\MetaBag` / `Meta\ObjectType` / `#[MetaSchema]`。本文書は各基底の `meta()` ファサードのシグネチャと委譲先のみを規定し、MetaBagの内部仕様には立ち入らない。
-- **拡張パッケージ設計書(thumbnail)**: `tmswp/post/thumbnail_fallback` フィルタ(本文書が定義)に本文img抽出フォールバックを差し込む側。
+- **AI向け資料(rules/post-type.md)**: `tmswp/post/thumbnail_fallback` フィルタ(本文書が定義)へ app 側からフォールバック画像を差し込むレシピを持つ。
 
 ---
 
@@ -574,7 +574,7 @@ PHPDocの `@return MetaBag<static>` は必須である。`MetaBag` は04文書�
 3. フォールバックフィルタ: `$fallback = apply_filters('tmswp/post/thumbnail_fallback', null, $post, $size);`
    - `$fallback instanceof Thumbnail` ならそれを返す。それ以外(null含む)はnullを返す。
    - このフィルタの第1引数nullは「フォールバックなし」を意味する実値であり、ストレージ差し替え用のフォールスルーセンチネル(DR-18で禁止)ではない。Thumbnailは常に非空URLを持つため曖昧さは生じない。
-   - tmswp/thumbnail拡張が本文img抽出フォールバックをここに差し込む。コアは正規表現抽出・`getimagesize` による同期HTTP I/Oを一切行わない。
+   - フォールバック(本文画像の抽出等)が必要な場合は app 側がこのフィルタに差し込む(rules/post-type.md)。コアは正規表現抽出・`getimagesize` による同期HTTP I/Oを一切行わない。
 
 **`thumbnailUrl()`**: `static::thumbnail($post, $size)?->url`。ダミー画像は呼び出し側の `?? $dummyUrl` で表現する(旧 `dummy_image` 引数は廃止)。
 
@@ -1578,19 +1578,13 @@ $id = ProductPost::create([
 | labels自動生成(英語フォーマット+iwf2bテキストドメイン依存) | en/jaテンプレート内蔵の `LabelGenerator`、gettext非依存 | 既定 en でソース文字列方針に揃え、日本語サイトは `labelLanguage(LabelLanguage::Ja)` で決定的に切り替える(DR-17)。2クラスに重複していた生成コードの一元化 |
 | `$find_args`+`create_args()` | `query()` オーバーライド+クエリビルダ | グローバルスコープ相当の価値は維持し、配列マージの暗黙性を型付きAPIへ |
 | `template`/`thumbnail` 擬似キー | `PostQuery::template()`/`hasThumbnail()` | 実利用39箇所超の高価値機能を明示メソッド化 |
-| `get_thumbnail` の3段フォールバック(本文img抽出+getimagesize) | コアは主経路(WP標準API)のみ+`tmswp/post/thumbnail_fallback` フィルタ | レンダリング中の同期HTTP I/O排除。分割境界は「主経路コア・本文抽出は拡張」(DR-15) |
+| `get_thumbnail` の3段フォールバック(本文img抽出+getimagesize) | コアは主経路(WP標準API)のみ+`tmswp/post/thumbnail_fallback` フィルタ | レンダリング中の同期HTTP I/O排除。分割境界は「主経路はコア・本文抽出等のフォールバックは app 側」 |
 | `$object_type` にAbstractPost FQCN | `objectType()` のFQCN受理を1.5節規約で全クエリAPIへ拡張 | 旧FWの良設計(マジックストリング排除)の踏襲・拡張 |
 | 手動タームキャッシュ(`get_object_term_cache`) | `get_the_terms()` に委譲 | WP4.7以降の車輪の再発明の除去 |
 | `insert_default_meta`(空文字メタ自動挿入) | 廃止 | `register_*_meta` のdefault値(04文書・DR-05)で代替。空文字レコードのDB増殖を解消 |
 | `AbstractUser`(非abstract・`user_register` をadd_filterで誤登録) | abstract基底+登録フックなし(メタdefaultは04文書の責務) | バグの根治と責務縮小。ロール定義+クエリの薄さは維持し、認証フローは引き続きapp側(rules/レシピ) |
 | `__callStatic`(MK_*/ON_*) | 全廃。`meta()` ファサード+明示アクセサ規約 | 本FW最大のAIアンフレンドリー箇所の除去(DR-05) |
 | `Loader` の `$dependencies` 手動宣言(Tax→Post順) | Kernel固定順序(Taxonomy→PostType→UserRole、FQCN昇順) | 非決定的ロード順・依存宣言漏れの根治(DR-04) |
-
-上記に加え、モダン化監査(2026-06-13)による改稿を反映している:
-
-- `register()` の再入ガード(static `$registered`)を撤廃し、「正確に1回」の保証をKernelの1巡走査へ一本化(1.2節契約3・1.6節)。`resetRuntimeCache()` はメモ化定義の破棄のみに縮小。
-- `thumbnail()` のalt解決を `_wp_attachment_image_alt` メタ1段(コア同一セマンティクス)へ簡素化し、添付 `post_excerpt`/`post_title` フォールバックを廃止(5.3節)。レスポンシブ画像はWP標準手法に委ねる方針を明記(6節)。
-- builtinタクソノミー紐付けのfalseの意味を「再試行前=ロード順起因(正常)/再試行後=真の失敗」に純化し、再試行後の失敗のみ `Log::warning` で警告(9.2節)。
 
 ---
 

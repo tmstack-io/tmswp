@@ -818,7 +818,7 @@ error_reporting(E_ALL & ~E_DEPRECATED);
 ### 4.8 カバレッジ方針
 
 - 計測対象は**ユニット層のみ**。ドライバは pcov(ローカル: `pecl install pcov`、CI: `setup-php` の `coverage: pcov`)。統合層は wp-env コンテナ内実行でありカバレッジは計測しない(実行コストと環境差異のため)。
-- CI ゲート: **コア6パッケージ合算の line coverage ≥ 85%**。`composer test:coverage` が clover を生成し `bin/coverage-check.php` が閾値を検査する。
+- CI ゲート: **5パッケージ合算の line coverage ≥ 85%**。`composer test:coverage` が clover を生成し `bin/coverage-check.php` が閾値を検査する。
 - モジュール別の目標値(レビュー指針。CI 自動ゲートは合算 85% のみ):
 
 | モジュール | 目標(行) | 根拠 |
@@ -1188,7 +1188,7 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 | 19 | `TestCase/Log/LogTest.php` | `packages/core/tests/Unit/Log/LogTest.php` | Unit | チャンネル・スコープ・ロガー差し替え・vfsStream への書込検証を移植。シングルトン検証(get_instance)は `LoggerRegistry` の登録 / 解決検証に置換 |
 | 20 | `TestCase/Log/Logger/SimpleLoggerTest.php` | `packages/core/tests/Unit/Log/SimpleLoggerTest.php` | Unit | 日付フォーマット・ファイル名・ディレクトリ分割・全レベル・コンテキスト展開を vfsStream で移植(PSR-3 **v3** シグネチャで書き直し) |
 | 21 | `TestCase/Post/AbstractPostTest.php` | `packages/core/tests/Integration/Post/PostTypeTest.php` | Integration | CPT 自動登録・`get`/`get_id` 相当(`PostQuery`)・META 定数によるメタ読み書き(`MetaBag` 経由)・permalink / アーカイブリンクを移植。「デフォルト meta 挿入」は `MetaSchema(default:)` の仕様検証へ置換 |
-| 21b | 同上(サムネイル 4 経路) | `packages/thumbnail/tests/Integration/ThumbnailResolveTest.php` | Integration | なし / アイキャッチ / ダミー画像 / 本文先頭 img の 4 経路解決を移植(DR-15 で thumbnail 拡張へ移設。GD 画像生成 + WP ファクトリの作法を踏襲) |
+| 21b | 同上(サムネイル解決) | `packages/core/tests/Integration/Post/PostTypeTest.php` | Integration | アイキャッチなし / アイキャッチあり / `tmswp/post/thumbnail_fallback` フィルタの 3 経路の解決を移植(GD 画像生成 + WP ファクトリの作法を踏襲)。ダミー画像は呼び出し側の `?? $dummyUrl` で表すため対象外。本文先頭 img の抽出はコアにも thumbnail 拡張にも持たない(03 文書 §5) |
 | 22 | `TestCase/Tax/AbstractTaxTest.php` | `packages/core/tests/Integration/Tax/TaxonomyTest.php` | Integration | タクソノミー登録(object_type の文字列 / 配列 / PostType クラス名解決)・term meta 定数操作・term link を移植 |
 | 23 | `TestCase/User/AbstractUserTest.php` | `packages/core/tests/Integration/User/UserRoleTest.php` | Integration | ロール登録・user meta 定数操作・author link を移植 |
 | 24 | `bin/install-wp-tests.sh` | — | — | 廃棄(wp-env + wp-phpunit に置換) |
@@ -1316,7 +1316,6 @@ final class EmailRuleTest extends UnitTestCase
 - テストの実質的価値は「FW の期待仕様を実行可能な形で記述した唯一のドキュメント」(AbstractPost/Tax/UserTest、Rule 系データプロバイダ、Log 系 vfsStream)にあった。→ コードではなく**仕様を**移植する対応表(8 章)を確定。
 - git タグゼロ・version フィールドなしで利用側は dev-master 参照しかできなかった。→ monorepo-builder release + SemVer タグ + split 配布(DR-11)。
 - Model / View / SettingsPage / CsvImport / Thumb が完全未テストのまま 10 年運用された。→ 未テスト領域の新規テスト必須リスト(8.2)とカバレッジゲートで再発を防止。
-- モダン化監査(2026-06-13)による更新: `actions/` の output / set_404 検査をトークン手書きリンタから FW 同梱 PHPStan 拡張のカスタムルール + `actions/` 専用 neon(level 0)へ移行し静的検査エンジンを統一。孤児検査は Docker 不要の軽量スクリプト `bin/tms-check` に残置。split アクションを保守後継の danharrin 版へ統一し、`with:` 内で評価されないタグ式の実バグを修正。php-cs-fixer 基底を PSR-12 から後継規格 PER-CS 2.0(`@PER-CS2x0`)へ更新し、基底に内包される手動ルールを削減。
 
 ---
 
@@ -1333,13 +1332,13 @@ final class EmailRuleTest extends UnitTestCase
 - [ ] ユニットテストが PHPUnit 11・`tests/bootstrap-unit.php`(WP 定数を定義しない)で、WP / MySQL / Docker なしで全件パスする
 - [ ] 全ユニットテストが `TMSWP\Core\Tests\Support\UnitTestCase` を継承している
 - [ ] 統合テストが wp-env の `cli` コンテナ内で PHPUnit 9.6(vendor-bin 隔離)+ wp-phpunit で全件パスする
-- [ ] `phpunit.unit.xml.dist` / `phpunit.integration.xml.dist` に 6 パッケージ分の testsuite が定義されている
-- [ ] ユニット層カバレッジ(コア 6 パッケージ合算)が 85% 以上で、`bin/coverage-check.php` が閾値未満を exit 1 にする
+- [ ] `phpunit.unit.xml.dist` / `phpunit.integration.xml.dist` に 5 パッケージ分の testsuite が定義されている
+- [ ] ユニット層カバレッジ(5 パッケージ合算)が 85% 以上で、`bin/coverage-check.php` が閾値未満を exit 1 にする
 - [ ] qa.yml に lint / analyse / monorepo / rules-verify / unit(PHP 8.3 / 8.5)/ integration(PHP 8.3 / 8.5 × WP 7.0 / 最新版 = 4 セル。テストライブラリは各セルの WP と同じ系列)の全ジョブがある
 - [ ] `npm ci` で package.json に固定した版の @wordpress/env が入り、composer スクリプト・qa.yml が wp-env を `node node_modules/@wordpress/env/bin/wp-env` のパスでだけ呼ぶ
-- [ ] split.yml がタグ push で 8 パッケージ(packages 6 + starters 2)を read-only リポジトリへ split し、同名タグを伝播する
+- [ ] split.yml がタグ push で 7 リポジトリ(packages 5 + starters 2)を read-only リポジトリへ split し、同名タグを伝播する
 - [ ] `monorepo-builder.php` が packages/ と starters/ を対象に validate / merge / release を構成している
-- [ ] ルート composer.json の `replace` に全 6 パッケージが列挙されている
+- [ ] ルート composer.json の `replace` に全 5 パッケージが列挙されている
 - [ ] 8.1 の移植対応表のうち「移植」と記した全行に対応する新テストが存在する(廃棄行は存在しないこと)
 - [ ] 8.2 の新規テスト必須リストの全行に対応するテストが存在する
 - [ ] 9 章の手順を新規環境で実施し、`composer qa` まで成功する

@@ -89,12 +89,12 @@ tmswp/                                  # monorepo ルート (<org>/tmswp)
 │   │   │   ├── Container/                # Container.php (PSR-11 実装)
 │   │   │   ├── Attribute/                # AsPostType.php, AsTaxonomy.php, AsUserRole.php, AsModel.php,
 │   │   │   │                             #   AsHook.php, AsOptionGroup.php, Action.php, Filter.php,
-│   │   │   │                             #   MetaSchema.php, OptionSchema.php, UseMetaStorage.php
+│   │   │   │                             #   MetaSchema.php, OptionSchema.php, UseMetaStorage.php, WithMetaRevisions.php
 │   │   │   ├── Post/                     # PostType.php, PostTypeDefinition.php, PostQuery.php
 │   │   │   ├── Tax/                      # Taxonomy.php, TaxonomyDefinition.php, TermQuery.php
 │   │   │   ├── User/                     # UserRole.php, UserRoleDefinition.php, UserQuery.php
 │   │   │   ├── Meta/                     # MetaBag.php, ObjectType.php, MetaValueType.php, MetaStorageInterface.php,
-│   │   │   │                             #   WpMetaStorage.php, MetaSchemaRegistry.php, PreviewMetaSupport.php
+│   │   │   │                             #   WpMetaStorage.php, MetaSchemaRegistry.php
 │   │   │   ├── Option/                   # OptionAccess.php (trait), OptionRepository.php,
 │   │   │   │                             #   OptionStorageInterface.php, WpOptionStorage.php
 │   │   │   ├── Form/                     # Form.php, FormDefinition.php, FormResult.php, FormStep.php,
@@ -287,7 +287,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 
 ```json
 {
-    "name": "tmswp/monorepo",
+    "name": "tmswp/tmswp",
     "description": "TMStack WordPress Framework - development monorepo (not for production use)",
     "license": "GPL-2.0-or-later",
     "require": {
@@ -357,12 +357,12 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
   │                         │ GitHub Actions split.yml     │                          │
   │                         │  packages/core      ────────>│ <org>/tmswp-core       │
   │                         │  packages/thumbnail ────────>│ <org>/tmswp-thumbnail  │
-  │                         │  ...(計 8 split)             │ ...                      │
+  │                         │  ...(計 7 split)             │ ...                      │
   │                         │  (subtree push + tag 複製)   │                          │
   │                         │                              │ webhook ────────────────>│ tmswp/core 等を更新
 ```
 
-- split 対象は packages/ 配下 6 + starters/ 配下 2 の**計 8 リポジトリ**。split リポジトリは read-only(Issue/PR 無効化、README に monorepo への誘導を明記)。
+- split 対象は packages/ 配下 5 + starters/ 配下 2 の**計 7 リポジトリ**。split リポジトリは read-only(Issue/PR 無効化、README に monorepo への誘導を明記)。
 - 実装: `.github/workflows/split.yml` で `danharrin/monorepo-split-github-action@v2` を使用する(同等機能の action への差し替えは PATCH 扱いで可。ただし「main への push で HEAD を、タグ push で同名タグを各 split リポジトリへ複製する」挙動は不変条件)。
 - ワークフロー手順(擬似コード):
 
@@ -401,7 +401,7 @@ jobs:
                 repository_name: '${{ matrix.package.repo }}' }
 ```
 
-- Packagist には split リポジトリ 8 件を `tmswp/core` 等の名前で登録し、GitHub webhook で自動更新する。monorepo 本体は登録しない。
+- Packagist には split リポジトリ 7 件を `tmswp/core` 等の名前で登録し、GitHub webhook で自動更新する。monorepo 本体は登録しない。
 
 ### 4.5 ブランチ・タグ運用
 
@@ -441,7 +441,7 @@ CI は PHP 8.3 / 8.5 でテストし、PHPStan は 8.3〜8.5 を解析範囲と�
 
 対応範囲は WordPress 7.0 以上(DR-02)。FW が使う WP API はすべて 7.0 より前に導入済みであり(§5.3)、7.0 を下限とすれば引数互換の心配なく使える。導入が比較的新しく、FW の機能が前提とする API は次の 3 つ:
 
-1. `register_post_meta()` の `revisions_enabled` 引数(**6.4**)— `Meta\PreviewMetaSupport`(プレビュー時メタ保存)はリビジョンへのメタ保存機構の上に実装する。
+1. `register_post_meta()` の `revisions_enabled` 引数(**6.4**)— `#[WithMetaRevisions]`(プレビュー時メタ保存)はリビジョンへのメタ保存機構の上に実装する。
 2. `wp_trigger_error()`(**6.4**)— Discovery の探索失敗・循環依存検出(DR-04)の開発時通知を WP 標準作法(`WP_DEBUG` 連動)で出すために使用。
 3. `wp_admin_notice()`(**6.4**)— Migrator の移行失敗通知、acf-bridge のドリフト検知通知等の管理画面表示に使用。
 
@@ -464,7 +464,7 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 | Meta(ユーザー) | `register_meta('user', ...)` | 4.6(現行引数形式) | **注: `register_user_meta()` という関数は WP コアに存在しない**。ユーザーメタは `register_meta('user', ...)` で登録する(Meta 設計書はこの API を使うこと) |
 | Meta | `register_meta()` の `default` 引数 | 5.5 | `#[MetaSchema(default: ...)]` の WP 側反映 |
 | Meta | `show_in_rest` の `schema`(array/object 型) | 5.3 | 複合型メタの REST スキーマ |
-| Meta / PreviewMetaSupport | `register_post_meta()` の `revisions_enabled` | **6.4 ★** | プレビュー・リビジョンへのメタ保存 |
+| Meta / `#[WithMetaRevisions]` | `register_post_meta()` の `revisions_enabled` | **6.4 ★** | プレビュー・リビジョンへのメタ保存 |
 | Meta(保存タイミング) | `wp_after_insert_post` フック | 5.6 | メタ確定後の後処理フック |
 | Option | `register_setting()` の `$args`(type/default/show_in_rest) | 4.7 | `#[OptionSchema]` の WP 側反映 |
 | Form | `wp_create_nonce` / `wp_verify_nonce` / `wp_nonce_field` | 2.0.4 | CSRF 自動埋込み・自動検証(DR-07) |
@@ -507,14 +507,12 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 
 | ヘルパ | 委譲先 | 提供パッケージ | シグネチャ定義文書 |
 |---|---|---|---|
-| `tms_part()` | `TMSWP\Core\View\Template::part()` | tmswp/core | View 設計書 |
-| `tms_render()` | `TMSWP\Core\View\Template::render()` | tmswp/core | View 設計書 |
 | `tms_var()` | `TMSWP\Core\View\View::get()` | tmswp/core | View 設計書(DR-19) |
 | `tms_log()` | `TMSWP\Core\Log\Log` ファサード(チャンネル取得) | tmswp/core | Log 設計書 |
 | `tms_thumb()` | `TMSWP\Thumbnail\`(署名付き URL 生成) | tmswp/thumbnail | thumbnail 設計書 |
 
 - 旧 iwf2b のヘルパは `iwf_dump` / `iwf_log` / `iwf_thumb` の 3 つだった。`iwf_dump`(Debug)は DR-16 で廃止。`iwf_log` → `tms_log`、`iwf_thumb` → `tms_thumb` が後継に当たる(API 互換はない)。
-- 上記 5 つの正確なシグネチャ(引数・戻り値型)は各定義文書が確定する。本書はヘルパ名と委譲先のみを予約する。`tms_var()` はテンプレート前処理(DR-19)で actions ファイルが用意した変数を取得するためのヘルパで、`View::get()` への 1 メソッド委譲(意味論は 07-support.md)。
+- 上記 3 つの正確なシグネチャ(引数・戻り値型)は各定義文書が確定する。本書はヘルパ名と委譲先のみを予約する。`tms_var()` はテンプレート前処理(DR-19)で actions ファイルが用意した変数を取得するためのヘルパで、`View::get()` への 1 メソッド委譲(意味論は 07-support.md)。
 - 利用側プロジェクト(app/)が独自のグローバルヘルパを定義する場合は `tms_` を**使ってはならない**(プロジェクト固有接頭辞を使う)。rules/ に明記する。
 
 ---
@@ -572,7 +570,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/vendor/autoload.php';
 
-\TMSWP\Core\Kernel::boot(
+\TMSWP\Core\Kernel\Kernel::boot(
     \TMSWP\Core\Kernel\KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App')
 );
 ```
@@ -588,7 +586,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/vendor/autoload.php';
 
-\TMSWP\Core\Kernel::boot(
+\TMSWP\Core\Kernel\Kernel::boot(
     \TMSWP\Core\Kernel\KernelConfig::plugin(file: __FILE__, appDir: __DIR__ . '/app', appNamespace: 'App')
 );
 ```
@@ -731,8 +729,8 @@ my-plugin/
 リリース・配布:
 
 - [ ] `vendor/bin/monorepo-builder validate` が green(相互依存・ルート composer.json の乖離なし)
-- [ ] `split.yml` が main push で 8 split リポジトリの HEAD を、タグ push で同名タグを複製する
-- [ ] Packagist に tmswp/core ほか 8 パッケージが split リポジトリから登録され、タグで `composer require tmswp/core:^X.Y` が解決する
+- [ ] `split.yml` が main push で 7 split リポジトリの HEAD を、タグ push で同名タグを複製する
+- [ ] Packagist に tmswp/core ほか計 7 パッケージ(5 パッケージ + 2 スターター)が split リポジトリから登録され、タグで `composer require tmswp/core:^X.Y` が解決する
 - [ ] 全パッケージのバージョン番号が常に一致する(lockstep)
 
 下限・互換:

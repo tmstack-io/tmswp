@@ -601,7 +601,7 @@ final class Messages
 - デフォルトメッセージは英語ソースを `__('...', 'tmswp')` でラップして内蔵し、日本語は同梱翻訳ファイルで提供する(DR-17/01 §7)。
 - プレースホルダ書式は `{name}` 固定(旧 `%name%` から変更。sprintf `%s` との衝突事故=旧UploadFileRule未展開バグの再発防止)。
 - 上書き層は「ルール単位(コンストラクタ `message:`)」と「サイト全体(`tmswp/form/rule_message` フィルタ)」の2層のみ。フォーム単位の層は設けない(必要ならルール単位で足りる)。フィルタ名はKernel文書のフック命名規約(`tmswp/` 始まりのスラッシュ区切り)に従う。
-- 静的可変レジストリ(旧 `override()`/`reset()`)は持たない。P8で根絶したグローバル可変状態と同型のアンチパターンでありテスト間の状態リークを生むため、サイト全体上書きはWP標準フィルタへ一本化した(モダン化監査(2026-06-13)で採用。DR-17は実現方式の変更のみで、2層上書きの大枠は維持)。
+- 静的可変レジストリ(`override()`/`reset()` のような静的な上書きAPI)は持たない。グローバル可変状態のアンチパターンでありテスト間の状態リークを生むため、サイト全体の上書きはWP標準フィルタに一本化する。
 
 ### ConfirmToken(署名付き確認トークン)
 
@@ -726,7 +726,7 @@ gc():
 
 - `autoload = 'off'` のため `alloptions` キャッシュを汚染しない。送信成立ごとの非キャッシュDB書込は1回で、フォーム送信頻度に対して無視できるコスト。
 - GCの掃除圧は、transient利用時に発生する `_transient_timeout_*` のクリーンアップと同等のテーブル負荷であり、optionsテーブルへの負荷純増ではない。
-- 旧仕様の `wp_using_ext_object_cache()` 分岐(`wp_cache_add` / transientフォールバック)は、フォールバック側が非アトミックでTOCTOUレースを許容する「運用環境依存の条件付き保証」だったため、モダン化監査(2026-06-13)により本1経路へ統一した。
+- `wp_using_ext_object_cache()` による分岐(`wp_cache_add` / transient)は持たない。transient側が非アトミックでTOCTOUレースを許容し、二重送信防止が運用環境に依存する条件付き保証になるため、本1経路だけとする。
 
 ### UploadedFile / StoredFile / TempFileStore
 
@@ -914,7 +914,7 @@ final class Form
 }
 ```
 
-app側のフォーム定義クラスの規約: `Form` を継承せず、「構成済み `Form` を返す `create(): Form` staticファクトリを持つfinalクラス」として置く。呼び出し側の書き味(`ContactForm::create()`)は従来どおり。テストはサブクラススタブ不要で、任意の `FormDefinition` を `new Form($definition)` で直接渡せる(モダン化監査(2026-06-13)で採用。abstract基底+`create(): static`(LSB)+nullセンチネルコンストラクタを廃止。DR-18整合)。
+app側のフォーム定義クラスの規約: `Form` を継承せず、「構成済み `Form` を返す `create(): Form` staticファクトリを持つfinalクラス」として置く。呼び出し側は `ContactForm::create()` と書く。テストはサブクラススタブ不要で、任意の `FormDefinition` を `new Form($definition)` で直接渡せる。`Form` を abstract 基底にして `create(): static`(LSB)や null センチネルのコンストラクタで構成する形は採らない(DR-18)。
 
 #### handle() の状態機械(確定擬似コード)
 
@@ -1521,7 +1521,6 @@ add_filter(
 - **レンダリングの3層コールバック合成**(FormRenderer/before_render/after_render、マジックインデックス)は、価値(エラー断片とinput断片のecho書き味)に対して複雑性が過大であり、FieldView+FormHtml純関数へ全面置換(DR-16)。echoの書き味とWP標準テンプレート構造はそのまま維持する。
 - **Rule群はラインナップを実利用実績で選別**(RequiredRule 104参照〜Regex 21参照の上位+ファイル系)。全プロジェクト未使用の比較系・ExactLength・RequiredUnless・Type・UniqueEmailは収載しない。config配列+リフレクション注入はPHP8のコンストラクタプロモーション+named argumentsへ置換し、`%param%` は `{param}` に改める(sprintf混線バグの根絶)。
 - **FieldSetシングルトン・FieldInterfaceの__construct宣言・RuleのFieldSet逆依存**は、テスト困難・静的解析不能の根源として全廃。クロスフィールド検証は `ValidationContext` 注入で解決(DR-09/DR-12)。
-- **モダン化監査(2026-06-13)での改稿**: `Messages` の静的可変レジストリ `override()`/`reset()` を廃止し `tmswp/form/rule_message` フィルタへ。DR-17は実現方式の変更のみで2層上書きの大枠は維持。`Form` をabstract基底からfinal具象+`FormDefinition` 合成へ。`create(): static`(LSB)とnullセンチネルコンストラクタを廃止しプリセット規約と統一。DR-18整合。jti再送防止の `wp_using_ext_object_cache()` 分岐+transientフォールバック2経路を `JtiStore` の `wp_options` アトミックINSERT 1経路へ統一。二重送信防止を運用環境非依存の無条件保証へ。`UploadedFile::detectedMime()` のメモ化規定を削除し、readonlyクラスと整合する純粋アクセサへ。
 
 ## 受け入れ基準
 
