@@ -664,11 +664,13 @@ v0.2.0
 
 #### v0.5.0-T4: Migrator の作り直し
 
-- 対象ファイル領域: packages/core/src/Model/{Migrator,MigrationResult,MigrationStatus,MigrateCommand}.php、packages/core/src/Kernel/Kernel.php(Migrator の配線)、packages/core/tests/Integration/ModelIntegrationTest.php(Migrator 部分)、docs/06 §5、docs/02(マイグレーションの契機)
+- 対象ファイル領域: packages/core/src/Model/{Migrator,MigrationResult,MigrationStatus,MigrateCommand}.php、packages/core/src/Kernel/Kernel.php(Migrator の配線)、packages/core/tests/Integration/ModelIntegrationTest.php(Migrator 部分)、docs/06 §5・§7(Kernel 統合契約の `listen()` の呼び出し)、docs/02(マイグレーションの契機)
 - 完了条件:
   - `wp tmswp migrate` で適用し、dbDelta の後に `lastError()` と残った差分を確認し、失敗した場合はハッシュを更新しない。
   - テーブル定義のハッシュが DB と食い違うと、権限のある管理者に `admin_notices` で通知する。起動時・admin_init・ajax・cron で自動適用しない(§1.5)。
   - `action` が enum で、シグネチャと出力が docs/06 どおり。
+  - docs/06 §5・§7 の `listen()` のシグネチャと呼び出しの記述が実装と一致している(v0.2.0 の時点では、文書が `listen(bool $isTheme, ?string $pluginFile = null)`、実装が `listen(Kernel $kernel)`)。
+  - Migrator が `WP_DEBUG` を直接参照せず、`listen()` に渡した Kernel の `KernelConfig::$debug` で判定する(§1.7)。対象: packages/core/src/Model/Migrator.php の 161 行(v0.2.0 の時点の行)。
 - 検証コマンド: `composer test:integration`、`node node_modules/@wordpress/env/bin/wp-env run cli wp tmswp migrate`、`composer test:unit`
 
 #### v0.5.0-T5: Template
@@ -719,12 +721,13 @@ v0.3.0(v0.2.0 を含む)
 
 #### v0.6.0-T1: Kernel ごとの登録と CLI
 
-- 対象ファイル領域: packages/acf-bridge/src/{AcfBridge,BridgeConfig}.php、packages/acf-bridge/src/Cli/、packages/acf-bridge/src/Manifest/、packages/core/rules/extensions.md(acf-bridge の登録例)、docs/09 §2・§5.4・§9
+- 対象ファイル領域: packages/acf-bridge/src/{AcfBridge,BridgeConfig}.php、packages/acf-bridge/src/Cli/、packages/acf-bridge/src/Manifest/、packages/core/rules/extensions.md(acf-bridge の登録例)、docs/09 §1.4(パッケージ構成の例外)・§2・§5.4・§9
 - 完了条件:
   - acf-bridge が `KernelConfig` 経由で Kernel ごとに登録され、テーマとプラグインの両方で使える(統合テスト)。CLI に `--app=` がある。save_json が登録元の acf-json に向く。
   - acf-bridge の debug による分岐が、登録した Kernel の debug に従う(§1.7)。
   - E101 の静的検査が Generator の managedKeys と共通で、options の post_id を実行時に決めず、黙殺の経路がエラー方針どおりになっている。BridgeConfig の入力を検証する。
   - ACF が無効なときの扱い(管理キーのマーク、CLI のオプションページの解決)がエラー方針(`00-overview.md` §5.6)に沿って docs/09 に定められ、`function_exists` で黙って処理を飛ばす経路が残っていない。
+  - docs/09 §1.4 のパッケージ構成の図の `Exception/` が、packages/acf-bridge/src/Exception/ の例外クラスと一致している(v0.2.0 の時点では、AcfBridge・BridgeConfig・AcfCommand が投げる `AcfBridgeRuntimeException` が図に無い)。
 - 検証コマンド: `composer test:unit`、`composer test:integration`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`
 
 #### v0.6.0-T2: 実行時アクセス(AcfFieldAccess と AcfMetaStorage)
@@ -911,11 +914,12 @@ v0.2.0〜v0.7.0
 
 #### v0.8.0-T3: 配布物の整備
 
-- 対象ファイル領域: packages/*/composer.json、packages/*/phpunit.xml.dist(新設)、packages/*/.gitattributes(新設)、テスト支援コード(packages/core/tests/Support の切り出し先)、CHANGELOG.md(新設)、monorepo-builder.php、docs/01、docs/10 §5〜§6、docs/RELEASING.md
+- 対象ファイル領域: packages/*/composer.json、packages/*/phpunit.xml.dist(新設)、packages/*/.gitattributes(新設)、テスト支援コード(packages/core/tests/Support の切り出し先)、packages/core/tests/Support/UsesTempDirectories.php(一時ディレクトリの隔離。切り出す場合は切り出し先)、CHANGELOG.md(新設)、monorepo-builder.php、docs/01、docs/10 §5〜§6、docs/RELEASING.md
 - 完了条件:
   - 各パッケージを単独で clone して `composer install && composer test` が通る(require-dev と phpunit の設定がある)。export-ignore で tests や fixture が配布物に入らない。.DS_Store が混入しない。
   - CHANGELOG.md があり、docs/01 のスターターの名前空間の記述が §1.6 どおり。
-- 検証コマンド: 各パッケージを split 相当で取り出して `composer install && composer test`、`git archive HEAD packages/<pkg> | tar -t`(tests 等が含まれない)、`composer monorepo:validate`
+  - テストの一時ディレクトリを、テストごとに専用の親ディレクトリの下に作り、`KernelConfig` が `dirname(appDir)` に書く探索結果ファイル(`tmswp-discovery.php`)もその中に収まる。テストの後に、探索結果ファイルを含めて片付ける。PHP 8.3 と 8.5 の unit を並列に実行しても干渉しない(v0.2.0 の時点では、UsesTempDirectories が `sys_get_temp_dir()` の直下に一時ディレクトリを作るため、探索結果ファイルが `sys_get_temp_dir()` の直下に書かれて残り、並列の実行で `KernelTest::testInitializerWithoutInterfaceThrowsInProduction` が 1 件エラーになる)。
+- 検証コマンド: 各パッケージを split 相当で取り出して `composer install && composer test`、`git archive HEAD packages/<pkg> | tar -t`(tests 等が含まれない)、`composer monorepo:validate`、PHP 8.3 と 8.5 の `vendor/bin/phpunit -c phpunit.unit.xml.dist` の並列実行(どちらも成功し、実行後の `sys_get_temp_dir()` の直下に `tmswp-discovery.php` が無い)
 
 #### v0.8.0-T4: sample-site の作り直し
 
@@ -931,11 +935,12 @@ v0.2.0〜v0.7.0
 
 #### v0.8.0-T6: 開発基盤の残り
 
-- 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.github/workflows/split.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、docs/10 §4.8(カバレッジゲート)・§5(ワークフローの完全版)、docs/01 §4.4(ワークフロー)
+- 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.github/workflows/split.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、package.json・package-lock.json(@wordpress/env の版と、npm のインストールスクリプトの扱い)、docs/10 §1.1(package.json の写しの版)・§4.8(カバレッジゲート)・§5(ワークフローの完全版)、docs/01 §4.4(ワークフロー)
 - 完了条件:
   - rules の検査が全パッケージの rules/ を対象にし、docs/11 §6.3 どおりの検証をする。sample-site と starters の `composer qa` が CI にある。
   - unit と integration の合算カバレッジが、5 パッケージ全体に加えてパッケージ別にも判定され(パッケージ別の基準値はこの版で決める)、docs/10 §4.8 がその方式に改訂されている。php-cs-fixer の設定が docs/10 §3.2・§7 項目4 どおり。
-  - qa.yml と split.yml の外部アクションが Node.js 24 で動く版になり(CI に Node.js 20 の非推奨の警告が出ない)、SHA で固定されている(docs/10 §5.3)。全ジョブの runner の版が固定され、`ubuntu-latest` を使っていない。docs/10 §5 と docs/01 §4.4 のワークフローの完全版が実ファイルと一致する。
+  - qa.yml と split.yml の外部アクションが Node.js 24 で動く版になり(CI に Node.js 20 の非推奨の警告が出ない)、SHA で固定されている(docs/10 §5.3)。外部アクションの実行時に出る Node.js の非推奨の警告(DEP0040 の `punycode`、DEP0169 の `url.parse()`。v0.2.0 の時点では、actions/setup-node・actions/cache・actions/upload-artifact・ramsey/composer-install の実行時に全ジョブで出ている)が、更新後の版で出ないことを確かめる。最新の版でも出る場合は、そのアクションと版を受け入れ記録に書く。
+  - CI の `npm ci` の警告を解消する。v0.2.0 の時点では、`npm ci` を実行するジョブ(Integration の 4 セルと Coverage)で、`npm warn deprecated` の @octokit/webhooks-types@7.6.1・glob@10.5.0 と、fs-ext-extra-prebuilt@2.2.7 のインストールスクリプトが allowScripts で許可されていないという `npm warn install-scripts` が出ている(いずれも @wordpress/env 11.17.0 の依存)。@wordpress/env の更新か、インストールスクリプトの扱いの決定で解消し、最新の版でも出る警告は、そのパッケージと版を受け入れ記録に書く。全ジョブの runner の版が固定され、`ubuntu-latest` を使っていない。docs/10 §5 と docs/01 §4.4 のワークフローの完全版が実ファイルと一致する。
 - 検証コマンド: `composer lint`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`、`composer test:coverage`、`grep -n "ubuntu-latest" .github/workflows/*.yml`(0 件)
 
 #### v0.8.0-T7: rules・AGENTS.md・README の全面整備
@@ -954,7 +959,7 @@ v0.2.0〜v0.7.0
 
 - 順序: T1 → {T2 ∥ T3 ∥ T4} → {T5 ∥ T6} → T7 → T8
 - T2(starters/ と docs/11)・T3(packages/* の配布設定、テスト支援、docs/01・10)・T4(examples/sample-site/)はファイル領域が重ならない。T2 と T4 は T1 のブロック登録を使うため T1 の後。
-- T5(packages/*/tests/Unit)と T6(tools・bin・CI・cs-fixer の設定・docs/10 §4.8・§5、docs/01 §4.4)はファイル領域が重ならない。T5 は T3(テスト支援の配置)、T6 は T2・T4(CI に入れる対象)と T3(docs/01・docs/10 §5)の後。
+- T5(packages/*/tests/Unit)と T6(tools・bin・CI・cs-fixer の設定・package.json・docs/10 §1.1・§4.8・§5、docs/01 §4.4)はファイル領域が重ならない。T5 は T3(テスト支援の配置)、T6 は T2・T4(CI に入れる対象)と T3(docs/01・docs/10 §5)の後。
 - T7 は全 API の確定後に行う。
 
 ### 受け入れ条件
