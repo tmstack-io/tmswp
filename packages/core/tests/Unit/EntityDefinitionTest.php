@@ -26,8 +26,13 @@ final class EntityDefinitionTest extends UnitTestCase
             ->taxonomies(DefinitionTaxonomy::class)
             ->toArgs(LabelLanguage::En);
 
+        self::assertArrayHasKey('labels', $args);
+        self::assertArrayHasKey('label', $args);
+        self::assertArrayHasKey('public', $args);
+        self::assertArrayHasKey('has_archive', $args);
+        self::assertArrayHasKey('supports', $args);
+        self::assertArrayHasKey('taxonomies', $args);
         $labels = $args['labels'];
-        self::assertIsArray($labels);
 
         self::assertTrue($args['public']);
         self::assertSame('Products', $args['label']);
@@ -35,9 +40,8 @@ final class EntityDefinitionTest extends UnitTestCase
         self::assertSame('Add Product', $labels['add_new_item']);
         self::assertSame('All Products', $labels['all_items']);
         self::assertSame('Product Catalog', $labels['menu_name']);
-        // 非階層の投稿タイプでは、コアと同じく parent_item_colon が null
-        self::assertArrayHasKey('parent_item_colon', $labels);
-        self::assertNull($labels['parent_item_colon']);
+        // コアが非階層の投稿タイプで null にする parent_item_colon は渡さない(WordPress が同じ null で補う)
+        self::assertArrayNotHasKey('parent_item_colon', $labels);
         self::assertTrue($args['has_archive']);
         self::assertSame(['title', 'thumbnail'], $args['supports']);
         self::assertSame(['product_category'], $args['taxonomies']);
@@ -50,8 +54,9 @@ final class EntityDefinitionTest extends UnitTestCase
             ->labelLanguage(LabelLanguage::Ja)
             ->toArgs(LabelLanguage::En);
 
+        self::assertArrayHasKey('labels', $args);
+        self::assertArrayHasKey('label', $args);
         $labels = $args['labels'];
-        self::assertIsArray($labels);
 
         self::assertSame('事例', $args['label']);
         self::assertSame('事例', $labels['singular_name']);
@@ -123,15 +128,15 @@ final class EntityDefinitionTest extends UnitTestCase
             ->labels(['back_to_items' => '← ジャンルへ'])
             ->toArgs(LabelLanguage::En);
 
+        self::assertArrayHasKey('labels', $args);
         $labels = $args['labels'];
-        self::assertIsArray($labels);
 
-        self::assertSame('ジャンル', $args['label']);
+        self::assertSame('ジャンル', $labels['name']);
         self::assertSame('ジャンル一覧', $labels['all_items']);
         self::assertSame('ジャンルを編集', $labels['edit_item']);
         self::assertSame('← ジャンルへ', $labels['back_to_items']);
-        // 非階層のタクソノミーでは、コアと同じく親に関するキーが null
-        self::assertNull($labels['parent_item']);
+        // コアが非階層のタクソノミーで null にする親に関するキーは渡さない(WordPress が同じ null で補う)
+        self::assertArrayNotHasKey('parent_item', $labels);
         self::assertSame('よく使われているジャンル', $labels['popular_items']);
     }
 
@@ -146,10 +151,10 @@ final class EntityDefinitionTest extends UnitTestCase
     public function testUnspecifiedLabelLanguageUsesKernelDefault(PostTypeDefinition|TaxonomyDefinition $definition, string $addNewItem): void
     {
         // labelLanguage() を呼ばない定義は、渡された Kernel の既定(Ja)でラベルを作り、複数形を省略できる
-        $labels = $definition->toArgs(LabelLanguage::Ja)['labels'];
+        $args = $definition->toArgs(LabelLanguage::Ja);
 
-        self::assertIsArray($labels);
-        self::assertSame($addNewItem, $labels['add_new_item']);
+        self::assertArrayHasKey('labels', $args);
+        self::assertSame($addNewItem, $args['labels']['add_new_item']);
     }
 
     public function testExplicitLabelLanguageTakesPrecedenceOverKernelDefault(): void
@@ -157,9 +162,9 @@ final class EntityDefinitionTest extends UnitTestCase
         $postType = PostTypeDefinition::create('book')->label('Book', 'Books')->labelLanguage(LabelLanguage::En)->toArgs(LabelLanguage::Ja);
         $taxonomy = TaxonomyDefinition::create('genre')->label('Genre', 'Genres')->labelLanguage(LabelLanguage::En)->toArgs(LabelLanguage::Ja);
 
-        self::assertIsArray($postType['labels']);
+        self::assertArrayHasKey('labels', $postType);
         self::assertSame('Add Book', $postType['labels']['add_new_item']);
-        self::assertIsArray($taxonomy['labels']);
+        self::assertArrayHasKey('labels', $taxonomy);
         self::assertSame('Add Genre', $taxonomy['labels']['add_new_item']);
     }
 
@@ -179,8 +184,38 @@ final class EntityDefinitionTest extends UnitTestCase
             ->labels(['name' => 'Books', 'singular_name' => 'Book'])
             ->toArgs(LabelLanguage::En);
 
+        self::assertArrayHasKey('label', $args);
+        self::assertArrayHasKey('labels', $args);
         self::assertSame('Books', $args['label']);
         self::assertSame(['name' => 'Books', 'singular_name' => 'Book'], $args['labels']);
+    }
+
+    public function testArgsSetsArgumentsWithoutDedicatedSetters(): void
+    {
+        $postType = PostTypeDefinition::create('book')
+            ->label('Book', 'Books')
+            ->args(['rest_namespace' => 'shop/v1', 'public' => false])
+            ->toArgs(LabelLanguage::En);
+        $taxonomy = TaxonomyDefinition::create('genre')
+            ->label('Genre', 'Genres')
+            ->args(['meta_box_cb' => false])
+            ->toArgs(LabelLanguage::En);
+
+        self::assertArrayHasKey('rest_namespace', $postType);
+        self::assertArrayHasKey('public', $postType);
+        self::assertSame('shop/v1', $postType['rest_namespace']);
+        // FW の既定値 public => true も、args() で上書きできる
+        self::assertFalse($postType['public']);
+        self::assertArrayHasKey('meta_box_cb', $taxonomy);
+        self::assertFalse($taxonomy['meta_box_cb']);
+    }
+
+    public function testBuiltinPostTypeRejectsArgs(): void
+    {
+        $this->expectException(EntityDefinitionException::class);
+        $this->expectExceptionMessage("PostTypeDefinition::args() is not allowed for builtin post type 'page'");
+
+        PostTypeDefinition::builtin('page')->args(['public' => true]);
     }
 
     public function testDefinitionRejectsInvalidSlugAndBuiltinSetterMisuse(): void
@@ -205,6 +240,7 @@ final class EntityDefinitionTest extends UnitTestCase
             ->hierarchical()
             ->toArgs(LabelLanguage::Ja);
 
+        self::assertArrayHasKey('hierarchical', $args);
         self::assertTrue($args['hierarchical']);
         self::assertSame(['product'], TaxonomyDefinition::create('product_category')->objectType(DefinitionPostType::class, DefinitionPostType::class)->resolvedObjectTypes());
     }

@@ -9,7 +9,6 @@ use ReflectionClass;
 use TMSWP\Core\Attribute\MetaSchema;
 use TMSWP\Core\Attribute\UseMetaStorage;
 use TMSWP\Core\Attribute\WithMetaRevisions;
-use TMSWP\Core\Entity\WpBridge;
 use TMSWP\Core\Exception\DuplicateMetaKeyException;
 use TMSWP\Core\Exception\EntityNotRegisteredException;
 use TMSWP\Core\Exception\InvalidSchemaException;
@@ -218,9 +217,9 @@ final class MetaSchemaRegistry
                 }
 
                 $registered = match ($entry['objectType']) {
-                    ObjectType::Post => WpBridge::call('register_post_meta', $entry['subtype'], $definition->key, $args),
-                    ObjectType::Term => WpBridge::call('register_term_meta', $entry['subtype'], $definition->key, $args),
-                    ObjectType::User => WpBridge::call('register_meta', 'user', $definition->key, $args),
+                    ObjectType::Post => register_post_meta($entry['subtype'], $definition->key, $args),
+                    ObjectType::Term => register_term_meta($entry['subtype'], $definition->key, $args),
+                    ObjectType::User => register_meta('user', $definition->key, $args),
                 };
 
                 if ($registered !== true) {

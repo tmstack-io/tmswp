@@ -4,16 +4,57 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\User;
 
-use TMSWP\Core\Entity\WpBridge;
 use TMSWP\Core\Exception\QueryException;
 use TMSWP\Core\Query\PageResult;
 use TMSWP\Core\Query\QueryValidator;
 use WP_User;
 use WP_User_Query;
 
+/**
+ * WpUserQueryArgs は php-stubs/wordpress-stubs の WP_User_Query::__construct() の $query(`@phpstan-param`)と同じ配列の形。
+ * stubs が要素の型を書いていない array(meta_query・orderby の配列)だけは要素の型を書く
+ * (PHPStan level max は要素の型の無い array を許さないため)。
+ *
+ * @phpstan-type WpUserQueryArgs array{
+ *   blog_id?: int,
+ *   role?: string|string[],
+ *   role__in?: string[],
+ *   role__not_in?: string[],
+ *   meta_key?: string|string[],
+ *   meta_value?: string|string[],
+ *   meta_compare?: string,
+ *   meta_compare_key?: string,
+ *   meta_type?: string,
+ *   meta_type_key?: string,
+ *   meta_query?: array<int|string, string|array<string, mixed>>,
+ *   capability?: string|string[],
+ *   capability__in?: string[],
+ *   capability__not_in?: string[],
+ *   include?: int[],
+ *   exclude?: int[],
+ *   search?: string,
+ *   search_columns?: string[],
+ *   orderby?: string|array<string, string>,
+ *   order?: string,
+ *   offset?: int,
+ *   number?: int,
+ *   paged?: int,
+ *   count_total?: bool,
+ *   fields?: string|string[],
+ *   who?: string,
+ *   has_published_posts?: bool|string[],
+ *   nicename?: string,
+ *   nicename__in?: string[],
+ *   nicename__not_in?: string[],
+ *   login?: string,
+ *   login__in?: string[],
+ *   login__not_in?: string[],
+ *   cache_results?: bool,
+ * }
+ */
 final class UserQuery
 {
-    /** @var array<string, mixed> */
+    /** @var WpUserQueryArgs */
     private array $args = [];
 
     /** @var list<array<string, mixed>> */
@@ -25,7 +66,7 @@ final class UserQuery
     /** @var array<string, string> */
     private array $orderBy = [];
 
-    /** @var array<string, mixed> */
+    /** @var WpUserQueryArgs */
     private array $rawArgs = [];
 
     private function __construct(
@@ -132,9 +173,14 @@ final class UserQuery
         return $this;
     }
 
-    public function withArg(string $key, mixed $value): self
+    /**
+     * 専用のメソッドが無い WP_User_Query の引数を設定する。キーごとに上書きする。role は上書きできない。
+     *
+     * @param WpUserQueryArgs $args
+     */
+    public function withArgs(array $args): self
     {
-        $this->rawArgs[$key] = $value;
+        $this->rawArgs = array_merge($this->rawArgs, $args);
 
         return $this;
     }
@@ -142,7 +188,7 @@ final class UserQuery
     /** @return list<WP_User> */
     public function get(): array
     {
-        $query = self::newWpUserQuery($this->toArgs());
+        $query = new WP_User_Query($this->toArgs());
 
         return array_values(array_filter($query->get_results(), static fn(mixed $user): bool => $user instanceof WP_User));
     }
@@ -151,7 +197,7 @@ final class UserQuery
     {
         $args = $this->toArgs();
         $args['number'] = 1;
-        $query = self::newWpUserQuery($args);
+        $query = new WP_User_Query($args);
         $users = $query->get_results();
         $user = \array_key_exists(0, $users) ? $users[0] : null;
 
@@ -163,7 +209,7 @@ final class UserQuery
     {
         $args = $this->toArgs();
         $args['fields'] = 'ID';
-        $query = self::newWpUserQuery($args);
+        $query = new WP_User_Query($args);
         $ids = [];
 
         foreach ($query->get_results() as $id) {
@@ -186,7 +232,7 @@ final class UserQuery
         $args['fields'] = 'ID';
         $args['number'] = 1;
         $args['count_total'] = true;
-        $query = self::newWpUserQuery($args);
+        $query = new WP_User_Query($args);
 
         return (int) $query->get_total();
     }
@@ -221,7 +267,7 @@ final class UserQuery
         $args['number'] = $perPage;
         $args['offset'] = ($currentPage - 1) * $perPage;
         $args['count_total'] = true;
-        $query = self::newWpUserQuery($args);
+        $query = new WP_User_Query($args);
         $users = array_values(array_filter($query->get_results(), static fn(mixed $user): bool => $user instanceof WP_User));
 
         return new PageResult($users, (int) $query->get_total(), $perPage, $currentPage);
@@ -229,10 +275,10 @@ final class UserQuery
 
     public function wpUserQuery(): WP_User_Query
     {
-        return self::newWpUserQuery($this->toArgs());
+        return new WP_User_Query($this->toArgs());
     }
 
-    /** @return array<string, mixed> */
+    /** @return WpUserQueryArgs */
     public function toArgs(): array
     {
         $args = ['fields' => 'all', 'count_total' => false];
@@ -270,17 +316,5 @@ final class UserQuery
         }
 
         return 1;
-    }
-
-    /** @param array<string, mixed> $args */
-    private static function newWpUserQuery(array $args): WP_User_Query
-    {
-        $query = WpBridge::instantiate(WP_User_Query::class, $args);
-
-        if (!$query instanceof WP_User_Query) {
-            throw new QueryException('failed to create WP_User_Query');
-        }
-
-        return $query;
     }
 }

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\User;
 
-use TMSWP\Core\Entity\WpBridge;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\EntityPersistenceException;
 use TMSWP\Core\Exception\InvalidArgumentException;
@@ -156,14 +155,45 @@ abstract class UserRole
         return $url === '' ? null : $url;
     }
 
-    /** @param array<string, mixed> $userdata */
+    /**
+     * ユーザーを作る。user_login・user_pass・role は引数とこのクラスのロールにし、ID は無視する。
+     *
+     * $userdata は php-stubs/wordpress-stubs の wp_insert_user() の $userdata(`@phpstan-param`)のうち、配列の形。
+     * stubs が要素の型を書いていない array(meta_input)だけは、WordPress が受け付ける要素の型を書く。
+     *
+     * @param array{
+     *   ID?: int,
+     *   user_pass?: string,
+     *   user_login?: string,
+     *   user_nicename?: string,
+     *   user_url?: string,
+     *   user_email?: string,
+     *   display_name?: string,
+     *   nickname?: string,
+     *   first_name?: string,
+     *   last_name?: string,
+     *   description?: string,
+     *   rich_editing?: string,
+     *   syntax_highlighting?: string,
+     *   comment_shortcuts?: string,
+     *   admin_color?: string,
+     *   use_ssl?: bool,
+     *   user_registered?: string,
+     *   user_activation_key?: string,
+     *   spam?: bool,
+     *   show_admin_bar_front?: string,
+     *   role?: string,
+     *   locale?: string,
+     *   meta_input?: array<string, mixed>,
+     * } $userdata
+     */
     final public static function create(string $login, string $password, array $userdata = []): int
     {
         $userdata['user_login'] = $login;
         $userdata['user_pass'] = $password;
         $userdata['role'] = static::role();
         unset($userdata['ID']);
-        $id = WpBridge::call('wp_insert_user', $userdata);
+        $id = wp_insert_user($userdata);
 
         if ($id instanceof WP_Error) {
             throw EntityPersistenceException::fromWpError($id);

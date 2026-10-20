@@ -168,6 +168,13 @@ class QueryException extends RuntimeException
 - データが無いこと(投稿・ターム・ユーザーが無い、アイキャッチ未設定等)はエラーにせず、1.3節の正常な結果(null・空配列・false)で返す。
 - `meta()` だけは対象のエンティティを前提とするため、無い対象・スコープ外の対象は呼び出しの誤りとして、debugに関係なく `InvalidArgumentException`(`TMSWP\Core\Exception\`。`07-support.md` §6)を投げる(5.3節)。存在しない対象へのメタの書き込みを防ぐためで、04文書の `ObjectType::resolveId()` が不正なIDと種別の違うオブジェクトを `InvalidArgumentException` にするのと同じ扱いである。
 
+### 1.8 WordPressの関数に渡す引数の型
+
+- WordPressの関数とクラス(`register_post_type`・`register_taxonomy`・`register_post_meta`・`register_term_meta`・`register_meta`・`wp_insert_post`・`wp_insert_term`・`wp_insert_user`・`get_terms`・`WP_Term_Query`・`WP_User_Query`・`WP_Query`)は直接呼ぶ。関数名の文字列や可変のクラス名で呼んで、PHPStanの型検査を避けない。
+- WordPressに渡す配列(各 `toArgs()` の戻り値・各 `create()` の引数・メタの登録の引数)のPHPDocは、php-stubs/wordpress-stubsの該当する `@phpstan-param` と同じ配列の形にする。stubsが要素の型を書いていない `array` だけは、要素の型を書いて絞る(PHPStan level maxは要素の型の無い `array` を許さない)。stubsの型が配列の形を持たない `WP_Query` の引数は `array<string, mixed>` とする。
+- 形の合わない値は、渡す側で明示的に変換する(LabelGeneratorが返すnullのラベルを除いて渡す等。4.3節)。
+- エスケープハッチ(定義の `args()`・クエリの `withArgs()`)も同じ配列の形を受け取るため、専用のセッターが無い引数の型もPHPStanが呼び出し元で検査する。stubsの配列の形に無いキー(プラグインが読む独自の引数等)は、配列リテラルに書けば型検査を通る(PHPStanは配列の形に無いキーを拒まない)。
+
 ---
 
 ## 2. Label\LabelLanguage / Label\LabelGenerator
@@ -379,7 +386,7 @@ final class PostTypeDefinition
     /** null は labelLanguage() 未指定(Kernel の既定 KernelConfig::$labelLanguage を使う) */
     private ?LabelLanguage $labelLanguage = null;
 
-    /** @var array<string, mixed> セッターが構築する register_post_type 引数 */
+    /** @var RegisterPostTypeArgs セッターが構築する register_post_type 引数(stubs の register_post_type() の $args と同じ配列の形。1.8節) */
     private array $args = [];
 
     /** @var list<string>|null nullは「supports未指定=WP既定に委ねる」 */
@@ -456,10 +463,14 @@ final class PostTypeDefinition
     public function deleteWithUser(bool $delete = true): self;
     /** @param array<int, array<int, mixed>> $blockTemplate */
     public function template(array $blockTemplate, string|false $templateLock = false): self;
-    /** エスケープハッチ: 任意のregister_post_type引数を直接設定 */
-    public function arg(string $key, mixed $value): self;
+    /**
+     * エスケープハッチ: 専用のセッターが無いregister_post_type引数を設定する(キー単位で上書き)
+     * @param RegisterPostTypeArgs $args
+     */
+    public function args(array $args): self;
 
     // ---- 読み取り(FW内部・PostType::register()用) ----
+    /** @return lowercase-string&non-empty-string register_post_type() の $post_type と同じ型 */
     public function slug(): string;
     public function isBuiltin(): bool;
     public function blockEditorPreference(): ?bool;
@@ -467,7 +478,7 @@ final class PostTypeDefinition
     public function supportsList(): array;
     /**
      * @param LabelLanguage $defaultLabelLanguage labelLanguage() 未指定時のラベル言語(Kernel の既定)
-     * @return array<string, mixed> register_post_type の $args(builtin時はEntityDefinitionException)
+     * @return RegisterPostTypeArgs register_post_type の $args(builtin時はEntityDefinitionException)
      */
     public function toArgs(LabelLanguage $defaultLabelLanguage): array;
 }
@@ -486,7 +497,7 @@ final class PostTypeDefinition
 - builtinモードで呼び出し可能なメソッドは `supports()` と `blockEditor()` のみ。それ以外のセッターを呼んだ時点で `EntityDefinitionException` をthrow(設定が無視される事故を防ぐ。旧iwf2bはbuiltin時にargsが黙って捨てられていた)。
 - アダプタ先の投稿タイプは、登録(`init` 優先度10)の時点で登録済みでなければならない。無ければ `register()` が `EntityDefinitionException` を投げる(5.3節)。
 
-**各セッター**: snake_caseのWP引数キーへ1:1で書き込む(`excludeFromSearch` → `exclude_from_search` 等)。同一セッターの再呼び出しは上書き。`capabilityType()` は `capability_type` と `map_meta_cap` の2キーを設定する。
+**各セッター**: snake_caseのWP引数キーへ1:1で書き込む(`excludeFromSearch` → `exclude_from_search` 等)。同一セッターの再呼び出しは上書き。`capabilityType()` は `capability_type` と `map_meta_cap` の2キーを設定する。`args()` は渡した配列のキーを同じ `$args` へキー単位で上書きする。呼び出し順で上書きし合うのは、セッターが `$args` に直接書くキー(`public` 等。`public` の既定値も上書きできる)だけである。`labels`・`label`・`supports`・`taxonomies` は、`label()`/`labels()`・`supports()`・`taxonomies()` が別に持つ値から `toArgs()` が組み立てる(下記の手順2〜4)。そのため、`args()` で渡しても、`labels`・`label` は常に、`supports` は `supports()` を呼んだとき、`taxonomies` は `taxonomies()` で1つ以上指定したとき、`toArgs()` の組み立てた値が優先する(呼び出し順に関係しない)。
 
 **`toArgs()`** の構築手順(決定的):
 
@@ -496,7 +507,7 @@ final class PostTypeDefinition
    - `label()` が呼ばれている → 単数形・複数形とも、空文字は言語・`labels()` の有無に関係なく `EntityDefinitionException` にする(複数形の省略は null、つまり第2引数を渡さないことで表すため、空文字は常に設定の誤り。メッセージにスラッグを含め、複数形では省略するなら第2引数を渡さない旨も含める)。そのうえで複数形を決める。複数形が渡されていればそれを使う。省略されていれば、`LabelLanguage::Ja` では単数形を使い(日本語に複数形が無いための規則)、`LabelLanguage::En` では `EntityDefinitionException` を投げる(設定の誤りのため debug に関係なく常に投げる。メッセージにスラッグと `label('<単数形>', '<plural>')` の書き方、および `labelLanguage()` か `KernelConfig` の `labelLanguage` で Ja を選べることを含める)。
    - そのうえで `LabelGenerator::forPostType($singular, $plural, $labelLanguage, $hierarchical)` で生成し(`$hierarchical` は `$args['hierarchical']` の真偽。未指定は false)、`labelOverrides` をキー単位で上書きマージ(`array_merge(生成, 上書き)`)。
    - `label()` が呼ばれておらず `labelOverrides` のみ → そのまま `labels` に採用。
-   - 結果を `$args['labels']` に設定し、`$args['label']` には `labels['name']` を設定。
+   - 結果から値が null のキー(LabelGeneratorがコアと同じく階層の有無でnullにするキー。2.2節)を除いて `$args['labels']` に設定し、`$args['label']` には `labels['name']` を設定。nullのキーを除くのは、stubsの `labels` が `string[]` のため(1.8節)。WordPressは無いキーを、同じ階層の有無に応じたコアの既定(同じnull)で補う(`_get_custom_object_labels()`)ため、登録される labels は変わらない。
 3. `supports` が非null → `$args['supports']` に設定。
 4. `taxonomies` が非空 → 各要素を1.5節の規約で解決し `$args['taxonomies']` に設定。
 5. `$args` を連想配列のまま返す(キー順は挿入順でよい。比較テストでは `ksort` して検証する)。
@@ -565,7 +576,11 @@ abstract class PostType
     final public static function parents(\WP_Post|int $post, bool $includeSelf = false): array;
 
     // ---- 書き込み ----
-    /** @param array<string, mixed> $postarr 成功時は投稿ID。失敗時EntityPersistenceException */
+    /**
+     * @param array{ID?: int, post_author?: int, post_title?: string, ..., meta_input?: array<string, mixed>, page_template?: string} $postarr
+     *        stubs の wp_insert_post() の $postarr と同じ配列の形(1.8節。全キーは実装の PHPDoc)。post_type は static::slug() に、ID は除く。
+     *        成功時は投稿ID。失敗時EntityPersistenceException
+     */
     final public static function create(array $postarr): int;
 
     // ---- その他 ----
@@ -726,7 +741,7 @@ final class PostQuery
     /** @var array<string, string> orderby指定(field => ASC|DESC) */
     private array $orderBy = [];
 
-    /** @var array<string, mixed> withArg()による生引数(最後にマージ) */
+    /** @var array<string, mixed> withArgs()による生引数(最後にマージ) */
     private array $rawArgs = [];
 
     private function __construct(
@@ -777,8 +792,11 @@ final class PostQuery
     public function noPaging(): self;
     public function ignoreSticky(bool $ignore = true): self;
 
-    /** エスケープハッチ。post_typeのみ上書き不可(常に強制再注入)。 */
-    public function withArg(string $key, mixed $value): self;
+    /**
+     * エスケープハッチ。キー単位で上書き。post_typeのみ上書き不可(常に強制再注入)。
+     * @param array<string, mixed> $args WP_Query::__construct() の $query(stubs の型は string|array で配列の形を持たない。1.8節)
+     */
+    public function withArgs(array $args): self;
 
     // ---- 終端 ----
     /** @return list<\WP_Post> */
@@ -803,7 +821,7 @@ final class PostQuery
 
 | メソッド | WP_Query引数 |
 |---|---|
-| (常時) | `post_type` = スコープのスラッグ(最終段で強制注入。`withArg` でも上書き不可) |
+| (常時) | `post_type` = スコープのスラッグ(最終段で強制注入。`withArgs` でも上書き不可) |
 | (既定) | `post_status` = `['publish']`、`ignore_sticky_posts` = `true` |
 | `status(...$s)` | `post_status` = `$s` |
 | `anyStatus()` | `post_status` = `'any'` |
@@ -827,7 +845,7 @@ final class PostQuery
 
 **バリデーション**: `$direction` は大文字小文字を無視して `ASC`/`DESC` のみ許可(正規化して保持)、`$compare` はWPの許可リスト(`=`, `!=`, `>`, `>=`, `<`, `<=`, `LIKE`, `NOT LIKE`, `IN`, `NOT IN`, `BETWEEN`, `NOT BETWEEN`, `EXISTS`, `NOT EXISTS`, `REGEXP`, `NOT REGEXP`, `RLIKE`)、`$type` は(`NUMERIC`, `BINARY`, `CHAR`, `DATE`, `DATETIME`, `DECIMAL`, `SIGNED`, `TIME`, `UNSIGNED`)のみ。違反は `QueryException`。
 
-**`toArgs()` のマージ順(決定的)**: ①既定値 → ②セッター由来 `$args` → ③`meta_query`(無名句+名前付き句、`relation => 'AND'`。句が1つでもrelationを付ける) → ④`tax_query`(同上) → ⑤`orderby` / 対応する `order` 削除(連想配列形式を使う) → ⑥`rawArgs`(`withArg`) → ⑦`post_type` 強制再注入。
+**`toArgs()` のマージ順(決定的)**: ①既定値 → ②セッター由来 `$args` → ③`meta_query`(無名句+名前付き句、`relation => 'AND'`。句が1つでもrelationを付ける) → ④`tax_query`(同上) → ⑤`orderby` / 対応する `order` 削除(連想配列形式を使う) → ⑥`rawArgs`(`withArgs`) → ⑦`post_type` 強制再注入。
 
 ### 7.4 終端メソッド仕様
 
@@ -878,7 +896,7 @@ final class TaxonomyDefinition
     /** null は labelLanguage() 未指定(Kernel の既定 KernelConfig::$labelLanguage を使う) */
     private ?LabelLanguage $labelLanguage = null;
 
-    /** @var array<string, mixed> */
+    /** @var RegisterTaxonomyArgs stubs の register_taxonomy() の $args と同じ配列の形(1.8節) */
     private array $args = [];
 
     /** @var list<string> 未解決(FQCN混在可)のオブジェクトタイプ参照 */
@@ -924,7 +942,7 @@ final class TaxonomyDefinition
     public function restBase(string $base): self;
 
     // ---- 権限・URL・その他 ----
-    /** @param array<string, string> $capabilities */
+    /** @param array{manage_terms?: string, edit_terms?: string, delete_terms?: string, assign_terms?: string} $capabilities */
     public function capabilities(array $capabilities): self;
     /** @param bool|array{slug?: string, with_front?: bool, hierarchical?: bool, ep_mask?: int} $rewrite */
     public function rewrite(bool|array $rewrite): self;
@@ -933,7 +951,11 @@ final class TaxonomyDefinition
     /** @param string|array{name: string, slug?: string, description?: string} $term */
     public function defaultTerm(string|array $term): self;
     public function sort(bool $sort = true): self;
-    public function arg(string $key, mixed $value): self;
+    /**
+     * エスケープハッチ: 専用のセッターが無いregister_taxonomy引数を設定する(キー単位で上書き)
+     * @param RegisterTaxonomyArgs $args
+     */
+    public function args(array $args): self;
 
     // ---- 読み取り(FW内部用) ----
     public function slug(): string;
@@ -942,7 +964,7 @@ final class TaxonomyDefinition
     public function resolvedObjectTypes(): array;
     /**
      * @param LabelLanguage $defaultLabelLanguage labelLanguage() 未指定時のラベル言語(Kernel の既定)
-     * @return array<string, mixed> register_taxonomy の $args(builtin時はEntityDefinitionException)
+     * @return RegisterTaxonomyArgs register_taxonomy の $args(builtin時はEntityDefinitionException)
      */
     public function toArgs(LabelLanguage $defaultLabelLanguage): array;
 }
@@ -954,7 +976,8 @@ final class TaxonomyDefinition
 - **`builtin()`**: 呼び出し可能なのは `objectType()` のみ。それ以外のセッターは即 `EntityDefinitionException`。組込タクソノミーをCPTに紐付ける用途(`register_taxonomy_for_object_type`)に限定する。アダプタ先のタクソノミーは登録(`init` 優先度9)の時点で登録済みでなければならず、無ければ `objectType()` の有無に関係なく `register()` が `EntityDefinitionException` を投げる(9.2節)。
 - **`objectType()`**: 複数回呼ぶと追記(重複は解決後に除去)。未指定のまま登録すると「どの投稿タイプにも紐付かないタクソノミー」として `register_taxonomy($slug, [], $args)` で登録される(後から紐付ける運用を許容)。
 - **`resolvedObjectTypes()`**: 各要素を1.5節規約(期待基底=`Post\PostType`)で解決し、`array_values(array_unique(...))` で返す。
-- **`toArgs()`**: labels決定はPostTypeDefinitionと同一手順(生成元は `LabelGenerator::forTaxonomy`。複数形の扱いも同じ)。`label()` も `labels['name']` も無い場合は `EntityDefinitionException`。
+- **`toArgs()`**: labels決定はPostTypeDefinitionと同一手順(生成元は `LabelGenerator::forTaxonomy`。複数形の扱いと、nullのキーを除くことも同じ)。`label()` も `labels['name']` も無い場合は `EntityDefinitionException`。`label` キーは設定しない(stubsの register_taxonomy の `$args` に `label` は無く、`WP_Taxonomy` は登録時に `labels['name']` から `label` を設定する)。
+- **`args()`**: PostTypeDefinitionの `args()` と同じ(builtinでは `EntityDefinitionException`)。`toArgs()` が組み立てる `labels` だけは、`args()` で渡しても常に `toArgs()` の値が優先する。`objectType()` の値は `$args` ではなく `register_taxonomy()` の第2引数(`resolvedObjectTypes()`)として渡すため、`args()` とは関係しない。
 
 ---
 
@@ -1006,7 +1029,10 @@ abstract class Taxonomy
     final public static function parents(\WP_Term|int $term, bool $includeSelf = false): array;
 
     // ---- 書き込み ----
-    /** @param array<string, mixed> $args wp_insert_termの$args。成功時はterm_id */
+    /**
+     * @param array{alias_of?: string, description?: string, parent?: int, slug?: string} $args stubs の wp_insert_term() の $args と同じ配列の形(1.8節)。
+     *        成功時はterm_id
+     */
     final public static function create(string $name, array $args = []): int;
 
     // ---- その他 ----
@@ -1065,7 +1091,7 @@ namespace TMSWP\Core\Tax;
 
 final class TermQuery
 {
-    /** @var array<string, mixed> */
+    /** @var GetTermsArgs stubs の get_terms() の $args(WP_Term_Query::__construct() の $query と同じ)と同じ配列の形(1.8節) */
     private array $args = [];
 
     /** @var list<array<string, mixed>> */
@@ -1077,7 +1103,7 @@ final class TermQuery
     /** @var array<string, string> */
     private array $orderBy = [];
 
-    /** @var array<string, mixed> */
+    /** @var GetTermsArgs */
     private array $rawArgs = [];
 
     private function __construct(
@@ -1116,8 +1142,11 @@ final class TermQuery
     public function limit(int $limit): self;
     public function offset(int $offset): self;
 
-    /** エスケープハッチ。taxonomyのみ上書き不可。 */
-    public function withArg(string $key, mixed $value): self;
+    /**
+     * エスケープハッチ。キー単位で上書き。taxonomyのみ上書き不可。
+     * @param GetTermsArgs $args
+     */
+    public function withArgs(array $args): self;
 
     // ---- 終端 ----
     /** @return list<\WP_Term> */
@@ -1130,7 +1159,7 @@ final class TermQuery
     /** first()のタームアーカイブURL。該当なしはnull。 */
     public function url(): ?string;
     public function wpTermQuery(): \WP_Term_Query;
-    /** @return array<string, mixed> */
+    /** @return GetTermsArgs */
     public function toArgs(): array;
 }
 ```
@@ -1274,7 +1303,11 @@ abstract class UserRole
     final public static function authorUrl(\WP_User|int $user): ?string;
 
     // ---- 書き込み ----
-    /** @param array<string, mixed> $userdata 成功時はユーザーID。失敗時EntityPersistenceException */
+    /**
+     * @param array{ID?: int, user_pass?: string, user_login?: string, ..., locale?: string, meta_input?: array<string, mixed>} $userdata
+     *        stubs の wp_insert_user() の $userdata のうち配列の形(1.8節。全キーは実装の PHPDoc)。user_login・user_pass・role は
+     *        引数とこのクラスのロールに、ID は除く。成功時はユーザーID。失敗時EntityPersistenceException
+     */
     final public static function create(string $login, string $password, array $userdata = []): int;
 
     /** @internal テスト専用 */
@@ -1336,7 +1369,7 @@ use TMSWP\Core\Query\PageResult;
 
 final class UserQuery
 {
-    /** @var array<string, mixed> */
+    /** @var WpUserQueryArgs stubs の WP_User_Query::__construct() の $query と同じ配列の形(1.8節) */
     private array $args = [];
 
     /** @var list<array<string, mixed>> */
@@ -1345,7 +1378,7 @@ final class UserQuery
     /** @var array<string, array<string, mixed>> */
     private array $namedMetaClauses = [];
 
-    /** @var array<string, mixed> */
+    /** @var WpUserQueryArgs */
     private array $rawArgs = [];
 
     private function __construct(
@@ -1380,8 +1413,11 @@ final class UserQuery
     public function limit(int $limit): self;
     public function offset(int $offset): self;
 
-    /** エスケープハッチ。roleのみ上書き不可。 */
-    public function withArg(string $key, mixed $value): self;
+    /**
+     * エスケープハッチ。キー単位で上書き。roleのみ上書き不可。
+     * @param WpUserQueryArgs $args
+     */
+    public function withArgs(array $args): self;
 
     // ---- 終端 ----
     /** @return list<\WP_User> */
@@ -1396,7 +1432,7 @@ final class UserQuery
     /** @return PageResult<\WP_User> */
     public function paginate(int $perPage, ?int $page = null): PageResult;
     public function wpUserQuery(): \WP_User_Query;
-    /** @return array<string, mixed> */
+    /** @return WpUserQueryArgs */
     public function toArgs(): array;
 }
 ```
@@ -1706,7 +1742,7 @@ $id = ProductPost::create([
 **クエリ**
 
 - [ ] `PostQuery::toArgs()` が7.3節のマッピング表どおりの引数を生成する(ユニットテストで全メソッドを網羅)
-- [ ] `post_type`/`taxonomy`/`role` が `withArg()` でも上書きできない
+- [ ] `post_type`/`taxonomy`/`role` が `withArgs()` でも上書きできない
 - [ ] 既定値: PostQueryは `post_status=['publish']`+`ignore_sticky_posts=true`、TermQueryは `hide_empty=false`、UserQueryは `count_total=false`
 - [ ] 不正な `direction`/`compare`/`type`/`limit(0)`/`paginate(0)` が `QueryException` を投げる
 - [ ] `orderByMeta()` が名前付きmeta_query句(`tms_order_0`...)と連想配列orderbyを生成する

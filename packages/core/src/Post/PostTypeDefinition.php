@@ -9,6 +9,57 @@ use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Label\LabelGenerator;
 use TMSWP\Core\Label\LabelLanguage;
 
+/**
+ * register_post_type の引数を組み立てる。
+ *
+ * RegisterPostTypeArgs は php-stubs/wordpress-stubs の register_post_type() の $args(`@phpstan-param`)と同じ配列の形。
+ * stubs が要素の型を書いていない array(capability_type・supports・template)だけは、要素の型を対応するセッターの型に絞る
+ * (PHPStan level max は要素の型の無い array を許さないため)。絞った型は stubs の型に含まれる。
+ *
+ * @phpstan-type RegisterPostTypeArgs array{
+ *   label?: string,
+ *   labels?: string[],
+ *   description?: string,
+ *   public?: bool,
+ *   hierarchical?: bool,
+ *   exclude_from_search?: bool,
+ *   publicly_queryable?: bool,
+ *   show_ui?: bool,
+ *   show_in_menu?: bool|string,
+ *   show_in_nav_menus?: bool,
+ *   show_in_admin_bar?: bool,
+ *   show_in_rest?: bool,
+ *   rest_base?: string,
+ *   rest_namespace?: string,
+ *   rest_controller_class?: string,
+ *   autosave_rest_controller_class?: string|bool,
+ *   revisions_rest_controller_class?: string|bool,
+ *   late_route_registration?: bool,
+ *   menu_position?: int,
+ *   menu_icon?: string,
+ *   capability_type?: string|array{0: string, 1: string},
+ *   capabilities?: string[],
+ *   map_meta_cap?: bool,
+ *   supports?: list<string>|false,
+ *   register_meta_box_cb?: callable,
+ *   taxonomies?: string[],
+ *   has_archive?: bool|string,
+ *   rewrite?: bool|array{
+ *     slug?: string,
+ *     with_front?: bool,
+ *     feeds?: bool,
+ *     pages?: bool,
+ *     ep_mask?: int,
+ *   },
+ *   query_var?: string|bool,
+ *   can_export?: bool,
+ *   delete_with_user?: bool,
+ *   template?: array<int, array<int, mixed>>,
+ *   template_lock?: string|false,
+ *   _builtin?: bool,
+ *   _edit_link?: string,
+ * }
+ */
 final class PostTypeDefinition
 {
     /** null は label() が呼ばれていないこと */
@@ -22,7 +73,7 @@ final class PostTypeDefinition
     /** null は labelLanguage() が呼ばれていないこと(Kernel の既定 KernelConfig::$labelLanguage を使う) */
     private ?LabelLanguage $labelLanguage = null;
 
-    /** @var array<string, mixed> */
+    /** @var RegisterPostTypeArgs */
     private array $args = [];
 
     /** @var list<string>|null */
@@ -33,6 +84,7 @@ final class PostTypeDefinition
 
     private ?bool $blockEditor = null;
 
+    /** @param lowercase-string&non-empty-string $slug */
     private function __construct(
         private readonly string $slug,
         private readonly bool $builtin,
@@ -40,8 +92,7 @@ final class PostTypeDefinition
 
     public static function create(string $slug): self
     {
-        self::assertSlug($slug, 20);
-        $definition = new self($slug, false);
+        $definition = new self(self::assertSlug($slug, 20), false);
         $definition->args['public'] = true;
 
         return $definition;
@@ -49,9 +100,7 @@ final class PostTypeDefinition
 
     public static function builtin(string $slug): self
     {
-        self::assertSlug($slug, null);
-
-        return new self($slug, true);
+        return new self(self::assertSlug($slug, null), true);
     }
 
     /**
@@ -91,67 +140,67 @@ final class PostTypeDefinition
 
     public function description(string $description): self
     {
-        return $this->argForNew('description', $description, __FUNCTION__);
+        return $this->argsForNew(['description' => $description], __FUNCTION__);
     }
 
     public function public(bool $public = true): self
     {
-        return $this->argForNew('public', $public, __FUNCTION__);
+        return $this->argsForNew(['public' => $public], __FUNCTION__);
     }
 
     public function hierarchical(bool $hierarchical = true): self
     {
-        return $this->argForNew('hierarchical', $hierarchical, __FUNCTION__);
+        return $this->argsForNew(['hierarchical' => $hierarchical], __FUNCTION__);
     }
 
     public function excludeFromSearch(bool $exclude = true): self
     {
-        return $this->argForNew('exclude_from_search', $exclude, __FUNCTION__);
+        return $this->argsForNew(['exclude_from_search' => $exclude], __FUNCTION__);
     }
 
     public function publiclyQueryable(bool $queryable = true): self
     {
-        return $this->argForNew('publicly_queryable', $queryable, __FUNCTION__);
+        return $this->argsForNew(['publicly_queryable' => $queryable], __FUNCTION__);
     }
 
     public function showUi(bool $show = true): self
     {
-        return $this->argForNew('show_ui', $show, __FUNCTION__);
+        return $this->argsForNew(['show_ui' => $show], __FUNCTION__);
     }
 
     public function showInMenu(bool|string $show = true): self
     {
-        return $this->argForNew('show_in_menu', $show, __FUNCTION__);
+        return $this->argsForNew(['show_in_menu' => $show], __FUNCTION__);
     }
 
     public function showInNavMenus(bool $show = true): self
     {
-        return $this->argForNew('show_in_nav_menus', $show, __FUNCTION__);
+        return $this->argsForNew(['show_in_nav_menus' => $show], __FUNCTION__);
     }
 
     public function showInAdminBar(bool $show = true): self
     {
-        return $this->argForNew('show_in_admin_bar', $show, __FUNCTION__);
+        return $this->argsForNew(['show_in_admin_bar' => $show], __FUNCTION__);
     }
 
     public function menuPosition(int $position): self
     {
-        return $this->argForNew('menu_position', $position, __FUNCTION__);
+        return $this->argsForNew(['menu_position' => $position], __FUNCTION__);
     }
 
     public function menuIcon(string $icon): self
     {
-        return $this->argForNew('menu_icon', $icon, __FUNCTION__);
+        return $this->argsForNew(['menu_icon' => $icon], __FUNCTION__);
     }
 
     public function showInRest(bool $show = true): self
     {
-        return $this->argForNew('show_in_rest', $show, __FUNCTION__);
+        return $this->argsForNew(['show_in_rest' => $show], __FUNCTION__);
     }
 
     public function restBase(string $base): self
     {
-        return $this->argForNew('rest_base', $base, __FUNCTION__);
+        return $this->argsForNew(['rest_base' => $base], __FUNCTION__);
     }
 
     public function blockEditor(bool $enabled): self
@@ -174,7 +223,7 @@ final class PostTypeDefinition
     /** @param array<string, string> $capabilities */
     public function capabilities(array $capabilities): self
     {
-        return $this->argForNew('capabilities', $capabilities, __FUNCTION__);
+        return $this->argsForNew(['capabilities' => $capabilities], __FUNCTION__);
     }
 
     public function supports(string ...$features): self
@@ -194,13 +243,13 @@ final class PostTypeDefinition
 
     public function hasArchive(bool|string $archive = true): self
     {
-        return $this->argForNew('has_archive', $archive, __FUNCTION__);
+        return $this->argsForNew(['has_archive' => $archive], __FUNCTION__);
     }
 
     /** @param bool|array{slug?: string, with_front?: bool, feeds?: bool, pages?: bool, ep_mask?: int} $rewrite */
     public function rewrite(bool|array $rewrite): self
     {
-        return $this->argForNew('rewrite', $rewrite, __FUNCTION__);
+        return $this->argsForNew(['rewrite' => $rewrite], __FUNCTION__);
     }
 
     public function rewriteSlug(string $slug, bool $withFront = true): self
@@ -210,17 +259,17 @@ final class PostTypeDefinition
 
     public function queryVar(bool|string $queryVar): self
     {
-        return $this->argForNew('query_var', $queryVar, __FUNCTION__);
+        return $this->argsForNew(['query_var' => $queryVar], __FUNCTION__);
     }
 
     public function canExport(bool $canExport = true): self
     {
-        return $this->argForNew('can_export', $canExport, __FUNCTION__);
+        return $this->argsForNew(['can_export' => $canExport], __FUNCTION__);
     }
 
     public function deleteWithUser(bool $delete = true): self
     {
-        return $this->argForNew('delete_with_user', $delete, __FUNCTION__);
+        return $this->argsForNew(['delete_with_user' => $delete], __FUNCTION__);
     }
 
     /** @param array<int, array<int, mixed>> $blockTemplate */
@@ -233,11 +282,17 @@ final class PostTypeDefinition
         return $this;
     }
 
-    public function arg(string $key, mixed $value): self
+    /**
+     * 専用のセッターが無い register_post_type の引数を設定する。キーごとに上書きする。
+     *
+     * @param RegisterPostTypeArgs $args
+     */
+    public function args(array $args): self
     {
-        return $this->argForNew($key, $value, __FUNCTION__);
+        return $this->argsForNew($args, __FUNCTION__);
     }
 
+    /** @return lowercase-string&non-empty-string */
     public function slug(): string
     {
         return $this->slug;
@@ -266,7 +321,7 @@ final class PostTypeDefinition
     /**
      * @param LabelLanguage $defaultLabelLanguage labelLanguage() を指定していないときのラベル言語(Kernel の既定)
      *
-     * @return array<string, mixed>
+     * @return RegisterPostTypeArgs
      */
     public function toArgs(LabelLanguage $defaultLabelLanguage): array
     {
@@ -296,7 +351,12 @@ final class PostTypeDefinition
         return $args;
     }
 
-    private static function assertSlug(string $slug, ?int $maxLength): void
+    /**
+     * スラッグを検証し、register_post_type() の $post_type と同じ型(小文字の空でない文字列)で返す。
+     *
+     * @return lowercase-string&non-empty-string
+     */
+    private static function assertSlug(string $slug, ?int $maxLength): string
     {
         if (preg_match('/^[a-z0-9_\-]+$/', $slug) !== 1) {
             throw new EntityDefinitionException("invalid post type slug: {$slug}");
@@ -305,6 +365,9 @@ final class PostTypeDefinition
         if ($maxLength !== null && \strlen($slug) > $maxLength) {
             throw new EntityDefinitionException("post type slug must be {$maxLength} characters or fewer: {$slug}");
         }
+
+        // 正規表現で小文字・数字・_・- だけと確かめた値なので、strtolower() は値を変えない。型を小文字の文字列にするために通す
+        return strtolower($slug);
     }
 
     private function assertNotBuiltin(string $method): void
@@ -314,15 +377,16 @@ final class PostTypeDefinition
         }
     }
 
-    private function argForNew(string $key, mixed $value, string $method): self
+    /** @param RegisterPostTypeArgs $args */
+    private function argsForNew(array $args, string $method): self
     {
         $this->assertNotBuiltin($method);
-        $this->args[$key] = $value;
+        $this->args = array_merge($this->args, $args);
 
         return $this;
     }
 
-    /** @return array<string, string|null> */
+    /** @return array<string, string> */
     private function labelsForArgs(LabelLanguage $language): array
     {
         if ($this->singularLabel === null && !\array_key_exists('name', $this->labelOverrides)) {
@@ -349,9 +413,13 @@ final class PostTypeDefinition
             LabelLanguage::En => throw new EntityDefinitionException("post type '{$this->slug}' requires a plural label for LabelLanguage::En: pass it as label('{$this->singularLabel}', '<plural>'), or select LabelLanguage::Ja with labelLanguage() or KernelConfig's labelLanguage"),
         };
 
-        return array_merge(
-            LabelGenerator::forPostType($this->singularLabel, $plural, $language, (bool) ($this->args['hierarchical'] ?? false)),
+        $labels = array_merge(
+            LabelGenerator::forPostType($this->singularLabel, $plural, $language, $this->args['hierarchical'] ?? false),
             $this->labelOverrides,
         );
+
+        // LabelGenerator はコアと同じく、階層の有無で既定が null になるキーを null で返す。stubs の labels は string[] のため、
+        // null のキーは除いて渡す。WordPress は無いキーを、同じ階層の有無に応じたコアの既定(同じ null)で補う(_get_custom_object_labels())
+        return array_filter($labels, static fn(?string $label): bool => $label !== null);
     }
 }

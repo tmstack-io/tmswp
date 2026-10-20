@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tax;
 
-use TMSWP\Core\Entity\WpBridge;
 use TMSWP\Core\Exception\EntityDataException;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\EntityPersistenceException;
@@ -54,7 +53,7 @@ abstract class Taxonomy
             throw new EntityDefinitionException("taxonomy is already registered: {$slug}");
         }
 
-        $registered = WpBridge::call('register_taxonomy', $slug, $definition->resolvedObjectTypes(), $definition->toArgs($kernel->config()->labelLanguage));
+        $registered = register_taxonomy($slug, $definition->resolvedObjectTypes(), $definition->toArgs($kernel->config()->labelLanguage));
 
         if ($registered instanceof WP_Error) {
             throw new EntityDefinitionException($registered->get_error_message());
@@ -178,10 +177,16 @@ abstract class Taxonomy
         return self::parentDepthExceeded($resolved->term_id);
     }
 
-    /** @param array<string, mixed> $args */
+    /**
+     * タームを作る。
+     *
+     * $args は php-stubs/wordpress-stubs の wp_insert_term() の $args(`@phpstan-param`)と同じ配列の形。
+     *
+     * @param array{alias_of?: string, description?: string, parent?: int, slug?: string} $args
+     */
     final public static function create(string $name, array $args = []): int
     {
-        $result = WpBridge::call('wp_insert_term', $name, static::slug(), $args);
+        $result = wp_insert_term($name, static::slug(), $args);
 
         if ($result instanceof WP_Error) {
             throw EntityPersistenceException::fromWpError($result);

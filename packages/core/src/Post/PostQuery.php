@@ -207,9 +207,14 @@ final class PostQuery
         return $this;
     }
 
-    public function withArg(string $key, mixed $value): self
+    /**
+     * 専用のメソッドが無い WP_Query の引数を設定する。キーごとに上書きする。post_type は上書きできない。
+     *
+     * @param array<string, mixed> $args WP_Query::__construct() の $query(stubs の型は string|array)
+     */
+    public function withArgs(array $args): self
     {
-        $this->rawArgs[$key] = $value;
+        $this->rawArgs = array_merge($this->rawArgs, $args);
 
         return $this;
     }
@@ -220,7 +225,7 @@ final class PostQuery
         $args = $this->toArgs();
         $args['no_found_rows'] = true;
         unset($args['fields']);
-        $query = self::newWpQuery($args);
+        $query = new WP_Query($args);
 
         return array_values(array_filter($query->posts, static fn(mixed $post): bool => $post instanceof WP_Post));
     }
@@ -231,7 +236,7 @@ final class PostQuery
         $args['posts_per_page'] = 1;
         $args['no_found_rows'] = true;
         unset($args['fields']);
-        $query = self::newWpQuery($args);
+        $query = new WP_Query($args);
         $post = \array_key_exists(0, $query->posts) ? $query->posts[0] : null;
 
         return $post instanceof WP_Post ? $post : null;
@@ -243,7 +248,7 @@ final class PostQuery
         $args = $this->toArgs();
         $args['fields'] = 'ids';
         $args['no_found_rows'] = true;
-        $query = self::newWpQuery($args);
+        $query = new WP_Query($args);
         $ids = [];
 
         foreach ($query->posts as $id) {
@@ -267,7 +272,7 @@ final class PostQuery
         $args['posts_per_page'] = 1;
         $args['paged'] = 1;
         $args['no_found_rows'] = false;
-        $query = self::newWpQuery($args);
+        $query = new WP_Query($args);
 
         return (int) $query->found_posts;
     }
@@ -303,7 +308,7 @@ final class PostQuery
         $args['paged'] = $currentPage;
         $args['no_found_rows'] = false;
         unset($args['fields']);
-        $query = self::newWpQuery($args);
+        $query = new WP_Query($args);
         $posts = array_values(array_filter($query->posts, static fn(mixed $post): bool => $post instanceof WP_Post));
 
         return new PageResult($posts, (int) $query->found_posts, $perPage, $currentPage);
@@ -311,10 +316,10 @@ final class PostQuery
 
     public function wpQuery(): WP_Query
     {
-        return self::newWpQuery($this->toArgs());
+        return new WP_Query($this->toArgs());
     }
 
-    /** @return array<string, mixed> */
+    /** @return array<string, mixed> WP_Query::__construct() の $query(stubs の型は string|array で、配列の形を持たない) */
     public function toArgs(): array
     {
         $args = ['post_status' => ['publish'], 'ignore_sticky_posts' => true];
@@ -358,13 +363,5 @@ final class PostQuery
         }
 
         return 1;
-    }
-
-    /** @param array<string, mixed> $args */
-    private static function newWpQuery(array $args): WP_Query
-    {
-        $class = WP_Query::class;
-
-        return new $class($args);
     }
 }

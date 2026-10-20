@@ -9,6 +9,57 @@ use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Label\LabelGenerator;
 use TMSWP\Core\Label\LabelLanguage;
 
+/**
+ * register_taxonomy の引数を組み立てる。
+ *
+ * RegisterTaxonomyArgs は php-stubs/wordpress-stubs の register_taxonomy() の $args(`@phpstan-param`)と同じ配列の形。
+ * stubs が要素の型を書いていない array(args)だけは、wp_get_object_terms() の引数(get_terms() と同じ形)の型を書く
+ * (PHPStan level max は要素の型の無い array を許さないため)。
+ *
+ * @phpstan-import-type GetTermsArgs from TermQuery
+ *
+ * @phpstan-type RegisterTaxonomyArgs array{
+ *   labels?: string[],
+ *   description?: string,
+ *   public?: bool,
+ *   publicly_queryable?: bool,
+ *   hierarchical?: bool,
+ *   show_ui?: bool,
+ *   show_in_menu?: bool,
+ *   show_in_nav_menus?: bool,
+ *   show_in_rest?: bool,
+ *   rest_base?: string,
+ *   rest_namespace?: string,
+ *   rest_controller_class?: string,
+ *   show_tagcloud?: bool,
+ *   show_in_quick_edit?: bool,
+ *   show_admin_column?: bool,
+ *   meta_box_cb?: bool|callable,
+ *   meta_box_sanitize_cb?: callable,
+ *   capabilities?: array{
+ *     manage_terms?: string,
+ *     edit_terms?: string,
+ *     delete_terms?: string,
+ *     assign_terms?: string,
+ *   },
+ *   rewrite?: bool|array{
+ *     slug?: string,
+ *     with_front?: bool,
+ *     hierarchical?: bool,
+ *     ep_mask?: int,
+ *   },
+ *   query_var?: string|bool,
+ *   update_count_callback?: callable,
+ *   default_term?: string|array{
+ *     name?: string,
+ *     slug?: string,
+ *     description?: string,
+ *   },
+ *   sort?: bool,
+ *   args?: GetTermsArgs,
+ *   _builtin?: bool,
+ * }
+ */
 final class TaxonomyDefinition
 {
     /** null は label() が呼ばれていないこと */
@@ -22,7 +73,7 @@ final class TaxonomyDefinition
     /** null は labelLanguage() が呼ばれていないこと(Kernel の既定 KernelConfig::$labelLanguage を使う) */
     private ?LabelLanguage $labelLanguage = null;
 
-    /** @var array<string, mixed> */
+    /** @var RegisterTaxonomyArgs */
     private array $args = [];
 
     /** @var list<string> */
@@ -91,74 +142,74 @@ final class TaxonomyDefinition
 
     public function description(string $description): self
     {
-        return $this->argForNew('description', $description, __FUNCTION__);
+        return $this->argsForNew(['description' => $description], __FUNCTION__);
     }
 
     public function public(bool $public = true): self
     {
-        return $this->argForNew('public', $public, __FUNCTION__);
+        return $this->argsForNew(['public' => $public], __FUNCTION__);
     }
 
     public function hierarchical(bool $hierarchical = true): self
     {
-        return $this->argForNew('hierarchical', $hierarchical, __FUNCTION__);
+        return $this->argsForNew(['hierarchical' => $hierarchical], __FUNCTION__);
     }
 
     public function publiclyQueryable(bool $queryable = true): self
     {
-        return $this->argForNew('publicly_queryable', $queryable, __FUNCTION__);
+        return $this->argsForNew(['publicly_queryable' => $queryable], __FUNCTION__);
     }
 
     public function showUi(bool $show = true): self
     {
-        return $this->argForNew('show_ui', $show, __FUNCTION__);
+        return $this->argsForNew(['show_ui' => $show], __FUNCTION__);
     }
 
     public function showInMenu(bool $show = true): self
     {
-        return $this->argForNew('show_in_menu', $show, __FUNCTION__);
+        return $this->argsForNew(['show_in_menu' => $show], __FUNCTION__);
     }
 
     public function showInNavMenus(bool $show = true): self
     {
-        return $this->argForNew('show_in_nav_menus', $show, __FUNCTION__);
+        return $this->argsForNew(['show_in_nav_menus' => $show], __FUNCTION__);
     }
 
     public function showTagcloud(bool $show = true): self
     {
-        return $this->argForNew('show_tagcloud', $show, __FUNCTION__);
+        return $this->argsForNew(['show_tagcloud' => $show], __FUNCTION__);
     }
 
     public function showInQuickEdit(bool $show = true): self
     {
-        return $this->argForNew('show_in_quick_edit', $show, __FUNCTION__);
+        return $this->argsForNew(['show_in_quick_edit' => $show], __FUNCTION__);
     }
 
     public function showAdminColumn(bool $show = true): self
     {
-        return $this->argForNew('show_admin_column', $show, __FUNCTION__);
+        return $this->argsForNew(['show_admin_column' => $show], __FUNCTION__);
     }
 
     public function showInRest(bool $show = true): self
     {
-        return $this->argForNew('show_in_rest', $show, __FUNCTION__);
+        return $this->argsForNew(['show_in_rest' => $show], __FUNCTION__);
     }
 
     public function restBase(string $base): self
     {
-        return $this->argForNew('rest_base', $base, __FUNCTION__);
+        return $this->argsForNew(['rest_base' => $base], __FUNCTION__);
     }
 
-    /** @param array<string, string> $capabilities */
+    /** @param array{manage_terms?: string, edit_terms?: string, delete_terms?: string, assign_terms?: string} $capabilities */
     public function capabilities(array $capabilities): self
     {
-        return $this->argForNew('capabilities', $capabilities, __FUNCTION__);
+        return $this->argsForNew(['capabilities' => $capabilities], __FUNCTION__);
     }
 
     /** @param bool|array{slug?: string, with_front?: bool, hierarchical?: bool, ep_mask?: int} $rewrite */
     public function rewrite(bool|array $rewrite): self
     {
-        return $this->argForNew('rewrite', $rewrite, __FUNCTION__);
+        return $this->argsForNew(['rewrite' => $rewrite], __FUNCTION__);
     }
 
     public function rewriteSlug(string $slug, bool $withFront = true, bool $hierarchical = false): self
@@ -168,23 +219,28 @@ final class TaxonomyDefinition
 
     public function queryVar(bool|string $queryVar): self
     {
-        return $this->argForNew('query_var', $queryVar, __FUNCTION__);
+        return $this->argsForNew(['query_var' => $queryVar], __FUNCTION__);
     }
 
     /** @param string|array{name: string, slug?: string, description?: string} $term */
     public function defaultTerm(string|array $term): self
     {
-        return $this->argForNew('default_term', $term, __FUNCTION__);
+        return $this->argsForNew(['default_term' => $term], __FUNCTION__);
     }
 
     public function sort(bool $sort = true): self
     {
-        return $this->argForNew('sort', $sort, __FUNCTION__);
+        return $this->argsForNew(['sort' => $sort], __FUNCTION__);
     }
 
-    public function arg(string $key, mixed $value): self
+    /**
+     * 専用のセッターが無い register_taxonomy の引数を設定する。キーごとに上書きする。
+     *
+     * @param RegisterTaxonomyArgs $args
+     */
+    public function args(array $args): self
     {
-        return $this->argForNew($key, $value, __FUNCTION__);
+        return $this->argsForNew($args, __FUNCTION__);
     }
 
     public function slug(): string
@@ -212,7 +268,7 @@ final class TaxonomyDefinition
     /**
      * @param LabelLanguage $defaultLabelLanguage labelLanguage() を指定していないときのラベル言語(Kernel の既定)
      *
-     * @return array<string, mixed>
+     * @return RegisterTaxonomyArgs
      */
     public function toArgs(LabelLanguage $defaultLabelLanguage): array
     {
@@ -221,9 +277,7 @@ final class TaxonomyDefinition
         }
 
         $args = $this->args;
-        $labels = $this->labelsForArgs($this->labelLanguage ?? $defaultLabelLanguage);
-        $args['labels'] = $labels;
-        $args['label'] = $labels['name'];
+        $args['labels'] = $this->labelsForArgs($this->labelLanguage ?? $defaultLabelLanguage);
 
         return $args;
     }
@@ -246,15 +300,16 @@ final class TaxonomyDefinition
         }
     }
 
-    private function argForNew(string $key, mixed $value, string $method): self
+    /** @param RegisterTaxonomyArgs $args */
+    private function argsForNew(array $args, string $method): self
     {
         $this->assertNotBuiltin($method);
-        $this->args[$key] = $value;
+        $this->args = array_merge($this->args, $args);
 
         return $this;
     }
 
-    /** @return array<string, string|null> */
+    /** @return array<string, string> */
     private function labelsForArgs(LabelLanguage $language): array
     {
         if ($this->singularLabel === null && !\array_key_exists('name', $this->labelOverrides)) {
@@ -281,9 +336,13 @@ final class TaxonomyDefinition
             LabelLanguage::En => throw new EntityDefinitionException("taxonomy '{$this->slug}' requires a plural label for LabelLanguage::En: pass it as label('{$this->singularLabel}', '<plural>'), or select LabelLanguage::Ja with labelLanguage() or KernelConfig's labelLanguage"),
         };
 
-        return array_merge(
-            LabelGenerator::forTaxonomy($this->singularLabel, $plural, $language, (bool) ($this->args['hierarchical'] ?? false)),
+        $labels = array_merge(
+            LabelGenerator::forTaxonomy($this->singularLabel, $plural, $language, $this->args['hierarchical'] ?? false),
             $this->labelOverrides,
         );
+
+        // LabelGenerator はコアと同じく、階層の有無で既定が null になるキーを null で返す。stubs の labels は string[] のため、
+        // null のキーは除いて渡す。WordPress は無いキーを、同じ階層の有無に応じたコアの既定(同じ null)で補う(_get_custom_object_labels())
+        return array_filter($labels, static fn(?string $label): bool => $label !== null);
     }
 }

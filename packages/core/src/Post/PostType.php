@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace TMSWP\Core\Post;
 
 use TMSWP\Core\Entity\EntityReference;
-use TMSWP\Core\Entity\WpBridge;
 use TMSWP\Core\Exception\EntityDataException;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\EntityPersistenceException;
@@ -64,7 +63,7 @@ abstract class PostType
             self::mergeThumbnailSupport($slug);
         }
 
-        $registered = WpBridge::call('register_post_type', $slug, $definition->toArgs($kernel->config()->labelLanguage));
+        $registered = register_post_type($slug, $definition->toArgs($kernel->config()->labelLanguage));
 
         if ($registered instanceof WP_Error) {
             throw new EntityDefinitionException($registered->get_error_message());
@@ -267,13 +266,47 @@ abstract class PostType
         return self::parentDepthExceeded($resolved->ID);
     }
 
-    /** @param array<string, mixed> $postarr */
+    /**
+     * 投稿を作る。post_type はこのクラスのスラッグにし、ID は無視する。
+     *
+     * $postarr は php-stubs/wordpress-stubs の wp_insert_post() の $postarr(`@phpstan-param`)と同じ配列の形。
+     * stubs が要素の型を書いていない array(tags_input・tax_input・meta_input)だけは、WordPress が受け付ける要素の型を書く。
+     *
+     * @param array{
+     *   ID?: int,
+     *   post_author?: int,
+     *   post_date?: string,
+     *   post_date_gmt?: string,
+     *   post_content?: string,
+     *   post_content_filtered?: string,
+     *   post_title?: string,
+     *   post_excerpt?: string,
+     *   post_status?: string,
+     *   post_type?: string,
+     *   comment_status?: string,
+     *   ping_status?: string,
+     *   post_password?: string,
+     *   post_name?: string,
+     *   to_ping?: string,
+     *   pinged?: string,
+     *   post_parent?: int,
+     *   menu_order?: int,
+     *   post_mime_type?: string,
+     *   guid?: string,
+     *   import_id?: int,
+     *   post_category?: int[],
+     *   tags_input?: array<int|string>,
+     *   tax_input?: array<string, array<int|string>|string>,
+     *   meta_input?: array<string, mixed>,
+     *   page_template?: string,
+     * } $postarr
+     */
     final public static function create(array $postarr): int
     {
         $postarr['post_type'] = static::slug();
         unset($postarr['ID']);
 
-        $id = WpBridge::call('wp_insert_post', $postarr, true);
+        $id = wp_insert_post($postarr, true);
 
         if ($id instanceof WP_Error) {
             throw EntityPersistenceException::fromWpError($id);

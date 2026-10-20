@@ -99,6 +99,29 @@ final class EntityRegistrationIntegrationTest extends IntegrationTestCase
         self::assertEqualsCanonicalizing($generated, array_keys(get_object_vars($taxonomy->labels)));
     }
 
+    /**
+     * toArgs() は LabelGenerator が null で返すキーを除いて渡し、タクソノミーには label を渡さない。WordPress は無いキーを
+     * コアの既定(同じ階層の有無での null)で補い、タクソノミーの label を labels の name から設定するため、登録された
+     * ラベルは生成したラベル(null のキーを含む)と同じになる。
+     */
+    public function testRegisteredLabelsEqualGeneratedLabelsIncludingNullKeys(): void
+    {
+        $language = self::themeKernel()->config()->labelLanguage;
+
+        $postType = get_post_type_object('tmswp_product');
+        self::assertInstanceOf(WP_Post_Type::class, $postType);
+        self::assertFalse($postType->hierarchical);
+        self::assertEquals(LabelGenerator::forPostType('製品', '製品', $language, false), get_object_vars($postType->labels));
+        self::assertNull($postType->labels->parent_item_colon);
+
+        $taxonomy = get_taxonomy('tmswp_product_tag');
+        self::assertInstanceOf(WP_Taxonomy::class, $taxonomy);
+        self::assertFalse($taxonomy->hierarchical);
+        self::assertEquals(LabelGenerator::forTaxonomy('製品タグ', '製品タグ', $language, false), get_object_vars($taxonomy->labels));
+        self::assertNull($taxonomy->labels->parent_item);
+        self::assertSame('製品タグ', $taxonomy->label);
+    }
+
     public function testUserRoleIsRegisteredOnInit(): void
     {
         $role = get_role('tmswp_member');

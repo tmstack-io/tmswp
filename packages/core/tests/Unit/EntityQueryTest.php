@@ -21,7 +21,7 @@ final class EntityQueryTest extends UnitTestCase
             ->whereTerm('product_category', ['news'])
             ->orderByMeta('price', 'DESC', true)
             ->limit(5)
-            ->withArg('post_type', 'ignored')
+            ->withArgs(['post_type' => 'ignored'])
             ->toArgs();
 
         $metaQuery = $args['meta_query'];
@@ -60,9 +60,14 @@ final class EntityQueryTest extends UnitTestCase
             ->hideEmpty()
             ->whereMetaExists('featured')
             ->orderBy('name', 'desc')
-            ->withArg('taxonomy', 'ignored')
+            ->withArgs(['taxonomy' => 'ignored'])
             ->toArgs();
 
+        self::assertArrayHasKey('meta_query', $args);
+        self::assertArrayHasKey('taxonomy', $args);
+        self::assertArrayHasKey('hide_empty', $args);
+        self::assertArrayHasKey('orderby', $args);
+        self::assertArrayHasKey('order', $args);
         $metaQuery = $args['meta_query'];
         self::assertIsArray($metaQuery);
 
@@ -83,9 +88,15 @@ final class EntityQueryTest extends UnitTestCase
             ->whereMetaNotExists('disabled_at')
             ->orderBy('registered', 'DESC')
             ->limit(10)
-            ->withArg('role', 'ignored')
+            ->withArgs(['role' => 'ignored'])
             ->toArgs();
 
+        self::assertArrayHasKey('meta_query', $args);
+        self::assertArrayHasKey('role', $args);
+        self::assertArrayHasKey('search', $args);
+        self::assertArrayHasKey('search_columns', $args);
+        self::assertArrayHasKey('orderby', $args);
+        self::assertArrayHasKey('number', $args);
         $metaQuery = $args['meta_query'];
         self::assertIsArray($metaQuery);
 

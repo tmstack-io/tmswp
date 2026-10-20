@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tax;
 
-use TMSWP\Core\Entity\WpBridge;
 use TMSWP\Core\Exception\QueryException;
 use TMSWP\Core\Query\QueryValidator;
 use WP_Error;
@@ -12,9 +11,50 @@ use WP_Post;
 use WP_Term;
 use WP_Term_Query;
 
+/**
+ * GetTermsArgs は php-stubs/wordpress-stubs の get_terms() の $args と WP_Term_Query::__construct() の $query
+ * (`@phpstan-param`。2つは同じ形)と同じ配列の形。stubs が要素の型を書いていない array(meta_query)だけは要素の型を書く
+ * (PHPStan level max は要素の型の無い array を許さないため)。
+ *
+ * @phpstan-type GetTermsArgs array{
+ *   taxonomy?: string|string[],
+ *   object_ids?: int|int[],
+ *   orderby?: string,
+ *   order?: string,
+ *   hide_empty?: bool|int,
+ *   include?: int[]|string,
+ *   exclude?: int[]|string,
+ *   exclude_tree?: int[]|string,
+ *   number?: int|string,
+ *   offset?: int,
+ *   fields?: string,
+ *   name?: string|string[],
+ *   slug?: string|string[],
+ *   term_taxonomy_id?: int|int[],
+ *   hierarchical?: bool,
+ *   search?: string,
+ *   name__like?: string,
+ *   description__like?: string,
+ *   pad_counts?: bool,
+ *   get?: string,
+ *   child_of?: int,
+ *   parent?: int,
+ *   childless?: bool,
+ *   cache_domain?: string,
+ *   cache_results?: bool,
+ *   update_term_meta_cache?: bool,
+ *   meta_key?: string|string[],
+ *   meta_value?: string|string[],
+ *   meta_compare?: string,
+ *   meta_compare_key?: string,
+ *   meta_type?: string,
+ *   meta_type_key?: string,
+ *   meta_query?: array<int|string, string|array<string, mixed>>,
+ * }
+ */
 final class TermQuery
 {
-    /** @var array<string, mixed> */
+    /** @var GetTermsArgs */
     private array $args = [];
 
     /** @var list<array<string, mixed>> */
@@ -26,7 +66,7 @@ final class TermQuery
     /** @var array<string, string> */
     private array $orderBy = [];
 
-    /** @var array<string, mixed> */
+    /** @var GetTermsArgs */
     private array $rawArgs = [];
 
     private function __construct(
@@ -172,9 +212,14 @@ final class TermQuery
         return $this;
     }
 
-    public function withArg(string $key, mixed $value): self
+    /**
+     * 専用のメソッドが無い get_terms の引数を設定する。キーごとに上書きする。taxonomy は上書きできない。
+     *
+     * @param GetTermsArgs $args
+     */
+    public function withArgs(array $args): self
     {
-        $this->rawArgs[$key] = $value;
+        $this->rawArgs = array_merge($this->rawArgs, $args);
 
         return $this;
     }
@@ -182,7 +227,7 @@ final class TermQuery
     /** @return list<WP_Term> */
     public function get(): array
     {
-        $terms = self::getTerms($this->toArgs());
+        $terms = get_terms($this->toArgs());
 
         if ($terms instanceof WP_Error || !\is_array($terms)) {
             return [];
@@ -195,7 +240,7 @@ final class TermQuery
     {
         $args = $this->toArgs();
         $args['number'] = 1;
-        $terms = self::getTerms($args);
+        $terms = get_terms($args);
 
         if ($terms instanceof WP_Error || !\is_array($terms) || $terms === []) {
             return null;
@@ -209,7 +254,7 @@ final class TermQuery
     {
         $args = $this->toArgs();
         $args['fields'] = 'ids';
-        $ids = self::getTerms($args);
+        $ids = get_terms($args);
 
         if ($ids instanceof WP_Error || !\is_array($ids)) {
             return [];
@@ -235,7 +280,7 @@ final class TermQuery
     {
         $args = $this->toArgs();
         $args['fields'] = 'count';
-        $count = self::getTerms($args);
+        $count = get_terms($args);
 
         if ($count instanceof WP_Error) {
             return 0;
@@ -264,16 +309,10 @@ final class TermQuery
 
     public function wpTermQuery(): WP_Term_Query
     {
-        $query = WpBridge::instantiate(WP_Term_Query::class, $this->toArgs());
-
-        if (!$query instanceof WP_Term_Query) {
-            throw new QueryException('failed to create WP_Term_Query');
-        }
-
-        return $query;
+        return new WP_Term_Query($this->toArgs());
     }
 
-    /** @return array<string, mixed> */
+    /** @return GetTermsArgs */
     public function toArgs(): array
     {
         $args = ['hide_empty' => false];
@@ -294,13 +333,5 @@ final class TermQuery
         $args['taxonomy'] = $this->taxonomy;
 
         return $args;
-    }
-
-    /**
-     * @param array<string, mixed> $args
-     */
-    private static function getTerms(array $args): mixed
-    {
-        return WpBridge::call('get_terms', $args);
     }
 }
