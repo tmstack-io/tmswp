@@ -14,6 +14,7 @@ use TMSWP\Core\Attribute\WithMetaRevisions;
 use TMSWP\Core\Container\Container;
 use TMSWP\Core\Exception\DuplicateMetaKeyException;
 use TMSWP\Core\Exception\InvalidSchemaException;
+use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
 use TMSWP\Core\Meta\MetaStorageInterface;
 use TMSWP\Core\Meta\MetaValueType;
@@ -152,6 +153,40 @@ final class MetaSchemaRegistryTest extends UnitTestCase
         $registry->registerAll();
     }
 
+    public function testRegisteringEntityAfterRegisterAllIsRejected(): void
+    {
+        $registry = new MetaSchemaRegistry(new Container());
+        $registry->registerAll();
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('MetaSchemaRegistry::registerEntity() must be called before registerAll(): ' . RegistryProductPost::class);
+
+        $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
+    }
+
+    public function testBagRejectsWritingSanitizedKeyUntilRegisterAllHasRegisteredIt(): void
+    {
+        $container = new Container();
+        $registry = new MetaSchemaRegistry($container);
+        $registry->registerEntity(RegistrySanitizedPost::class, ObjectType::Post, 'registry_sanitized');
+        // 登録の前に作った MetaBag も、登録の後は書ける(登録の状態は書き込みのたびに確かめる)
+        $bag = $registry->bagFor(RegistrySanitizedPost::class, 10);
+
+        try {
+            $bag->set(RegistrySanitizedPost::META_NOTE, 'before');
+            self::fail('LogicException was not thrown');
+        } catch (LogicException $exception) {
+            self::assertStringStartsWith("meta 'sanitized_note' of " . RegistrySanitizedPost::class . ' declares sanitize and cannot be written before', $exception->getMessage());
+        }
+
+        self::assertTrue($bag->set(RegistrySanitizedPost::META_PLAIN, 'plain'));
+        Functions\when('register_post_meta')->justReturn(true);
+        $registry->registerAll();
+
+        self::assertTrue($bag->set(RegistrySanitizedPost::META_NOTE, 'after'));
+        self::assertSame('after', $container->get(RegistryArrayMetaStorage::class)->get(ObjectType::Post, 10, 'sanitized_note'));
+    }
+
     public function testUseMetaStorageControlsBagStorage(): void
     {
         $container = new Container();
@@ -255,6 +290,27 @@ final class RegistryCustomStoragePost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('registry_custom');
+    }
+}
+
+#[AsPostType]
+#[UseMetaStorage(RegistryArrayMetaStorage::class)]
+final class RegistrySanitizedPost extends PostType
+{
+    #[MetaSchema(type: MetaValueType::String, sanitize: [self::class, 'trimNote'])]
+    public const META_NOTE = 'sanitized_note';
+
+    #[MetaSchema(type: MetaValueType::String)]
+    public const META_PLAIN = 'plain_note';
+
+    public static function trimNote(mixed $value): string
+    {
+        return \is_string($value) ? trim($value) : '';
+    }
+
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('registry_sanitized');
     }
 }
 

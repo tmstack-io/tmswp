@@ -7,6 +7,7 @@ namespace TMSWP\Core\Tests\Unit;
 use TMSWP\Core\Attribute\MetaSchema;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\InvalidSchemaException;
+use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Meta\MetaBag;
 use TMSWP\Core\Meta\MetaSchemaDefinition;
 use TMSWP\Core\Meta\MetaSchemaSet;
@@ -101,6 +102,50 @@ final class MetaBagTest extends UnitTestCase
         self::assertSame(['any' => 'shape'], $bag->get('undeclared'));
     }
 
+    /**
+     * sanitize を宣言したキーは、スキーマを WordPress に登録する前には書けない(WordPress が sanitize を適用しないため)。
+     * sanitize の無いキーの書き込み・読み取り・delete() は登録の前でも使え、登録の後は sanitize のキーにも書ける。
+     */
+    public function testSanitizedKeyCannotBeWrittenBeforeRegistrationWithWordPress(): void
+    {
+        $storage = new ArrayMetaStorage();
+        $registered = false;
+        $bag = new MetaBag(
+            MetaBagFixtureEntity::class,
+            ObjectType::Post,
+            10,
+            $storage,
+            MetaSchemaSet::fromList([
+                new MetaSchemaDefinition(MetaBagFixtureEntity::class, 'META_CODE', 'code', MetaValueType::String, null, true, false, '', null),
+                new MetaSchemaDefinition(MetaBagFixtureEntity::class, 'META_NOTE', 'note', MetaValueType::String, null, true, false, '', 'trim'),
+            ]),
+            static function () use (&$registered): bool {
+                return $registered;
+            },
+        );
+
+        try {
+            $bag->set('note', 'before');
+            self::fail('LogicException was not thrown');
+        } catch (LogicException $exception) {
+            self::assertSame(
+                "meta 'note' of " . MetaBagFixtureEntity::class . ' declares sanitize and cannot be written before its schema is registered with WordPress; WordPress applies sanitize only after the registration at init priority 20, so write it after that',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertFalse($bag->has('note'));
+        self::assertTrue($bag->set('code', 'A-1'));
+        self::assertSame('A-1', $bag->string('code'));
+        self::assertTrue($bag->delete('code'));
+        self::assertSame('', $bag->string('note'));
+
+        $registered = true;
+
+        self::assertTrue($bag->set('note', 'after'));
+        self::assertSame('after', $bag->string('note'));
+    }
+
     public function testSchemaDefinitionRejectsInvalidDeclaration(): void
     {
         $this->expectException(InvalidSchemaException::class);
@@ -139,6 +184,7 @@ final class MetaBagTest extends UnitTestCase
                 new MetaSchemaDefinition(MetaBagFixtureEntity::class, 'META_CODE', 'code', MetaValueType::String, null, true, false, '', null),
                 new MetaSchemaDefinition(MetaBagFixtureEntity::class, 'META_RELATED_IDS', 'related_id', MetaValueType::Integer, null, false, false, '', null),
             ]),
+            static fn(): bool => true,
         );
     }
 }

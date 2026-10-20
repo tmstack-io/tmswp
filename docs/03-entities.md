@@ -69,8 +69,8 @@ final class ProductPost extends PostType
 
 エンティティ層がKernel(02文書)に要求する契約。02文書はこれを満たすこと。
 
-1. Kernelは、Discoveryが収集した各エンティティクラスの `register()`(`final public static`)を **WP `init` アクション**の中で、02文書の属性スケジュール表が定める優先度(**Taxonomy=9、PostType/UserRole=10**)で呼ぶ。`init` より前(`plugins_loaded` 等)での呼び出しは禁止。
-2. 呼び出し順は **Taxonomy群 → PostType群 → UserRole群** とする。Taxonomy群の先行は優先度差(init 9 → 10)で保証され、同一優先度内のPostType群→UserRole群の順序はKernelのグループランナー登録順(02文書)で、同種内はFQCNの昇順(`strcmp`)で決定的にする。旧iwf2bで `$dependencies` によりTax→Postの順序を手動宣言していた実態(T04)を、FW側の固定順序で不要化する。
+1. Kernelは、Discoveryが収集した各エンティティクラスの `register()`(`final public static`)を **WP `init` アクション**の中で、02文書の属性スケジュール表が定める優先度(**Taxonomy=9、PostType=10、UserRole=11**)で呼ぶ。`init` より前(`plugins_loaded` 等)での呼び出しは禁止。メタスキーマの登録(`MetaSchemaRegistry::registerEntity()`)はこれと別に、Kernel の boot の中で行う(02文書 §7。04文書 §4.9)。
+2. 呼び出し順は **Taxonomy群 → PostType群 → UserRole群** とする。この順は優先度差(init 9 → 10 → 11)で保証し、同種内はFQCNの昇順(`strcmp`)で決定的にする。
 3. Kernelは収集リストの1巡走査により、各クラスの `register()` を**正確に1回**呼ぶ。`register()` 側は重複防止(再入ガード)を持たない(1.6節)。
 
 ### 1.3 get系戻り値の `?T` 統一(全エンティティ共通)
@@ -1024,7 +1024,7 @@ abstract class Taxonomy
 1. `$def = static::definition()`(メモ化)。
 2. **builtinの場合**: `taxonomy_exists($def->slug())` がfalseなら、`objectType()` の有無に関係なく `EntityDefinitionException`(`builtin taxonomy does not exist: {slug}`)。存在しないアダプタ先は設定の誤りであり、debugに関係なく投げる(00-overview §5.6。PostType(5.3節)・UserRole(12.2節)と同じ扱い)。存在すれば、`resolvedObjectTypes()` の各スラッグに対し `register_taxonomy_for_object_type($def->slug(), $objectType)` を実行する。
    - 対象がbuiltin投稿タイプ(post/page等。コアが `init` 優先度0で登録済み)なら初回試行で成功する(fast-path)。
-   - 対象が同一 `init` 内の後続(02文書の属性スケジュール表: PostType群=優先度10)で登録されるCPTの場合、初回試行はfalseを返す(ロード順による未登録であり異常ではない)。**falseになったスラッグのみ**を `init` 優先度11で1回だけ再試行する。再試行は `$kernel->defer('init', 11, ...)`(02文書 §3.3)で予約する。通常は `add_action('init', ..., 11)` と同じであり、本番の遅延bootのキャッチアップ(`init` 発火済み)でも、同じKernelのPostType群(優先度10)の登録の後、MetaSchemaの登録(優先度20)の前に実行される(`add_action` で予約すると、発火済みの `init` 11 は二度と来ないため、再試行も警告も実行されない)。
+   - 対象が同一 `init` 内の後続(02文書の属性スケジュール表: PostType群=優先度10)で登録されるCPTの場合、初回試行はfalseを返す(ロード順による未登録であり異常ではない)。**falseになったスラッグのみ**を `init` 優先度11で1回だけ再試行する。再試行は `$kernel->defer('init', 11, ...)`(02文書 §3.3)で予約する。通常は `add_action('init', ..., 11)` と同じであり、本番の遅延bootのキャッチアップ(`init` 発火済み)でも、同じKernelのPostType群(優先度10)の登録の後、MetaSchemaのWordPressへの登録(優先度20)の前に実行される(`add_action` で予約すると、発火済みの `init` 11 は二度と来ないため、再試行も警告も実行されない)。
    - 再試行後もfalseの場合は真の失敗(スラッグtypo・未登録投稿タイプ等)であり、渡された Kernel のログ(`$kernel->logger()->warning()`。Log文書 §5.1。TMSWP の内部のログは扱う Kernel を明示して記録する)で警告する。これによりfalseの意味は「再試行前=ロード順起因(正常)」「再試行後=真の失敗」に純化され、warningは常に対処すべき信号になる。
 3. **非builtinの場合**: `register_taxonomy($def->slug(), $def->resolvedObjectTypes(), $def->toArgs($kernel->config()->labelLanguage))`。戻り値が `WP_Error` なら `EntityDefinitionException`。
 
@@ -1251,7 +1251,7 @@ abstract class UserRole
 
     final public static function role(): string;
 
-    /** @internal Kernelがinit(優先度10)・PostType群の後に、このクラスを探索した Kernel を渡して呼ぶ。冪等。 */
+    /** @internal Kernelがinit(優先度11)・PostType群(優先度10)の後に、このクラスを探索した Kernel を渡して呼ぶ。冪等。 */
     final public static function register(\TMSWP\Core\Kernel\Kernel $kernel): void;
 
     // ---- 取得(?T統一) ----
@@ -1686,7 +1686,7 @@ $id = ProductPost::create([
 - [ ] Kernelが収集リストの1巡走査で各エンティティクラスの `register()` を正確に1回だけ呼ぶ(統合テストで呼び出し回数を検証。`register()` 自身は重複防止を持たない)
 - [ ] `supports('thumbnail')` を持つ複数のPostTypeを登録しても `post-thumbnails` テーマサポートが和集合でマージされる
 - [ ] `TaxonomyDefinition::objectType(BlogPost::class)` が登録時に `'blog'` へ解決される。Taxonomy/PostType以外のクラスFQCNは `EntityDefinitionException`
-- [ ] builtinタクソノミーのCPT紐付けで、初回falseになったスラッグのみが `init` 優先度11で再試行されて成功し(警告なし)、未登録投稿タイプ相手は再試行後に渡された Kernel のロガー(`$kernel->logger()`)に `warning` が1回記録される。本番の遅延bootのキャッチアップでも、再試行がPostType群の登録の後、MetaSchemaの登録の前に実行される(統合テスト)
+- [ ] builtinタクソノミーのCPT紐付けで、初回falseになったスラッグのみが `init` 優先度11で再試行されて成功し(警告なし)、未登録投稿タイプ相手は再試行後に渡された Kernel のロガー(`$kernel->logger()`)に `warning` が1回記録される。本番の遅延bootのキャッチアップでも、再試行がPostType群の登録の後、MetaSchemaのWordPressへの登録の前に実行される(統合テスト)
 - [ ] 存在しないbuiltinのアダプタ先(`PostTypeDefinition::builtin()` の投稿タイプ、`TaxonomyDefinition::builtin()` のタクソノミー(`objectType()` の有無に関係なく)、`UserRoleDefinition::builtin()` のロール)が、`register()` で `EntityDefinitionException` になる。PostTypeは例外の前に `add_post_type_support` しない
 - [ ] `UserRole::register()` が2リクエスト目以降にDB書き込み(`add_role`/`add_cap`)を行わない(`get_role()`/`has_cap()` チェックによる冪等性。統合テストで `update_option` 呼び出し回数を検証)
 - [ ] 既存の非builtinロールの表示名の違いと宣言に無いcapが、渡された Kernel のロガーに `warning` で記録され、DBは書き換えない。初回の `add_role`・宣言どおりのロール・builtinのロールでは記録しない

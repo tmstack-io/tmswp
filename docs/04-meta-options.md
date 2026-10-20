@@ -5,7 +5,7 @@
 WordPressのメタデータ(post/term/user meta)とオプション(wp_options)を、属性によるスキーマ宣言と型付きアクセサで扱う層を定義する。本層が保証すること:
 
 1. **宣言の一元化**: メタキーはエンティティクラスの定数として、オプションキーはオプショングループ enum のケースとして一度だけ宣言し、`#[MetaSchema]` / `#[OptionSchema]` 属性で型・デフォルト値・REST公開等のスキーマを付与する。
-2. **WPコアへの自動登録**: 宣言されたメタスキーマはブート時に `register_post_meta()` / `register_term_meta()` / `register_meta('user', ...)` へ自動登録される。
+2. **WPコアへの自動登録**: 宣言されたメタスキーマは Kernel の boot の中で集めて検証し、`init`(priority 20)で `register_post_meta()` / `register_term_meta()` / `register_meta('user', ...)` へ自動登録する(4.9)。
 3. **型安全な読み書き**: `MetaBag` / オプショングループ enum(`OptionAccess` trait)の型付きgetter(`int()`/`string()`/`bool()`/`float()`/`list()`/`json()`)と、FW同梱のPHPStan拡張による戻り値型ナローイングで、メタ値の型をコードとして検証可能にする。
 4. **ストレージの差し替え可能性**: `MetaStorageInterface` / `OptionStorageInterface` により、ACF等の外部ストレージへの委譲を「エンティティ単位の明示オプトイン」で行える(DR-18)。グローバルフィルタによる暗黙差し替えと null センチネルは全廃する。
 5. **プレビュー時メタの整合**: WP 6.4 の `revisions_enabled` 機構を用いた ACF 非依存のプレビュー時メタ保存を、クラス属性 `#[WithMetaRevisions]` による宣言的オプトインで提供する。
@@ -24,7 +24,7 @@ WordPressのメタデータ(post/term/user meta)とオプション(wp_options)�
 
 ## 依存文書
 
-- Kernel/Discovery 設計書: `Kernel::boot()` のフェーズ、`Discovery` による属性付きクラスの収集、コンポーネントの初期化タイミング。本書の `MetaSchemaRegistry` には、Discovery が収集したエンティティの Initializer が初期化時に登録する。
+- Kernel/Discovery 設計書: `Kernel::boot()` のフェーズ、`Discovery` による属性付きクラスの収集、コンポーネントの初期化タイミング。本書の `MetaSchemaRegistry` には、Discovery が収集したエンティティの Initializer が Kernel の boot の中(boot 時の初期化。Kernel設計書 §7)で登録する。
 - エンティティ定義設計書(PostType/Taxonomy/UserRole): エンティティ基底の `meta()` ファサードと `definition()` のスラッグ解決。本書が定義する `MetaSchemaRegistry::registerEntity()` をKernelが呼び出す際のスラッグ(subtype)の供給元。
 - acf-bridge 拡張設計書: `AcfMetaStorage` の実装、acf-json からのコード生成、`MetaSchemaRegistry::markExternallyManaged()` の呼び出しタイミング。
 
@@ -39,11 +39,16 @@ app/Post/ProductPost.php
       public const META_PRICE = 'price';
   }
 
-エンティティの初期化時(Kernel が属性ごとに登録したフック。#[AsPostType] は init 10):
-  PostTypeInitializer → MetaSchemaRegistry::registerEntity(ProductPost::class, ObjectType::Post, 'product')
+Kernel::boot() の中(boot 時の初期化。エンティティの一覧は探索結果ファイル(本番)か走査(debug)から):
+  PostTypeInitializer::initializeAtBoot()
+    → MetaSchemaRegistry::registerEntity(ProductPost::class, ObjectType::Post, 'product')
             → 定数リフレクション → MetaSchemaDefinition 群を構築・検証
-  init(priority 20) → MetaSchemaRegistry::registerAll()
-            → register_post_meta('product', 'price', [...])  ※ACF管理下キーはスキップ
+  (boot の後は init の前でも ProductPost::meta($post) が使える)
+init(priority 6)  → acf-bridge が外部管理のキーを申告(markExternallyManaged())
+init(priority 10) → PostTypeInitializer::initialize() → register_post_type('product', ...)
+init(priority 20) → MetaSchemaRegistry::registerAll()
+            → register_post_meta('product', 'price', [...])
+            (これ以降、sanitize を宣言したキーにも書き込める)
 
 実行時(テンプレート/app):
   ProductPost::meta($post)                    ← エンティティ基底のファサード(エンティティ設計書)
@@ -218,7 +223,7 @@ enum ObjectType: string
 
 #### 役割
 
-`#[MetaSchema]` 属性をエンティティの初期化時に検証・正規化した不変の値オブジェクトと、エンティティ1クラス分のスキーマ集合。
+`#[MetaSchema]` 属性を Kernel の boot の中(エンティティの boot 時の初期化)で検証・正規化した不変の値オブジェクトと、エンティティ1クラス分のスキーマ集合。
 
 #### シグネチャ
 
@@ -499,6 +504,7 @@ final class MetaBag
      * 直接 new しない。MetaSchemaRegistry::bagFor() 経由で生成する。
      *
      * @param class-string<TEntity> $entityClass
+     * @param \Closure(): bool $registeredWithWordPress スキーマを WordPress に登録済み(registerAll() の後)なら true
      */
     public function __construct(
         private readonly string $entityClass,
@@ -506,6 +512,7 @@ final class MetaBag
         private readonly int $objectId,
         private readonly MetaStorageInterface $storage,
         private readonly MetaSchemaSet $schemas,
+        private readonly \Closure $registeredWithWordPress,
     ) {
     }
 
@@ -539,6 +546,8 @@ final class MetaBag
 
     /**
      * @return bool 書き込んだら true、書き込まなかったら false(保存値は変わっていない)
+     * @throws \TMSWP\Core\Exception\LogicException sanitize を宣言したキーを、スキーマの WordPress への登録
+     *         (init 20 の MetaSchemaRegistry::registerAll())の前に書こうとした
      * @throws \TMSWP\Core\Exception\InvalidArgumentException null・スキーマの型に合わない値・single=false への非list
      * @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー
      */
@@ -566,7 +575,7 @@ final class MetaBag
 - `json($key)`: `storage->get()` の値を `ValueCaster::toJsonArray()`。
 - `has($key)`: `storage->has()` への委譲。スキーマdefaultの有無は影響しない(「行が存在するか」のみ)。
 - `all()`: **宣言済みキーのみ**が対象で、各キーの値は `get($key)` と同じになる。single=true のキーは `storage->getMultiple($type, $id, single=true のキー)` を1回呼び、欠けたキーはスキーマdefault(無ければ null)で補完する。single=false のキーは `get()` と同じく全行の list(行が無ければ null)を返す(`getMultiple()` は単一値用で先頭行しか返さないため使わない)。
-- `set($key, $value)`: `$value` が `null` なら `InvalidArgumentException`(宣言の有無に関係なく。削除は `delete()` を使う)。スキーマが `single: false` の場合、`$value` が list でなければ `InvalidArgumentException`、listなら各要素を検査して `storage->setAll()`。それ以外は値を検査して `storage->set()`。宣言済みキーの値(single=false では各要素)は `ValueCaster::accepts()`(4.7)でスキーマの型に合うことを確かめ、合わなければ `InvalidArgumentException`。未宣言キーは型を検査しない。キャストやサニタイズは行わない(WpMetaStorage 経由なら `register_meta` の sanitize_callback がWPコアで適用される。4.6参照)。戻り値はストレージの戻り値(書き込んだか)で、データベースのエラーはストレージが例外にする(4.5)。
+- `set($key, $value)`: `sanitize` を宣言したキーは、スキーマを WordPress に登録する前(init priority 20 の `MetaSchemaRegistry::registerAll()` の前)に書こうとすると、debug に関係なく `LogicException`(キーとエンティティのクラスを含む)にする。WordPress が sanitize を適用するのは `register_*_meta` の後なので、sanitize を通らない保存をさせないためである(呼び出しの順序の誤りとして扱う)。`sanitize` を持たないキーの書き込み、読み取り、`delete()` は登録の前でも使える。`$value` が `null` なら `InvalidArgumentException`(宣言の有無に関係なく。削除は `delete()` を使う)。スキーマが `single: false` の場合、`$value` が list でなければ `InvalidArgumentException`、listなら各要素を検査して `storage->setAll()`。それ以外は値を検査して `storage->set()`。宣言済みキーの値(single=false では各要素)は `ValueCaster::accepts()`(4.7)でスキーマの型に合うことを確かめ、合わなければ `InvalidArgumentException`。未宣言キーは型を検査しない。キャストやサニタイズは行わない(WpMetaStorage 経由なら `register_meta` の sanitize_callback がWPコアで適用される。4.6参照)。戻り値はストレージの戻り値(書き込んだか)で、データベースのエラーはストレージが例外にする(4.5)。
 - `delete($key)`: `storage->delete()` への委譲。
 
 **未宣言キーの扱い(確定)**: `#[MetaSchema]` で宣言されていないキー文字列を渡してもエラーにしない。`_thumbnail_id` 等のWP組込みメタや他プラグインのキーを読む正当なユースケースがあるためである。ただし未宣言キーにはスキーマdefault・single=false分岐・REST登録・PHPStanナローイングのいずれも適用されない。タイポ検出は実行時例外ではなく、PHPStan拡張の定数所属検査(4.18)が担う。
@@ -611,7 +620,8 @@ final class MetaSchemaRegistry
     }
 
     /**
-     * エンティティ1クラスを登録する。エンティティの Initializer(PostTypeInitializer 等)が初期化時に呼ぶ。
+     * エンティティ1クラスを登録する。エンティティの Initializer(PostTypeInitializer 等)が Kernel::boot() の中
+     * (boot 時の初期化。BootInitializerInterface::initializeAtBoot())で呼ぶ。
      *
      * @param class-string $entityClass #[AsPostType|AsTaxonomy|AsUserRole] が付与されたクラス
      * @param string $subtype Post→投稿タイプスラッグ / Term→タクソノミースラッグ / User→''(固定)
@@ -619,6 +629,8 @@ final class MetaSchemaRegistry
      *         #[WithMetaRevisions] の付与違反(4.11)
      * @throws \TMSWP\Core\Exception\DuplicateMetaKeyException 同一エンティティ内キー重複、
      *         または同一 (ObjectType, subtype, key) の組を別エンティティが二重宣言した場合
+     * @throws \TMSWP\Core\Exception\LogicException registerAll() の後に呼んだ場合(WordPress に登録されない
+     *         スキーマになるため)
      */
     public function registerEntity(string $entityClass, ObjectType $objectType, string $subtype): void;
 
@@ -640,7 +652,8 @@ final class MetaSchemaRegistry
     public function bagFor(string $entityClass, WP_Post|WP_Term|WP_User|int $object): MetaBag;
 
     /**
-     * 外部管理キーの宣言(acf-bridge が呼ぶ)。該当キーは registerAll() で register_*_meta をスキップする。
+     * 外部管理キーの宣言(acf-bridge が init 6 で呼ぶ)。該当キーは #[MetaSchema] で宣言できないため、register_*_meta されない。
+     * #[MetaSchema] は boot の中で登録済みのため、重複はこの申告の時点で検出される。
      * PHP側 #[MetaSchema] と同一 (objectType, subtype, key) が両方に存在する場合は
      * DuplicateMetaKeyException(DR-06: acf-json が真実源、二重宣言はエラー)。
      * subtype は文字列どおりの1サブタイプだけを表す('all' という名前の投稿タイプも1つのサブタイプとして扱う)。
@@ -671,6 +684,7 @@ final class MetaSchemaRegistry
 **registerEntity() の処理手順(擬似コード)**:
 
 ```
+0. registerAll() の後なら LogicException(登録しても WordPress に流れないため)
 1. ReflectionClass($entityClass) の getReflectionConstants() で全定数を列挙し、#[MetaSchema] 属性を持つ定数のみ対象にする
    (定数名プレフィックス規約は課さない。属性の有無だけが宣言の根拠。META_ 接頭辞は推奨規約として rules/ に記載)。
    属性を持つ定数が public でなければ InvalidSchemaException(黙って飛ばさない)
@@ -687,7 +701,8 @@ final class MetaSchemaRegistry
 ```
 
 - 親クラスから継承した定数も `getReflectionConstants()` に含まれるが、**宣言クラス(`ReflectionClassConstant::getDeclaringClass()`)が `$entityClass` 自身であるものだけ**を対象とする。エンティティ継承によるスキーマの暗黙共有は行わない(明示性優先)。
-- メタスキーマは探索結果ファイル(Kernel設計書 §6)に載せない。探索結果ファイルが持つのはコンポーネントの属性と引数だけで、メタスキーマは `registerEntity()` が初期化時に定数のリフレクションで毎回構築する。
+- `registerEntity()` は Kernel の boot の中で、探索結果ファイル(本番)か走査(debug)が収集したエンティティのコンポーネントごとに1回呼ばれる。そのため boot の後なら、init の前でも、app の `#[Action('init')]` の中でも `meta()`(`bagFor()`)が使え、宣言の誤り(4.1・4.4・4.10・4.11)は debug に関係なく boot の例外になる。
+- メタスキーマ自体は探索結果ファイル(Kernel設計書 §6)に載せない。探索結果ファイルが持つのはコンポーネントの属性と引数だけで、メタスキーマは `registerEntity()` が boot のたびに定数と属性のリフレクションで構築する。そのため `#[UseMetaStorage]`・`#[WithMetaRevisions]` も、探索結果ファイルの経路で失われない(経路はこの1つだけである)。
 
 **bagFor() の処理手順**:
 
@@ -696,7 +711,9 @@ final class MetaSchemaRegistry
    (メッセージ例: "ProductPost is not registered. Did you forget #[AsPostType]?")
 2. objectType->resolveId($object) でIDを解決
 3. storageClass(デフォルト WpMetaStorage::class)を container->get() で解決
-4. new MetaBag(entityClass, objectType, id, storage, schemas) を返す
+4. new MetaBag(entityClass, objectType, id, storage, schemas, fn(): bool => registerAll() が完了したか) を返す
+   (第6引数の Closure は、呼ぶたびにこのレジストリの登録の状態を返す。MetaBag は sanitize を宣言したキーの
+   書き込みのたびにこれを呼ぶため、登録の前に作った MetaBag も登録の後は書ける。4.8)
 ```
 
 **registerAll() の処理手順**:
@@ -704,7 +721,6 @@ final class MetaSchemaRegistry
 ```
 foreach 登録済みエンティティ:
   foreach MetaSchemaSet:
-    if isExternallyManaged(objectType, subtype, key): continue   # ACF管理下はWP登録しない(DR-06)
     args = [
       'type'              => definition->type->value,
       'description'       => definition->description,
@@ -724,7 +740,10 @@ foreach 登録済みエンティティ:
     if registered !== true: InvalidSchemaException                # WP が登録を拒否した(黙殺しない)
 ```
 
-- フック登録はKernelが行う: `add_action('init', $registry->registerAll(...), 20)`(第一級callable構文)。priority 20 は、エンティティの `register_post_type`/`register_taxonomy`(init 10、エンティティ設計書)を確実に先行させるため。リビジョン保存宣言は属性(4.11)であり registerEntity() 時点で確定しているため、init より前に呼ぶべき有効化処理は存在しない。
+- 外部管理のキー(ACF管理下。DR-06)は `#[MetaSchema]` と重なれば `DuplicateMetaKeyException` になるため、登録済みのスキーマに含まれることはなく、`register_*_meta` されない。
+- registerAll() が最後まで成功すると、以降は sanitize を宣言したキーにも `MetaBag::set()` で書き込める(4.8)。
+- フック登録はKernelが行う: `add_action('init', $registry->registerAll(...), 20)`(第一級callable構文。本番の遅延bootではキャッチアップの規則に従う。Kernel設計書 §3.3)。priority 20 にするのは次の2点のためである。(1) acf-bridge が外部管理のキーを申告する init 6 の後に流す(`#[MetaSchema]` と重なる申告は、その時点で例外になり、`register_*_meta` に進まない。DR-06)。(2) WordPress の `register_meta()` は `revisions_enabled` を `post_type_supports($subtype, 'revisions')` で確かめて満たさなければ登録を拒否するため、エンティティの `register_post_type`/`register_taxonomy`(init 9・10、エンティティ設計書)を確実に先行させる。リビジョン保存宣言は属性(4.11)であり registerEntity() 時点で確定しているため、init より前に呼ぶべき有効化処理は存在しない。
+- エンティティの `register()` が例外を投げても(本番を含む。設定の誤りのため隔離しない。Kernel設計書 §7)、スキーマは boot で登録済みであり、`register()` の失敗によってスキーマの登録が黙って飛ばされることはない。例外は init から伝わり、そのリクエストでは registerAll() に進まない。
 - 旧FWの `insert_default_meta`(新規作成時に空文字メタ行を自動挿入し meta_query EXISTS を成立させる機能)は**踏襲しない**。デフォルト値は `register_meta` の `default` と `MetaBag` の解決順で供給される。EXISTS/ORDER BY meta_value が必要なケースの対処(保存フックでの明示挿入)は rules/ のレシピとして提供する。
 
 ### 4.10 `TMSWP\Core\Attribute\UseMetaStorage`
@@ -1269,7 +1288,7 @@ final class EntityNotRegisteredException extends LogicException {}
 - 引数不正(ObjectType とWPオブジェクトの不一致、ID<1、single=false への非list set、`null` の set、宣言済みキーへのスキーマの型に合わない値の set、メタへの object の set 等)は、FWの基底 `InvalidArgumentException`(`07-support.md` §6。`\InvalidArgumentException` 系)を送出する。
 - 書き込み(`set`・`setAll`・`delete`)でのデータベースのエラーは、FWの基底 `RuntimeException`(`\RuntimeException` 系)を送出する。書き込みの戻り値は「書き込んだか」であり、データベースのエラーを `false` で返すことはしない。ほかのプラグインのフィルタが書き込みを止めた場合は、保存値が変わっていないので false である(4.5・4.6・4.14)。
 - `InvalidSchemaException` には、4.1 の宣言の誤り(public でない定数、REST に出す Array/Object 型のスキーマ欠落を含む)、WP が `register_*_meta` を拒否したこと(4.9)、`#[OptionSchema]` の enum ケース以外への付与(4.12)も含む。
-- 方針: スキーマ・宣言系の誤りはすべて「ブート時に LogicException 系で即死」させ、本番実行時の黙殺・フォールスルー(旧FWのフィルタ名不一致が3年以上発覚しなかった原因)を構造的に防ぐ。
+- 方針: スキーマ・宣言系の誤りは2つの時点で検出する。宣言の誤りは Kernel の boot の中の `registerEntity()`(4.9)で、WordPress が `register_*_meta` を拒否した場合と sanitize の callable が実在しない場合は `init` 20 の `registerAll()`(4.9)で検出する。どちらの時点でも、検出した設定の誤りは debug に関係なく LogicException 系の例外にして黙って捨てず、本番実行時の黙殺・フォールスルー(旧FWのフィルタ名不一致が3年以上発覚しなかった原因)を構造的に防ぐ。
 
 ### 4.18 FW同梱PHPStan拡張
 
@@ -1471,7 +1490,9 @@ $code  = \App\Post\ProductPost::meta($post)->string(\App\Post\ProductPost::META_
 final class CampaignPost extends PostType
 {
     // v0.6.0 までは、ACF のフィールドグループで管理するキーを #[MetaSchema] で宣言すると
-    // ブート時に DuplicateMetaKeyException になる(「メタ・設定の使い分け」の v0.6.0 までの境目)
+    // DuplicateMetaKeyException になる(「メタ・設定の使い分け」の v0.6.0 までの境目)。重複は宣言と
+    // acf-bridge のマークのうち後に起きた側で検出し、通常の boot では acf-bridge が init 6 でマークした
+    // 時点で例外になる(acf-bridge 設計書 §7.3)
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('campaign')->label('キャンペーン')->labelLanguage(LabelLanguage::Ja);
@@ -1543,7 +1564,7 @@ final class ProductPost extends PostType
 }
 ```
 
-命令的な有効化呼び出しは存在しない。宣言は `registerAll()`(init 20)が読み取り、`register_post_meta` へ `revisions_enabled => true` を渡す(4.9/4.11)。
+命令的な有効化呼び出しは存在しない。宣言は boot の中の `registerEntity()` が属性を読み取って保持し、`registerAll()`(init 20)がその値を `register_post_meta` の引数 `revisions_enabled => true` に反映する(4.9/4.11)。
 
 ---
 
@@ -1579,6 +1600,7 @@ final class ProductPost extends PostType
 - [ ] `#[UseMetaStorage]` 付きエンティティの `meta()` が指定ストレージ実装で読み書きし、属性なしエンティティは `WpMetaStorage` を使う。不正なstorageClassはブート時例外。
 - [ ] `ObjectType::resolveId()` が種別不一致のWPオブジェクト・ID<1 で `InvalidArgumentException` を送出する。
 - [ ] `#[WithMetaRevisions]` 付きエンティティのメタが `revisions_enabled => true` で登録され(統合テスト)、Post以外のエンティティ・revisions非サポート投稿タイプへの付与がブート時(`registerEntity()`)に `InvalidSchemaException` となる。
+- [ ] メタスキーマが Kernel の boot の中で登録され、本番相当(探索結果ファイルの経路)の boot の後、init の前でも app の `#[Action('init')]` の中でも `meta()` が使え、`#[UseMetaStorage]` と `#[WithMetaRevisions]` が保持される。`register_*_meta` は init 20 で行われ、`registerAll()` の後の `registerEntity()` は `LogicException` になる(統合テスト・ユニットテスト)。
 - [ ] `OptionAccess` を use したオプショングループ enum でプレフィックス適用(`name()`)・autoload指定・`deleteAll()` が仕様どおり動作し、`deleteAll()` が実際に削除した実オプション名だけを返す(統合テスト)。
 - [ ] オプショングループ enum のスキーマ収集が `ReflectionEnum::getCases()` + `ReflectionEnumUnitCase::getAttributes()` 経由で行われ、string backed でない enum・`#[AsOptionGroup]` 欠落・enum ケース以外(ケースでない定数・enum 自身・メソッド・引数)への `#[OptionSchema]` がブート時 `InvalidSchemaException` となる(ユニットテスト)。
 - [ ] PHPStan拡張: `MetaBag::get(ProductPost::META_PRICE)` が `int`(default宣言あり時)/`int|null`(なし時)へ絞り込まれること、他エンティティ定数の混入(`tmswp.metaKeyOwnership`)と宣言済みキーの文字列リテラル直書き(`tmswp.metaKeyLiteral`)が報告されることを、PHPStanのルールテスト(`RuleTestCase`/`TypeInferenceTestCase`)で検証。オプション側は `SiteOption::ContactEmail->get()`(enum ケースレシーバ)の絞り込みを `TypeInferenceTestCase` で検証(キー所属の誤りは enum の型システム上表現不能のためルールテストは持たない)。

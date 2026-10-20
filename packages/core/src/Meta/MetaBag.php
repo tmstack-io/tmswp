@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Meta;
 
+use Closure;
 use TMSWP\Core\Exception\InvalidArgumentException;
+use TMSWP\Core\Exception\LogicException;
 
 /**
  * @template TEntity of object
@@ -13,6 +15,8 @@ final class MetaBag
 {
     /**
      * @param class-string<TEntity> $entityClass
+     * @param Closure(): bool $registeredWithWordPress スキーマを WordPress に登録済み(MetaSchemaRegistry::registerAll()
+     *                                                 の後)なら true を返す。sanitize を宣言したキーの書き込みの可否に使う
      */
     public function __construct(
         private readonly string $entityClass,
@@ -20,6 +24,7 @@ final class MetaBag
         private readonly int $objectId,
         private readonly MetaStorageInterface $storage,
         private readonly MetaSchemaSet $schemas,
+        private readonly Closure $registeredWithWordPress,
     ) {}
 
     /** @return class-string<TEntity> */
@@ -138,6 +143,10 @@ final class MetaBag
     /**
      * 値を保存する。宣言済みのキーはスキーマの型に合う値だけを受け付ける。
      *
+     * sanitize を宣言したキーは、WordPress がその sanitize を適用するのが register_*_meta(init priority 20 の
+     * MetaSchemaRegistry::registerAll())の後なので、それより前の書き込みを例外にする(sanitize を通らない保存をしない)。
+     *
+     * @throws LogicException sanitize を宣言したキーを、スキーマを WordPress に登録する前に書こうとした場合
      * @throws InvalidArgumentException null、スキーマの型に合わない値、single=false のキーへの list 以外
      * @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー
      *
@@ -146,6 +155,10 @@ final class MetaBag
     public function set(string $key, mixed $value): bool
     {
         $schema = $this->schemas->get($key);
+
+        if ($schema instanceof MetaSchemaDefinition && $schema->sanitize !== null && !($this->registeredWithWordPress)()) {
+            throw new LogicException("meta '{$key}' of {$this->entityClass} declares sanitize and cannot be written before its schema is registered with WordPress; WordPress applies sanitize only after the registration at init priority 20, so write it after that");
+        }
 
         if ($schema instanceof MetaSchemaDefinition && !$schema->single) {
             if (!\is_array($value) || !array_is_list($value)) {

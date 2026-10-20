@@ -11,6 +11,7 @@ use TMSWP\Core\Attribute\ComponentAttributeInterface;
 use TMSWP\Core\Container\Container;
 use TMSWP\Core\Exception\DiscoveryException;
 use TMSWP\Core\Exception\KernelException;
+use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Log\LoggerRegistry;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
@@ -101,6 +102,8 @@ final class Kernel
      * できない。テーマは functions.php、プラグインはプラグインのファイルで、それぞれ独立に boot する。
      *
      * @throws KernelException 別の Kernel の boot が進行中の場合や、WordPress の版・名前空間・appDir 等の検査に失敗した場合
+     * @throws LogicException boot 時の初期化(メタスキーマの宣言の誤りによる InvalidSchemaException・
+     *                        DuplicateMetaKeyException 等)や、本番の遅延 boot のキャッチアップの初期化が投げた設定の誤り
      */
     public static function boot(KernelConfig $config): self
     {
@@ -154,6 +157,9 @@ final class Kernel
             // キャッチアップで動くアプリのコードが Kernel::forClass()・forFile()(Log の静的な呼び出し)で
             // この Kernel を引けるよう、キャッチアップより先にレジストリに登録する
             self::$kernels[$config->appNamespace] = $kernel;
+            // メタスキーマの登録等の boot 時の初期化。拡張が Container に入れたサービス(メタのストレージ等)を使え、
+            // キャッチアップで動く初期化やアプリのコードからも登録済みのスキーマを使えるよう、この位置で行う
+            $kernel->initializeAtBoot();
             $kernel->catchUp($missed);
         } catch (Throwable $exception) {
             // boot が失敗したら、起動していない Kernel をレジストリに残さないよう取り除いてから、例外をそのまま投げ直す
@@ -375,7 +381,8 @@ final class Kernel
     }
 
     /**
-     * コンポーネントの初期化・MetaSchema の登録・`#[Action]` / `#[Filter]` のメソッドを、WordPress のフックに登録する(§7)。
+     * コンポーネントの初期化・MetaSchema の WordPress への登録・`#[Action]` / `#[Filter]` のメソッドを、WordPress のフックに
+     * 登録する(§7)。
      *
      * 遅延 boot の検査(発火済みのフックがあるか)は、どのフックを登録するよりも先に行う。debug では何も登録・
      * 実行しないまま例外を投げる。本番では発火済みのフックのグループを返し、boot() が拡張とレジストリへの登録の後で
@@ -388,7 +395,9 @@ final class Kernel
     private function scheduleAll(): array
     {
         $groups = $this->componentGroups();
-        // MetaSchema の登録(init 20)も、コンポーネントの初期化と同じ順序の規則で扱う
+        // MetaSchema の WordPress への登録(init 20。register_*_meta)も、コンポーネントの初期化と同じ順序の規則で扱う。
+        // スキーマ自体は boot の中で集める(initializeAtBoot())。WordPress へは、acf-bridge が外部管理のキーを申告する
+        // init 6 の後、かつ revisions_enabled の検査(post_type_supports())が効くよう投稿タイプの登録(init 10)の後に流す
         $groups[] = [
             'hook' => 'init',
             'priority' => 20,
@@ -433,6 +442,23 @@ final class Kernel
         }
 
         return $missed;
+    }
+
+    /**
+     * BootInitializerInterface を実装する Initializer の boot 時の初期化(エンティティのメタスキーマの登録)を、
+     * components の順(FQCN 昇順)に実行する(§7)。それ以外の Initializer は、ここでは Container から取り出さない。
+     *
+     * 失敗は設定の誤り(00-overview.md §5.6)なので、debug に関係なく例外をそのまま投げる。
+     */
+    private function initializeAtBoot(): void
+    {
+        foreach ($this->components as $component) {
+            $initializerClass = $component->attribute()->initializerClass();
+
+            if (is_a($initializerClass, BootInitializerInterface::class, true)) {
+                $this->container->get($initializerClass)->initializeAtBoot($component, $this);
+            }
+        }
     }
 
     /**
@@ -582,7 +608,7 @@ final class Kernel
     }
 
     /**
-     * コンポーネント1件を初期化する。初期化は投稿タイプ・タクソノミー・メタスキーマ・オプション等の登録そのもので、
+     * コンポーネント1件を初期化する。初期化は投稿タイプ・タクソノミー・オプション等の登録そのもので、
      * そこで起きる失敗は設定の誤り(00-overview.md §5.6)なので、debug に関係なく例外をそのまま投げる。
      *
      * @throws DiscoveryException initializer が ComponentInitializerInterface を実装していない場合

@@ -24,7 +24,10 @@ use TMSWP\Core\Attribute\ComponentAttributeInterface;
 use TMSWP\Core\Attribute\MetaSchema;
 use TMSWP\Core\Exception\ContainerException;
 use TMSWP\Core\Exception\DiscoveryException;
+use TMSWP\Core\Exception\DuplicateMetaKeyException;
+use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\KernelException;
+use TMSWP\Core\Kernel\BootInitializerInterface;
 use TMSWP\Core\Kernel\ComponentInitializerInterface;
 use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\DiscoveredHookMethod;
@@ -559,9 +562,88 @@ PHP);
     }
 
     /**
-     * 本番の遅延 boot のキャッチアップで、MetaSchema の登録(init 20)は init 9・10 のコンポーネントの初期化より後、
-     * init 30 の初期化より前に動く。init 9 の初期化が登録したエンティティのメタを register_post_meta() するかどうかと、
-     * その呼び出しの位置で順序を確かめる。
+     * init の前の本番の boot で、エンティティのメタスキーマは boot の中で MetaSchemaRegistry に登録され、WordPress への
+     * 登録(register_post_meta())は init 20 まで行われない。acf-bridge が init 6 で外部管理のキーを申告する時点では
+     * スキーマが揃っているため、#[MetaSchema] と同じキーの申告はその場で DuplicateMetaKeyException になる。
+     */
+    public function testBootRegistersEntityMetaSchemasWithoutRegisteringThemWithWordPress(): void
+    {
+        $config = KernelConfig::theme($this->createTempDirectory('boot-meta-app'), 'Example\Tests\BootMetaApp' . uniqid(), false, false);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent(KernelTestMetaPost::class, AsPostType::class, []),
+        ], []));
+        Functions\expect('register_post_meta')->never();
+
+        $kernel = Kernel::boot($config);
+        $registry = $kernel->container()->get(MetaSchemaRegistry::class);
+
+        self::assertSame(ObjectType::Post, $registry->objectTypeOf(KernelTestMetaPost::class));
+        self::assertSame(['tmswp_kernel_note'], array_map(
+            static fn(array $entry): string => $entry['schema']->key,
+            array_values(array_filter($registry->schemas(), static fn(array $entry): bool => $entry['subtype'] === 'tmswp_kernel_meta')),
+        ));
+
+        $this->expectException(DuplicateMetaKeyException::class);
+        $this->expectExceptionMessage("externally managed meta key 'tmswp_kernel_note' for post:tmswp_kernel_meta is already declared by " . KernelTestMetaPost::class);
+
+        $registry->markExternallyManaged(ObjectType::Post, 'tmswp_kernel_meta', 'tmswp_kernel_note');
+    }
+
+    public function testDeferOutsideCatchUpIsAddAction(): void
+    {
+        $kernel = Kernel::boot(KernelConfig::theme($this->createAppDirectory('defer-app'), 'Example\Tests\DeferApp' . uniqid(), true, false));
+        $callback = static function (): void {};
+        // キャッチアップ中でなければ、発火済みのフックへの予約も add_action() と同じ
+        $GLOBALS['wp_actions'] = ['plugins_loaded' => 1];
+        Actions\expectAdded('init')->once()->with($callback, 11, 0);
+        Actions\expectAdded('plugins_loaded')->once()->with($callback, 5, 0);
+
+        $kernel->defer('init', 11, $callback);
+        $kernel->defer('plugins_loaded', 5, $callback);
+    }
+
+    /**
+     * 本番の遅延 boot のキャッチアップの中で発火済みのフックへ予約したものは、残りのグループの (最初に発火した順,
+     * priority) の位置(同じ位置のグループの後)で実行され、遅延 boot のログは記録しない。未発火のフックへの予約は
+     * add_action() する。
+     */
+    public function testDeferDuringCatchUpRunsAtFiredOrderAndPriorityAmongRemainingGroups(): void
+    {
+        $logger = new KernelTestLogger();
+        $config = KernelConfig::theme($this->createTempDirectory('defer-catch-up-app'), 'Example\Tests\DeferCatchUpApp' . uniqid(), false, false, logChannels: self::recordTo($logger));
+        $namespace = $config->appNamespace;
+        $attribute = KernelTestCatchUpAttribute::class;
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\A', $attribute, ['hook' => 'init', 'priority' => 9, 'initializer' => KernelTestDeferringInitializer::class]),
+            new DiscoveredComponent($namespace . '\B', $attribute, ['hook' => 'init', 'priority' => 10]),
+            new DiscoveredComponent($namespace . '\C', $attribute, ['hook' => 'init', 'priority' => 12]),
+        ], []));
+        $GLOBALS['wp_actions'] = ['plugins_loaded' => 1, 'init' => 1];
+        Actions\expectAdded('wp_loaded')->once()->with(Mockery::type(Closure::class), 10, 0);
+
+        Kernel::boot($config);
+
+        self::assertSame(
+            [
+                $namespace . '\A',
+                // plugins_loaded は init より先に発火したため、残りのグループの先頭に入る
+                'deferred plugins_loaded 10',
+                $namespace . '\B',
+                // 同じ (init, 10) のグループ B の後
+                'deferred init 10',
+                'deferred init 11',
+                $namespace . '\C',
+            ],
+            KernelTestRecordingInitializer::$initialized,
+        );
+        // 発火済みのグループ(init 9・10・12 と MetaSchema の init 20)ごとに1回
+        self::assertCount(4, $logger->records);
+    }
+
+    /**
+     * 本番の遅延 boot では、メタスキーマの MetaSchemaRegistry への登録(boot 時の初期化)がキャッチアップより先に動き、
+     * キャッチアップの中の MetaSchema の WordPress への登録(init 20)は init 9・10 のコンポーネントの初期化より後、
+     * init 30 の初期化より前に動く。boot 時に登録したエンティティのメタを register_post_meta() する位置で順序を確かめる。
      */
     public function testLateBootCatchUpRunsMetaSchemaRegistrationAfterInitNineAndTen(): void
     {
@@ -583,7 +665,7 @@ PHP);
         Kernel::boot($config);
 
         self::assertSame(
-            [$namespace . '\C', $namespace . '\B', 'register_post_meta(tmswp_kernel_meta, tmswp_kernel_note)', $namespace . '\A'],
+            ['boot ' . $namespace . '\C', $namespace . '\C', $namespace . '\B', 'register_post_meta(tmswp_kernel_meta, tmswp_kernel_note)', $namespace . '\A'],
             KernelTestRecordingInitializer::$initialized,
         );
     }
@@ -950,28 +1032,25 @@ PHP);
         self::assertTrue(class_exists($attribute));
     }
 
-    public function testInvalidPostTypeComponentThrowsInProduction(): void
+    public function testInvalidPostTypeComponentFailsBootInProduction(): void
     {
         $appDir = $this->createTempDirectory('invalid-post-type-app');
         $namespace = 'Example\Tests\InvalidPostTypeApp' . uniqid();
         $config = KernelConfig::theme($appDir, $namespace, false, false);
-        // PostType を継承しないクラスに #[AsPostType] が付いている(探索結果ファイルが古い等の設定の誤り)
+        // PostType を継承しないクラスに #[AsPostType] が付いている(探索結果ファイルが古い等の設定の誤り)。
+        // メタスキーマの登録(boot 時の初期化)で検出し、init を待たずに boot が失敗する
         (new DiscoveryFile($config))->write(new DiscoveryResult([
             new DiscoveredComponent(KernelTestHookProbe::class, AsPostType::class, []),
         ], []));
-        $runner = null;
-        Actions\expectAdded('init')->once()->with(Mockery::type(Closure::class), 10, 0)
-            ->whenHappen(static function (Closure $callback) use (&$runner): void {
-                $runner = $callback;
-            });
 
-        Kernel::boot($config);
+        try {
+            Kernel::boot($config);
+            self::fail('DiscoveryException was not thrown');
+        } catch (DiscoveryException $exception) {
+            self::assertSame('post type component must extend PostType: ' . KernelTestHookProbe::class, $exception->getMessage());
+        }
 
-        self::assertInstanceOf(Closure::class, $runner);
-        $this->expectException(DiscoveryException::class);
-        $this->expectExceptionMessage('post type component must extend PostType: ' . KernelTestHookProbe::class);
-
-        $runner();
+        self::assertSame([], Kernel::all());
     }
 
     public function testInitializerWithoutInterfaceThrowsInProduction(): void
@@ -1007,19 +1086,23 @@ PHP);
         $appDir = $this->createTempDirectory('failing-catch-up-app');
         $namespace = 'Example\Tests\FailingCatchUpApp' . uniqid();
         $config = KernelConfig::theme($appDir, $namespace, false, false, logChannels: self::recordTo($logger));
+        // アダプタ先の builtin の投稿タイプが無い(register() が投げる設定の誤り)
         (new DiscoveryFile($config))->write(new DiscoveryResult([
-            new DiscoveredComponent(KernelTestHookProbe::class, AsPostType::class, []),
+            new DiscoveredComponent(KernelTestMissingBuiltinPost::class, AsPostType::class, []),
         ], []));
         $GLOBALS['wp_actions'] = ['init' => 1];
+        Functions\when('post_type_exists')->justReturn(false);
 
         try {
             Kernel::boot($config);
-            self::fail('DiscoveryException was not thrown');
-        } catch (DiscoveryException $exception) {
-            self::assertStringContainsString('post type component must extend PostType', $exception->getMessage());
+            self::fail('EntityDefinitionException was not thrown');
+        } catch (EntityDefinitionException $exception) {
+            self::assertSame('builtin post type does not exist: tmswp_kernel_missing', $exception->getMessage());
         }
 
         self::assertSame([], Kernel::all());
+        // 失敗は本番でもログに記録して隠さない(記録は遅延 boot の1件だけ)
+        self::assertSame(["Kernel::boot() was called after the 'init' hook had fired. Boot from the top level of functions.php or the plugin main file."], array_column($logger->records, 'message'));
     }
 
     public function testProductionCatchUpRegistersKernelSoThatAppCodeCanLogToIt(): void
@@ -1524,14 +1607,52 @@ final class KernelTestMetaPost extends PostType
 }
 
 /**
- * KernelTestMetaPost を MetaSchemaRegistry に登録し、初期化されたコンポーネントのクラス名を記録する。
+ * boot 時の初期化で KernelTestMetaPost を MetaSchemaRegistry に登録し、boot 時の初期化と初期化のそれぞれで
+ * コンポーネントのクラス名を記録する(boot 時の初期化は 'boot ' を前に付ける)。
  */
-final class KernelTestMetaEntityInitializer implements ComponentInitializerInterface
+final class KernelTestMetaEntityInitializer implements BootInitializerInterface
+{
+    public function initializeAtBoot(DiscoveredComponent $component, Kernel $kernel): void
+    {
+        $kernel->container()->get(MetaSchemaRegistry::class)->registerEntity(KernelTestMetaPost::class, ObjectType::Post, 'tmswp_kernel_meta');
+        KernelTestRecordingInitializer::$initialized[] = 'boot ' . $component->class;
+    }
+
+    public function initialize(DiscoveredComponent $component, Kernel $kernel): void
+    {
+        KernelTestRecordingInitializer::$initialized[] = $component->class;
+    }
+}
+
+/**
+ * 初期化されたコンポーネントのクラス名を記録し、Kernel::defer() で記録の処理を予約する。発火済みの init(10・11)・
+ * plugins_loaded(10)と、未発火の wp_loaded(10)に予約する。
+ */
+final class KernelTestDeferringInitializer implements ComponentInitializerInterface
 {
     public function initialize(DiscoveredComponent $component, Kernel $kernel): void
     {
-        $kernel->container()->get(MetaSchemaRegistry::class)->registerEntity(KernelTestMetaPost::class, ObjectType::Post, 'tmswp_kernel_meta');
         KernelTestRecordingInitializer::$initialized[] = $component->class;
+
+        foreach ([['init', 11], ['init', 10], ['plugins_loaded', 10], ['wp_loaded', 10]] as [$hook, $priority]) {
+            $kernel->defer($hook, $priority, static function () use ($hook, $priority): void {
+                KernelTestRecordingInitializer::$initialized[] = "deferred {$hook} {$priority}";
+            });
+        }
+    }
+}
+
+/**
+ * アダプタ先の builtin の投稿タイプが無い投稿タイプ。register() が EntityDefinitionException を投げる。
+ */
+final class KernelTestMissingBuiltinPost extends PostType
+{
+    #[MetaSchema(type: MetaValueType::String)]
+    public const META_NOTE = 'tmswp_kernel_missing_note';
+
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::builtin('tmswp_kernel_missing');
     }
 }
 

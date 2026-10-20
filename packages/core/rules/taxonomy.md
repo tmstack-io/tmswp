@@ -54,6 +54,7 @@ final class NewsCategoryTax extends Taxonomy
 ## してはいけないこと
 
 - `register_taxonomy()` を直接呼ばない。
+- `definition()` の中で WP 関数や `__()` を呼ばない。Kernel が boot の時点(init より前)でメタスキーマの登録のために呼び、結果を使い回す。
 - 投稿タイプのスラッグ文字列を手で重複管理しない。`objectType()` には投稿タイプクラスを渡す。
 
 ## 確認方法

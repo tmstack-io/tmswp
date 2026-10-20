@@ -63,6 +63,12 @@ final class ProductPost extends PostType
 }
 ```
 
+## 使える時点
+
+- メタスキーマは Kernel の boot の中で登録されるため、`::meta($object)` の読み取りと `delete()` は boot の後ならいつでも使える(init の前、app の `#[Action('init')]` の中を含む)。`sanitize` を宣言していないキーの `set()` も同じ。
+- WordPress への `register_*_meta` は `init` の priority 20 で行われる。WordPress が `sanitize` を適用するのはその後なので、`sanitize` を宣言したキーの `set()` は `init` の priority 20 より後で呼ぶ。それより前に呼ぶと `LogicException` になる。
+- REST への公開のような、WordPress への登録に頼るほかの動作も `init` の priority 20 より後で効く。
+
 ## 書き込みの規則
 
 - `set()` は書き込んだら `true`、書き込まなかったら `false` を返す。`false` は失敗ではなく、同じ値だった場合と、ほかのプラグインのフィルタが書き込みを止めた場合で、保存されている値は変わっていない。データベースのエラーで書き込めなかったら `RuntimeException` が投げられる。

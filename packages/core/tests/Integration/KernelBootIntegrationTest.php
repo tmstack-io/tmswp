@@ -11,7 +11,10 @@ use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Attribute\AsTaxonomy;
 use TMSWP\Core\Attribute\AsUserRole;
 use TMSWP\Core\Exception\DiscoveryException;
+use TMSWP\Core\Exception\DuplicateMetaKeyException;
+use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\KernelException;
+use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\DiscoveredHookMethod;
 use TMSWP\Core\Kernel\Discovery;
@@ -23,9 +26,14 @@ use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Kernel\KernelContext;
 use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Log\LogChannel;
+use TMSWP\Core\Meta\MetaSchemaRegistry;
+use TMSWP\Core\Meta\MetaStorageInterface;
+use TMSWP\Core\Meta\ObjectType;
+use TMSWP\Core\Meta\WpMetaStorage;
 use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Model\Model;
 use TMSWP\Core\Option\OptionRepositoryFactory;
+use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
 use TMSWP\Core\Tests\Support\RecordingExtension;
 use TMSWP\Core\Tests\Support\RecordingInitializer;
@@ -346,12 +354,12 @@ PHP);
             self::assertFalse(taxonomy_exists($taxonomy));
             self::assertNull(get_role($role));
 
-            // 登録は init に予約されている(タクソノミー 9、投稿タイプとロール 10、MetaSchema 20)
+            // 登録は init に予約されている(タクソノミー 9、投稿タイプ 10、ロール 11、MetaSchema の WordPress への登録 20)
             $initCallbacks = array_values(array_filter(
                 array_diff_key(self::registeredCallbacks(), $before),
                 static fn(array $callback): bool => $callback['hook'] === 'init',
             ));
-            self::assertSame([9, 10, 20], array_column($initCallbacks, 'priority'));
+            self::assertSame([9, 10, 11, 20], array_column($initCallbacks, 'priority'));
 
             // 空振りしていないことの確認: 予約されたコールバックを WordPress の init と同じ順に実行すると登録される
             foreach ($initCallbacks as $callback) {
@@ -367,6 +375,377 @@ PHP);
             unregister_post_type($postType);
             remove_role($role);
         }
+    }
+
+    /**
+     * 探索結果ファイルから boot した本番の Kernel では、エンティティのメタスキーマを boot の中で登録するため、init の前
+     * でも、app の #[Action('init')](投稿タイプの登録と同じ priority 10 で、それより先に動く)の中でも meta() が使える。
+     * WordPress への登録(register_post_meta())は init 20 で行う。
+     */
+    public function testMetaIsUsableBeforeInitAndFromAppInitActionAfterProductionBoot(): void
+    {
+        $config = $this->productionThemeConfig('MetaBeforeInit');
+        $namespace = $config->appNamespace;
+        $postType = 'tmswp_mb_' . substr(md5($namespace), 0, 8);
+        $this->writeNotePostClass($config, $postType);
+        $this->writeFile($config->appDir . '/Hook/InitMetaHook.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Hook;
+
+use {$namespace}\\Post\\NotePost;
+use TMSWP\\Core\\Attribute\\Action;
+use TMSWP\\Core\\Attribute\\AsHook;
+use TMSWP\\Core\\Hook\\Hook;
+
+#[AsHook]
+final class InitMetaHook extends Hook
+{
+    #[Action('init')]
+    public function readNote(): void
+    {
+        \$postId = apply_filters('tmswp_integration/note_post', 0);
+        do_action('tmswp_integration/note_read', NotePost::meta(\$postId)->string(NotePost::META_NOTE), post_type_exists('{$postType}'));
+    }
+}
+PHP);
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult(
+            [new DiscoveredComponent($namespace . '\\Post\\NotePost', AsPostType::class, [])],
+            [new DiscoveredHookMethod($namespace . '\\Hook\\InitMetaHook', 'readNote', 'init', 10, 0, HookMethodKind::Action)],
+        ));
+        $postId = self::createPost($postType);
+        $reads = [];
+        add_filter('tmswp_integration/note_post', static fn(): int => $postId);
+        add_action('tmswp_integration/note_read', static function (string $note, bool $postTypeExists) use (&$reads): void {
+            $reads[] = [$note, $postTypeExists];
+        }, 10, 2);
+
+        try {
+            $initCallbacks = $this->bootBeforeAfterSetupTheme($config);
+            $postClass = self::fixtureClass($namespace . '\\Post\\NotePost', PostType::class);
+
+            // init の前: 宣言の既定値を読め、書き込める。WordPress にはまだ登録していない
+            self::assertSame('none', $postClass::meta($postId)->string('tmswp_note'));
+            self::assertTrue($postClass::meta($postId)->set('tmswp_note', 'written before init'));
+            self::assertArrayNotHasKey('tmswp_note', get_registered_meta_keys('post', $postType));
+
+            self::runCallbacks($initCallbacks);
+
+            // app の init のアクションは投稿タイプの登録より先に動き、そこでも meta() が使える
+            self::assertSame([['written before init', false]], $reads);
+            self::assertTrue(post_type_exists($postType));
+            self::assertArrayHasKey('tmswp_note', get_registered_meta_keys('post', $postType));
+        } finally {
+            unregister_post_type($postType);
+        }
+    }
+
+    /**
+     * sanitize を宣言したキーは、init 20 でスキーマを WordPress に登録する前には書けず(sanitize を通らない保存を
+     * させない)、登録の後は WordPress が sanitize を適用して保存する。sanitize の無いキーは登録の前でも書ける。
+     */
+    public function testSanitizedMetaCanOnlyBeWrittenAfterRegistrationWithWordPress(): void
+    {
+        $config = $this->productionThemeConfig('SanitizedMeta');
+        $namespace = $config->appNamespace;
+        $postType = 'tmswp_sm_' . substr(md5($namespace), 0, 8);
+        $this->writeFile($config->appDir . '/Post/TrimmedPost.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Post;
+
+use TMSWP\\Core\\Attribute\\AsPostType;
+use TMSWP\\Core\\Attribute\\MetaSchema;
+use TMSWP\\Core\\Meta\\MetaValueType;
+use TMSWP\\Core\\Post\\PostType;
+use TMSWP\\Core\\Post\\PostTypeDefinition;
+
+#[AsPostType]
+final class TrimmedPost extends PostType
+{
+    #[MetaSchema(type: MetaValueType::String, sanitize: [self::class, 'trimNote'])]
+    public const META_TRIMMED = 'tmswp_trimmed';
+
+    #[MetaSchema(type: MetaValueType::String)]
+    public const META_PLAIN = 'tmswp_plain';
+
+    public static function trimNote(mixed \$value): string
+    {
+        return \\is_string(\$value) ? trim(\$value) : '';
+    }
+
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('{$postType}')->label('Trimmed', 'Trimmed');
+    }
+}
+PHP);
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\\Post\\TrimmedPost', AsPostType::class, []),
+        ], []));
+        $postId = self::createPost($postType);
+
+        try {
+            $initCallbacks = $this->bootBeforeAfterSetupTheme($config);
+            $postClass = self::fixtureClass($namespace . '\\Post\\TrimmedPost', PostType::class);
+
+            try {
+                $postClass::meta($postId)->set('tmswp_trimmed', '  before  ');
+                self::fail('LogicException was not thrown');
+            } catch (LogicException $exception) {
+                self::assertStringContainsString("meta 'tmswp_trimmed' of {$postClass} declares sanitize", $exception->getMessage());
+                self::assertStringContainsString('init priority 20', $exception->getMessage());
+            }
+
+            self::assertSame('', get_post_meta($postId, 'tmswp_trimmed', true));
+            self::assertTrue($postClass::meta($postId)->set('tmswp_plain', '  plain  '));
+
+            self::runCallbacks($initCallbacks);
+
+            self::assertTrue($postClass::meta($postId)->set('tmswp_trimmed', '  after  '));
+            self::assertSame('after', get_post_meta($postId, 'tmswp_trimmed', true));
+            self::assertSame('  plain  ', get_post_meta($postId, 'tmswp_plain', true));
+        } finally {
+            unregister_post_type($postType);
+        }
+    }
+
+    /**
+     * #[UseMetaStorage] と #[WithMetaRevisions] は、本番の boot(探索結果ファイルの経路)でも保持される。保存先の
+     * 差し替えは init の前の meta() から効き、リビジョンの対象は init 20 の register_post_meta() に渡る。
+     */
+    public function testUseMetaStorageAndWithMetaRevisionsAreKeptThroughTheDiscoveryFile(): void
+    {
+        $config = $this->productionThemeConfig('MetaAttributes');
+        $namespace = $config->appNamespace;
+        $suffix = substr(md5($namespace), 0, 8);
+        $storedType = 'tmswp_ms_' . $suffix;
+        $revisedType = 'tmswp_mr_' . $suffix;
+        $storage = self::fixtureClass(self::THEME_NAMESPACE . '\\Storage\\ArrayMetaStorage', MetaStorageInterface::class);
+        $this->writeFile($config->appDir . '/Post/StoredNotePost.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Post;
+
+use TMSWP\\Core\\Attribute\\AsPostType;
+use TMSWP\\Core\\Attribute\\MetaSchema;
+use TMSWP\\Core\\Attribute\\UseMetaStorage;
+use TMSWP\\Core\\Meta\\MetaValueType;
+use TMSWP\\Core\\Post\\PostType;
+use TMSWP\\Core\\Post\\PostTypeDefinition;
+
+#[AsPostType]
+#[UseMetaStorage(\\{$storage}::class)]
+final class StoredNotePost extends PostType
+{
+    #[MetaSchema(type: MetaValueType::String)]
+    public const META_STORED = 'tmswp_stored_note';
+
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('{$storedType}')->label('Stored', 'Stored');
+    }
+}
+PHP);
+        $this->writeFile($config->appDir . '/Post/RevisedNotePost.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Post;
+
+use TMSWP\\Core\\Attribute\\AsPostType;
+use TMSWP\\Core\\Attribute\\MetaSchema;
+use TMSWP\\Core\\Attribute\\WithMetaRevisions;
+use TMSWP\\Core\\Meta\\MetaValueType;
+use TMSWP\\Core\\Post\\PostType;
+use TMSWP\\Core\\Post\\PostTypeDefinition;
+
+#[AsPostType]
+#[WithMetaRevisions]
+final class RevisedNotePost extends PostType
+{
+    #[MetaSchema(type: MetaValueType::String)]
+    public const META_REVISED = 'tmswp_revised_note';
+
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('{$revisedType}')->label('Revised', 'Revised')->supports('title', 'revisions');
+    }
+}
+PHP);
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\\Post\\RevisedNotePost', AsPostType::class, []),
+            new DiscoveredComponent($namespace . '\\Post\\StoredNotePost', AsPostType::class, []),
+        ], []));
+        $postId = self::createPost($storedType);
+
+        try {
+            $initCallbacks = $this->bootBeforeAfterSetupTheme($config);
+            $storedClass = self::fixtureClass($namespace . '\\Post\\StoredNotePost', PostType::class);
+
+            // 差し替え先にだけ保存され、WP のメタには書かれない
+            self::assertTrue($storedClass::meta($postId)->set('tmswp_stored_note', 'kept'));
+            self::assertSame('kept', (new $storage())->get(ObjectType::Post, $postId, 'tmswp_stored_note'));
+            self::assertFalse((new WpMetaStorage())->has(ObjectType::Post, $postId, 'tmswp_stored_note'));
+
+            self::runCallbacks($initCallbacks);
+
+            $revised = get_registered_meta_keys('post', $revisedType);
+            self::assertArrayHasKey('tmswp_revised_note', $revised);
+            self::assertTrue($revised['tmswp_revised_note']['revisions_enabled']);
+            self::assertFalse(get_registered_meta_keys('post', $storedType)['tmswp_stored_note']['revisions_enabled']);
+        } finally {
+            unregister_post_type($storedType);
+            unregister_post_type($revisedType);
+        }
+    }
+
+    /**
+     * ロール(init 11)は投稿タイプ(init 10)の後に登録される。FQCN の順(ここではロールが先)には依らない。
+     */
+    public function testUserRolesAreRegisteredAfterPostTypes(): void
+    {
+        $config = $this->productionThemeConfig('RoleOrder');
+        $namespace = $config->appNamespace;
+        $suffix = substr(md5($namespace), 0, 8);
+        $postType = 'tmswp_op_' . $suffix;
+        $role = 'tmswp_or_' . $suffix;
+        $this->writeFile($config->appDir . '/Entity/AaRole.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Entity;
+
+use TMSWP\\Core\\User\\UserRole;
+use TMSWP\\Core\\User\\UserRoleDefinition;
+
+final class AaRole extends UserRole
+{
+    public static function definition(): UserRoleDefinition
+    {
+        return UserRoleDefinition::create('{$role}')->label('Order')->capabilities('read');
+    }
+}
+PHP);
+        $this->writeFile($config->appDir . '/Entity/ZzPost.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Entity;
+
+use TMSWP\\Core\\Post\\PostType;
+use TMSWP\\Core\\Post\\PostTypeDefinition;
+
+final class ZzPost extends PostType
+{
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('{$postType}')->label('Order', 'Orders');
+    }
+}
+PHP);
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\\Entity\\AaRole', AsUserRole::class, []),
+            new DiscoveredComponent($namespace . '\\Entity\\ZzPost', AsPostType::class, []),
+        ], []));
+        $roleAtPostTypeRegistration = [];
+        add_action('registered_post_type', static function (string $registered) use ($postType, $role, &$roleAtPostTypeRegistration): void {
+            if ($registered === $postType) {
+                $roleAtPostTypeRegistration[] = get_role($role);
+            }
+        });
+
+        try {
+            self::runCallbacks($this->bootBeforeAfterSetupTheme($config));
+
+            self::assertSame([null], $roleAtPostTypeRegistration);
+            self::assertNotNull(get_role($role));
+        } finally {
+            unregister_post_type($postType);
+            remove_role($role);
+        }
+    }
+
+    /**
+     * 本番でエンティティの register() が例外(設定の誤り)を出しても、メタスキーマは boot の中で登録済みで、例外は
+     * 本番でも記録だけで済ませずに、そのまま init から伝わる(エラー方針 00-overview.md §5.6)。
+     */
+    public function testRegisterFailureInProductionPropagatesWithMetaSchemaAlreadyRegistered(): void
+    {
+        $config = $this->productionThemeConfig('RegisterFailure');
+        $namespace = $config->appNamespace;
+        $missing = 'tmswp_missing_' . substr(md5($namespace), 0, 8);
+        $this->writeNotePostClass($config, $missing, builtin: true);
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\\Post\\NotePost', AsPostType::class, []),
+        ], []));
+
+        $initCallbacks = $this->bootBeforeAfterSetupTheme($config);
+        $postClass = self::fixtureClass($namespace . '\\Post\\NotePost', PostType::class);
+        $registry = Kernel::get($namespace)->container()->get(MetaSchemaRegistry::class);
+
+        self::assertTrue($registry->schemasFor($postClass)->has('tmswp_note'));
+
+        try {
+            self::runCallbacks($initCallbacks);
+            self::fail('EntityDefinitionException was not thrown');
+        } catch (EntityDefinitionException $exception) {
+            self::assertSame("builtin post type does not exist: {$missing}", $exception->getMessage());
+        }
+
+        self::assertTrue($registry->schemasFor($postClass)->has('tmswp_note'));
+        self::assertSame([], $this->logger->records);
+    }
+
+    /**
+     * acf-bridge は init 6 で外部管理のキーを申告する。#[MetaSchema] は boot の中で登録済みのため、同じキーの申告は
+     * その時点で DuplicateMetaKeyException になり、register_post_meta()(init 20)には進まない。
+     */
+    public function testExternallyManagedKeyMarkedAtInitSixConflictsWithMetaSchemaRegisteredAtBoot(): void
+    {
+        $config = $this->productionThemeConfig('ExternalKey');
+        $namespace = $config->appNamespace;
+        $postType = 'tmswp_ek_' . substr(md5($namespace), 0, 8);
+        $this->writeNotePostClass($config, $postType);
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\\Post\\NotePost', AsPostType::class, []),
+        ], []));
+
+        $initCallbacks = $this->bootBeforeAfterSetupTheme($config);
+        $registry = Kernel::get($namespace)->container()->get(MetaSchemaRegistry::class);
+        // acf-bridge の AcfBridge::registerManagedKeys()(init 6)の代わり
+        $mark = ['hook' => 'init', 'priority' => 6, 'function' => static fn() => $registry->markExternallyManaged(ObjectType::Post, $postType, 'tmswp_note'), 'acceptedArgs' => 0];
+        $ran = [];
+
+        try {
+            foreach ([$mark, ...$initCallbacks] as $callback) {
+                $ran[] = $callback['priority'];
+                self::assertIsCallable($callback['function']);
+                \call_user_func($callback['function']);
+            }
+
+            self::fail('DuplicateMetaKeyException was not thrown');
+        } catch (DuplicateMetaKeyException $exception) {
+            self::assertStringStartsWith("externally managed meta key 'tmswp_note' for post:{$postType} is already declared by ", $exception->getMessage());
+        }
+
+        self::assertSame([6], $ran);
+        self::assertArrayNotHasKey('tmswp_note', get_registered_meta_keys('post', $postType));
     }
 
     /**
@@ -497,7 +876,7 @@ PHP;
                 ['kernel' => $plugin, 'component' => "{$plugin}\\Option\\SpiedOption", 'hook' => 'init', 'priority' => 5],
                 ['kernel' => $theme, 'component' => "{$theme}\\Spy\\SpiedTaxonomy", 'hook' => 'init', 'priority' => 9],
                 ['kernel' => $theme, 'component' => "{$theme}\\Spy\\SpiedPost", 'hook' => 'init', 'priority' => 10],
-                ['kernel' => $theme, 'component' => "{$theme}\\Spy\\SpiedRole", 'hook' => 'init', 'priority' => 10],
+                ['kernel' => $theme, 'component' => "{$theme}\\Spy\\SpiedRole", 'hook' => 'init', 'priority' => 11],
             ],
             RecordingInitializer::$calls,
         );
@@ -948,6 +1327,82 @@ PHP);
         self::assertTrue(post_type_exists($postType));
 
         return $postType;
+    }
+
+    /**
+     * 文字列のメタ tmswp_note(既定値 'none')を宣言する投稿タイプのクラス(app/Post/NotePost.php)を書く。$builtin なら
+     * $postType の builtin のアダプタにする。
+     */
+    private function writeNotePostClass(KernelConfig $config, string $postType, bool $builtin = false): void
+    {
+        $namespace = $config->appNamespace;
+        $definition = $builtin ? "PostTypeDefinition::builtin('{$postType}')" : "PostTypeDefinition::create('{$postType}')->label('Note', 'Notes')";
+        $this->writeFile($config->appDir . '/Post/NotePost.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Post;
+
+use TMSWP\\Core\\Attribute\\AsPostType;
+use TMSWP\\Core\\Attribute\\MetaSchema;
+use TMSWP\\Core\\Meta\\MetaValueType;
+use TMSWP\\Core\\Post\\PostType;
+use TMSWP\\Core\\Post\\PostTypeDefinition;
+
+#[AsPostType]
+final class NotePost extends PostType
+{
+    #[MetaSchema(type: MetaValueType::String, default: 'none')]
+    public const META_NOTE = 'tmswp_note';
+
+    public static function definition(): PostTypeDefinition
+    {
+        return {$definition};
+    }
+}
+PHP);
+    }
+
+    /**
+     * テーマの functions.php の読み込み時(after_setup_theme の前)の状態で boot し、boot が init に予約したコールバックを、
+     * WordPress の init と同じ順(priority の昇順、同じ priority の中は登録の順)で返す。書き換えた $wp_actions は boot の
+     * 後に戻す。
+     *
+     * @return list<array{hook: string, priority: int, function: mixed, acceptedArgs: int}>
+     */
+    private function bootBeforeAfterSetupTheme(KernelConfig $config): array
+    {
+        $before = self::registeredCallbacks();
+        $actions = $GLOBALS['wp_actions'];
+        self::assertIsArray($actions);
+        $position = array_search('after_setup_theme', array_keys($actions), true);
+        self::assertIsInt($position);
+        $GLOBALS['wp_actions'] = \array_slice($actions, 0, $position, true);
+
+        try {
+            Kernel::boot($config);
+        } finally {
+            $GLOBALS['wp_actions'] = $actions;
+        }
+
+        return array_values(array_filter(
+            array_diff_key(self::registeredCallbacks(), $before),
+            static fn(array $callback): bool => $callback['hook'] === 'init',
+        ));
+    }
+
+    /**
+     * bootBeforeAfterSetupTheme() が返したコールバックを、その順に引数なしで呼ぶ(WordPress の init の代わり)。
+     *
+     * @param list<array{hook: string, priority: int, function: mixed, acceptedArgs: int}> $callbacks
+     */
+    private static function runCallbacks(array $callbacks): void
+    {
+        foreach ($callbacks as $callback) {
+            self::assertIsCallable($callback['function']);
+            \call_user_func($callback['function']);
+        }
     }
 
     /** アーカイブを持つ投稿タイプのクラス(app/Post/RewritePost.php)を書く。 */

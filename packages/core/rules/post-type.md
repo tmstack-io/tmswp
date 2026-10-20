@@ -119,6 +119,7 @@ final class ThumbnailFallbackHook extends Hook
 ## してはいけないこと
 
 - `register_post_type()` や `add_action('init', ...)` を自分で書かない。
+- `definition()` の中で WP 関数や `__()` を呼ばない。Kernel が boot の時点(init より前)でメタスキーマの登録のために呼び、結果を使い回す。
 - `functions.php` に投稿タイプ関連のロジックを書かない。
 - 1クラスで複数投稿タイプを定義しない。
 

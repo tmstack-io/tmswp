@@ -768,7 +768,7 @@ final class AcfManifest
 
 ## 7.2 register_*_meta 発行スキップ連携
 
-コアの `MetaSchemaRegistry`(Meta/Option 定義層文書)は `#[MetaSchema]` 宣言を `init` priority 10 で `register_post_meta`/`register_term_meta`/`register_user_meta` へ流し込む。本拡張は **`init` priority 6**(`acf/init` = priority 5 の直後)で以下を実行する。
+コアの `MetaSchemaRegistry`(Meta/Option 定義層文書)は `#[MetaSchema]` 宣言を Kernel の boot の中で集め、`init` priority 20 で `register_post_meta`/`register_term_meta`/`register_meta('user', ...)` へ流し込む(Kernel 設計書 §7)。本拡張は **`init` priority 6**(`acf/init` = priority 5 の直後)で以下を実行する。
 
 ```
 $manifestClass = $config->namespace . '\\AcfManifest';
@@ -802,7 +802,7 @@ public function isExternallyManaged(ObjectType $objectType, string $objectSubtyp
 
 同一 `(ObjectType, objectSubtype, metaKey)` が「`#[MetaSchema]` 宣言」と「ACF 管理下キー」の両方に存在する状態は**構成エラー**であり、フェイルファストする(DR-06)。旧 FW の「ACF とコアのメタ層が同じキーを別経路で読み書きして挙動不明」という事故の再発防止が目的。
 
-- **実行時**: `MetaSchemaRegistry` が flush(`init` prio 10)時に、`markExternallyManaged` 済みキーと `#[MetaSchema]` 宣言キーの積集合を検査し、非空なら例外(コア例外。`TMSWP\Core\Exception\` 配下、Meta/Option 文書定義)を投げる。例外メッセージには衝突キー・宣言クラス・定数名・ACF グループ key の全対応を含めること。
+- **実行時**: `MetaSchemaRegistry` は、`#[MetaSchema]` の宣言と外部管理の申告(`markExternallyManaged`・`markExternallyManagedInAllSubtypes`)のうち後から行われた側の時点で、同じキーが無いかを検査し、あれば `DuplicateMetaKeyException`(コア例外。Meta/Option 文書定義)を投げる。宣言は Kernel の boot の中で揃うため、本拡張が `init` 6 で申告した時点で検出され、`register_*_meta`(`init` 20)には進まない。例外メッセージは衝突したキー・(ObjectType, サブタイプ)・宣言クラスを含む。定数名と ACF グループ key はまだ含まない(申告の API がグループ key を受け取らないため。v0.6.0 で本節とあわせて見直す)。
 - **静的(CI)**: `wp tmswp acf check` も同じ検査を行い、検出時は E101・exit 2 で報告する(実行時例外より早く CI で気づける)。check は `MetaSchemaRegistry` から宣言済みスキーマ一覧を取得して照合する(要求 API: `public function schemas(): list<RegisteredMetaSchema>` 相当。正準形は Meta/Option 文書に従う)。
 - 解消方法は二択であり、エラーメッセージに明記する: (a) `#[MetaSchema]` 定数を削除して生成アクセサ(`XxxFields`)へ一本化する、(b) acf-json から当該フィールドを削除して PHP 宣言へ一本化する。
 

@@ -16,9 +16,10 @@ final readonly class AsUserRole implements ComponentAttributeInterface
         return 'init';
     }
 
+    /** 投稿タイプ(#[AsPostType] の init 10)の後に登録するため、priority を分ける */
     public function hookPriority(): int
     {
-        return 10;
+        return 11;
     }
 
     public function initializerClass(): string

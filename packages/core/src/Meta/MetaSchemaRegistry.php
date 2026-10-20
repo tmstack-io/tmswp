@@ -48,10 +48,21 @@ final class MetaSchemaRegistry
     ) {}
 
     /**
+     * エンティティ1クラスのメタスキーマを、定数と属性(#[MetaSchema]・#[UseMetaStorage]・#[WithMetaRevisions])の
+     * リフレクションで集めて登録する。エンティティの Initializer が Kernel::boot() の中で呼ぶ。
+     *
      * @param class-string $entityClass
+     *
+     * @throws LogicException registerAll() の後に呼んだ場合(WordPress に登録されないスキーマになるため)
+     * @throws InvalidSchemaException スキーマ・ストレージ・#[WithMetaRevisions] の宣言の誤り
+     * @throws DuplicateMetaKeyException キーの重複、または外部管理のキーを宣言した場合
      */
     public function registerEntity(string $entityClass, ObjectType $objectType, string $subtype): void
     {
+        if ($this->registered) {
+            throw new LogicException("MetaSchemaRegistry::registerEntity() must be called before registerAll(): {$entityClass}");
+        }
+
         $reflection = new ReflectionClass($entityClass);
         $schemas = MetaSchemaSet::fromList($this->definitionsFor($reflection));
         $storageClass = $this->storageClassFor($reflection);
@@ -105,11 +116,13 @@ final class MetaSchemaRegistry
             $entry['objectType']->resolveId($object),
             $storage,
             $entry['schemas'],
+            fn(): bool => $this->registered,
         );
     }
 
     /**
-     * 外部(acf-bridge 等)が管理するキーを申告する。申告したキーは registerAll() で register_*_meta しない。
+     * 外部(acf-bridge 等)が管理するキーを申告する。申告したキーは #[MetaSchema] で宣言できないため、register_*_meta
+     * されない。#[MetaSchema] は boot の中で登録済みのため、acf-bridge が init 6 で申告した時点で重複を検出する。
      *
      * @throws DuplicateMetaKeyException 同じ (ObjectType, subtype, key) を #[MetaSchema] が宣言済み
      */
@@ -167,6 +180,12 @@ final class MetaSchemaRegistry
         return $schemas;
     }
 
+    /**
+     * 登録済みのスキーマを register_*_meta で WordPress に登録する。Kernel が init 20 で1回だけ呼ぶ。
+     *
+     * @throws LogicException 2回目の呼び出し
+     * @throws InvalidSchemaException sanitize が呼び出せない、または WordPress が登録を拒否した場合
+     */
     public function registerAll(): void
     {
         if ($this->registered) {
@@ -175,10 +194,6 @@ final class MetaSchemaRegistry
 
         foreach ($this->entities as $entry) {
             foreach ($entry['schemas']->all() as $definition) {
-                if ($this->isExternallyManaged($entry['objectType'], $entry['subtype'], $definition->key)) {
-                    continue;
-                }
-
                 $args = [
                     'type' => $definition->type->value,
                     'description' => $definition->description,

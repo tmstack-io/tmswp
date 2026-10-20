@@ -498,7 +498,6 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 | Meta | `show_in_rest` の `schema`(array/object 型) | 5.3 | 複合型メタの REST スキーマ |
 | Meta / `#[WithMetaRevisions]` | `register_post_meta()` の `revisions_enabled` | **6.4 ★** | プレビュー・リビジョンへのメタ保存 |
 | Meta(保存タイミング) | `wp_after_insert_post` フック | 5.6 | メタ確定後の後処理フック |
-| Option | `register_setting()` の `$args`(type/default/show_in_rest) | 4.7 | `#[OptionSchema]` の WP 側反映 |
 | Form | `wp_create_nonce` / `wp_verify_nonce` / `wp_nonce_field` | 2.0.4 | CSRF 自動埋込み・自動検証(DR-07) |
 | Form / ConfirmToken | `wp_salt()` | 2.5 | HMAC 署名鍵の導出 |
 | Form | `wp_unslash()` | 3.6 | リクエスト値の正規化 |
