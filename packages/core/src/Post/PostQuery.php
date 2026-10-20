@@ -39,8 +39,8 @@ final class PostQuery
     private array $rawArgs = [];
 
     /**
-     * 空の IN 指定を受けた条件(WP_Query の引数名)。1つでもあれば結果は0件と確定し、終端メソッドは WP_Query を
-     * 実行しない(WordPress は空の IN 指定を「条件なし」と扱い、全件を返すため)。
+     * 空の IN 指定と author(0) を受けた条件(WP_Query の引数名)。1つでもあれば結果は0件と確定し、終端メソッドは
+     * WP_Query を実行しない(WordPress は空の IN 指定と author の 0 を「条件なし」と扱い、全件を返すため)。
      *
      * @var array<string, true>
      */
@@ -91,9 +91,29 @@ final class PostQuery
         return $this;
     }
 
+    /**
+     * 投稿者で絞る。WP_Query は author の 0 を「条件なし」、負の値を除外(author__not_in)として扱うため、0(未ログインの
+     * wp_get_current_user() 等、ID が 0 の WP_User を含む)は結果を0件にし、負の値は受け付けない。
+     *
+     * @throws InvalidArgumentException 負の ID の場合
+     */
     public function author(int|WP_User $author): self
     {
-        $this->args['author'] = $author instanceof WP_User ? (int) $author->ID : $author;
+        $id = $author instanceof WP_User ? (int) $author->ID : $author;
+
+        if ($id < 0) {
+            throw new InvalidArgumentException("PostQuery::author() must be 0 or greater, {$id} given");
+        }
+
+        if ($id === 0) {
+            unset($this->args['author']);
+            $this->emptyIn['author'] = true;
+
+            return $this;
+        }
+
+        unset($this->emptyIn['author']);
+        $this->args['author'] = $id;
 
         return $this;
     }
@@ -488,7 +508,7 @@ final class PostQuery
         return $this->buildArgs();
     }
 
-    /** 結果が0件と確定しているか(空の IN 指定、または idIn() から idNotIn() を差し引いて空)。 */
+    /** 結果が0件と確定しているか(空の IN 指定・author(0)、または idIn() から idNotIn() を差し引いて空)。 */
     private function matchesNothing(): bool
     {
         return $this->emptyIn !== [] || $this->includedIds() === [];

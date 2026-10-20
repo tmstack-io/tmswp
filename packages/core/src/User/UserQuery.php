@@ -11,6 +11,7 @@ use TMSWP\Core\Query\Compare;
 use TMSWP\Core\Query\MetaClause;
 use TMSWP\Core\Query\PageResult;
 use TMSWP\Core\Query\SortOrder;
+use TMSWP\Core\Query\UserSearchColumn;
 use WP_User;
 use WP_User_Query;
 
@@ -101,12 +102,13 @@ final class UserQuery
         return new self($userRoleClass::role());
     }
 
-    public function search(string $keyword, string ...$columns): self
+    /** 列を渡さなければ、WP_User_Query がキーワードの形から列を選ぶ。 */
+    public function search(string $keyword, UserSearchColumn ...$columns): self
     {
         $this->args['search'] = str_contains($keyword, '*') ? $keyword : '*' . $keyword . '*';
 
         if ($columns !== []) {
-            $this->args['search_columns'] = $columns;
+            $this->args['search_columns'] = array_map(static fn(UserSearchColumn $column): string => $column->value, array_values($columns));
         }
 
         return $this;

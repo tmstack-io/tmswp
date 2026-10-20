@@ -6,11 +6,13 @@ namespace TMSWP\Core\Tests\Integration;
 
 use Closure;
 use TMSWP\Core\Exception\EntityDefinitionException;
+use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Post\PostQuery;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Query\CastType;
 use TMSWP\Core\Query\Compare;
 use TMSWP\Core\Query\SortOrder;
+use TMSWP\Core\Query\UserSearchColumn;
 use TMSWP\Core\Tax\Taxonomy;
 use TMSWP\Core\Tax\TermQuery;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
@@ -58,6 +60,69 @@ final class EntityQueryIntegrationTest extends IntegrationTestCase
             static fn(): TermQuery => $category::query()->idIn(),
             static fn(): UserQuery => $member::query()->whereMeta('tmswp_rank', [], Compare::In),
         );
+    }
+
+    /**
+     * WordPress は author の 0 を「条件なし」、負の値を除外として扱う。PostQuery::author() は 0(未ログインの
+     * wp_get_current_user() のように ID が 0 の WP_User を含む)で0件を返して WordPress のクエリを実行せず、
+     * 負の値は InvalidArgumentException にする。
+     */
+    public function testAuthorZeroMatchesNothingAndNegativeIsRejected(): void
+    {
+        $productPost = self::productPost();
+        $category = self::productCategory();
+        $member = self::memberRole();
+        $authorId = self::createUser($member::role());
+        $ownPost = self::createAuthoredPost($productPost::slug(), $authorId);
+        $otherPost = self::createAuthoredPost($productPost::slug(), self::createUser($member::role()));
+        wp_set_current_user(0);
+        $guest = wp_get_current_user();
+        self::assertSame(0, $guest->ID);
+
+        // WordPress に author=0 を渡すと全件、負の値を渡すとその投稿者を除いた全件が返る
+        $wpAll = new WP_Query(['post_type' => $productPost::slug(), 'author' => 0, 'posts_per_page' => -1, 'fields' => 'ids']);
+        self::assertEqualsCanonicalizing([$ownPost, $otherPost], $wpAll->posts);
+        $wpExcluded = new WP_Query(['post_type' => $productPost::slug(), 'author' => -$authorId, 'posts_per_page' => -1, 'fields' => 'ids']);
+        self::assertSame([$otherPost], $wpExcluded->posts);
+
+        self::assertSame([$ownPost], $productPost::query()->author($authorId)->ids());
+        self::assertSame([$ownPost], $productPost::query()->author(0)->author($authorId)->ids());
+        self::assertTerminalsReturnEmptyWithoutWordPress(
+            static fn(): PostQuery => $productPost::query()->author($guest),
+            static fn(): TermQuery => $category::query()->idIn(),
+            static fn(): UserQuery => $member::query()->idIn(),
+        );
+        self::assertTerminalsReturnEmptyWithoutWordPress(
+            static fn(): PostQuery => $productPost::query()->author($authorId)->author(0),
+            static fn(): TermQuery => $category::query()->idIn(),
+            static fn(): UserQuery => $member::query()->idIn(),
+        );
+
+        try {
+            $productPost::query()->author(-$authorId);
+            self::fail('InvalidArgumentException was not thrown');
+        } catch (InvalidArgumentException $exception) {
+            self::assertSame("PostQuery::author() must be 0 or greater, -{$authorId} given", $exception->getMessage());
+        }
+    }
+
+    /** UserQuery::search() の UserSearchColumn のすべての列を、WP_User_Query が検索の条件に使う(黙って捨てない)。 */
+    public function testUserSearchUsesEveryColumnOfUserSearchColumn(): void
+    {
+        $member = self::memberRole();
+
+        foreach (UserSearchColumn::cases() as $column) {
+            $where = $member::query()->search('tmswp', $column)->wpUserQuery()->query_where;
+            self::assertIsString($where);
+            $condition = $column === UserSearchColumn::Id ? 'ID = ' : "{$column->value} LIKE ";
+
+            self::assertStringContainsString($condition, $where, $column->name);
+        }
+
+        $userId = self::factory()->user->create(['role' => $member::role(), 'display_name' => 'Tmswp Searchable Display']);
+        self::assertIsInt($userId);
+        self::assertSame([$userId], $member::query()->search('Searchable Display', UserSearchColumn::DisplayName)->ids());
+        self::assertSame([], $member::query()->search('Searchable Display', UserSearchColumn::UserLogin)->ids());
     }
 
     /**
@@ -222,8 +287,8 @@ final class EntityQueryIntegrationTest extends IntegrationTestCase
         }
     }
 
-    /** paginate() の総件数・総ページ数と、limit() と offset() の組み合わせ。 */
-    public function testPaginateAndLimitWithOffset(): void
+    /** paginate() は PageResult を返し、投稿25件・1ページ10件で total・totalPages()・hasNext() が正しい。 */
+    public function testPaginateReturnsPageResultWithTotals(): void
     {
         $productPost = self::productPost();
         $postIds = [];
@@ -232,14 +297,56 @@ final class EntityQueryIntegrationTest extends IntegrationTestCase
             $postIds[] = self::createPost($productPost::slug());
         }
 
-        $page = $productPost::query()->orderBy('ID')->paginate(10, 3);
-        self::assertSame(25, $page->total);
-        self::assertSame(3, $page->totalPages());
-        self::assertFalse($page->hasNext());
-        self::assertSame(\array_slice($postIds, 20), array_map(static fn(WP_Post $post): int => $post->ID, $page->items));
+        $first = $productPost::query()->orderBy('ID')->paginate(10, 1);
+        self::assertSame([25, 3, true, 1], [$first->total, $first->totalPages(), $first->hasNext(), $first->currentPage]);
+        self::assertSame(\array_slice($postIds, 0, 10), array_map(static fn(WP_Post $post): int => $post->ID, $first->items));
+
+        $last = $productPost::query()->orderBy('ID')->paginate(10, 3);
+        self::assertSame([25, 3, false, 3], [$last->total, $last->totalPages(), $last->hasNext(), $last->currentPage]);
+        self::assertSame(\array_slice($postIds, 20), array_map(static fn(WP_Post $post): int => $post->ID, $last->items));
+    }
+
+    /** limit() と offset() の組み合わせは、その範囲だけを返す。count() は limit()・offset() を無視して全体の件数を返す。 */
+    public function testLimitWithOffsetReturnsTheRangeAndCountIgnoresThem(): void
+    {
+        $productPost = self::productPost();
+        $postIds = [];
+
+        for ($i = 0; $i < 10; ++$i) {
+            $postIds[] = self::createPost($productPost::slug());
+        }
 
         self::assertSame(\array_slice($postIds, 5, 3), $productPost::query()->orderBy('ID')->limit(3)->offset(5)->ids());
-        self::assertSame(25, $productPost::query()->limit(3)->offset(5)->count());
+        self::assertSame(10, $productPost::query()->limit(3)->offset(5)->count());
+    }
+
+    /**
+     * count() は件数だけを求め、全件を読み込まない(fields=ids・posts_per_page=1 で検索し、found_posts を返す)。
+     */
+    public function testCountFetchesOnlyTheNumberOfPosts(): void
+    {
+        $productPost = self::productPost();
+
+        for ($i = 0; $i < 3; ++$i) {
+            self::createPost($productPost::slug());
+        }
+
+        $queries = [];
+        add_filter('posts_request', static function (string $sql, WP_Query $query) use (&$queries): string {
+            $queries[] = ['vars' => $query->query_vars, 'sql' => $sql];
+
+            return $sql;
+        }, 10, 2);
+
+        self::assertSame(3, $productPost::query()->noPaging()->count());
+
+        self::assertCount(1, $queries);
+        self::assertSame('ids', $queries[0]['vars']['fields']);
+        self::assertSame(1, $queries[0]['vars']['posts_per_page']);
+        self::assertFalse($queries[0]['vars']['no_found_rows']);
+        // WP_Query は posts_per_page が -1 でなければ nopaging を false にする(noPaging() の指定は外れている)
+        self::assertFalse($queries[0]['vars']['nopaging']);
+        self::assertStringContainsString('LIMIT 0, 1', $queries[0]['sql']);
     }
 
     /** `\` を含む文字列で存在しないクラスを指定すると、スラッグとして素通しせず EntityDefinitionException にする。 */
@@ -358,6 +465,15 @@ final class EntityQueryIntegrationTest extends IntegrationTestCase
         self::assertIsArray($term);
 
         return (int) $term['term_id'];
+    }
+
+    private static function createAuthoredPost(string $postType, int $authorId): int
+    {
+        $postId = wp_insert_post(['post_type' => $postType, 'post_status' => 'publish', 'post_title' => 'Authored', 'post_author' => $authorId]);
+        self::assertIsInt($postId);
+        self::assertGreaterThan(0, $postId);
+
+        return $postId;
     }
 
     private static function createUser(string $role): int

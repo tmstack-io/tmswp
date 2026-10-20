@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Integration;
 
-use Closure;
+use ArrayObject;
 use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Attribute\AsTaxonomy;
+use TMSWP\Core\Attribute\AsUserRole;
 use TMSWP\Core\Exception\EntityDataException;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\InvalidArgumentException;
@@ -22,12 +23,14 @@ use TMSWP\Core\Post\PostTypeDefinition;
 use TMSWP\Core\Post\Thumbnail;
 use TMSWP\Core\Tax\Taxonomy;
 use TMSWP\Core\Tax\TaxonomyDefinition;
+use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
 use TMSWP\Core\Tests\Support\RecordingLogger;
 use TMSWP\Core\Tests\Support\UsesTempDirectories;
 use TMSWP\Core\User\UserRole;
 use TMSWP\Core\User\UserRoleDefinition;
 use WP_Error;
+use WP_Hook;
 
 /**
  * エンティティの builtin のアダプタ・ロールの差分の通知・キャッチアップでの再試行・ファサードの実行時の扱い
@@ -35,12 +38,10 @@ use WP_Error;
  */
 final class EntityRuntimeIntegrationTest extends IntegrationTestCase
 {
+    use BootsKernelBeforeInit;
     use UsesTempDirectories;
 
     private const string LATE_BOOT_MESSAGE = "Kernel::boot() was called after the 'init' hook had fired. Boot from the top level of functions.php or the plugin main file.";
-
-    /** @var list<Closure(string): void> */
-    private array $autoloaders = [];
 
     /** productionPluginConfig() の Kernel のログを記録するロガー */
     private RecordingLogger $logger;
@@ -53,10 +54,7 @@ final class EntityRuntimeIntegrationTest extends IntegrationTestCase
 
     public function tear_down(): void
     {
-        foreach ($this->autoloaders as $autoloader) {
-            spl_autoload_unregister($autoloader);
-        }
-
+        $this->unregisterAppAutoloaders();
         $this->cleanupTempDirectories();
         parent::tear_down();
     }
@@ -112,6 +110,88 @@ final class EntityRuntimeIntegrationTest extends IntegrationTestCase
         self::assertTrue(apply_filters('use_block_editor_for_post_type', true, 'post'));
         self::assertFalse(apply_filters('use_block_editor_for_post_type', null, 'page'));
         self::assertFalse(apply_filters('use_block_editor_for_post_type', true, 'page'));
+    }
+
+    /**
+     * init より前に boot した Kernel では、builtin のタクソノミーの紐付けで init 9 の初回に失敗した投稿タイプだけを、
+     * init 11 で1回だけ再試行する。同じ Kernel が init 10 で登録する投稿タイプには警告なしで紐付き、登録されない
+     * 投稿タイプは、再試行の後に渡された Kernel のロガーに warning が1回記録される。初回に成功した投稿タイプは
+     * 再試行しない。
+     */
+    public function testBuiltinTaxonomyRetriesOnlyTheFailedPostTypesAtInitEleven(): void
+    {
+        $config = $this->productionPluginConfig('BuiltinRetryBeforeInit');
+        $namespace = $config->appNamespace;
+        $suffix = substr(md5($namespace), 0, 8);
+        $postType = 'tmswp_rb_' . $suffix;
+        $missing = 'tmswp_missing_' . $suffix;
+        $this->writeFile($config->appDir . '/Post/RetryPost.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Post;
+
+use TMSWP\\Core\\Post\\PostType;
+use TMSWP\\Core\\Post\\PostTypeDefinition;
+
+final class RetryPost extends PostType
+{
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('{$postType}')->label('Retry', 'Retries');
+    }
+}
+PHP);
+        $this->writeFile($config->appDir . '/Tax/CategoryAdapter.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Tax;
+
+use {$namespace}\\Post\\RetryPost;
+use TMSWP\\Core\\Tax\\Taxonomy;
+use TMSWP\\Core\\Tax\\TaxonomyDefinition;
+
+final class CategoryAdapter extends Taxonomy
+{
+    public static function definition(): TaxonomyDefinition
+    {
+        return TaxonomyDefinition::builtin('category')->objectType('page', RetryPost::class, '{$missing}');
+    }
+}
+PHP);
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\\Post\\RetryPost', AsPostType::class, []),
+            new DiscoveredComponent($namespace . '\\Tax\\CategoryAdapter', AsTaxonomy::class, []),
+        ], []));
+        // 紐付けに成功した投稿タイプと、そのときの init の priority を記録する
+        $attached = [];
+        add_action('registered_taxonomy_for_object_type', static function (string $taxonomy, string $objectType) use (&$attached): void {
+            $filters = $GLOBALS['wp_filter'];
+            $init = \is_array($filters) ? ($filters['init'] ?? null) : null;
+
+            if ($taxonomy === 'category') {
+                $attached[] = [$objectType, $init instanceof WP_Hook ? $init->current_priority() : false];
+            }
+        }, 10, 2);
+
+        try {
+            self::fireInit($this->bootBeforeInit($config));
+
+            self::assertSame([['page', 9], [$postType, 11]], $attached);
+            self::assertContains('category', get_object_taxonomies($postType));
+            self::assertSame(
+                [['warning', "failed to attach taxonomy 'category' to post type '{$missing}'"]],
+                array_map(static fn(array $record): array => [$record['level'], $record['message']], $this->logger->records),
+            );
+        } finally {
+            unregister_taxonomy_for_object_type('category', 'page');
+            unregister_taxonomy_for_object_type('category', $postType);
+            unregister_post_type($postType);
+        }
     }
 
     /**
@@ -185,6 +265,119 @@ PHP);
         } finally {
             unregister_taxonomy_for_object_type('category', $postType);
             unregister_post_type($postType);
+        }
+    }
+
+    /**
+     * supports('thumbnail') を持つ複数の投稿タイプを登録すると、post-thumbnails のテーマサポートは、既に宣言された
+     * 投稿タイプとそれらの和集合になる。thumbnail を持たない投稿タイプは加わらない。
+     */
+    public function testThumbnailSupportOfPostTypesIsMergedIntoThemeSupport(): void
+    {
+        $config = $this->productionPluginConfig('ThumbnailSupport');
+        $namespace = $config->appNamespace;
+        $suffix = substr(md5($namespace), 0, 8);
+        $postTypes = ['First' => "tmswp_tf_{$suffix}", 'Second' => "tmswp_ts_{$suffix}", 'Plain' => "tmswp_tp_{$suffix}"];
+        $supports = ['First' => "'title', 'thumbnail'", 'Second' => "'thumbnail'", 'Plain' => "'title'"];
+        $components = [];
+
+        foreach ($postTypes as $name => $postType) {
+            $this->writeFile($config->appDir . "/Post/{$name}Post.php", <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Post;
+
+use TMSWP\\Core\\Post\\PostType;
+use TMSWP\\Core\\Post\\PostTypeDefinition;
+
+final class {$name}Post extends PostType
+{
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('{$postType}')->label('{$name}', '{$name}s')->supports({$supports[$name]});
+    }
+}
+PHP);
+            $components[] = new DiscoveredComponent("{$namespace}\\Post\\{$name}Post", AsPostType::class, []);
+        }
+
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult($components, []));
+        $features = $GLOBALS['_wp_theme_features'];
+        self::assertIsArray($features);
+        // fixture のテーマの ProductPost(supports('thumbnail'))が、WordPress の読み込みで宣言している
+        $declared = self::thumbnailPostTypes();
+        self::assertContains('tmswp_product', $declared);
+
+        try {
+            self::fireInit($this->bootBeforeInit($config));
+
+            self::assertEqualsCanonicalizing([...$declared, $postTypes['First'], $postTypes['Second']], self::thumbnailPostTypes());
+        } finally {
+            $GLOBALS['_wp_theme_features'] = $features;
+
+            foreach ($postTypes as $postType) {
+                unregister_post_type($postType);
+            }
+        }
+    }
+
+    /**
+     * ロールの登録は、DB(ロールのオプション)に書くのを初回だけにする。2回目以降のリクエスト(DB から読み直した
+     * ロール)の register() は、get_role()・has_cap() の確認により update_option() を呼ばない。
+     */
+    public function testUserRoleRegistrationWritesToTheDatabaseOnlyOnTheFirstRequest(): void
+    {
+        $config = $this->productionPluginConfig('RoleIdempotency');
+        $namespace = $config->appNamespace;
+        $role = 'tmswp_ri_' . substr(md5($namespace), 0, 8);
+        $this->writeFile($config->appDir . '/User/IdempotentRole.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\User;
+
+use TMSWP\\Core\\User\\UserRole;
+use TMSWP\\Core\\User\\UserRoleDefinition;
+
+final class IdempotentRole extends UserRole
+{
+    public static function definition(): UserRoleDefinition
+    {
+        return UserRoleDefinition::create('{$role}')->label('Idempotent')->capabilities('read', 'upload_files');
+    }
+}
+PHP);
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\\User\\IdempotentRole', AsUserRole::class, []),
+        ], []));
+        $writes = new ArrayObject();
+        add_filter('pre_update_option_' . wp_roles()->role_key, static function (mixed $value) use ($writes): mixed {
+            $writes->append($value);
+
+            return $value;
+        });
+
+        try {
+            // 1回目のリクエスト: add_role() と add_cap() が DB に書く
+            self::fireInit($this->bootBeforeInit($config));
+            self::assertNotCount(0, $writes);
+
+            // 2回目のリクエストと同じく、ロールを DB から読み直してから登録する
+            wp_roles()->for_site();
+            $writes->exchangeArray([]);
+            self::fixtureClass($namespace . '\\User\\IdempotentRole', UserRole::class)::register(Kernel::get($namespace));
+
+            self::assertCount(0, $writes);
+            $registered = get_role($role);
+            self::assertNotNull($registered);
+            self::assertSame(['read' => true, 'upload_files' => true], $registered->capabilities);
+        } finally {
+            remove_role($role);
         }
     }
 
@@ -355,7 +548,7 @@ PHP);
         ], []));
 
         try {
-            Kernel::boot($config);
+            self::fireInit($this->bootBeforeInit($config));
             $loopPost = self::fixtureClass($namespace . '\\Post\\LoopPost', PostType::class);
             $loopTaxonomy = self::fixtureClass($namespace . '\\Tax\\LoopTaxonomy', Taxonomy::class);
             $postId = $this->createPostCycle($postType);
@@ -420,7 +613,17 @@ PHP);
                 self::assertSame($message, $exception->getMessage(), $name);
             }
         }
+    }
 
+    /**
+     * debug の Kernel(fixture のテーマ)では、URL の取得で WordPress の関数が返した WP_Error(get_term_link())は
+     * QueryException になる。
+     */
+    public function testUrlWpErrorThrowsQueryExceptionInDebug(): void
+    {
+        $category = self::fixtureClass(self::THEME_NAMESPACE . '\\Tax\\ProductCategoryTaxonomy', Taxonomy::class);
+        $termId = wp_insert_term('WP_Error url', $category::slug());
+        self::assertIsArray($termId);
         add_filter('term_link', static fn(): WP_Error => new WP_Error('tmswp_forced', 'Forced error.'));
 
         foreach (['Taxonomy::url' => static fn(): mixed => $category::url((int) $termId['term_id']), 'TermQuery::url' => static fn(): mixed => $category::query()->url()] as $name => $call) {
@@ -478,7 +681,7 @@ PHP);
         $this->registerAppAutoloader($config);
         // どちらのクラスも探索結果に含めない(タクソノミーは登録されない)
         (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
-        Kernel::boot($config);
+        self::fireInit($this->bootBeforeInit($config));
         $lostPost = self::fixtureClass($namespace . '\\Post\\LostPost', PostType::class);
         $lostTaxonomy = self::fixtureClass($namespace . '\\Tax\\LostTaxonomy', Taxonomy::class);
         $postId = self::createPost('post');
@@ -536,6 +739,57 @@ PHP);
         }
     }
 
+    /**
+     * 本番の Kernel では、URL の取得で WordPress の関数が返した WP_Error(get_term_link())は例外にせず、その Kernel の
+     * ロガーに error で記録して null を返す。
+     */
+    public function testUrlWpErrorIsLoggedAndReturnsNullInProduction(): void
+    {
+        $config = $this->productionPluginConfig('UrlWpError');
+        $namespace = $config->appNamespace;
+        $taxonomy = 'tmswp_ue_' . substr(md5($namespace), 0, 8);
+        $this->writeFile($config->appDir . '/Tax/LinkTaxonomy.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Tax;
+
+use TMSWP\\Core\\Tax\\Taxonomy;
+use TMSWP\\Core\\Tax\\TaxonomyDefinition;
+
+final class LinkTaxonomy extends Taxonomy
+{
+    public static function definition(): TaxonomyDefinition
+    {
+        return TaxonomyDefinition::create('{$taxonomy}')->label('Link', 'Links')->objectType('post');
+    }
+}
+PHP);
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\\Tax\\LinkTaxonomy', AsTaxonomy::class, []),
+        ], []));
+
+        try {
+            self::fireInit($this->bootBeforeInit($config));
+            $linkTaxonomy = self::fixtureClass($namespace . '\\Tax\\LinkTaxonomy', Taxonomy::class);
+            $termId = $linkTaxonomy::create('Linked');
+            add_filter('term_link', static fn(): WP_Error => new WP_Error('tmswp_forced', 'Forced error.'));
+
+            self::assertNull($linkTaxonomy::url($termId));
+            self::assertNull($linkTaxonomy::query()->url());
+            $record = [
+                'level' => 'error',
+                'message' => 'tmswp.entity: {function}() returned WP_Error {code}: {message} ({class})',
+                'context' => ['function' => 'get_term_link', 'code' => 'tmswp_forced', 'message' => 'Forced error.', 'class' => $linkTaxonomy],
+            ];
+            self::assertSame([$record, $record], $this->logger->records);
+        } finally {
+            unregister_taxonomy($taxonomy);
+        }
+    }
+
     /** fixture のテーマが test チャネルに登録した RecordingLogger を返す。 */
     private static function fixtureLogger(): RecordingLogger
     {
@@ -543,6 +797,26 @@ PHP);
         self::assertInstanceOf(RecordingLogger::class, $logger);
 
         return $logger;
+    }
+
+    /**
+     * post-thumbnails のテーマサポートを宣言している投稿タイプを返す(投稿タイプを限定した宣言であることも確かめる)。
+     *
+     * @return list<string>
+     */
+    private static function thumbnailPostTypes(): array
+    {
+        $support = get_theme_support('post-thumbnails');
+        self::assertIsArray($support);
+        self::assertIsArray($support[0] ?? null);
+        $postTypes = [];
+
+        foreach ($support[0] as $postType) {
+            self::assertIsString($postType);
+            $postTypes[] = $postType;
+        }
+
+        return $postTypes;
     }
 
     /** 互いを親にした2件の投稿を作り(post_parent の循環)、その1件の ID を返す。 */
@@ -610,18 +884,6 @@ PHP);
         return self::fixtureClass($namespace . '\\' . $shortName, Taxonomy::class);
     }
 
-    /** app/ のクラスを、名前空間に対応するパスから読み込む autoload を登録する(tear_down で外す)。 */
-    private function registerAppAutoloader(KernelConfig $config): void
-    {
-        $namespace = $config->appNamespace;
-        $this->autoloaders[] = $autoloader = static function (string $class) use ($namespace, $config): void {
-            if (str_starts_with($class, $namespace . '\\')) {
-                require $config->appDir . '/' . str_replace('\\', '/', substr($class, \strlen($namespace) + 1)) . '.php';
-            }
-        };
-        spl_autoload_register($autoloader);
-    }
-
     /**
      * 本番相当(debug=false)のプラグイン形態の構成を、一時ディレクトリのプラグインで作る。ログはこのテストの
      * RecordingLogger に記録する。
@@ -640,19 +902,6 @@ PHP);
             false,
             logChannels: static fn(): array => ['integration' => new LogChannel($logger)],
         );
-    }
-
-    private function writeFile(string $path, string $contents): void
-    {
-        $dir = \dirname($path);
-
-        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
-            self::fail("ディレクトリを作成できません: {$dir}");
-        }
-
-        if (file_put_contents($path, $contents) === false) {
-            self::fail("ファイルを書き込めません: {$path}");
-        }
     }
 }
 

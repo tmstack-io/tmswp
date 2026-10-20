@@ -7,6 +7,9 @@ namespace TMSWP\Core\Tests\Unit;
 use Brain\Monkey\Functions;
 use Closure;
 use PHPUnit\Framework\Attributes\DataProvider;
+use ReflectionClass;
+use ReflectionMethod;
+use ReflectionNamedType;
 use TMSWP\Core\Entity\EntityReference;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\InvalidArgumentException;
@@ -20,6 +23,7 @@ use TMSWP\Core\Query\PageResult;
 use TMSWP\Core\Query\SortOrder;
 use TMSWP\Core\Query\TermField;
 use TMSWP\Core\Query\TermOperator;
+use TMSWP\Core\Query\UserSearchColumn;
 use TMSWP\Core\Tax\Taxonomy;
 use TMSWP\Core\Tax\TaxonomyDefinition;
 use TMSWP\Core\Tax\TermQuery;
@@ -64,6 +68,195 @@ final class EntityQueryTest extends UnitTestCase
             $args['tax_query'],
         );
         self::assertSame(['date' => 'DESC'], $args['orderby']);
+    }
+
+    /**
+     * 既定値: PostQuery は post_status=['publish']・ignore_sticky_posts=true・posts_per_page=-1、TermQuery は hide_empty=false、
+     * UserQuery は count_total=false。
+     */
+    public function testQueriesStartFromTheDocumentedDefaults(): void
+    {
+        self::assertSame(
+            ['post_status' => ['publish'], 'ignore_sticky_posts' => true, 'posts_per_page' => -1, 'post_type' => 'product'],
+            PostQuery::of(QueryTestProductPost::class)->toArgs(),
+        );
+        self::assertSame(['hide_empty' => false, 'taxonomy' => 'product_category'], TermQuery::of(QueryTestCategoryTaxonomy::class)->toArgs());
+        self::assertSame(['fields' => 'all', 'count_total' => false, 'role' => 'member'], UserQuery::of(QueryTestMemberRole::class)->toArgs());
+    }
+
+    /** スコープ(post_type・taxonomy・role)は、withArgs() で渡しても上書きできない(呼ぶ順に関係ない)。 */
+    public function testScopeCannotBeOverriddenByWithArgs(): void
+    {
+        self::assertSame('product', PostQuery::of(QueryTestProductPost::class)->withArgs(['post_type' => 'page'])->toArgs()['post_type']);
+        self::assertSame('product', PostQuery::of(QueryTestProductPost::class)->withArgs(['post_type' => ['page', 'post']])->status('draft')->toArgs()['post_type']);
+        self::assertSame('product_category', TermQuery::of(QueryTestCategoryTaxonomy::class)->withArgs(['taxonomy' => 'category'])->toArgs()['taxonomy'] ?? null);
+        self::assertSame('member', UserQuery::of(QueryTestMemberRole::class)->withArgs(['role' => 'administrator'])->toArgs()['role'] ?? null);
+    }
+
+    /** @return iterable<string, array{Closure(PostQuery): PostQuery, array<string, mixed>, list<string>}> */
+    public static function postQueryMappings(): iterable
+    {
+        yield 'status' => [static fn(PostQuery $q): PostQuery => $q->status('draft', 'pending'), ['post_status' => ['draft', 'pending']], []];
+        yield 'status empty' => [static fn(PostQuery $q): PostQuery => $q->status(), ['post__in' => [0], 'ignore_sticky_posts' => true], []];
+        yield 'anyStatus' => [static fn(PostQuery $q): PostQuery => $q->anyStatus(), ['post_status' => 'any'], []];
+        yield 'search' => [static fn(PostQuery $q): PostQuery => $q->search('keyword'), ['s' => 'keyword'], []];
+        yield 'author' => [static fn(PostQuery $q): PostQuery => $q->author(5), ['author' => 5], []];
+        yield 'author zero' => [static fn(PostQuery $q): PostQuery => $q->author(0), ['post__in' => [0], 'ignore_sticky_posts' => true], ['author']];
+        yield 'author after zero' => [static fn(PostQuery $q): PostQuery => $q->author(0)->author(5), ['author' => 5], ['post__in']];
+        yield 'parent' => [static fn(PostQuery $q): PostQuery => $q->parent(7), ['post_parent' => 7], []];
+        yield 'slugIn' => [static fn(PostQuery $q): PostQuery => $q->slugIn('a', 'b'), ['post_name__in' => ['a', 'b']], []];
+        yield 'slugIn empty' => [static fn(PostQuery $q): PostQuery => $q->slugIn(), ['post__in' => [0]], ['post_name__in']];
+        yield 'idIn' => [static fn(PostQuery $q): PostQuery => $q->idIn(3, 1), ['post__in' => [3, 1]], ['post__not_in']];
+        yield 'idNotIn' => [static fn(PostQuery $q): PostQuery => $q->idNotIn(4, 5), ['post__not_in' => [4, 5]], ['post__in']];
+        yield 'idIn minus idNotIn' => [static fn(PostQuery $q): PostQuery => $q->idNotIn(2)->idIn(1, 2), ['post__in' => [1]], ['post__not_in']];
+        yield 'idNotIn empty' => [static fn(PostQuery $q): PostQuery => $q->idNotIn(), [], ['post__in', 'post__not_in']];
+        yield 'whereMeta' => [
+            static fn(PostQuery $q): PostQuery => $q->whereMeta('price', 100, Compare::Gte, CastType::Numeric),
+            ['meta_query' => ['relation' => 'AND', ['key' => 'price', 'value' => 100, 'compare' => '>=', 'type' => 'NUMERIC']]],
+            [],
+        ];
+        yield 'whereMeta defaults' => [
+            static fn(PostQuery $q): PostQuery => $q->whereMeta('color', 'red'),
+            ['meta_query' => ['relation' => 'AND', ['key' => 'color', 'value' => 'red', 'compare' => '=', 'type' => 'CHAR']]],
+            [],
+        ];
+        yield 'whereMeta IN empty' => [static fn(PostQuery $q): PostQuery => $q->whereMeta('color', [], Compare::In), ['post__in' => [0]], ['meta_query']];
+        yield 'whereMeta NOT IN empty' => [static fn(PostQuery $q): PostQuery => $q->whereMeta('color', [], Compare::NotIn), [], ['meta_query', 'post__in']];
+        yield 'whereMetaExists' => [static fn(PostQuery $q): PostQuery => $q->whereMetaExists('featured'), ['meta_query' => ['relation' => 'AND', ['key' => 'featured', 'compare' => 'EXISTS']]], []];
+        yield 'whereMetaNotExists' => [static fn(PostQuery $q): PostQuery => $q->whereMetaNotExists('hidden'), ['meta_query' => ['relation' => 'AND', ['key' => 'hidden', 'compare' => 'NOT EXISTS']]], []];
+        yield 'whereTerm' => [
+            static fn(PostQuery $q): PostQuery => $q->whereTerm('category', [3, 4], TermField::TermId, TermOperator::And),
+            ['tax_query' => ['relation' => 'AND', ['taxonomy' => 'category', 'field' => 'term_id', 'terms' => [3, 4], 'operator' => 'AND']]],
+            [],
+        ];
+        yield 'whereTerm scalar defaults' => [
+            static fn(PostQuery $q): PostQuery => $q->whereTerm('category', 'news'),
+            ['tax_query' => ['relation' => 'AND', ['taxonomy' => 'category', 'field' => 'slug', 'terms' => ['news'], 'operator' => 'IN']]],
+            [],
+        ];
+        yield 'whereTerm IN empty' => [static fn(PostQuery $q): PostQuery => $q->whereTerm('category', []), ['post__in' => [0]], ['tax_query']];
+        yield 'whereTerm AND empty' => [static fn(PostQuery $q): PostQuery => $q->whereTerm('category', [], TermField::Slug, TermOperator::And), ['post__in' => [0]], ['tax_query']];
+        yield 'whereTerm NOT IN empty' => [static fn(PostQuery $q): PostQuery => $q->whereTerm('category', [], TermField::Slug, TermOperator::NotIn), [], ['tax_query', 'post__in']];
+        yield 'template' => [
+            static fn(PostQuery $q): PostQuery => $q->template('templates/landing.php'),
+            ['meta_query' => ['relation' => 'AND', ['key' => '_wp_page_template', 'value' => 'templates/landing.php', 'compare' => '=', 'type' => 'CHAR']]],
+            [],
+        ];
+        yield 'hasThumbnail' => [static fn(PostQuery $q): PostQuery => $q->hasThumbnail(), ['meta_query' => ['relation' => 'AND', ['key' => '_thumbnail_id', 'compare' => 'EXISTS']]], []];
+        yield 'hasThumbnail false' => [static fn(PostQuery $q): PostQuery => $q->hasThumbnail(false), ['meta_query' => ['relation' => 'AND', ['key' => '_thumbnail_id', 'compare' => 'NOT EXISTS']]], []];
+        yield 'orderBy accumulates and overwrites the same field' => [
+            static fn(PostQuery $q): PostQuery => $q->orderBy('date', SortOrder::Desc)->orderBy('title')->orderBy('date'),
+            ['orderby' => ['date' => 'ASC', 'title' => 'ASC']],
+            ['order'],
+        ];
+        yield 'orderByDesc' => [static fn(PostQuery $q): PostQuery => $q->orderByDesc('date'), ['orderby' => ['date' => 'DESC']], ['order']];
+        yield 'withArgs is merged after orderBy' => [static fn(PostQuery $q): PostQuery => $q->withArgs(['order' => 'DESC'])->orderBy('title'), ['orderby' => ['title' => 'ASC'], 'order' => 'DESC'], []];
+        yield 'orderByMeta' => [
+            static fn(PostQuery $q): PostQuery => $q->orderByMeta('price', SortOrder::Desc, CastType::Numeric),
+            [
+                'meta_query' => ['relation' => 'AND', ['relation' => 'OR', 'tms_order_0' => ['key' => 'price', 'compare' => 'NOT EXISTS', 'type' => 'NUMERIC'], ['key' => 'price', 'compare' => 'EXISTS']]],
+                'orderby' => ['tms_order_0' => 'DESC'],
+            ],
+            [],
+        ];
+        yield 'limit' => [static fn(PostQuery $q): PostQuery => $q->limit(5), ['posts_per_page' => 5], ['offset', 'nopaging']];
+        yield 'offset' => [static fn(PostQuery $q): PostQuery => $q->limit(5)->offset(10), ['posts_per_page' => 5, 'offset' => 10], []];
+        yield 'noPaging' => [static fn(PostQuery $q): PostQuery => $q->noPaging(), ['nopaging' => true, 'posts_per_page' => -1], []];
+        yield 'ignoreSticky' => [static fn(PostQuery $q): PostQuery => $q->ignoreSticky(false), ['ignore_sticky_posts' => false], []];
+        yield 'withArgs' => [static fn(PostQuery $q): PostQuery => $q->withArgs(['post_status' => 'private', 'menu_order' => 3]), ['post_status' => 'private', 'menu_order' => 3], []];
+    }
+
+    /**
+     * PostQuery::toArgs() が docs/03 §7.3 の対応表どおりの引数を作る(表の行ごとに1件)。
+     *
+     * @param Closure(PostQuery): PostQuery $build
+     * @param array<string, mixed> $expected
+     * @param list<string> $absent
+     */
+    #[DataProvider('postQueryMappings')]
+    public function testPostQueryToArgsFollowsTheMappingTable(Closure $build, array $expected, array $absent): void
+    {
+        $args = $build(PostQuery::of(QueryTestProductPost::class))->toArgs();
+
+        foreach ($expected as $key => $value) {
+            self::assertArrayHasKey($key, $args);
+            self::assertSame($value, $args[$key], $key);
+        }
+
+        foreach ($absent as $key) {
+            self::assertArrayNotHasKey($key, $args);
+        }
+
+        self::assertSame('product', $args['post_type']);
+    }
+
+    /** whereTerm() にタクソノミーのクラスを渡すと、そのスラッグに解決する。 */
+    public function testWhereTermResolvesTaxonomyClassToItsSlug(): void
+    {
+        $args = PostQuery::of(QueryTestProductPost::class)->whereTerm(QueryTestCategoryTaxonomy::class, 'news')->toArgs();
+
+        self::assertSame(
+            ['relation' => 'AND', ['taxonomy' => 'product_category', 'field' => 'slug', 'terms' => ['news'], 'operator' => 'IN']],
+            $args['tax_query'],
+        );
+    }
+
+    /**
+     * 3つのクエリは、比較演算子・キャスト型・並び順・whereTerm() の field・operator を enum で受け、文字列で受ける引数を
+     * 持たない。文字列を実行時に許可リストで検査するクラス(旧 QueryValidator)は無く、EXISTS は Compare に含めない。
+     */
+    public function testQueriesAcceptOperatorsCastsAndOrdersOnlyAsEnums(): void
+    {
+        $enumParameters = ['compare' => Compare::class, 'type' => CastType::class, 'direction' => SortOrder::class, 'operator' => TermOperator::class];
+        $checked = 0;
+
+        foreach ([PostQuery::class, TermQuery::class, UserQuery::class] as $queryClass) {
+            foreach ((new ReflectionClass($queryClass))->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+                foreach ($method->getParameters() as $parameter) {
+                    $expected = $enumParameters[$parameter->getName()] ?? null;
+
+                    if ($method->getName() === 'whereTerm' && $parameter->getName() === 'field') {
+                        $expected = TermField::class;
+                    }
+
+                    if ($queryClass === UserQuery::class && $method->getName() === 'search' && $parameter->getName() === 'columns') {
+                        $expected = UserSearchColumn::class;
+                    }
+
+                    if ($expected === null) {
+                        continue;
+                    }
+
+                    $type = $parameter->getType();
+                    self::assertInstanceOf(ReflectionNamedType::class, $type, "{$queryClass}::{$method->getName()}() \${$parameter->getName()}");
+                    self::assertSame($expected, $type->getName(), "{$queryClass}::{$method->getName()}() \${$parameter->getName()}");
+                    ++$checked;
+                }
+            }
+        }
+
+        // PostQuery の whereMeta・orderBy・orderByDesc 以外にも検査が及んでいる(空の検査にしない)
+        self::assertGreaterThanOrEqual(15, $checked);
+        self::assertFalse(class_exists('TMSWP\Core\Query\QueryValidator'));
+        self::assertSame([], array_values(array_filter(Compare::cases(), static fn(Compare $compare): bool => str_contains($compare->value, 'EXISTS'))));
+    }
+
+    /** PostQuery::author() は負の ID を受け付けない(WP_Query は負の author を除外として扱うため)。 */
+    public function testPostQueryAuthorRejectsNegativeIds(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('PostQuery::author() must be 0 or greater, -3 given');
+
+        PostQuery::of(QueryTestProductPost::class)->author(-3);
+    }
+
+    /** UserSearchColumn のケースは、WP 7.0 の WP_User_Query が search_columns で受け付ける列とちょうど一致する。 */
+    public function testUserSearchColumnCoversTheColumnsWpUserQueryAccepts(): void
+    {
+        self::assertSame(
+            ['ID', 'user_login', 'user_email', 'user_url', 'user_nicename', 'display_name'],
+            array_map(static fn(UserSearchColumn $column): string => $column->value, UserSearchColumn::cases()),
+        );
     }
 
     /** 件数を指定しない PostQuery は posts_per_page=-1 を明示し、サイトの設定(既定10件)に依存しない。 */
@@ -113,7 +306,7 @@ final class EntityQueryTest extends UnitTestCase
     public function testUserQueryBuildsScopedArgsFromEnums(): void
     {
         $args = UserQuery::of(QueryTestMemberRole::class)
-            ->search('tanaka', 'user_login')
+            ->search('tanaka', UserSearchColumn::UserLogin, UserSearchColumn::DisplayName)
             ->whereMetaNotExists('disabled_at')
             ->orderBy('registered', SortOrder::Desc)
             ->limit(10)
@@ -122,7 +315,7 @@ final class EntityQueryTest extends UnitTestCase
 
         self::assertSame('member', $args['role'] ?? null);
         self::assertSame('*tanaka*', $args['search'] ?? null);
-        self::assertSame(['user_login'], $args['search_columns'] ?? null);
+        self::assertSame(['user_login', 'display_name'], $args['search_columns'] ?? null);
         self::assertSame(['relation' => 'AND', ['key' => 'disabled_at', 'compare' => 'NOT EXISTS']], $args['meta_query'] ?? null);
         self::assertSame(['registered' => 'DESC'], $args['orderby'] ?? null);
         self::assertSame(10, $args['number'] ?? null);
@@ -224,6 +417,8 @@ final class EntityQueryTest extends UnitTestCase
         yield 'post whereTerm AND' => [static fn(): PostQuery => $post()->whereTerm('category', [], TermField::TermId, TermOperator::And)];
         yield 'post whereMeta IN' => [static fn(): PostQuery => $post()->whereMeta('color', [], Compare::In)];
         yield 'post idIn after values' => [static fn(): PostQuery => $post()->idIn(1, 2)->idIn()];
+        yield 'post author zero' => [static fn(): PostQuery => $post()->author(0)];
+        yield 'post author zero after values' => [static fn(): PostQuery => $post()->author(5)->author(0)];
         yield 'post idIn all excluded by idNotIn' => [static fn(): PostQuery => $post()->idIn(1, 2)->idNotIn(2, 1)];
         yield 'term idIn' => [static fn(): TermQuery => $term()->idIn()];
         yield 'term slugIn' => [static fn(): TermQuery => $term()->slugIn()];

@@ -214,7 +214,7 @@ final class TaxonomyDefinition
 
     public function rewriteSlug(string $slug, bool $withFront = true, bool $hierarchical = false): self
     {
-        return $this->rewrite(['slug' => $slug, 'with_front' => $withFront, 'hierarchical' => $hierarchical]);
+        return $this->argsForNew(['rewrite' => ['slug' => $slug, 'with_front' => $withFront, 'hierarchical' => $hierarchical]], __FUNCTION__);
     }
 
     public function queryVar(bool|string $queryVar): self

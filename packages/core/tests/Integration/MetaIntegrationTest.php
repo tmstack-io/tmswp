@@ -6,22 +6,39 @@ namespace TMSWP\Core\Tests\Integration;
 
 use ArrayObject;
 use stdClass;
+use Stringable;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\RuntimeException;
+use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Core\Meta\WpMetaStorage;
 use TMSWP\Core\Post\PostType;
+use TMSWP\Core\Tax\Taxonomy;
+use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Core\Tests\Support\UsesTempDirectories;
+use TMSWP\Core\User\UserRole;
 use WP_Post;
 
 final class MetaIntegrationTest extends IntegrationTestCase
 {
+    use BootsKernelBeforeInit;
+    use UsesTempDirectories;
+
     private const PRICE = 'tmswp_price';
 
     private const CODES = 'tmswp_codes';
 
     private const CUSTOM = 'tmswp_custom';
 
+    public function tear_down(): void
+    {
+        $this->unregisterAppAutoloaders();
+        $this->cleanupTempDirectories();
+        parent::tear_down();
+    }
+
+    /** #[MetaSchema] の6つの引数(type・default・single・showInRest・description・sanitize)が register_post_meta() に渡る。 */
     public function testMetaSchemaIsRegisteredOnInit(): void
     {
         $postClass = self::fixtureClass(self::THEME_NAMESPACE . '\\Post\\MetaPost', PostType::class);
@@ -34,9 +51,290 @@ final class MetaIntegrationTest extends IntegrationTestCase
         self::assertTrue($registered[self::PRICE]['show_in_rest']);
         self::assertSame('価格', $registered[self::PRICE]['description']);
         self::assertSame([$postClass, 'sanitizePrice'], $registered[self::PRICE]['sanitize_callback']);
-        self::assertTrue($registered[self::PRICE]['revisions_enabled'] ?? false);
         self::assertArrayHasKey(self::CODES, $registered);
         self::assertFalse($registered[self::CODES]['single']);
+        self::assertSame('string', $registered[self::CODES]['type']);
+        self::assertSame('', $registered[self::CODES]['description']);
+        self::assertNull($registered[self::CODES]['sanitize_callback']);
+    }
+
+    /** #[WithMetaRevisions] を付けたエンティティのメタは revisions_enabled => true で、付けないエンティティは false で登録される。 */
+    public function testWithMetaRevisionsRegistersMetaWithRevisionsEnabled(): void
+    {
+        $revised = get_registered_meta_keys('post', 'tmswp_meta_post');
+        self::assertTrue($revised[self::PRICE]['revisions_enabled']);
+        self::assertTrue($revised[self::CODES]['revisions_enabled']);
+
+        $stored = get_registered_meta_keys('post', 'tmswp_stored_post');
+        self::assertArrayHasKey(self::CUSTOM, $stored);
+        self::assertFalse($stored[self::CUSTOM]['revisions_enabled']);
+    }
+
+    /**
+     * #[WithMetaRevisions] のエンティティのプレビュー(WordPress の _set_preview() が足す _wp_preview_meta_filter)では、
+     * オートセーブの値が偽('0')でも、行があるものとして読む。Integer のメタ(default 100)をオートセーブで 0 にすると、
+     * int()・has()・get() と all() のどれもプレビューの値を返す。
+     */
+    public function testPreviewOfFalsyAutosaveValueIsReadByEveryGetterAndAll(): void
+    {
+        $root = $this->createTempDirectory('integration-preview');
+        self::assertTrue(mkdir($root . '/app'));
+        $this->writeFile($root . '/plugin.php', "<?php\n");
+        $config = KernelConfig::plugin($root . '/plugin.php', $root . '/app', 'TmswpIntegrationPreview' . uniqid(), true);
+        $namespace = $config->appNamespace;
+        $postType = 'tmswp_pv_' . substr(md5($namespace), 0, 8);
+        $this->writeFile($config->appDir . '/Post/PreviewPost.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Post;
+
+use TMSWP\\Core\\Attribute\\AsPostType;
+use TMSWP\\Core\\Attribute\\MetaSchema;
+use TMSWP\\Core\\Attribute\\WithMetaRevisions;
+use TMSWP\\Core\\Meta\\MetaValueType;
+use TMSWP\\Core\\Post\\PostType;
+use TMSWP\\Core\\Post\\PostTypeDefinition;
+
+#[AsPostType]
+#[WithMetaRevisions]
+final class PreviewPost extends PostType
+{
+    #[MetaSchema(type: MetaValueType::Integer, default: 100)]
+    public const META_STOCK = 'tmswp_preview_stock';
+
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('{$postType}')->label('Preview', 'Previews')->supports('title', 'revisions');
+    }
+}
+PHP);
+        $this->registerAppAutoloader($config);
+        $previewFilters = [['get_the_terms', '_wp_preview_terms_filter'], ['get_post_metadata', '_wp_preview_post_thumbnail_filter'], ['get_post_metadata', '_wp_preview_meta_filter']];
+
+        try {
+            self::fireInit($this->bootBeforeInit($config));
+            $previewPost = self::fixtureClass($namespace . '\\Post\\PreviewPost', PostType::class);
+            $key = 'tmswp_preview_stock';
+            $postId = self::createPost($postType);
+            self::assertTrue($previewPost::meta($postId)->set($key, 500));
+            $autosaveId = _wp_put_post_revision(['ID' => $postId, 'post_type' => $postType, 'post_title' => 'Autosave', 'post_content' => '', 'post_excerpt' => ''], true);
+            self::assertIsInt($autosaveId);
+            // オートセーブのリビジョンのメタは、WordPress の wp_autosave_post_revisioned_meta_fields() と同じく update_metadata() で書く
+            // (update_post_meta() はリビジョンの ID を親の投稿の ID に置き換えるため)
+            self::assertNotFalse(update_metadata('post', $autosaveId, $key, wp_slash('0')));
+
+            $post = get_post($postId);
+            self::assertInstanceOf(WP_Post::class, $post);
+            $GLOBALS['post'] = $post;
+            _set_preview($post);
+            $bag = $previewPost::meta($postId);
+
+            // 確かめ方の確認: プレビューのフィルタは、偽のオートセーブの値を返す
+            self::assertSame('0', get_post_meta($postId, $key, true));
+            self::assertTrue($bag->has($key));
+            self::assertSame(0, $bag->int($key));
+            self::assertSame('0', $bag->get($key));
+            self::assertSame([$key => '0'], $bag->all());
+        } finally {
+            foreach ($previewFilters as [$hook, $callback]) {
+                remove_filter($hook, $callback);
+            }
+
+            unset($GLOBALS['post']);
+            unregister_post_type($postType);
+        }
+    }
+
+    /**
+     * Boolean のスキーマのキーに false を書くと、WordPress のメタには空文字で保存され、get() は空文字、bool() は false を
+     * 返す(default の true には戻らない)。true は '1' で保存され、bool() は true を返す。
+     */
+    public function testBooleanSchemaRoundTripsFalseThroughWpMetaStorage(): void
+    {
+        $postClass = self::fixtureClass(self::THEME_NAMESPACE . '\\Post\\MetaPost', PostType::class);
+        $postId = self::createPost('tmswp_meta_post');
+        $bag = $postClass::meta($postId);
+        $key = 'tmswp_featured';
+
+        // 確かめ方の確認: 行が無ければスキーマの default(true)になる
+        self::assertTrue($bag->bool($key));
+
+        self::assertTrue($bag->set($key, false));
+        self::assertTrue($bag->has($key));
+        self::assertSame('', get_post_meta($postId, $key, true));
+        self::assertSame('', $bag->get($key));
+        self::assertFalse($bag->bool($key));
+
+        self::assertTrue($bag->set($key, true));
+        self::assertSame('1', $bag->get($key));
+        self::assertTrue($bag->bool($key));
+    }
+
+    /**
+     * WordPress のサムネイルのプレビュー(_set_preview() が足す _wp_preview_post_thumbnail_filter)は、single が false でも
+     * サムネイルの ID を文字列で返す。WpMetaStorage はその値を1行として扱い、has()・get()・getMultiple() と MetaBag の
+     * get() がプレビューの ID を返す。
+     */
+    public function testThumbnailPreviewValueIsReadAsARow(): void
+    {
+        $postId = self::createPost('tmswp_meta_post');
+        $storage = new WpMetaStorage();
+        $previewFilters = [['get_the_terms', '_wp_preview_terms_filter'], ['get_post_metadata', '_wp_preview_post_thumbnail_filter'], ['get_post_metadata', '_wp_preview_meta_filter']];
+        self::assertTrue($storage->set(ObjectType::Post, $postId, '_thumbnail_id', '123'));
+        $post = get_post($postId);
+        self::assertInstanceOf(WP_Post::class, $post);
+
+        try {
+            // プレビューの画面の要求(post.php の preview で、アイキャッチを 987 に変えた状態)
+            $_REQUEST['preview_id'] = (string) $postId;
+            $_REQUEST['_thumbnail_id'] = '987';
+            $GLOBALS['post'] = $post;
+            _set_preview($post);
+
+            // 確かめ方の確認: WordPress の読み取りはプレビューの ID を返す
+            self::assertSame('987', get_post_meta($postId, '_thumbnail_id', true));
+            self::assertSame('987', get_metadata_raw('post', $postId, '_thumbnail_id', false));
+
+            self::assertTrue($storage->has(ObjectType::Post, $postId, '_thumbnail_id'));
+            self::assertSame('987', $storage->get(ObjectType::Post, $postId, '_thumbnail_id'));
+            self::assertSame(['_thumbnail_id' => '987'], $storage->getMultiple(ObjectType::Post, $postId, ['_thumbnail_id']));
+            self::assertSame('987', self::fixtureClass(self::THEME_NAMESPACE . '\\Post\\MetaPost', PostType::class)::meta($postId)->get('_thumbnail_id'));
+        } finally {
+            foreach ($previewFilters as [$hook, $callback]) {
+                remove_filter($hook, $callback);
+            }
+
+            unset($_REQUEST['preview_id'], $_REQUEST['_thumbnail_id'], $GLOBALS['post']);
+        }
+
+        self::assertSame('123', $storage->get(ObjectType::Post, $postId, '_thumbnail_id'));
+    }
+
+    /**
+     * アイキャッチを外すプレビュー(_thumbnail_id が0以下)では、_wp_preview_post_thumbnail_filter がスカラーの '' を返す。
+     * WordPress と同じく行なしと扱い、保存済みの値(123)があっても has() は false、get() は null、getMultiple() は
+     * そのキーを含まない。
+     */
+    public function testThumbnailRemovalPreviewIsReadAsNoRow(): void
+    {
+        $postId = self::createPost('tmswp_meta_post');
+        $storage = new WpMetaStorage();
+        $previewFilters = [['get_the_terms', '_wp_preview_terms_filter'], ['get_post_metadata', '_wp_preview_post_thumbnail_filter'], ['get_post_metadata', '_wp_preview_meta_filter']];
+        self::assertTrue($storage->set(ObjectType::Post, $postId, '_thumbnail_id', '123'));
+        $post = get_post($postId);
+        self::assertInstanceOf(WP_Post::class, $post);
+
+        try {
+            $_REQUEST['preview_id'] = (string) $postId;
+            $_REQUEST['_thumbnail_id'] = '-1';
+            $GLOBALS['post'] = $post;
+            _set_preview($post);
+
+            // 確かめ方の確認: WordPress はスカラーの '' を受け取り、行もアイキャッチも無いと扱う
+            self::assertSame('', get_metadata_raw('post', $postId, '_thumbnail_id', false));
+            self::assertFalse(metadata_exists('post', $postId, '_thumbnail_id'));
+            self::assertFalse(has_post_thumbnail($postId));
+
+            self::assertFalse($storage->has(ObjectType::Post, $postId, '_thumbnail_id'));
+            self::assertNull($storage->get(ObjectType::Post, $postId, '_thumbnail_id'));
+            self::assertSame([], $storage->getMultiple(ObjectType::Post, $postId, ['_thumbnail_id']));
+            self::assertNull(self::fixtureClass(self::THEME_NAMESPACE . '\\Post\\MetaPost', PostType::class)::meta($postId)->get('_thumbnail_id'));
+        } finally {
+            foreach ($previewFilters as [$hook, $callback]) {
+                remove_filter($hook, $callback);
+            }
+
+            unset($_REQUEST['preview_id'], $_REQUEST['_thumbnail_id'], $GLOBALS['post']);
+        }
+
+        self::assertSame('123', $storage->get(ObjectType::Post, $postId, '_thumbnail_id'));
+    }
+
+    /**
+     * タームとユーザーのメタも、エンティティの #[MetaSchema] の定数で MetaBag から読み書きできる(スキーマの default、
+     * 書き込み、型の検査、削除)。WordPress のタームメタ・ユーザーメタに保存される。
+     */
+    public function testTermAndUserMetaAreReadAndWrittenThroughMetaBag(): void
+    {
+        $category = self::fixtureClass(self::THEME_NAMESPACE . '\\Tax\\ProductCategoryTaxonomy', Taxonomy::class);
+        $member = self::fixtureClass(self::THEME_NAMESPACE . '\\User\\MemberRole', UserRole::class);
+        $termId = $category::create('Meta term');
+        $userId = self::factory()->user->create(['role' => $member::role()]);
+        self::assertIsInt($userId);
+        $color = 'tmswp_term_color';
+        $memberNo = 'tmswp_member_no';
+
+        $termMeta = $category::meta($termId);
+        self::assertFalse($termMeta->has($color));
+        self::assertSame('gray', $termMeta->string($color));
+        self::assertTrue($termMeta->set($color, 'C:\\blue'));
+        self::assertSame('C:\\blue', $termMeta->string($color));
+        self::assertSame('C:\\blue', get_term_meta($termId, $color, true));
+        self::assertSame([$color => 'C:\\blue'], $termMeta->all());
+        $this->assertRejectedValue(static fn(): bool => $termMeta->set($color, ['blue']), "meta '{$color}' expects string, got array");
+        self::assertTrue($termMeta->delete($color));
+        self::assertSame('gray', $termMeta->string($color));
+
+        $userMeta = $member::meta($userId);
+        self::assertFalse($userMeta->has($memberNo));
+        self::assertSame(0, $userMeta->int($memberNo));
+        self::assertTrue($userMeta->set($memberNo, 1024));
+        self::assertSame(1024, $userMeta->int($memberNo));
+        self::assertSame('1024', get_user_meta($userId, $memberNo, true));
+        self::assertSame([$memberNo => '1024'], $userMeta->all());
+        $this->assertRejectedValue(static fn(): bool => $userMeta->set($memberNo, '1024'), "meta '{$memberNo}' expects integer, got string");
+        self::assertTrue($userMeta->delete($memberNo));
+        self::assertSame(0, $userMeta->int($memberNo));
+    }
+
+    /** String のスキーマは Stringable のオブジェクトを受け付けない(オプションと同じ規則。WpMetaStorage まで渡さない)。 */
+    public function testStringSchemaRejectsStringableObjects(): void
+    {
+        $postClass = self::fixtureClass(self::THEME_NAMESPACE . '\\Post\\MetaPost', PostType::class);
+        $postId = self::createPost('tmswp_meta_post');
+        $bag = $postClass::meta($postId);
+
+        $this->assertRejectedValue(
+            static fn(): bool => $bag->set(self::CODES, ['code', new MetaStringable()]),
+            "meta 'tmswp_codes' expects string, got " . MetaStringable::class,
+        );
+        self::assertFalse($bag->has(self::CODES));
+    }
+
+    /**
+     * register_meta の default があるキーでも、WpMetaStorage の get()・getAll() は default を介さず、行が無ければ null・空配列を
+     * 返す(get_metadata_raw() の経路)。WordPress の get_post_meta() は default を返す。
+     */
+    public function testWpMetaStorageReadsIgnoreTheRegisteredDefault(): void
+    {
+        $postId = self::createPost('tmswp_meta_post');
+        $storage = new WpMetaStorage();
+        // FW の宣言は single=false と default を併用できないため、行の list の default は WordPress に直接登録する
+        register_post_meta('tmswp_meta_post', 'tmswp_raw_rows', ['type' => 'string', 'single' => false, 'default' => 'row-default']);
+
+        self::assertSame(1200, get_post_meta($postId, self::PRICE, true));
+        self::assertSame(['row-default'], get_post_meta($postId, 'tmswp_raw_rows'));
+
+        self::assertNull($storage->get(ObjectType::Post, $postId, self::PRICE));
+        self::assertFalse($storage->has(ObjectType::Post, $postId, self::PRICE));
+        self::assertSame([], $storage->getAll(ObjectType::Post, $postId, 'tmswp_raw_rows'));
+        self::assertSame([], $storage->getMultiple(ObjectType::Post, $postId, [self::PRICE, 'tmswp_raw_rows']));
+    }
+
+    /** MetaBag::all() の single=false のキーの値は、get() と同じ全行の list になる(行が無ければ null)。 */
+    public function testMetaBagAllReturnsAllRowsOfSingleFalseKeys(): void
+    {
+        $postClass = self::fixtureClass(self::THEME_NAMESPACE . '\\Post\\MetaPost', PostType::class);
+        $bag = $postClass::meta(self::createPost('tmswp_meta_post'));
+
+        self::assertNull($bag->all()[self::CODES]);
+
+        self::assertTrue($bag->set(self::CODES, ['alpha', 'beta', 'gamma']));
+
+        self::assertSame(['alpha', 'beta', 'gamma'], $bag->get(self::CODES));
+        self::assertSame($bag->get(self::CODES), $bag->all()[self::CODES]);
     }
 
     public function testMetaBagReadsDefaultsAndWritesThroughWpMetaStorage(): void
@@ -328,6 +626,8 @@ final class MetaIntegrationTest extends IntegrationTestCase
         self::assertTrue($storage->set(ObjectType::Post, $postId, 'tmswp_empty', ''));
         self::assertTrue($storage->has(ObjectType::Post, $postId, 'tmswp_false'));
         self::assertTrue($storage->has(ObjectType::Post, $postId, 'tmswp_empty'));
+        // WordPress のメタは false を空文字で保存する(WP 固有の保存の形。抽象の契約テストでは強制しない)
+        self::assertSame('', $storage->get(ObjectType::Post, $postId, 'tmswp_false'));
         self::assertSame('', $storage->get(ObjectType::Post, $postId, 'tmswp_empty'));
         self::assertTrue($storage->delete(ObjectType::Post, $postId, 'tmswp_empty'));
         self::assertFalse($storage->delete(ObjectType::Post, $postId, 'tmswp_empty'));
@@ -372,6 +672,7 @@ final class MetaIntegrationTest extends IntegrationTestCase
     public function testObjectTypeRejectsInvalidIdsAndMismatchedObjects(): void
     {
         $this->assertInvalidMetaObject(static fn(): int => ObjectType::Post->resolveId(0));
+        $this->assertInvalidMetaObject(static fn(): int => ObjectType::User->resolveId(-1));
         $this->assertInvalidMetaObject(static fn(): int => ObjectType::Post->resolveId(new WP_Post((object) ['ID' => 0])));
         $this->assertInvalidMetaObject(static fn(): int => ObjectType::Term->resolveId(new WP_Post((object) ['ID' => 1])));
     }
@@ -442,5 +743,13 @@ final class MetaIntegrationTest extends IntegrationTestCase
         }
 
         self::fail('InvalidArgumentException が送出されませんでした');
+    }
+}
+
+final class MetaStringable implements Stringable
+{
+    public function __toString(): string
+    {
+        return 'stringable';
     }
 }

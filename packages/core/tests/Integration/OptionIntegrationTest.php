@@ -8,6 +8,7 @@ use ArrayObject;
 use BackedEnum;
 use ReflectionMethod;
 use stdClass;
+use Stringable;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\RuntimeException;
 use TMSWP\Core\Kernel\Kernel;
@@ -41,6 +42,22 @@ final class OptionIntegrationTest extends IntegrationTestCase
         $this->assertRejectedValue(static fn(): bool => $repository->set('maintenance', null), "option 'maintenance' cannot be set to null; use delete() to remove it");
         self::assertTrue($repository->has('maintenance'));
         self::assertFalse($repository->bool('maintenance'));
+    }
+
+    /**
+     * String のスキーマは Stringable のオブジェクトを受け付けない。オプションは object をシリアライズして保存できるが、
+     * メタ(WpMetaStorage)は保存できないため、型の検査で揃えて拒否する。
+     */
+    public function testStringSchemaRejectsStringableObjects(): void
+    {
+        $repository = self::siteOptionRepository();
+
+        $this->assertRejectedValue(
+            static fn(): bool => $repository->set('contact_email', new OptionStringable()),
+            "option 'contact_email' expects string, got " . OptionStringable::class,
+        );
+        self::assertFalse($repository->has('contact_email'));
+        self::assertFalse(get_option(self::PREFIX . 'contact_email'));
     }
 
     public function testWpOptionStorageKeepsStoredFalseAndEmptyValuesAndRejectsNull(): void
@@ -300,5 +317,13 @@ final class OptionIntegrationTest extends IntegrationTestCase
         }
 
         self::fail("保存できない値が拒否されませんでした: {$message}");
+    }
+}
+
+final class OptionStringable implements Stringable
+{
+    public function __toString(): string
+    {
+        return 'stringable';
     }
 }

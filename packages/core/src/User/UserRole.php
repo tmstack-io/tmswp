@@ -10,6 +10,7 @@ use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Meta\MetaBag;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
+use TMSWP\Core\Meta\WpMetaStorage;
 use WP_Error;
 use WP_Role;
 use WP_User;
@@ -156,7 +157,16 @@ abstract class UserRole
     }
 
     /**
-     * ユーザーを作る。user_login・user_pass・role は引数とこのクラスのロールにし、ID は無視する。
+     * ユーザーを作る。user_login・user_pass・role は引数とこのクラスのロールにし、ID は無視する。値は元の(slash して
+     * いない)値を渡す。
+     *
+     * wp_insert_user() は $userdata を slash 済み($_POST と同じ形)として受け取り、文字列を wp_unslash() して保存する
+     * (users テーブルの列と、first_name 等・meta_input・連絡先を保存する add_user_meta()・update_user_meta())。
+     * 元の値を保存するため、文字列をすべて slash して渡す。meta_input はキーも add_user_meta() が unslash するため、
+     * WpMetaStorage::slashMetaInput() でキーと値を slash する(null と object を含む値は InvalidArgumentException)。
+     * user_pass は unslash せずにそのままハッシュされる。ログインの画面の wp_signon() は slash 済みの $_POST['pwd'] で
+     * 照合するため、slash したパスワードをハッシュさせる(wp-admin でパスワードを設定したユーザーと同じ形)。
+     * role は set_role() が unslash せずに使うため、slash の後に設定する。
      *
      * $userdata は php-stubs/wordpress-stubs の wp_insert_user() の $userdata(`@phpstan-param`)のうち、配列の形。
      * stubs が要素の型を書いていない array(meta_input)だけは、WordPress が受け付ける要素の型を書く。
@@ -186,14 +196,23 @@ abstract class UserRole
      *   locale?: string,
      *   meta_input?: array<string, mixed>,
      * } $userdata
+     *
+     * @throws InvalidArgumentException meta_input に null、または object を含む値がある場合
+     * @throws EntityPersistenceException wp_insert_user() が WP_Error を返した場合
      */
     final public static function create(string $login, string $password, array $userdata = []): int
     {
         $userdata['user_login'] = $login;
         $userdata['user_pass'] = $password;
-        $userdata['role'] = static::role();
         unset($userdata['ID']);
-        $id = wp_insert_user($userdata);
+        $slashed = wp_slash($userdata);
+
+        if (\array_key_exists('meta_input', $userdata)) {
+            $slashed['meta_input'] = WpMetaStorage::slashMetaInput($userdata['meta_input']);
+        }
+
+        $slashed['role'] = static::role();
+        $id = wp_insert_user($slashed);
 
         if ($id instanceof WP_Error) {
             throw EntityPersistenceException::fromWpError($id);

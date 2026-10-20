@@ -152,6 +152,94 @@ PHP);
         self::assertSame("{$namespace}\\Option\\SiteOption", $result->components[0]->class);
     }
 
+    /** @return iterable<string, array{string, string, string}> */
+    public static function misplacedOptionSchemas(): iterable
+    {
+        $header = <<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+namespace {namespace}\Option;
+
+use TMSWP\Core\Attribute\AsOptionGroup;
+use TMSWP\Core\Attribute\OptionSchema;
+use TMSWP\Core\Meta\MetaValueType;
+use TMSWP\Core\Option\OptionAccess;
+
+PHP;
+
+        yield 'クラス自身' => [
+            $header . <<<'PHP'
+#[OptionSchema(type: MetaValueType::String)]
+final class Misplaced
+{
+}
+PHP,
+            '#[OptionSchema] is only allowed on enum cases: {class}',
+            'Misplaced',
+        ];
+        yield 'グループの enum のケースでない定数' => [
+            $header . <<<'PHP'
+#[AsOptionGroup(prefix: 'example_')]
+enum Misplaced: string
+{
+    use OptionAccess;
+
+    #[OptionSchema(type: MetaValueType::String)]
+    public const LEGACY = 'legacy';
+
+    #[OptionSchema(type: MetaValueType::String)]
+    case ContactEmail = 'contact_email';
+}
+PHP,
+            '#[OptionSchema] is only allowed on enum cases: {class}::LEGACY',
+            'Misplaced',
+        ];
+        yield 'クラスの定数' => [
+            $header . <<<'PHP'
+final class Misplaced
+{
+    #[OptionSchema(type: MetaValueType::String)]
+    public const CONTACT_EMAIL = 'contact_email';
+}
+PHP,
+            '#[OptionSchema] is only allowed on enum cases: {class}::CONTACT_EMAIL',
+            'Misplaced',
+        ];
+        yield '#[AsOptionGroup] の無い enum のケース' => [
+            $header . <<<'PHP'
+enum Misplaced: string
+{
+    use OptionAccess;
+
+    #[OptionSchema(type: MetaValueType::String)]
+    case ContactEmail = 'contact_email';
+}
+PHP,
+            '#[OptionSchema] requires #[AsOptionGroup] on the enum: {class}::ContactEmail',
+            'Misplaced',
+        ];
+    }
+
+    /**
+     * #[OptionSchema] を、#[AsOptionGroup] を付けた enum のケース以外(クラス自身、enum のケースでない定数、
+     * #[AsOptionGroup] の無い enum のケース)に付けると、黙って無視せずに探索失敗にする。
+     */
+    #[DataProvider('misplacedOptionSchemas')]
+    public function testItRejectsOptionSchemaOutsideOptionGroupCases(string $source, string $message, string $shortName): void
+    {
+        $namespace = $this->runtimeNamespace();
+        $appDir = $this->createTempDirectory('misplaced-option-schema-app');
+        $class = "{$namespace}\\Option\\{$shortName}";
+        $this->writePhpFile($appDir, "Option/{$shortName}.php", str_replace('{namespace}', $namespace, $source));
+        $this->registerAppAutoloader($namespace, $appDir);
+
+        $exception = $this->scanFailure($namespace, $appDir);
+
+        self::assertStringStartsWith(str_replace('{class}', $class, $message) . '; file: ', $exception->getMessage());
+    }
+
     public function testItRejectsMethodHooksWithoutAsHook(): void
     {
         $namespace = $this->runtimeNamespace();

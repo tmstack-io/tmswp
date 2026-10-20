@@ -165,37 +165,49 @@ abstract class Taxonomy
             return [];
         }
 
-        $parents = $includeSelf ? [$resolved] : [];
+        $parents = [];
         $current = $resolved;
 
-        for ($depth = 0; $depth < self::MAX_PARENT_DEPTH; ++$depth) {
-            if ((int) $current->parent <= 0) {
-                return array_reverse($parents);
-            }
-
+        while ((int) $current->parent > 0) {
             $parent = static::get((int) $current->parent);
 
             if (!$parent instanceof WP_Term) {
-                return array_reverse($parents);
+                break;
+            }
+
+            // 上限ちょうどの数の祖先は正常に返し、その先にさらに親があるときだけ超過にする
+            if (\count($parents) === self::MAX_PARENT_DEPTH) {
+                return self::parentDepthExceeded($resolved->term_id);
             }
 
             $parents[] = $parent;
             $current = $parent;
         }
 
-        return self::parentDepthExceeded($resolved->term_id);
+        $ancestors = array_reverse($parents);
+
+        return $includeSelf ? [...$ancestors, $resolved] : $ancestors;
     }
 
     /**
-     * タームを作る。
+     * タームを作る。名前と値は元の(slash していない)値を渡す。
      *
      * $args は php-stubs/wordpress-stubs の wp_insert_term() の $args(`@phpstan-param`)と同じ配列の形。
      *
+     * wp_insert_term() は名前と description を slash 済み($_POST と同じ形)として受け取り、wp_unslash() して保存する。
+     * 元の値を保存するため、この2つを slash して渡す。slug・alias_of は unslash されずにそのまま使われるため、slash しない。
+     *
      * @param array{alias_of?: string, description?: string, parent?: int, slug?: string} $args
+     *
+     * @throws EntityPersistenceException wp_insert_term() が WP_Error を返した場合
      */
     final public static function create(string $name, array $args = []): int
     {
-        $result = wp_insert_term($name, static::slug(), $args);
+        if (\array_key_exists('description', $args)) {
+            $args['description'] = wp_slash($args['description']);
+        }
+
+        $result = wp_insert_term(wp_slash($name), static::slug(), $args);
 
         if ($result instanceof WP_Error) {
             throw EntityPersistenceException::fromWpError($result);

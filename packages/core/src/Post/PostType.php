@@ -13,6 +13,7 @@ use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Meta\MetaBag;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
+use TMSWP\Core\Meta\WpMetaStorage;
 use WP_Error;
 use WP_Post;
 use WP_Post_Type;
@@ -22,6 +23,36 @@ abstract class PostType
 {
     /** parents() がたどる親の数の上限。超えたら post_parent の循環等のデータの不整合として扱う */
     private const int MAX_PARENT_DEPTH = 100;
+
+    /**
+     * create() が slash して wp_insert_post() に渡すキー。WP 7.0 の wp_insert_post() が wp_unslash() してから保存する
+     * 文字列の値だけを並べる。投稿の列は $data = wp_unslash($data) で、tags_input・tax_input のターム名は term_exists()・
+     * wp_insert_term() で unslash される(wp-includes/post.php・taxonomy.php)。meta_input は別に
+     * WpMetaStorage::slashMetaInput() でキーと値を slash する。
+     *
+     * 含めないキー: page_template は unslash されずに、テーマのテンプレートの配列のキーとしてそのまま検証される
+     * (slash すると引用符を含む正当なテンプレートが Invalid page template になる)。post_type はこのクラスのスラッグを
+     * そのまま渡す。ID・post_author・post_parent・menu_order・import_id・post_category は整数で、slash の対象外。
+     */
+    private const array SLASHED_KEYS = [
+        'post_date' => true,
+        'post_date_gmt' => true,
+        'post_content' => true,
+        'post_content_filtered' => true,
+        'post_title' => true,
+        'post_excerpt' => true,
+        'post_status' => true,
+        'comment_status' => true,
+        'ping_status' => true,
+        'post_password' => true,
+        'post_name' => true,
+        'to_ping' => true,
+        'pinged' => true,
+        'post_mime_type' => true,
+        'guid' => true,
+        'tags_input' => true,
+        'tax_input' => true,
+    ];
 
     /** @var array<class-string<self>, PostTypeDefinition> */
     private static array $definitions = [];
@@ -251,29 +282,37 @@ abstract class PostType
             return [];
         }
 
-        $parents = $includeSelf ? [$resolved] : [];
+        $parents = [];
         $current = $resolved;
 
-        for ($depth = 0; $depth < self::MAX_PARENT_DEPTH; ++$depth) {
-            if ((int) $current->post_parent <= 0) {
-                return array_reverse($parents);
-            }
-
+        while ((int) $current->post_parent > 0) {
             $parent = static::get((int) $current->post_parent);
 
             if (!$parent instanceof WP_Post) {
-                return array_reverse($parents);
+                break;
+            }
+
+            // 上限ちょうどの数の祖先は正常に返し、その先にさらに親があるときだけ超過にする
+            if (\count($parents) === self::MAX_PARENT_DEPTH) {
+                return self::parentDepthExceeded($resolved->ID);
             }
 
             $parents[] = $parent;
             $current = $parent;
         }
 
-        return self::parentDepthExceeded($resolved->ID);
+        $ancestors = array_reverse($parents);
+
+        return $includeSelf ? [...$ancestors, $resolved] : $ancestors;
     }
 
     /**
-     * 投稿を作る。post_type はこのクラスのスラッグにし、ID は無視する。
+     * 投稿を作る。post_type はこのクラスのスラッグにし、ID は無視する。値は元の(slash していない)値を渡す。
+     *
+     * wp_insert_post() は $postarr を slash 済み($_POST と同じ形)として受け取り、多くの値を wp_unslash() して保存する。
+     * 元の値を保存するため、unslash されるキー(SLASHED_KEYS)の値だけを slash して渡す。meta_input はキーも
+     * update_post_meta() が unslash するため、WpMetaStorage::slashMetaInput() でキーと値を slash する(null と object を
+     * 含む値は InvalidArgumentException)。page_template は unslash されずに検証されるため、元の値のまま渡す。
      *
      * $postarr は php-stubs/wordpress-stubs の wp_insert_post() の $postarr(`@phpstan-param`)と同じ配列の形。
      * stubs が要素の型を書いていない array(tags_input・tax_input・meta_input)だけは、WordPress が受け付ける要素の型を書く。
@@ -306,13 +345,21 @@ abstract class PostType
      *   meta_input?: array<string, mixed>,
      *   page_template?: string,
      * } $postarr
+     *
+     * @throws InvalidArgumentException meta_input に null、または object を含む値がある場合
+     * @throws EntityPersistenceException wp_insert_post() が WP_Error を返した場合
      */
     final public static function create(array $postarr): int
     {
         $postarr['post_type'] = static::slug();
         unset($postarr['ID']);
+        $slashed = array_replace($postarr, wp_slash(array_intersect_key($postarr, self::SLASHED_KEYS)));
 
-        $id = wp_insert_post($postarr, true);
+        if (\array_key_exists('meta_input', $postarr)) {
+            $slashed['meta_input'] = WpMetaStorage::slashMetaInput($postarr['meta_input']);
+        }
+
+        $id = wp_insert_post($slashed, true);
 
         if ($id instanceof WP_Error) {
             throw EntityPersistenceException::fromWpError($id);

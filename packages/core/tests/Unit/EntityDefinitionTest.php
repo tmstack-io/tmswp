@@ -4,8 +4,14 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Unit;
 
+use Closure;
 use PHPUnit\Framework\Attributes\DataProvider;
+use ReflectionClass;
+use ReflectionMethod;
+use ReflectionNamedType;
+use ReflectionUnionType;
 use TMSWP\Core\Exception\EntityDefinitionException;
+use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
@@ -16,6 +22,27 @@ use TMSWP\Core\User\UserRoleDefinition;
 
 final class EntityDefinitionTest extends UnitTestCase
 {
+    /**
+     * label()・hasArchive() だけの定義の toArgs() は、FW の既定の public=true、生成した英語の labels、has_archive=true を含み、
+     * 呼ばなかったセッターのキーを含まない。
+     */
+    public function testToArgsContainsOnlyTheDefaultAndTheSpecifiedArgs(): void
+    {
+        $args = PostTypeDefinition::create('product')->label('Product', 'Products')->hasArchive()->toArgs(LabelLanguage::En);
+
+        self::assertSame(['public', 'has_archive', 'labels', 'label'], array_keys($args));
+        self::assertArrayHasKey('public', $args);
+        self::assertArrayHasKey('has_archive', $args);
+        self::assertArrayHasKey('label', $args);
+        self::assertTrue($args['public']);
+        self::assertTrue($args['has_archive']);
+        self::assertSame('Products', $args['label']);
+        self::assertArrayHasKey('labels', $args);
+        self::assertSame('Products', $args['labels']['name']);
+        self::assertSame('Product', $args['labels']['singular_name']);
+        self::assertSame('Add Product', $args['labels']['add_new_item']);
+    }
+
     public function testPostTypeDefinitionBuildsArgsWithGeneratedLabels(): void
     {
         $args = PostTypeDefinition::create('product')
@@ -47,11 +74,13 @@ final class EntityDefinitionTest extends UnitTestCase
         self::assertSame(['product_category'], $args['taxonomies']);
     }
 
+    /** labelLanguage(LabelLanguage::Ja) で日本語の labels になり、labels() はキー単位で上書きする。 */
     public function testPostTypeDefinitionCanGenerateJapaneseLabelsWhenExplicit(): void
     {
         $args = PostTypeDefinition::create('case')
             ->label('事例')
             ->labelLanguage(LabelLanguage::Ja)
+            ->labels(['menu_name' => '導入事例'])
             ->toArgs(LabelLanguage::En);
 
         self::assertArrayHasKey('labels', $args);
@@ -62,6 +91,29 @@ final class EntityDefinitionTest extends UnitTestCase
         self::assertSame('事例', $labels['singular_name']);
         self::assertSame('新規事例を追加', $labels['add_new_item']);
         self::assertSame('事例が見つかりませんでした', $labels['not_found']);
+        self::assertSame('導入事例', $labels['menu_name']);
+        // 上書きしないキーは生成した値のまま
+        self::assertSame('事例', $labels['name']);
+    }
+
+    /** label() も labels() の name も無い定義の toArgs() は、EntityDefinitionException を投げる。 */
+    public function testDefinitionWithoutLabelOrLabelsNameIsRejectedAtArgsBuild(): void
+    {
+        $cases = [
+            'post type' => [PostTypeDefinition::create('book'), "post type 'book' requires label() or labels(['name' => ...])"],
+            'post type with labels but without name' => [PostTypeDefinition::create('book')->labels(['menu_name' => 'Books']), "post type 'book' requires label() or labels(['name' => ...])"],
+            'taxonomy' => [TaxonomyDefinition::create('genre'), "taxonomy 'genre' requires label() or labels(['name' => ...])"],
+            'taxonomy with labels but without name' => [TaxonomyDefinition::create('genre')->labels(['menu_name' => 'Genres']), "taxonomy 'genre' requires label() or labels(['name' => ...])"],
+        ];
+
+        foreach ($cases as $name => [$definition, $message]) {
+            try {
+                $definition->toArgs(LabelLanguage::Ja);
+                self::fail("EntityDefinitionException was not thrown for {$name}");
+            } catch (EntityDefinitionException $exception) {
+                self::assertSame($message, $exception->getMessage(), $name);
+            }
+        }
     }
 
     public function testEnglishPostTypeLabelWithoutPluralIsRejectedAtArgsBuild(): void
@@ -210,26 +262,93 @@ final class EntityDefinitionTest extends UnitTestCase
         self::assertFalse($taxonomy['meta_box_cb']);
     }
 
-    public function testBuiltinPostTypeRejectsArgs(): void
+    /** @return iterable<string, array{Closure(): mixed, string}> */
+    public static function invalidSlugs(): iterable
     {
-        $this->expectException(EntityDefinitionException::class);
-        $this->expectExceptionMessage("PostTypeDefinition::args() is not allowed for builtin post type 'page'");
-
-        PostTypeDefinition::builtin('page')->args(['public' => true]);
+        yield 'post type not matching the pattern' => [static fn(): mixed => PostTypeDefinition::create('Invalid Slug!'), 'invalid post type slug: Invalid Slug!'];
+        yield 'post type over 20 characters' => [static fn(): mixed => PostTypeDefinition::create(str_repeat('a', 21)), 'post type slug must be 20 characters or fewer: ' . str_repeat('a', 21)];
+        yield 'builtin post type not matching the pattern' => [static fn(): mixed => PostTypeDefinition::builtin('Page'), 'invalid post type slug: Page'];
+        yield 'taxonomy not matching the pattern' => [static fn(): mixed => TaxonomyDefinition::create('Invalid Slug!'), 'invalid taxonomy slug: Invalid Slug!'];
+        yield 'taxonomy over 32 characters' => [static fn(): mixed => TaxonomyDefinition::create(str_repeat('a', 33)), 'taxonomy slug must be 32 characters or fewer: ' . str_repeat('a', 33)];
+        yield 'user role not matching the pattern' => [static fn(): mixed => UserRoleDefinition::create('Invalid Role!'), 'invalid user role: Invalid Role!'];
     }
 
-    public function testDefinitionRejectsInvalidSlugAndBuiltinSetterMisuse(): void
+    /**
+     * スラッグの形式の違反(英小文字・数字・_・- 以外)と、WordPress の上限(投稿タイプ20文字・タクソノミー32文字)を超える
+     * スラッグは EntityDefinitionException になる。
+     *
+     * @param Closure(): mixed $create
+     */
+    #[DataProvider('invalidSlugs')]
+    public function testInvalidSlugIsRejected(Closure $create, string $message): void
     {
         $this->expectException(EntityDefinitionException::class);
+        $this->expectExceptionMessage($message);
 
-        PostTypeDefinition::create('Invalid Slug!');
+        $create();
     }
 
-    public function testBuiltinPostTypeRejectsUnsupportedSetter(): void
+    /** 上限ちょうどの長さのスラッグは受け付け、builtin() には長さの上限を適用しない。 */
+    public function testSlugsUpToTheLimitAreAccepted(): void
     {
-        $this->expectException(EntityDefinitionException::class);
+        self::assertSame(str_repeat('a', 20), PostTypeDefinition::create(str_repeat('a', 20))->slug());
+        self::assertSame(str_repeat('a', 32), TaxonomyDefinition::create(str_repeat('a', 32))->slug());
+        self::assertSame(str_repeat('a', 21), PostTypeDefinition::builtin(str_repeat('a', 21))->slug());
+        self::assertSame(str_repeat('a', 33), TaxonomyDefinition::builtin(str_repeat('a', 33))->slug());
+    }
 
-        PostTypeDefinition::builtin('page')->label('固定ページ');
+    /** @return iterable<string, array{Closure(): (PostTypeDefinition|TaxonomyDefinition|UserRoleDefinition), string, list<string>}> */
+    public static function builtinDefinitions(): iterable
+    {
+        yield 'post type' => [static fn(): PostTypeDefinition => PostTypeDefinition::builtin('page'), "is not allowed for builtin post type 'page'", ['supports', 'blockEditor']];
+        yield 'taxonomy' => [static fn(): TaxonomyDefinition => TaxonomyDefinition::builtin('category'), "is not allowed for builtin taxonomy 'category'", ['objectType']];
+        yield 'user role' => [static fn(): UserRoleDefinition => UserRoleDefinition::builtin('editor'), "is not allowed for builtin role 'editor'", ['capabilities']];
+    }
+
+    /**
+     * builtin() の定義は、許可されたセッター(投稿タイプは supports()・blockEditor()、タクソノミーは objectType()、ロールは
+     * capabilities())以外のセッターを呼んだ時点で EntityDefinitionException を投げる。セッターは定義クラスの公開メソッドの
+     * うち自身を返すものをすべて対象にする(セッターを足したときも検査から漏れない)。
+     *
+     * @param Closure(): (PostTypeDefinition|TaxonomyDefinition|UserRoleDefinition) $builtin
+     * @param list<string> $allowed
+     */
+    #[DataProvider('builtinDefinitions')]
+    public function testBuiltinDefinitionRejectsEverySetterExceptTheAllowedOnes(Closure $builtin, string $message, array $allowed): void
+    {
+        $class = new ReflectionClass($builtin());
+        $setters = [];
+
+        foreach ($class->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            $returnType = $method->getReturnType();
+
+            // 戻り値の型 self の名前は、PHP の版により self か解決したクラス名になる
+            if (!$method->isStatic() && $returnType instanceof ReflectionNamedType && \in_array($returnType->getName(), ['self', $class->getName()], true)) {
+                $setters[] = $method;
+            }
+        }
+
+        $names = array_map(static fn(ReflectionMethod $method): string => $method->getName(), $setters);
+        // 許可されたセッターがすべてあり、それ以外のセッターもある(空の検査にしない)
+        self::assertSame([], array_values(array_diff($allowed, $names)));
+        self::assertNotSame([], array_values(array_diff($names, $allowed)));
+
+        foreach ($setters as $method) {
+            $definition = $builtin();
+            $arguments = self::sampleArguments($method);
+
+            if (\in_array($method->getName(), $allowed, true)) {
+                self::assertSame($definition, $method->invokeArgs($definition, $arguments), $method->getName());
+                continue;
+            }
+
+            try {
+                $method->invokeArgs($definition, $arguments);
+                self::fail("EntityDefinitionException was not thrown for {$method->getName()}()");
+            } catch (EntityDefinitionException $exception) {
+                self::assertSame("{$class->getShortName()}::{$method->getName()}() {$message}", $exception->getMessage());
+            }
+        }
     }
 
     public function testTaxonomyDefinitionResolvesPostTypeClassReferences(): void
@@ -245,6 +364,19 @@ final class EntityDefinitionTest extends UnitTestCase
         self::assertSame(['product'], TaxonomyDefinition::create('product_category')->objectType(DefinitionPostType::class, DefinitionPostType::class)->resolvedObjectTypes());
     }
 
+    /** objectType() に PostType 以外のクラス(Taxonomy のサブクラス等)の FQCN を渡すと、解決の時点で EntityDefinitionException になる。 */
+    public function testObjectTypeRejectsClassesOtherThanPostTypes(): void
+    {
+        foreach ([DefinitionTaxonomy::class, Kernel::class] as $class) {
+            try {
+                TaxonomyDefinition::create('product_category')->objectType($class)->resolvedObjectTypes();
+                self::fail("EntityDefinitionException was not thrown for {$class}");
+            } catch (EntityDefinitionException $exception) {
+                self::assertSame("class '{$class}' must extend " . PostType::class, $exception->getMessage());
+            }
+        }
+    }
+
     public function testUserRoleDefinitionDeduplicatesCapabilities(): void
     {
         $definition = UserRoleDefinition::create('member')
@@ -254,6 +386,36 @@ final class EntityDefinitionTest extends UnitTestCase
         self::assertSame('member', $definition->role());
         self::assertSame('会員', $definition->roleLabel());
         self::assertSame(['read', 'upload_files'], $definition->capabilityList());
+    }
+
+    /**
+     * セッターの必須の引数に、その型の見本の値を渡す配列を返す(builtin の検査は値を使う前に例外にする)。
+     *
+     * @return list<mixed>
+     */
+    private static function sampleArguments(ReflectionMethod $method): array
+    {
+        $arguments = [];
+
+        foreach ($method->getParameters() as $parameter) {
+            if ($parameter->isOptional()) {
+                break;
+            }
+
+            $type = $parameter->getType();
+            $named = $type instanceof ReflectionUnionType ? $type->getTypes()[0] : $type;
+            self::assertInstanceOf(ReflectionNamedType::class, $named);
+            $arguments[] = match ($named->getName()) {
+                'string' => 'sample',
+                'int' => 1,
+                'bool' => true,
+                'array' => [],
+                LabelLanguage::class => LabelLanguage::Ja,
+                default => self::fail("no sample value for {$named->getName()} of {$method->getName()}()"),
+            };
+        }
+
+        return $arguments;
     }
 }
 

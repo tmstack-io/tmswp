@@ -12,6 +12,7 @@
 |---|---|
 | カスタム投稿タイプを追加する | `vendor/tmswp/core/rules/post-type.md` |
 | カスタムタクソノミーを追加する | `vendor/tmswp/core/rules/taxonomy.md` |
+| ユーザーロールを追加する | `vendor/tmswp/core/rules/user-role.md` |
 | 投稿/ターム/ユーザーにカスタムフィールドを持たせる | `vendor/tmswp/core/rules/meta.md` |
 | ACFでフィールドを管理する | `vendor/tmswp/core/rules/acf.md` |
 | フォームを実装する | `vendor/tmswp/core/rules/form.md` |

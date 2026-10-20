@@ -21,6 +21,9 @@ final class MetaPost extends PostType
     #[MetaSchema(type: MetaValueType::String, single: false, showInRest: true)]
     public const META_CODES = 'tmswp_codes';
 
+    #[MetaSchema(type: MetaValueType::Boolean, default: true)]
+    public const META_FEATURED = 'tmswp_featured';
+
     public static function sanitizePrice(mixed $value): int
     {
         return (int) $value;

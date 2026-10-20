@@ -34,6 +34,7 @@ use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Model\Model;
 use TMSWP\Core\Option\OptionRepositoryFactory;
 use TMSWP\Core\Post\PostType;
+use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
 use TMSWP\Core\Tests\Support\RecordingExtension;
 use TMSWP\Core\Tests\Support\RecordingInitializer;
@@ -45,13 +46,11 @@ use WP_Rewrite;
 
 final class KernelBootIntegrationTest extends IntegrationTestCase
 {
+    use BootsKernelBeforeInit;
     use UsesTempDirectories;
 
     /** fixture のテーマの Contact(#[AsModel])のテーブル。テーマの有効化で Migrator が作る */
     private const FIXTURE_CONTACTS_TABLE = 'tmswp_fixture_contacts';
-
-    /** @var list<Closure(string): void> */
-    private array $autoloaders = [];
 
     /** productionThemeConfig()・productionPluginConfig() の Kernel のログを記録するロガー */
     private RecordingLogger $logger;
@@ -64,9 +63,7 @@ final class KernelBootIntegrationTest extends IntegrationTestCase
 
     public function tear_down(): void
     {
-        foreach ($this->autoloaders as $autoloader) {
-            spl_autoload_unregister($autoloader);
-        }
+        $this->unregisterAppAutoloaders();
 
         // パーマリンクの設定は $wp_rewrite に残り、テストライブラリは戻さないため、変えたテストの後で既定(空)に戻す
         if (self::rewrite()->permalink_structure !== '') {
@@ -361,11 +358,8 @@ PHP);
             ));
             self::assertSame([9, 10, 11, 20], array_column($initCallbacks, 'priority'));
 
-            // 空振りしていないことの確認: 予約されたコールバックを WordPress の init と同じ順に実行すると登録される
-            foreach ($initCallbacks as $callback) {
-                self::assertIsCallable($callback['function']);
-                \call_user_func($callback['function']);
-            }
+            // 空振りしていないことの確認: 予約されたコールバックで init を発火すると登録される
+            self::fireInit($initCallbacks);
 
             self::assertTrue(post_type_exists($postType));
             self::assertContains($postType, get_taxonomy($taxonomy)->object_type ?? []);
@@ -424,7 +418,7 @@ PHP);
         }, 10, 2);
 
         try {
-            $initCallbacks = $this->bootBeforeAfterSetupTheme($config);
+            $initCallbacks = $this->bootBeforeInit($config);
             $postClass = self::fixtureClass($namespace . '\\Post\\NotePost', PostType::class);
 
             // init の前: 宣言の既定値を読め、書き込める。WordPress にはまだ登録していない
@@ -432,7 +426,7 @@ PHP);
             self::assertTrue($postClass::meta($postId)->set('tmswp_note', 'written before init'));
             self::assertArrayNotHasKey('tmswp_note', get_registered_meta_keys('post', $postType));
 
-            self::runCallbacks($initCallbacks);
+            self::fireInit($initCallbacks);
 
             // app の init のアクションは投稿タイプの登録より先に動き、そこでも meta() が使える
             self::assertSame([['written before init', false]], $reads);
@@ -492,7 +486,7 @@ PHP);
         $postId = self::createPost($postType);
 
         try {
-            $initCallbacks = $this->bootBeforeAfterSetupTheme($config);
+            $initCallbacks = $this->bootBeforeInit($config);
             $postClass = self::fixtureClass($namespace . '\\Post\\TrimmedPost', PostType::class);
 
             try {
@@ -506,7 +500,7 @@ PHP);
             self::assertSame('', get_post_meta($postId, 'tmswp_trimmed', true));
             self::assertTrue($postClass::meta($postId)->set('tmswp_plain', '  plain  '));
 
-            self::runCallbacks($initCallbacks);
+            self::fireInit($initCallbacks);
 
             self::assertTrue($postClass::meta($postId)->set('tmswp_trimmed', '  after  '));
             self::assertSame('after', get_post_meta($postId, 'tmswp_trimmed', true));
@@ -590,7 +584,7 @@ PHP);
         $postId = self::createPost($storedType);
 
         try {
-            $initCallbacks = $this->bootBeforeAfterSetupTheme($config);
+            $initCallbacks = $this->bootBeforeInit($config);
             $storedClass = self::fixtureClass($namespace . '\\Post\\StoredNotePost', PostType::class);
 
             // 差し替え先にだけ保存され、WP のメタには書かれない
@@ -598,7 +592,7 @@ PHP);
             self::assertSame('kept', (new $storage())->get(ObjectType::Post, $postId, 'tmswp_stored_note'));
             self::assertFalse((new WpMetaStorage())->has(ObjectType::Post, $postId, 'tmswp_stored_note'));
 
-            self::runCallbacks($initCallbacks);
+            self::fireInit($initCallbacks);
 
             $revised = get_registered_meta_keys('post', $revisedType);
             self::assertArrayHasKey('tmswp_revised_note', $revised);
@@ -669,7 +663,7 @@ PHP);
         });
 
         try {
-            self::runCallbacks($this->bootBeforeAfterSetupTheme($config));
+            self::fireInit($this->bootBeforeInit($config));
 
             self::assertSame([null], $roleAtPostTypeRegistration);
             self::assertNotNull(get_role($role));
@@ -694,14 +688,14 @@ PHP);
             new DiscoveredComponent($namespace . '\\Post\\NotePost', AsPostType::class, []),
         ], []));
 
-        $initCallbacks = $this->bootBeforeAfterSetupTheme($config);
+        $initCallbacks = $this->bootBeforeInit($config);
         $postClass = self::fixtureClass($namespace . '\\Post\\NotePost', PostType::class);
         $registry = Kernel::get($namespace)->container()->get(MetaSchemaRegistry::class);
 
         self::assertTrue($registry->schemasFor($postClass)->has('tmswp_note'));
 
         try {
-            self::runCallbacks($initCallbacks);
+            self::fireInit($initCallbacks);
             self::fail('EntityDefinitionException was not thrown');
         } catch (EntityDefinitionException $exception) {
             self::assertSame("builtin post type does not exist: {$missing}", $exception->getMessage());
@@ -726,25 +720,20 @@ PHP);
             new DiscoveredComponent($namespace . '\\Post\\NotePost', AsPostType::class, []),
         ], []));
 
-        $initCallbacks = $this->bootBeforeAfterSetupTheme($config);
+        $initCallbacks = $this->bootBeforeInit($config);
         $registry = Kernel::get($namespace)->container()->get(MetaSchemaRegistry::class);
         // acf-bridge の AcfBridge::registerManagedKeys()(init 6)の代わり
         $mark = ['hook' => 'init', 'priority' => 6, 'function' => static fn() => $registry->markExternallyManaged(ObjectType::Post, $postType, 'tmswp_note'), 'acceptedArgs' => 0];
-        $ran = [];
 
         try {
-            foreach ([$mark, ...$initCallbacks] as $callback) {
-                $ran[] = $callback['priority'];
-                self::assertIsCallable($callback['function']);
-                \call_user_func($callback['function']);
-            }
-
+            self::fireInit([$mark, ...$initCallbacks]);
             self::fail('DuplicateMetaKeyException was not thrown');
         } catch (DuplicateMetaKeyException $exception) {
             self::assertStringStartsWith("externally managed meta key 'tmswp_note' for post:{$postType} is already declared by ", $exception->getMessage());
         }
 
-        self::assertSame([6], $ran);
+        // init 6 の例外で init が止まり、投稿タイプの登録(init 10)にも register_post_meta()(init 20)にも進まない
+        self::assertFalse(post_type_exists($postType));
         self::assertArrayNotHasKey('tmswp_note', get_registered_meta_keys('post', $postType));
     }
 
@@ -819,7 +808,7 @@ PHP;
         self::assertFalse(class_exists($class, false));
         $declared = get_declared_classes();
 
-        Kernel::boot($config);
+        $this->bootBeforeInit($config);
 
         $loaded = array_filter(
             array_diff(get_declared_classes(), $declared),
@@ -952,7 +941,7 @@ PHP;
 
         foreach ([$withoutActions, $plugin] as $config) {
             (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
-            Kernel::boot($config);
+            $this->bootBeforeInit($config);
 
             self::assertCount(1, self::actionRouterCallbacks(), $config->appNamespace);
         }
@@ -960,7 +949,7 @@ PHP;
         // 比べ方の確認: actions: true のテーマ形態の Kernel は1本足す
         $withActions = $this->productionThemeConfig('WithActions', actions: true);
         (new DiscoveryFile($withActions))->write(new DiscoveryResult([], []));
-        Kernel::boot($withActions);
+        $this->bootBeforeInit($withActions);
 
         self::assertCount(2, self::actionRouterCallbacks());
     }
@@ -1011,7 +1000,7 @@ PHP;
         $config = $this->productionPluginConfig('MissingDiscoveryFile');
 
         try {
-            Kernel::boot($config);
+            $this->bootBeforeInit($config);
             self::fail('DiscoveryException was not thrown');
         } catch (DiscoveryException $exception) {
             self::assertStringContainsString("discovery file not found: {$config->discoveryFile()}", $exception->getMessage());
@@ -1052,8 +1041,7 @@ PHP);
             new DiscoveredHookMethod($config->appNamespace . '\\Hook\\FileOnlyHook', 'handle', $fileOnlyHook, 15, 0, HookMethodKind::Action),
         ]));
 
-        Kernel::boot($config);
-        $messages = array_column($this->logger->records, 'message');
+        $this->bootBeforeInit($config);
 
         $filters = $GLOBALS['wp_filter'];
         self::assertIsArray($filters);
@@ -1064,10 +1052,8 @@ PHP);
         self::assertFalse(class_exists($config->appNamespace . '\\Hook\\ScannedHook', false));
         self::assertArrayHasKey($config->appNamespace, Kernel::all());
 
-        // init の後に boot するため遅延 boot のログだけが残り、探索の失敗は記録されない
-        foreach ($messages as $message) {
-            self::assertStringNotContainsString('tmswp.discovery', $message);
-        }
+        // 探索結果ファイルを読むだけで走査しないため、探索の失敗を含めて何も記録しない
+        self::assertSame([], $this->logger->records);
     }
 
     public function testThemeAndPluginKernelsEachRegisterTheSameExtensionClass(): void
@@ -1145,7 +1131,7 @@ PHP);
         (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
 
         try {
-            Kernel::boot($config);
+            $this->bootBeforeInit($config);
             self::fail('KernelException was not thrown');
         } catch (KernelException $exception) {
             self::assertStringContainsString('do not match the loaded core ' . Kernel::VERSION . ": v0.1.0 at {$vendor}/composer/../tmswp/core", $exception->getMessage());
@@ -1188,8 +1174,7 @@ PHP);
         ], []));
 
         try {
-            // init の後の boot のため、投稿タイプはキャッチアップでその場で登録される
-            Kernel::boot($config);
+            self::fireInit($this->bootBeforeInit($config));
             $object = get_post_type_object($postType);
 
             self::assertNotNull($object);
@@ -1274,44 +1259,8 @@ PHP);
     }
 
     /**
-     * 登録済みのフックのコールバックを、フック・priority・WordPress の ID で一意なキーにして返す。
-     *
-     * @return array<string, array{hook: string, priority: int, function: mixed, acceptedArgs: int}>
-     */
-    private static function registeredCallbacks(): array
-    {
-        $filters = $GLOBALS['wp_filter'];
-        self::assertIsArray($filters);
-        $callbacks = [];
-
-        foreach ($filters as $hook => $wpHook) {
-            self::assertInstanceOf(WP_Hook::class, $wpHook);
-
-            foreach ($wpHook->callbacks as $priority => $entries) {
-                self::assertIsArray($entries);
-
-                foreach ($entries as $id => $entry) {
-                    // WordPress の ID は _wp_filter_build_unique_id() が作る文字列
-                    self::assertIsString($id);
-                    self::assertIsArray($entry);
-                    $acceptedArgs = $entry['accepted_args'] ?? null;
-                    self::assertIsInt($acceptedArgs);
-                    $callbacks["{$hook}\n{$priority}\n{$id}"] = [
-                        'hook' => (string) $hook,
-                        'priority' => (int) $priority,
-                        'function' => $entry['function'] ?? null,
-                        'acceptedArgs' => $acceptedArgs,
-                    ];
-                }
-            }
-        }
-
-        return $callbacks;
-    }
-
-    /**
-     * CPT を1つ持つ一時ディレクトリのテーマ・プラグインを、本番相当(debug=false)で boot し、投稿タイプ名を返す。
-     * init の後の boot のため、CPT はキャッチアップでその場で登録される。
+     * CPT を1つ持つ一時ディレクトリのテーマ・プラグインを、本番相当(debug=false)で init より前に boot して init を発火し、
+     * 投稿タイプ名を返す。
      */
     private function bootProductionKernelWithPostType(KernelConfig $config): string
     {
@@ -1323,7 +1272,7 @@ PHP);
             new DiscoveredComponent($namespace . '\\Post\\RewritePost', AsPostType::class, []),
         ], []));
 
-        Kernel::boot($config);
+        self::fireInit($this->bootBeforeInit($config));
         self::assertTrue(post_type_exists($postType));
 
         return $postType;
@@ -1364,47 +1313,6 @@ final class NotePost extends PostType
 PHP);
     }
 
-    /**
-     * テーマの functions.php の読み込み時(after_setup_theme の前)の状態で boot し、boot が init に予約したコールバックを、
-     * WordPress の init と同じ順(priority の昇順、同じ priority の中は登録の順)で返す。書き換えた $wp_actions は boot の
-     * 後に戻す。
-     *
-     * @return list<array{hook: string, priority: int, function: mixed, acceptedArgs: int}>
-     */
-    private function bootBeforeAfterSetupTheme(KernelConfig $config): array
-    {
-        $before = self::registeredCallbacks();
-        $actions = $GLOBALS['wp_actions'];
-        self::assertIsArray($actions);
-        $position = array_search('after_setup_theme', array_keys($actions), true);
-        self::assertIsInt($position);
-        $GLOBALS['wp_actions'] = \array_slice($actions, 0, $position, true);
-
-        try {
-            Kernel::boot($config);
-        } finally {
-            $GLOBALS['wp_actions'] = $actions;
-        }
-
-        return array_values(array_filter(
-            array_diff_key(self::registeredCallbacks(), $before),
-            static fn(array $callback): bool => $callback['hook'] === 'init',
-        ));
-    }
-
-    /**
-     * bootBeforeAfterSetupTheme() が返したコールバックを、その順に引数なしで呼ぶ(WordPress の init の代わり)。
-     *
-     * @param list<array{hook: string, priority: int, function: mixed, acceptedArgs: int}> $callbacks
-     */
-    private static function runCallbacks(array $callbacks): void
-    {
-        foreach ($callbacks as $callback) {
-            self::assertIsCallable($callback['function']);
-            \call_user_func($callback['function']);
-        }
-    }
-
     /** アーカイブを持つ投稿タイプのクラス(app/Post/RewritePost.php)を書く。 */
     private function writePostTypeClass(KernelConfig $config, string $postType): void
     {
@@ -1431,18 +1339,6 @@ final class RewritePost extends PostType
     }
 }
 PHP);
-    }
-
-    /** app/ のクラスを、名前空間に対応するパスから読み込む autoload を登録する(tear_down で外す)。 */
-    private function registerAppAutoloader(KernelConfig $config): void
-    {
-        $namespace = $config->appNamespace;
-        $this->autoloaders[] = $autoloader = static function (string $class) use ($namespace, $config): void {
-            if (str_starts_with($class, $namespace . '\\')) {
-                require $config->appDir . '/' . str_replace('\\', '/', substr($class, \strlen($namespace) + 1)) . '.php';
-            }
-        };
-        spl_autoload_register($autoloader);
     }
 
     /**
@@ -1485,18 +1381,5 @@ PHP);
         $logger = $this->logger;
 
         return static fn(): array => ['integration' => new LogChannel($logger)];
-    }
-
-    private function writeFile(string $path, string $contents): void
-    {
-        $dir = \dirname($path);
-
-        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
-            self::fail("ディレクトリを作成できません: {$dir}");
-        }
-
-        if (file_put_contents($path, $contents) === false) {
-            self::fail("ファイルを書き込めません: {$path}");
-        }
     }
 }

@@ -20,10 +20,10 @@ WordPressの3種のエンティティ(投稿タイプ・タクソノミー・ユ
 | `Tax\` | `Taxonomy`(基底), `TaxonomyDefinition`, `TermQuery` |
 | `User\` | `UserRole`(基底), `UserRoleDefinition`, `UserQuery` |
 | `Label\` | `LabelLanguage`(enum), `LabelGenerator` |
-| `Query\` | `PageResult`, `TermField`(enum), `TermOperator`(enum) |
+| `Query\` | `PageResult`, `TermField`(enum), `TermOperator`(enum), `UserSearchColumn`(enum) |
 | `Exception\` | `EntityDefinitionException`, `EntityPersistenceException`, `EntityDataException`, `QueryException` |
 
-`Label\`・`Query\`(`PageResult`・`TermField`・`TermOperator`)・`Thumbnail`・例外4種は本文書が完全定義する(他文書は本文書の定義に従う)。クエリの比較演算子・キャスト型・並び順のenum(`Query\Compare`・`Query\CastType`・`Query\SortOrder`)は06文書が正準定義し、エンティティのクエリ3種もそれを受け取る。
+`Label\`・`Query\`(`PageResult`・`TermField`・`TermOperator`・`UserSearchColumn`)・`Thumbnail`・例外4種は本文書が完全定義する(他文書は本文書の定義に従う)。クエリの比較演算子・キャスト型・並び順のenum(`Query\Compare`・`Query\CastType`・`Query\SortOrder`)は06文書が正準定義し、エンティティのクエリ3種もそれを受け取る。
 
 ## 依存文書
 
@@ -666,14 +666,16 @@ PHPDocの `@return MetaBag<static>` は必須である。`MetaBag` は04文書�
 **`parents()`**:
 
 - `get($post)` → null時 `[]`。
-- `post_parent` を `static::get()` でたどる(タイプ不一致・不存在で打ち切り)。無限ループ防止に深さ上限100を設ける。
+- `post_parent` を `static::get()` でたどる(タイプ不一致・不存在で打ち切り)。無限ループ防止に深さ上限100を設ける。祖先がちょうど100件なら全件を返し、101件目の親があるときだけ超過とする。
 - 深さ100の超過(`post_parent` の循環等)は実行時のデータの不整合であり、実行時のデータ取得の失敗(00-overview §5.6)として扱う。debugでは `EntityDataException` を投げ、本番ではこのクラスのKernel(`Kernel::forClass(static::class)`)のロガーに `error` で記録して空配列を返す(1.7節)。
 - `$includeSelf` がtrueなら自身を末尾に含む。戻り順は **ルート祖先が先頭、直近親(→自身)が末尾**(パンくず用)。
 
 **`create()`**:
 
 - `$postarr['post_type']` を `static::slug()` で強制上書き。`$postarr['ID']` はunset(更新誤用防止)。
-- `wp_insert_post($postarr, true)` が `WP_Error` なら `EntityPersistenceException::fromWpError()`。成功時はint IDを返す。
+- 呼び出し側は元の(slashしていない)値を渡す。`wp_insert_post()` は `$postarr` をslash済み(magic quotesを付けた `$_POST` と同じ形)として受け取り、文字列を `wp_unslash()` して保存する(投稿の列、`meta_input`・`page_template` を保存する `update_post_meta()`、`tags_input`・`tax_input` のターム名を扱う `term_exists()`・`wp_insert_term()`)。元の値を保存するため、unslashされるキー(投稿の列の文字列、`tags_input`・`tax_input`)の値を `wp_slash()` して渡す(04文書 §4.6 のメタと同じ規約)。`page_template` はunslashされずにテーマのテンプレートの配列のキーとしてそのまま検証される(WP 7.0の wp-includes/post.php `wp_insert_post()` の `isset($page_templates[$postarr['page_template']])`)ため、slashしない(slashすると引用符を含む登録済みのテンプレートが `Invalid page template.` になる)。`post_type` はスラッグをそのまま渡す。`meta_input` はキーも `update_post_meta()` が unslash するため、`WpMetaStorage::slashMetaInput()` でキーと値をslashする。値に `null` か object を含むと、WpMetaStorageと同じく `InvalidArgumentException`(04文書 §4.6)。これにより、バックスラッシュ(`C:\temp`)とJSONのエスケープ(ブロックの属性の `\u003c` 等)がそのまま保存される。
+  - 根拠(WP 7.0): `wp_insert_post()` は投稿の列を `$data = wp_unslash($data)` で、`update_metadata()` は `$meta_key`・`$meta_value` を `wp_unslash()` で(wp-includes/post.php・meta.php)、`term_exists()` はターム名を、`wp_insert_term()` は名前と説明を `wp_unslash()` する(wp-includes/taxonomy.php)。
+- `wp_insert_post($slashed, true)` が `WP_Error` なら `EntityPersistenceException::fromWpError()`。成功時はint IDを返す。
 
 **`postTypeObject()`**: `get_post_type_object(static::slug())`(`init` 前はnull)。
 
@@ -758,7 +760,7 @@ final class PostQuery
     /** @var array<string, mixed> withArgs()による生引数(最後にマージ) */
     private array $rawArgs = [];
 
-    /** @var array<string, true> 空のIN指定を受けた条件。1つでもあれば結果は0件と確定する(7.6節) */
+    /** @var array<string, true> 空のIN指定と author(0) を受けた条件。1つでもあれば結果は0件と確定する(7.6節) */
     private array $emptyIn = [];
 
     /** @var list<int>|null idIn()のID(nullはidIn()を呼んでいない)。idNotIn()のIDは差し引いて渡す(7.6節) */
@@ -788,6 +790,7 @@ final class PostQuery
     public function status(string ...$status): self;
     public function anyStatus(): self;
     public function search(string $keyword): self;
+    /** 0(IDが0のWP_Userを含む)は結果を0件にする。負の値は InvalidArgumentException(7.3節) */
     public function author(int|\WP_User $author): self;
     public function parent(int|\WP_Post $parent): self;
     public function slugIn(string ...$slugs): self;
@@ -882,7 +885,7 @@ enum TermOperator: string
 | `status(...$s)` | `post_status` = `$s`(空は0件。7.6節) |
 | `anyStatus()` | `post_status` = `'any'` |
 | `search($k)` | `s` = `$k` |
-| `author($a)` | `author` = ID(WP_Userは `->ID`) |
+| `author($a)` | `author` = ID(WP_Userは `->ID`)。0(未ログインの `wp_get_current_user()` のようにIDが0の `WP_User` を含む)は0件(7.6節)、負の値は `InvalidArgumentException`。WP_Queryは `author` の0を「条件なし」、負の値を除外(`author__not_in`)として扱うため、どちらもそのまま渡さない |
 | `parent($p)` | `post_parent` = ID |
 | `slugIn(...$s)` | `post_name__in` = `$s`(空は0件) |
 | `idIn(...$ids)` | `post__in` = `$ids` から `idNotIn()` のIDを差し引いたID(空は0件。7.6節) |
@@ -899,7 +902,7 @@ enum TermOperator: string
 | `noPaging()` | `nopaging` = `true`(`posts_per_page` は既定の `-1`) |
 | `ignoreSticky($b)` | `ignore_sticky_posts` = `$b` |
 
-**値の検証**: 比較演算子・キャスト型・並び順は06文書の `Compare`・`CastType`・`SortOrder`、`whereTerm()` のfield・operatorは `TermField`・`TermOperator` で受けるため、未知の値は型の段階で渡せない(EXISTS/NOT EXISTSは `whereMetaExists()`/`whereMetaNotExists()` に一本化し、`Compare` に含めない)。件数の値と指定どうしの矛盾は7.5節で検証する。
+**値の検証**: 比較演算子・キャスト型・並び順は06文書の `Compare`・`CastType`・`SortOrder`、`whereTerm()` のfield・operatorは `TermField`・`TermOperator`、UserQueryの `search()` の列は `UserSearchColumn`(13.2節)で受けるため、未知の値は型の段階で渡せない(EXISTS/NOT EXISTSは `whereMetaExists()`/`whereMetaNotExists()` に一本化し、`Compare` に含めない)。件数の値と指定どうしの矛盾は7.5節で検証する。
 
 **`toArgs()` のマージ順(決定的)**: (1)既定値(`posts_per_page` は `limit()` の値、無ければ `-1`) → (2)セッター由来 `$args` → (3)`offset`・`nopaging`・`post__in`/`post__not_in`(7.6節の差し引きの後) → (4)`meta_query`(無名句+並び替え専用の句のグループ、`relation => 'AND'`。句が1つでもrelationを付ける) → (5)`tax_query`(同上) → (6)`orderby` / 対応する `order` 削除(連想配列形式を使う) → (7)`rawArgs`(`withArgs`) → (8)`post_type` 強制再注入 → (9)結果が0件と確定している場合(7.6節)は `post__in` = `[0]`・`ignore_sticky_posts` = `true` を強制注入。`limit()` の無い `offset()` は `toArgs()` が `InvalidQueryException` を投げる(7.5節)。
 
@@ -947,6 +950,8 @@ WordPressは空のIN指定(`post__in = []`・`post_name__in = []`・`include = [
 | UserQuery: `idIn()` | 結果は0件 |
 | 3クエリ: `whereMeta($key, [], Compare::In)` | 結果は0件 |
 | 3クエリ: `idNotIn()`、`whereMeta($key, [], Compare::NotIn)`、PostQueryの `whereTerm()`(`TermOperator::NotIn`) | 何もしない(条件なし) |
+
+PostQueryの `author(0)`(IDが0の `WP_User` を含む)も、空のIN指定と同じく結果を0件と確定させる。WP_Queryは `author` の0を「条件なし」と扱って全件を返すためである(7.3節)。
 
 - 同じ引数を設定するセッター(`idIn()` 等)は後勝ちであり、空の指定の後に値のある指定をすると0件の確定は取り消される。句を足すメソッド(`whereMeta()`・`whereTerm()`)の空のIN指定は取り消せない。
 - **`idIn()` と `idNotIn()` の併用**: WordPressは包含のIDを指定すると除外のIDを無視する(WP 7.0の `WP_Query` は `post__in` があると `post__not_in` を、`WP_Term_Query` は `include` があると `exclude` を、`WP_User_Query` は `include` があると `exclude` を使わない)。3クエリは終端で、`idIn()` のIDから `idNotIn()` のIDを差し引いた集合だけを包含のID(`post__in`・`include`)として渡し、除外のIDは渡さない。差し引いた結果が空なら、空のIN指定と同じく0件と確定する。呼ぶ順に関係ない。`withArgs()` で渡した `post__in`・`post__not_in`・`include`・`exclude` は差し引かず、WordPressにそのまま渡す。
@@ -1183,7 +1188,7 @@ abstract class Taxonomy
 
 **`parents()`**: `parent` プロパティを `get()`(`get_term((int) $parent, static::slug())`)でたどる(nullで打ち切り。`WP_Error` は `get()` と同じく1.7節のエラー方針に従う)。深さ100の超過(`parent` の循環等)の扱い(debugは `EntityDataException`、本番はKernelのロガーに `error` で記録して空配列)・戻り順・`$includeSelf` の意味はPostTypeと同一(5.3節)。
 
-**`create()`**: `wp_insert_term($name, static::slug(), $args)`。`WP_Error` は `EntityPersistenceException::fromWpError()`。成功時は戻り配列の `term_id`(int)を返す。
+**`create()`**: `wp_insert_term(wp_slash($name), static::slug(), $args)`。`$args['description']` も `wp_slash()` して渡す。呼び出し側は元の(slashしていない)値を渡す。`wp_insert_term()` は名前と説明をslash済みとして受け取り `wp_unslash()` して保存するため(WP 7.0の wp-includes/taxonomy.php)、slashして元の値を保存させる(5.3節と同じ規約)。`slug`・`alias_of` はunslashされずにそのまま使われるため、slashしない。`WP_Error` は `EntityPersistenceException::fromWpError()`。成功時は戻り配列の `term_id`(int)を返す。
 
 **`meta()`**: PostType::meta() と同一規約(`ObjectType::Term`)。
 
@@ -1476,7 +1481,11 @@ abstract class UserRole
 **`create()`**:
 
 - `$userdata['user_login'] = $login`、`$userdata['user_pass'] = $password`、`$userdata['role'] = static::role()` を強制設定。`$userdata['ID']` はunset(更新誤用防止)。
-- `wp_insert_user($userdata)` が `WP_Error` なら `EntityPersistenceException::fromWpError()`。成功時int ID。
+- 呼び出し側は元の(slashしていない)値を渡す。`wp_insert_user()` は `$userdata` をslash済みとして受け取り、文字列を `wp_unslash()` して保存する(usersテーブルの列、`first_name` 等・`meta_input`・連絡先を保存する `add_user_meta()`・`update_user_meta()`)。元の値を保存するため、`wp_slash($userdata)` を渡す(5.3節と同じ規約)。`meta_input` は `WpMetaStorage::slashMetaInput()` でキーと値をslashし、`null` か object を含む値は `InvalidArgumentException`。
+  - `user_pass` は unslash されずにそのままハッシュされる。ログインの画面の `wp_signon()` はslash済みの `$_POST['pwd']` をそのまま照合に使うため、slashしたパスワードをハッシュさせる(wp-adminでパスワードを設定したユーザーと同じ形)。これにより、引用符やバックスラッシュを含むパスワードでもログインの画面からログインできる。
+  - `role` は `WP_User::set_role()` がunslashせずに使うため、slashの後に設定する。
+  - 根拠(WP 7.0): wp-includes/user.php の `wp_insert_user()` は users テーブルの列を `wp_unslash($compacted)` で、`wp_signon()` は `$_POST['pwd']` をunslashせずに `wp_authenticate()` へ渡す。
+- `wp_insert_user($slashed)` が `WP_Error` なら `EntityPersistenceException::fromWpError()`。成功時int ID。
 - builtin定義でも使用可(既存ロールのユーザー作成)。
 
 **`authorUrl()`**: `get($user)` → null時null。`get_author_posts_url($user->ID)`。空文字はnullへ正規化。
@@ -1540,9 +1549,9 @@ final class UserQuery
     // ---- スコープ ----
     /**
      * キーワード検索。$keywordに'*'が含まれない場合は前後に'*'を自動付与する。
-     * @param string ...$columns user_login / user_email / user_nicename / user_url / display_name / ID
+     * 列を渡さなければ、WP_User_Queryがキーワードの形から列を選ぶ。
      */
-    public function search(string $keyword, string ...$columns): self;
+    public function search(string $keyword, UserSearchColumn ...$columns): self;
     public function idIn(int ...$ids): self;
     public function idNotIn(int ...$ids): self;
 
@@ -1590,14 +1599,33 @@ final class UserQuery
 |---|---|
 | (常時) | `role` = スコープのロール(最終段で強制注入)。`fields` = `'all'` 既定 |
 | (既定) | `count_total` = `false`。`number` は渡さない(件数を指定しない場合は全件。7.5節) |
-| `search($k, ...$c)` | `search` = ワイルドカード処理後の `$k`、`$c` 非空なら `search_columns` = `$c` |
+| `search($k, ...$c)` | `search` = ワイルドカード処理後の `$k`、`$c` 非空なら `search_columns` = 各 `$c->value` |
 | `idIn` / `idNotIn` | `include` / `exclude`(`idIn()` の空は0件、`idNotIn()` の空は条件なし。併用すると `include` から差し引いたIDだけを渡す。7.6節) |
 | `whereMeta*` / `orderByMeta` | PostQueryと同一方式(`meta_query`、空のIN指定、並び替え専用の句のグループ `tms_order_{n}` と `orderby[tms_order_{n}]`。7.6節・7.7節) |
 | `orderBy($f, $d)` | `orderby[$f] = $d->value`(WP_User_Queryは連想配列orderbyをサポート。複数累積可) |
 | `limit($n)` | `number` = `$n`(`$n < 1` は `InvalidArgumentException`) |
 | `offset($n)` | `offset` = `$n`(負値は `InvalidArgumentException`。`limit()` の無い `offset()` は `toArgs()` で `InvalidQueryException`) |
 
-値の検証(enum)とマージ順はPostQueryと同一(role強制注入の後、0件と確定していれば `include` = `[0]` を強制注入して終わる)。
+値の検証(enum)とマージ順はPostQueryと同一(role強制注入の後、0件と確定していれば `include` = `[0]` を強制注入して終わる)。`search()` の列は `UserSearchColumn` で受ける。WP_User_Queryは `search_columns` のうち許可した列以外を黙って捨てる(WP 7.0の wp-includes/class-wp-user-query.php は `array_intersect()` で `ID`・`user_login`・`user_email`・`user_url`・`user_nicename`・`display_name` に絞る)ため、未知の列は型の段階で渡せないようにする。
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace TMSWP\Core\Query;
+
+/** UserQuery::search() で検索する列(WP_User_Query の search_columns が受け付ける列) */
+enum UserSearchColumn: string
+{
+    case Id = 'ID';
+    case UserLogin = 'user_login';
+    case UserEmail = 'user_email';
+    case UserUrl = 'user_url';
+    case UserNicename = 'user_nicename';
+    case DisplayName = 'display_name';
+}
+```
 
 | 終端 | 振る舞い |
 |---|---|
@@ -1721,7 +1749,7 @@ final class PagePost extends PostType
 
 ```php
 <?php
-// app/User/ContractorUser.php — 会員サイト向けロール
+// app/User/ContractorRole.php — 会員サイト向けロール
 
 declare(strict_types=1);
 
@@ -1732,7 +1760,7 @@ use TMSWP\Core\User\UserRole;
 use TMSWP\Core\User\UserRoleDefinition;
 
 #[AsUserRole]
-final class ContractorUser extends UserRole
+final class ContractorRole extends UserRole
 {
     public static function definition(): UserRoleDefinition
     {
@@ -1806,10 +1834,10 @@ foreach (BusinessTax::all() as $term) {
 ```php
 <?php
 // page-members.php — ページネーション
-use App\User\ContractorUser;
+use App\User\ContractorRole;
 use TMSWP\Core\Query\SortOrder;
 
-$page = ContractorUser::query()
+$page = ContractorRole::query()
     ->whereMeta('prefecture', '東京都')
     ->orderBy('registered', SortOrder::Desc)
     ->paginate(perPage: 20);
@@ -1888,7 +1916,7 @@ $id = ProductPost::create([
 - [ ] URL取得でWP関数が返す `WP_Error` を、debugでは `QueryException` にし、本番ではそのエンティティクラスのKernelのロガーに `error` で記録してnullにする(1.3節・1.7節)
 - [ ] `thumbnail()` がアイキャッチなし+フォールバック未登録でnull、`tmswp/post/thumbnail_fallback` にThumbnailを返すフィルタを登録するとそれを返す。Thumbnail以外の返却値は無視される
 - [ ] `thumbnail()` のaltが `_wp_attachment_image_alt` メタのみから解決される(メタが空なら `''`。添付の `post_excerpt`/`post_title` へはフォールバックしない)
-- [ ] `parents()` が「ルート祖先→直近親」順で返り、深さ100超(親の循環)はdebugで `EntityDataException`、本番でKernelのロガーへの `error` の記録と空配列になる(PostType・Taxonomy)
+- [ ] `parents()` が「ルート祖先→直近親」順で返り、祖先がちょうど100件なら全件を返し、深さ100超(101件目の親・親の循環)はdebugで `EntityDataException`、本番でKernelのロガーへの `error` の記録と空配列になる(PostType・Taxonomy。100段と101段の境界の統合テストを含む)
 - [ ] `meta()` が、無い対象・スコープ外の対象で `InvalidArgumentException` を投げる
 - [ ] `Thumbnail::img()` が `Support\Html::attributes()` で属性を出力し(boolのtrueは値なし、false・nullは出力しない。`src` は `esc_url()`)、`src`/`alt`/`width`/`height` の上書きを大文字小文字に関係なく無視する。フォールバックのフィルタが返した許可されないプロトコルのURLは `InvalidArgumentException` になる
 
@@ -1897,7 +1925,8 @@ $id = ProductPost::create([
 - [ ] `PostQuery::toArgs()` が7.3節のマッピング表どおりの引数を生成する(ユニットテストで全メソッドを網羅)
 - [ ] `post_type`/`taxonomy`/`role` が `withArgs()` でも上書きできない
 - [ ] 既定値: PostQueryは `post_status=['publish']`+`ignore_sticky_posts=true`+`posts_per_page=-1`、TermQueryは `hide_empty=false`、UserQueryは `count_total=false`
-- [ ] 3クエリが比較演算子・キャスト型・並び順を `Compare`・`CastType`・`SortOrder`、`whereTerm()` のfield・operatorを `TermField`・`TermOperator` で受け取り、文字列と実行時の許可リストで受けるAPIが無い
+- [ ] 3クエリが比較演算子・キャスト型・並び順を `Compare`・`CastType`・`SortOrder`、`whereTerm()` のfield・operatorを `TermField`・`TermOperator`、UserQueryの `search()` の列を `UserSearchColumn` で受け取り、文字列と実行時の許可リストで受けるAPIが無い。`UserSearchColumn` のすべての列がWP_User_Queryの検索の条件に使われる(統合テスト)
+- [ ] `PostQuery::author()` が、0(IDが0の `WP_User` を含む)で終端メソッドがWordPressの検索を実行せずに空の結果を返し(`author=0` をWordPressに直接渡すと全件が返る)、負の値で `InvalidArgumentException` を投げる(統合テスト)
 - [ ] 件数を指定しない `get()` が、サイトの `posts_per_page` の設定に関係なく全件を返す(統合テスト)
 - [ ] `limit(0)`・`limit(-1)`・負の `offset()`・`paginate(0)`・`paginate($n, 0)`・不正な値の `PageResult` が `InvalidArgumentException` を投げる
 - [ ] `noPaging()` と `limit()`・`offset()`・`paginate()` の併用、`offset()`・`limit()` と `paginate()` の併用、`limit()` の無い `offset()` が `InvalidQueryException` を投げる
@@ -1911,17 +1940,18 @@ $id = ProductPost::create([
 - [ ] `\` を含む文字列で存在しないクラスを指定すると `EntityDefinitionException` になる(統合テスト)
 - [ ] `paginate()` が `PageResult` を返し、`total`/`totalPages()`/`hasNext()` が統合テスト(wp-env、投稿25件×perPage 10)で正しい
 - [ ] `whereTerm(BlogCategoryTax::class, ...)` がスラッグへ解決される
-- [ ] `count()` が件数のみ取得し全件をロードしない(`fields=ids` + `posts_per_page=1` の引数生成をユニットで検証)
+- [ ] `count()` が件数のみ取得し全件をロードしない(統合テストで、実行した `WP_Query` の `query_vars`(`fields=ids`・`posts_per_page=1`・`no_found_rows=false`)とSQLの `LIMIT 0, 1` を確認)
 
 **書き込み**
 
 - [ ] `create()` がpost_type/taxonomy/roleを強制注入し、`ID` キーを除去し、WP_Error時に `EntityPersistenceException`(`wpError` プロパティに元のWP_Errorを保持)を投げる
+- [ ] `create()` がunslashされるキーの値だけをslashして渡し(`page_template` は引用符を含む登録済みのテンプレートもそのまま指定できる)、バックスラッシュ・引用符・JSONのエスケープ(`\u003c` 等)が、投稿(列・`meta_input` のキーと値・`tax_input` のターム名)・ターム(名前・説明)・ユーザー(列・メタ・`meta_input`)でそのまま保存される。引用符とバックスラッシュを含むパスワードで作ったユーザーが、ログインの画面と同じslashした値で `wp_authenticate()` を通る。`meta_input` の `null`・object は `InvalidArgumentException` になり、何も作らない(統合テスト)
 
 **静的解析・規約**
 
 - [ ] 本層の全クラスが `declare(strict_types=1)`・全シグネチャ型宣言済みで、PHPStan level max(`szepeviktor/phpstan-wordpress`、baselineなし)を通過する
 - [ ] `PageResult` のジェネリクス(`@template T`)により `ProductPost::query()->paginate(10)->items` が `list<WP_Post>` と推論される(PHPStanの型テスト `assertType` で検証)
-- [ ] マジックメソッド(`__callStatic` 等)・`extract()` を一切使用していない(PHPStan/PHPCSルールで検出)
+- [ ] マジックメソッド(`__callStatic` 等)・`extract()` を一切使用していない(ユニットテスト `LayerConventionTest` が、本層のソースのトークンを検査して検出)
 
 ### 検証コマンド
 

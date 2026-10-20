@@ -1394,10 +1394,10 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 |---|---|---|---|---|
 | 1 | `bootstrap.php` | `tests/bootstrap-integration.php` | — | `tests_add_filter('muplugins_loaded')` でのロード方式のみ踏襲。install-wp-tests.sh 経路は廃止(wp-env の WP_TESTS_DIR へ) |
 | 2 | `test-sample.php` | — | — | 廃棄(scaffold 残骸) |
-| 3 | `TestCase/ArrTest.php` | `packages/core/tests/Unit/Support/ArrTest.php` | Unit | ドット記法 get/set のデータプロバイダ**全件**移植(ネスト配列・配列パス両形式) |
-| 4 | `TestCase/TextTest.php` | `packages/core/tests/Unit/Support/StrTest.php` | Unit | stringify(__toString / Iterator 対応)・ケース変換のうち、新 `Support\Str` API に存在するものを移植。新 API に対応がない検証は廃棄 |
+| 3 | `TestCase/ArrTest.php` | `packages/core/tests/Unit/SupportTest.php` | Unit | ドット記法 get/set のデータプロバイダ**全件**移植(ネスト配列・配列パス両形式) |
+| 4 | `TestCase/TextTest.php` | `packages/core/tests/Unit/SupportTest.php` | Unit | stringify(__toString / Iterator 対応)・ケース変換のうち、新 `Support\Str` API に存在するものを移植。新 API に対応がない検証は廃棄 |
 | 5 | `TestCase/UtilTest.php` | (分割) | Unit | `parse_phpdoc_tags` 系は廃棄(Attribute 化で機構ごと消滅)。`is_empty` の境界値(0 / '0' / '' / [] / Countable)は Form 層の空値判定テスト(`Unit/Form/Validator` 系)へ仕様移植。`filter` / `namespace_split` は対応 API なしのため廃棄 |
-| 6 | `TestCase/OptionTest.php` | `packages/core/tests/Unit/Option/OptionRepositoryTest.php` + `Integration/Option/OptionGroupTest.php` | 両方 | 定数ベースの option 読み書き仕様を移植。ユニット層はフェイク `OptionStorageInterface` 実装で、統合層は実 `wp_options` で検証 |
+| 6 | `TestCase/OptionTest.php` | `packages/core/tests/Unit/OptionRepositoryTest.php` + `Integration/OptionIntegrationTest.php` | 両方 | 定数ベースの option 読み書き仕様を移植。ユニット層はフェイク `OptionStorageInterface` 実装で、統合層は実 `wp_options` で検証 |
 | 7 | `TestCase/Field/FieldTest.php` | `packages/core/tests/Unit/Form/FieldTest.php` | Unit | エラー設定 / クリアの仕様を移植 |
 | 8 | `TestCase/Field/FieldSetTest.php` | — | — | 廃棄。FieldSet のシングルトン的インスタンス管理は DR-09(AbstractSingleton 廃止)で機構ごと消滅。フィールド集合の保持は `FormDefinition` のテストとして新規作成 |
 | 9 | `TestCase/Field/Rule/RuleTraitTest.php` | `packages/core/tests/Unit/Form/Rule/RuleContractTest.php` | Unit | **空値スルー**(空値は Required 系以外を素通り)の仕様を移植。必須パラメータ欠落 / 型不一致の実行時検査は PHP 8.3 のコンストラクタ型宣言 + named arguments による静的保証に置換(`TypeError` の検証のみ残す)。`PHPUnit\Framework\Error\Notice` 依存の検証は廃棄 |
@@ -1410,12 +1410,12 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 | 16 | `TestCase/Field/Rule/UrlRuleTest.php` | `Unit/Form/Rule/UrlRuleTest.php` | Unit | 絶対 / 相対 / カスタムプロトコル URL のデータプロバイダ**全件**移植 |
 | 17 | `TestCase/Form/FormTest.php` | `packages/core/tests/Unit/Form/FormHtmlTest.php` | Unit | checkbox / radio の value 属性・checked 判定の境界 10 ケース(空 value・同値設定等)を `FormHtml` 純関数のスナップショット検証として移植 |
 | 18 | `TestCase/Form/FormChoiceTest.php` | `packages/core/tests/Unit/Form/FormHtmlTest.php` / `FieldViewTest.php` | Unit | 複数選択肢レンダリングの出力仕様を移植。カスタムレンダラ合成(3 層コールバック)の検証は機構廃止(DR-07)により `FieldView` の出力カスタマイズ仕様(05 文書)の検証に置換 |
-| 19 | `TestCase/Log/LogTest.php` | `packages/core/tests/Unit/Log/LogTest.php` | Unit | チャンネル・スコープ・ロガー差し替え・vfsStream への書込検証を移植。シングルトン検証(get_instance)は `LoggerRegistry` の登録 / 解決検証に置換 |
-| 20 | `TestCase/Log/Logger/SimpleLoggerTest.php` | `packages/core/tests/Unit/Log/SimpleLoggerTest.php` | Unit | 日付フォーマット・ファイル名・ディレクトリ分割・全レベル・コンテキスト展開を vfsStream で移植(PSR-3 **v3** シグネチャで書き直し) |
-| 21 | `TestCase/Post/AbstractPostTest.php` | `packages/core/tests/Integration/Post/PostTypeTest.php` | Integration | CPT 自動登録・`get`/`get_id` 相当(`PostQuery`)・META 定数によるメタ読み書き(`MetaBag` 経由)・permalink / アーカイブリンクを移植。「デフォルト meta 挿入」は `MetaSchema(default:)` の仕様検証へ置換 |
-| 21b | 同上(サムネイル解決) | `packages/core/tests/Integration/Post/PostTypeTest.php` | Integration | アイキャッチなし / アイキャッチあり / `tmswp/post/thumbnail_fallback` フィルタの 3 経路の解決を移植(GD 画像生成 + WP ファクトリの作法を踏襲)。ダミー画像は呼び出し側の `?? $dummyUrl` で表すため対象外。本文先頭 img の抽出はコアにも thumbnail 拡張にも持たない(03 文書 §5) |
-| 22 | `TestCase/Tax/AbstractTaxTest.php` | `packages/core/tests/Integration/Tax/TaxonomyTest.php` | Integration | タクソノミー登録(object_type の文字列 / 配列 / PostType クラス名解決)・term meta 定数操作・term link を移植 |
-| 23 | `TestCase/User/AbstractUserTest.php` | `packages/core/tests/Integration/User/UserRoleTest.php` | Integration | ロール登録・user meta 定数操作・author link を移植 |
+| 19 | `TestCase/Log/LogTest.php` | `packages/core/tests/Unit/LogTest.php` | Unit | チャンネル・スコープ・ロガー差し替え・vfsStream への書込検証を移植。シングルトン検証(get_instance)は `LoggerRegistry` の登録 / 解決検証に置換 |
+| 20 | `TestCase/Log/Logger/SimpleLoggerTest.php` | `packages/core/tests/Unit/LogTest.php` | Unit | 日付フォーマット・ファイル名・ディレクトリ分割・全レベル・コンテキスト展開を vfsStream で移植(PSR-3 **v3** シグネチャで書き直し) |
+| 21 | `TestCase/Post/AbstractPostTest.php` | `packages/core/tests/Integration/EntityRegistrationIntegrationTest.php`(登録) + `EntityFacadeIntegrationTest.php`(取得・URL) + `EntityQueryIntegrationTest.php`(クエリ) + `MetaIntegrationTest.php`(メタ) | Integration | CPT 自動登録・`get`/`get_id` 相当(`PostQuery`)・META 定数によるメタ読み書き(`MetaBag` 経由)・permalink / アーカイブリンクを移植。「デフォルト meta 挿入」は `MetaSchema(default:)` の仕様検証へ置換 |
+| 21b | 同上(サムネイル解決) | `packages/core/tests/Integration/EntityFacadeIntegrationTest.php` | Integration | アイキャッチなし / アイキャッチあり / `tmswp/post/thumbnail_fallback` フィルタの 3 経路の解決を移植(GD 画像生成 + WP ファクトリの作法を踏襲)。ダミー画像は呼び出し側の `?? $dummyUrl` で表すため対象外。本文先頭 img の抽出はコアにも thumbnail 拡張にも持たない(03 文書 §5) |
+| 22 | `TestCase/Tax/AbstractTaxTest.php` | `packages/core/tests/Integration/EntityRegistrationIntegrationTest.php`(登録・object_type の解決) + `EntityFacadeIntegrationTest.php`(term link) + `MetaIntegrationTest.php`(term meta) | Integration | タクソノミー登録(object_type の文字列 / 配列 / PostType クラス名解決)・term meta 定数操作・term link を移植 |
+| 23 | `TestCase/User/AbstractUserTest.php` | `packages/core/tests/Integration/EntityRegistrationIntegrationTest.php`(ロールの登録) + `EntityRuntimeIntegrationTest.php`(冪等性・差分の通知) + `EntityFacadeIntegrationTest.php`(author link) + `MetaIntegrationTest.php`(user meta) | Integration | ロール登録・user meta 定数操作・author link を移植 |
 | 24 | `bin/install-wp-tests.sh` | — | — | 廃棄(wp-env の WP_TESTS_DIR に置換) |
 | 25 | `.travis.yml` / `.phpcs.xml.dist` / `Gruntfile.js` / `package.json` | — | — | 廃棄(qa.yml / php-cs-fixer / wp-env(@wordpress/env)に置換。i18n pot 生成は `wp i18n make-pot` を必要時に使用) |
 

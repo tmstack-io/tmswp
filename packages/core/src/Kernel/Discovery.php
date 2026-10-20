@@ -16,6 +16,7 @@ use SplFileInfo;
 use Throwable;
 use TMSWP\Core\Attribute\Action;
 use TMSWP\Core\Attribute\AsHook;
+use TMSWP\Core\Attribute\AsOptionGroup;
 use TMSWP\Core\Attribute\ComponentAttributeInterface;
 use TMSWP\Core\Attribute\Filter;
 use TMSWP\Core\Attribute\OptionSchema;
@@ -299,17 +300,21 @@ final class Discovery
 
         $className = $reflection->getName();
         $enum = $reflection->isEnum() && is_subclass_of($className, UnitEnum::class) ? new ReflectionEnum($className) : null;
+        $isOptionGroup = $reflection->getAttributes(AsOptionGroup::class) !== [];
 
         foreach ($reflection->getReflectionConstants() as $constant) {
             if ($constant->getAttributes(OptionSchema::class) === []) {
                 continue;
             }
 
-            if ($enum instanceof ReflectionEnum && $enum->hasCase($constant->getName())) {
-                continue;
+            if (!$enum instanceof ReflectionEnum || !$enum->hasCase($constant->getName())) {
+                $this->fail("#[OptionSchema] is only allowed on enum cases: {$fqcn}::{$constant->getName()}", $file, $fqcn);
             }
 
-            $this->fail("#[OptionSchema] is only allowed on enum cases: {$fqcn}::{$constant->getName()}", $file, $fqcn);
+            // #[AsOptionGroup] の無い enum はオプショングループとして探索されず、ケースの宣言が使われないため黙って無視しない
+            if (!$isOptionGroup) {
+                $this->fail("#[OptionSchema] requires #[AsOptionGroup] on the enum: {$fqcn}::{$constant->getName()}", $file, $fqcn);
+            }
         }
     }
 

@@ -254,7 +254,7 @@ final class PostTypeDefinition
 
     public function rewriteSlug(string $slug, bool $withFront = true): self
     {
-        return $this->rewrite(['slug' => $slug, 'with_front' => $withFront]);
+        return $this->argsForNew(['rewrite' => ['slug' => $slug, 'with_front' => $withFront]], __FUNCTION__);
     }
 
     public function queryVar(bool|string $queryVar): self

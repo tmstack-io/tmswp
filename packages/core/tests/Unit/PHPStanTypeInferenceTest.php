@@ -30,6 +30,12 @@ final class PHPStanTypeInferenceTest extends TypeInferenceTestCase
         $this->assertTypesInFile(__DIR__ . '/../fixtures/phpstan/type-inference.php');
     }
 
+    /** PageResult の @template により、paginate() の items が list<WP_Post> と推論される(docs/03 §16)。 */
+    public function testPaginateItemsAreInferredFromThePageResultTemplate(): void
+    {
+        $this->assertTypesInFile(__DIR__ . '/../fixtures/phpstan/page-result-type-inference.php');
+    }
+
     public function testContainerGetIsInferredAsTheRequestedClass(): void
     {
         $this->assertTypesInFile(__DIR__ . '/../fixtures/phpstan/container-type-inference.php');

@@ -8,14 +8,22 @@ use TMSWP\Core\Exception\InvalidArgumentException;
 
 final class WpMetaStorage implements MetaStorageInterface
 {
+    /**
+     * 行の有無を、get_metadata_raw() の全行の読み込みが行を返したか(rows())で判定する。metadata_exists() は
+     * get_{$meta_type}_metadata フィルタの結果を (bool) にするため、プレビューのフィルタ(#[WithMetaRevisions] の
+     * _wp_preview_meta_filter)が '0'・'' を返すと、行があっても false になる。
+     */
     public function has(ObjectType $type, int $objectId, string $key): bool
     {
-        return metadata_exists($type->metaType(), $objectId, $key);
+        return self::rows($type, $objectId, $key) !== null;
     }
 
+    /** 先頭の行を返す。行が無ければ null(行の有無と行の扱いは has() と同じ。rows())。 */
     public function get(ObjectType $type, int $objectId, string $key): mixed
     {
-        return get_metadata_raw($type->metaType(), $objectId, $key, true);
+        $rows = self::rows($type, $objectId, $key);
+
+        return $rows === null ? null : $rows[0];
     }
 
     public function getAll(ObjectType $type, int $objectId, string $key): array
@@ -29,23 +37,20 @@ final class WpMetaStorage implements MetaStorageInterface
         return array_values($values);
     }
 
+    /**
+     * キーごとに get_metadata_raw() で読む(get_{$meta_type}_metadata フィルタがキーごとに効き、プレビューの値も返す)。
+     * 最初の読み込みが対象のメタをすべてメタのキャッシュに載せるため、データベースへの問い合わせは1回のまま。
+     */
     public function getMultiple(ObjectType $type, int $objectId, array $keys): array
     {
-        $all = get_metadata($type->metaType(), $objectId);
-
-        if (!\is_array($all)) {
-            return [];
-        }
-
         $values = [];
 
         foreach ($keys as $key) {
-            if (!\array_key_exists($key, $all) || !\is_array($all[$key]) || !\array_key_exists(0, $all[$key])) {
-                continue;
-            }
+            $rows = self::rows($type, $objectId, $key);
 
-            $raw = $all[$key][0];
-            $values[$key] = \is_string($raw) ? maybe_unserialize($raw) : $raw;
+            if ($rows !== null) {
+                $values[$key] = $rows[0];
+            }
         }
 
         return $values;
@@ -142,6 +147,54 @@ final class WpMetaStorage implements MetaStorageInterface
                 self::assertNoObject($key, $item);
             }
         }
+    }
+
+    /**
+     * wp_insert_post()・wp_insert_user() の meta_input に渡す配列を作る。WordPress は meta_input のキーと値を
+     * update_post_meta()・add_user_meta() で保存し、そこで wp_unslash() するため、set() と同じ規則で値を検査し、
+     * キーと値を slash して返す。
+     *
+     * @internal エンティティの create() が使う
+     *
+     * @param array<string, mixed> $metaInput
+     *
+     * @throws InvalidArgumentException null、または object を含む値がある場合
+     *
+     * @return array<string, mixed>
+     */
+    public static function slashMetaInput(array $metaInput): array
+    {
+        $slashed = [];
+
+        foreach ($metaInput as $key => $value) {
+            self::assertStorable($key, $value);
+            $slashed[wp_slash($key)] = self::slash($value);
+        }
+
+        return $slashed;
+    }
+
+    /**
+     * 全行(maybe_unserialize 済み)を返す。行が無ければ null。
+     *
+     * get_metadata_raw(..., false) は、行が無ければ null、対象の ID が不正なら false、行があれば行の配列を返す。
+     * get_{$meta_type}_metadata フィルタが null 以外を返した場合はその値をそのまま返す。そのため、null・false・空の配列と
+     * スカラーの空文字は行なし、空でない配列は各行('' や '0' の行も含む)、それ以外の値は1行として扱う。false は
+     * metadata_exists() と同じ扱い。WordPress のサムネイルのプレビューのフィルタ(_wp_preview_post_thumbnail_filter)は、
+     * single が false でもサムネイルの ID を文字列で返し、アイキャッチを外すプレビューでは '' を返す(WP 7.0 の
+     * wp-includes/revision.php)。WordPress もこの '' を行なしと扱う(metadata_exists()・has_post_thumbnail() が false)。
+     *
+     * @return non-empty-list<mixed>|null
+     */
+    private static function rows(ObjectType $type, int $objectId, string $key): ?array
+    {
+        $rows = get_metadata_raw($type->metaType(), $objectId, $key, false);
+
+        if ($rows === null || $rows === false || $rows === '' || $rows === []) {
+            return null;
+        }
+
+        return \is_array($rows) ? array_values($rows) : [$rows];
     }
 
     private static function slash(mixed $value): mixed

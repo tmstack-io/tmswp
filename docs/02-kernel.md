@@ -737,6 +737,14 @@ scan():
         - #[AsHook] が付いているのに Hook 基底(TMSWP\Core\Hook\Hook)を継承していなければ探索失敗
           ("#[AsHook] class must extend TMSWP\Core\Hook\Hook")。register() という名前の
           メソッドの有無とは無関係に検査する
+        - #[OptionSchema](04文書 4.12)の付与先の検査。#[OptionSchema] は #[AsOptionGroup] を
+          付けた enum のケースにだけ付けられる。属性のターゲット(TARGET_CLASS_CONSTANT)では
+          防げず、そのままでは宣言が使われずに黙って無視されるため、次を探索失敗にする:
+          - クラス・enum 自身への付与、enum のケースでない定数(クラスの定数、enum の const)
+            への付与("#[OptionSchema] is only allowed on enum cases: {fqcn}" または
+            "... : {fqcn}::{定数名}")
+          - #[AsOptionGroup] の無い enum のケースへの付与(その enum はオプショングループとして
+            探索されない。"#[OptionSchema] requires #[AsOptionGroup] on the enum: {fqcn}::{ケース名}")
      d. attrs = ref->getAttributes(ComponentAttributeInterface::class,
                                    ReflectionAttribute::IS_INSTANCEOF)
         - attrs が空: コンポーネントではない普通のクラス。手順 3-f へ進む
@@ -1785,6 +1793,7 @@ final class ContainerTest extends TestCase
 - [ ] Discovery: `#[AsHook]` クラスの `#[Action]`/`#[Filter]` メソッドが (class, method, hook, priority, acceptedArgs=宣言引数数, kind=属性の種類) の `DiscoveredHookMethod` として収集され、`register()` をオーバーライドしない `#[AsHook]` クラスは components に現れない
 - [ ] Discovery: `#[Action]`/`#[Filter]` の誤用(`#[AsHook]` なしクラスへの付与・static/非public/可変長引数メソッドへの付与・フックを1つも宣言しない `#[AsHook]` クラス)が探索失敗として扱われる
 - [ ] Discovery: 属性引数にオブジェクト(new式)を渡した場合に探索失敗となる(探索結果ファイルに書き出せる値に限る)
+- [ ] Discovery: `#[OptionSchema]` の付与先の誤り(クラス自身・クラスの定数・グループの enum のケースでない定数・`#[AsOptionGroup]` の無い enum のケース)が探索失敗となり、`#[AsOptionGroup]` を付けた enum のケースへの付与は正常に収集される(ユニットテスト)
 - [ ] DiscoveryFile: write→load の往復で `DiscoveryResult` が完全復元される(enum引数・hookMethods 含む)。ファイルが無い・`include` が throw する/配列以外を返す・schema不一致・appNamespace不一致・appDir不一致・破損エントリで、ファイルパスと `wp tmswp discover` の案内を含む `DiscoveryException` を投げる
 - [ ] DiscoveryFile: 同じ探索結果からは、絶対パスの違う場所でもバイト単位で同一の内容を生成し、内容に絶対パス・mtime・生成時刻を含まない。書き込みの失敗は `DiscoveryException` になる
 - [ ] Kernel: debug=false の boot が探索結果ファイルだけを読み、app/ を走査しない。ファイルが無ければ boot が `DiscoveryException`(ファイルパス入り)になる。debug=true の boot は毎回走査し、探索結果ファイルを読まない

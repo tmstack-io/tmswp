@@ -41,6 +41,12 @@ final class NewsPost extends PostType
 }
 ```
 
+## 定義の既定値と引数
+
+- `PostTypeDefinition::create()` は `public` を `true` にする(WordPress の既定は `false`)。FW が既定値を変える引数はこの1つだけで、ほかの引数は、呼ばなかったセッターの分を WordPress の既定に任せる。公開しない投稿タイプは `->public(false)` を明示する。
+- スラッグは英小文字・数字・`_`・`-` の20文字以内にする。違反は `EntityDefinitionException` になる。
+- 専用のセッターが無い `register_post_type()` の引数は `args([...])` で渡す。キーごとに上書きし、配列の形は PHPStan が `register_post_type()` の引数と同じ形で検査する。`labels`・`label` は常に、`supports`・`taxonomies` は `supports()`・`taxonomies()` を呼んだときに、セッターの値が `args()` の値より優先する。
+
 ## テンプレートでの使い方
 
 ```php
@@ -79,11 +85,55 @@ $pickup = NewsPost::query()
 $page = NewsPost::query()->orderByDesc('date')->paginate(10);
 ```
 
-- 件数を指定しない `get()` は全件を返す(管理画面の「1ページに表示する最大投稿数」は効かない)。件数を絞るときは `limit()` を呼ぶ。
+- 既定では公開済み(`publish`)の投稿だけを返す。ほかの状態も含めるときは `status()`・`anyStatus()` を呼ぶ。
+- 件数を指定しない `get()` は全件を返す(管理画面の「1ページに表示する最大投稿数」は効かない)。件数を絞るときは `limit()` を呼ぶ。`limit()` は1以上、`offset()` は0以上で、範囲外の値は `InvalidArgumentException` になる。
+- `author()` に 0(未ログインの `wp_get_current_user()` のように ID が 0 の `WP_User` を含む)を渡すと結果は0件になる。負の値は `InvalidArgumentException` になる。
 - `idIn()`・`slugIn()` 等の IN の指定が空なら結果は0件になる。`idNotIn()` 等の除外が空なら条件なしになる。`idIn()` と `idNotIn()` を併用すると、除外した ID を差し引いた ID に絞る。
 - `orderByMeta()` は並び替えだけで、メタの無い投稿も結果に残る(ASC では先頭、DESC では末尾)。メタのある投稿だけにするときは `whereMetaExists()` を併用する。
 - `offset()` は `limit()` と一緒に使う。`noPaging()` と `limit()`・`offset()`・`paginate()`、`limit()`・`offset()` と `paginate()` は併用できない(例外になる)。`first()` は常に1件だけ取得する。
 - タクソノミーは、スラッグの代わりに Taxonomy クラスの FQCN(`NewsCategoryTax::class`)を渡せる。存在しないクラスは例外になる。
+- 専用のメソッドが無い `WP_Query` の引数は `withArgs([...])` で渡す。キーごとに上書きし、`post_type` は上書きできない。`withArgs()` で渡した `post__in`・`post__not_in` は、`idIn()`・`idNotIn()` と差し引かずにそのまま渡る。
+- `terms()`・`firstTerm()` 等で WordPress の関数が `WP_Error` を返した場合(存在しないタクソノミー等)は、debug では `QueryException` になり、本番では Kernel のロガーに `error` で記録して空の結果(空の配列・null)を返す。該当なし(タームが付いていない等)は例外にならない。
+
+## 既存の投稿タイプを使う(builtin)
+
+コアの `post`・`page` や、ほかのプラグインの投稿タイプは、`PostTypeDefinition::builtin()` のアダプタを定義して使う。クエリは必ず投稿タイプのクラスから作る(`PagePost::query()`)ため、検索・メタ・テンプレート向けのメソッドを使うには、このアダプタが要る。
+
+`app/Post/PagePost.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Post;
+
+use TMSWP\Core\Attribute\AsPostType;
+use TMSWP\Core\Post\PostType;
+use TMSWP\Core\Post\PostTypeDefinition;
+
+#[AsPostType]
+final class PagePost extends PostType
+{
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::builtin('page')
+            ->supports('excerpt');
+    }
+}
+```
+
+テンプレートでの使い方:
+
+```php
+<?php // ページテンプレートのファイル名から固定ページの URL を引く ?>
+<a href="<?php echo esc_url(\App\Post\PagePost::query()->template('page-contact.php')->url() ?? home_url('/')); ?>">お問い合わせ</a>
+```
+
+- builtin の定義で呼べるセッターは `supports()` と `blockEditor()` だけ。ほかのセッター(`label()`・`args()` 等)を呼ぶと、その場で `EntityDefinitionException` になる。
+- `supports()` の機能は `add_post_type_support()` で足される。`register_post_type()` は呼ばない。
+- アダプタ先の投稿タイプが登録の時点(`init` の priority 10)で無い場合は、`EntityDefinitionException` になる(スラッグの誤り、ほかのプラグインが priority 10 より後に登録する投稿タイプ等)。
+- builtin のクラスにも `#[MetaSchema]` の定数を宣言できる(rules/meta.md)。その投稿タイプのメタとして登録される。
 
 ## アイキャッチ未設定時のフォールバック画像
 
@@ -154,7 +204,9 @@ final class ThumbnailFallbackHook extends Hook
 
 - `register_post_type()` や `add_action('init', ...)` を自分で書かない。
 - 件数を絞りたいクエリで `limit()` を省かない(省くと全件を読み込む)。
-- `definition()` の中で WP 関数や `__()` を呼ばない。Kernel が boot の時点(init より前)でメタスキーマの登録のために呼び、結果を使い回す。
+- `definition()` の中で WP 関数や `__()` を呼ばない。`definition()` は純粋な関数にする。Kernel が boot の時点(init より前)でメタスキーマの登録のために呼び、結果を使い回す。
+- 基底クラスに `#[AsPostType]` を付けて継承させない。PHP の属性は継承されないため、子クラスは探索されない。具象クラスごとに付ける。
+- 投稿タイプのクラスを定義せずに、`WP_Query` や `get_posts()` で投稿タイプを直接検索しない。コアやほかのプラグインの投稿タイプは builtin のアダプタを定義して `query()` を使う。
 - `functions.php` に投稿タイプ関連のロジックを書かない。
 - 1クラスで複数投稿タイプを定義しない。
 

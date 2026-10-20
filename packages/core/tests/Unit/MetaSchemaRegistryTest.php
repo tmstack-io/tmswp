@@ -39,6 +39,35 @@ final class MetaSchemaRegistryTest extends UnitTestCase
         $registry->registerEntity(RegistryDuplicateProductPost::class, ObjectType::Post, 'registry_product');
     }
 
+    /** 1つのエンティティの中で同じキーを2つの定数に宣言すると DuplicateMetaKeyException になる。 */
+    public function testDuplicateKeyWithinOneEntityIsRejected(): void
+    {
+        $registry = new MetaSchemaRegistry(new Container());
+
+        $this->expectException(DuplicateMetaKeyException::class);
+        $this->expectExceptionMessage("duplicate meta key 'same_key' in " . RegistrySelfDuplicatePost::class);
+
+        $registry->registerEntity(RegistrySelfDuplicatePost::class, ObjectType::Post, 'registry_self');
+    }
+
+    /**
+     * 外部管理(acf-bridge 等)と申告したキーは、registerAll() で register_*_meta に渡さない。特定のサブタイプへの申告と、
+     * 全サブタイプへの申告のどちらも同じ。
+     */
+    public function testRegisterAllDoesNotRegisterExternallyManagedKeys(): void
+    {
+        $registry = new MetaSchemaRegistry(new Container());
+        $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'acf_field');
+        $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'acf_shared_field');
+        $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
+        Functions\expect('register_post_meta')
+            ->once()
+            ->with('registry_product', 'shared_key', Mockery::type('array'))
+            ->andReturn(true);
+
+        $registry->registerAll();
+    }
+
     public function testExternallyManagedKeysCannotBeDeclaredByPhpSchema(): void
     {
         $registry = new MetaSchemaRegistry(new Container());
@@ -253,6 +282,21 @@ final class RegistryProductPost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('registry_product');
+    }
+}
+
+#[AsPostType]
+final class RegistrySelfDuplicatePost extends PostType
+{
+    #[MetaSchema(type: MetaValueType::String)]
+    public const META_FIRST = 'same_key';
+
+    #[MetaSchema(type: MetaValueType::String)]
+    public const META_SECOND = 'same_key';
+
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('registry_self');
     }
 }
 

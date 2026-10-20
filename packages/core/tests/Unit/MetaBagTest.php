@@ -18,19 +18,82 @@ use TMSWP\Core\Tests\Support\UnitTestCase;
 
 final class MetaBagTest extends UnitTestCase
 {
-    public function testSchemaDefaultAndTypedAccessorsResolveValuesInOrder(): void
+    /**
+     * すべての getter が、ストレージの値 → 引数の default → スキーマの default → ゼロ値(get() は null)の順に値を決める。
+     * 型付きの getter はストレージの値とスキーマの default を自分の型にキャストし、引数の default はそのまま返す。
+     */
+    public function testEveryGetterResolvesStorageThenArgumentDefaultThenSchemaDefaultThenZeroValue(): void
     {
         $storage = new ArrayMetaStorage();
-        $bag = $this->bag($storage);
+        $schema = static fn(string $key, MetaValueType $type, mixed $default, bool $single = true): MetaSchemaDefinition => new MetaSchemaDefinition(MetaBagFixtureEntity::class, 'META_' . strtoupper($key), $key, $type, $default, $single, false, '', null);
+        $bag = new MetaBag(
+            MetaBagFixtureEntity::class,
+            ObjectType::Post,
+            10,
+            $storage,
+            MetaSchemaSet::fromList([
+                $schema('int', MetaValueType::Integer, 100),
+                $schema('float', MetaValueType::Number, 1.5),
+                $schema('bool', MetaValueType::Boolean, true),
+                $schema('string', MetaValueType::String, 'schema'),
+                $schema('array', MetaValueType::Array, ['schema']),
+                $schema('object', MetaValueType::Object, ['from' => 'schema']),
+                $schema('rows', MetaValueType::Integer, null, false),
+                $schema('plain', MetaValueType::String, null),
+            ]),
+            static fn(): bool => true,
+        );
 
-        self::assertFalse($bag->has('price'));
-        self::assertSame(100, $bag->int('price'));
-        self::assertSame(250, $bag->int('price', 250));
+        // 4. ストレージにも引数にもスキーマにも値が無い: 型付きの getter はその型のゼロ値、get() は null
+        self::assertSame(0, $bag->int('plain'));
+        self::assertSame(0.0, $bag->float('plain'));
+        self::assertFalse($bag->bool('plain'));
+        self::assertSame('', $bag->string('plain'));
+        self::assertSame([], $bag->list('plain'));
+        self::assertSame([], $bag->list('rows'));
+        self::assertSame([], $bag->json('plain'));
+        self::assertNull($bag->get('plain'));
+        self::assertNull($bag->get('rows'));
 
-        $storage->set(ObjectType::Post, 10, 'price', '1200');
+        // 3. スキーマの default(getter の型にキャストする)
+        self::assertSame(100, $bag->int('int'));
+        self::assertSame(1.5, $bag->float('float'));
+        self::assertTrue($bag->bool('bool'));
+        self::assertSame('schema', $bag->string('string'));
+        self::assertSame(['schema'], $bag->list('array'));
+        self::assertSame(['from' => 'schema'], $bag->json('object'));
+        self::assertSame(100, $bag->get('int'));
+        self::assertSame('1.5', $bag->string('float'));
 
-        self::assertTrue($bag->has('price'));
-        self::assertSame(1200, $bag->int('price', 250));
+        // 2. 引数の default はスキーマの default より優先し、キャストしない
+        self::assertSame(7, $bag->int('int', 7));
+        self::assertSame(9.5, $bag->float('float', 9.5));
+        self::assertFalse($bag->bool('bool', false));
+        self::assertSame('argument', $bag->string('string', 'argument'));
+        self::assertSame(['argument'], $bag->list('array', ['argument']));
+        self::assertSame([3], $bag->list('rows', [3]));
+        self::assertSame(['from' => 'argument'], $bag->json('object', ['from' => 'argument']));
+        self::assertSame('argument', $bag->get('string', 'argument'));
+        self::assertSame([3], $bag->get('rows', [3]));
+
+        // 1. ストレージの値は引数の default・スキーマの default より優先し、getter の型にキャストする
+        $storage->set(ObjectType::Post, 10, 'int', '42');
+        $storage->set(ObjectType::Post, 10, 'float', '2.25');
+        $storage->set(ObjectType::Post, 10, 'bool', '0');
+        $storage->set(ObjectType::Post, 10, 'string', 42);
+        $storage->set(ObjectType::Post, 10, 'array', 'stored');
+        $storage->set(ObjectType::Post, 10, 'object', '{"from":"storage"}');
+        $storage->setAll(ObjectType::Post, 10, 'rows', [1, 2]);
+
+        self::assertSame(42, $bag->int('int', 7));
+        self::assertSame(2.25, $bag->float('float', 9.5));
+        self::assertFalse($bag->bool('bool', true));
+        self::assertSame('42', $bag->string('string', 'argument'));
+        self::assertSame(['stored'], $bag->list('array', ['argument']));
+        self::assertSame([1, 2], $bag->list('rows', [3]));
+        self::assertSame(['from' => 'storage'], $bag->json('object', ['from' => 'argument']));
+        self::assertSame(42, $bag->get('string', 'argument'));
+        self::assertSame([1, 2], $bag->get('rows', [3]));
     }
 
     public function testSingleFalseUsesAllRowsAndRequiresListOnSet(): void
