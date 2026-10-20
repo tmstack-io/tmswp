@@ -19,7 +19,7 @@ TMSWP コアのうち、テンプレート読み込みヘルパ(`View\Template`)
 
 ## 依存文書
 
-- Kernel/Discovery 設計書(`KernelConfig::theme()` / `KernelConfig::plugin()` のブートフロー)… 本章は統合要件として「プラグインブート時の `Template` フォールバックディレクトリ登録」「`Container` への `LoggerRegistry` バインド」を要求する(§1.6、§5.7)。
+- Kernel/Discovery 設計書(`KernelConfig::theme()` / `KernelConfig::plugin()` のブートフロー)… 本章は統合要件として「プラグインブート時の `Template` フォールバックディレクトリ登録」「Kernel ごとの `LoggerRegistry` の生成と `Container` へのバインド」「`Kernel::forFile()` による記録先の Kernel の解決」を要求する(§1.6、§5.7)。
 - フォーム設計書(`Form\FormHtml`)… `Support\Html::attributes()` の出力規約(先頭スペース規約、§4.2)に依存する。
 - Meta/Option 設計書 … `Support\Arr::get()` のドット記法仕様を参照してよい。
 
@@ -778,14 +778,19 @@ final class Html
 
 | クラス | 役割 |
 |---|---|
-| `Log` | 静的ファサード。明示メソッドのみ(`__callStatic` 禁止規約に従う) |
-| `LoggerRegistry` | チャンネル管理+ディスパッチの実体。`Psr\Log\LoggerInterface` 実装。Container 登録・テスト対象 |
-| `LogChannel` | チャンネル設定の内部 readonly 値オブジェクト |
+| `Log` | アプリのコード(テンプレートを含む)向けの静的ファサード。呼び出したファイルを含むルートの Kernel のレジストリへ委譲する。明示メソッドのみ(`__callStatic` 禁止規約に従う) |
+| `LoggerRegistry` | 1つの Kernel のチャンネル管理+ディスパッチの実体。`Psr\Log\LoggerInterface` 実装。Kernel ごとに1つ作られ(`Kernel::logger()`)、その Kernel の Container に登録される |
+| `LogChannel` | チャンネル1つの設定(ロガー・受理レベル・受理スコープ)の readonly 値オブジェクト。`KernelConfig` の `logChannels` で宣言する |
 | `ScopedLog` | `scope()` が返すワンショットの不変ロガー(旧実装の可変 scope 状態を置換) |
 | `SimpleLogger` | PSR-3 v3 のファイルロガー実装(依存ゼロ) |
-| `tms_log()` | グローバルヘルパ。`LoggerRegistry` を返す(旧 `iwf_log()` と同型の使い味) |
+| `tms_log()` | グローバルヘルパ。呼び出したファイルの Kernel の `LoggerRegistry` を返す(旧 `iwf_log()` と同型の使い味) |
 
 すべて `psr/log ^3` のシグネチャ(`string|\Stringable $message`)に準拠する。レベルメソッド8種は `Psr\Log\LoggerTrait` を use して実装する(マジックメソッド不使用)。
+
+**チャンネルは Kernel ごとに分かれる。** テーマと複数のプラグインがそれぞれ Kernel を boot するサイトでも、チャンネルの宣言は各 Kernel の `KernelConfig` に閉じ、他の Kernel の宣言で上書きされない(プロセス全体で1つのレジストリを差し替える API は持たない)。記録先の Kernel は次のとおり決まる。
+
+- アプリのコードからの静的な呼び出し(`Log::error()` 等、`tms_log()`): 呼び出したファイルを含むルートディレクトリ(`KernelConfig::rootDir()` = appDir の親)を持つ Kernel(§5.2)。
+- TMSWP の内部(`TMSWP\` の名前空間のクラス): 扱う Kernel を明示して、その `Kernel::logger()` に記録する(例: Kernel のフックメソッドの失敗とキャッチアップ、`Taxonomy::register()`、拡張)。テーマとプラグインで同梱する tmswp/core の版が別でも、クラスは先に読み込まれた側の1組だけが使われ、内部のクラスのファイルの場所では Kernel を決められないためである。
 
 ### 5.2 Log(静的ファサード)
 
@@ -800,22 +805,13 @@ use Psr\Log\LoggerInterface;
 
 final class Log
 {
-    private static ?LoggerRegistry $registry = null;
-
     private function __construct() {}
 
-    /** 共有レジストリ(未生成なら遅延生成)。tms_log() / Container バインドもこれを返す */
-    public static function registry(): LoggerRegistry;
-
-    /** レジストリ差し替え(テスト用)。null で初期化状態に戻す */
-    public static function setRegistry(?LoggerRegistry $registry): void;
-
     /**
-     * チャンネル登録。同名チャンネルは上書き。
-     * @param list<string> $levels 受理レベル(Psr\Log\LogLevel 定数値)。空=全レベル
-     * @param list<string> $scopes 受理スコープ。空=全スコープ(スコープなしレコード含む)
+     * 呼び出したファイルを含むルートディレクトリを持つ Kernel のレジストリ。tms_log() もこれを返す。
+     * @throws \TMSWP\Core\Exception\KernelException 呼び出したファイルがどの Kernel のルートにも含まれないとき
      */
-    public static function set(string $channel, LoggerInterface $logger, array $levels = [], array $scopes = []): void;
+    public static function registry(): LoggerRegistry;
 
     /**
      * 登録済みチャンネルのロガーを直接取得する。
@@ -843,9 +839,22 @@ final class Log
 }
 ```
 
-全メソッドは `self::registry()` への単純委譲。`registry()` は `self::$registry ??= new LoggerRegistry()`。プロセス内で単一(テーマ+複数プラグインの Kernel が共存しても Log は1系統)。
+全メソッドは `self::registry()` への単純委譲。`Log` は状態を持たない(レジストリの差し替え API・チャンネル登録 API を持たない。チャンネルは `KernelConfig` で宣言する。§5.3)。
 
-**スコープ付与は不変 `ScopedLog`(§5.3)の1経路のみ**であり、既定スコープのような可変アンビエント状態は持たない(レジストリはプロセス内共有のため、あるコンポーネントが設定した既定スコープが他コンポーネントのスコープなしログ全てに波及する遠隔作用となる。スコープは常に明示引数として静的に追跡できる)。常に自スコープで書きたいコードは `$log = tms_log()->scope('shop');` の戻り値(`LoggerInterface` 実装)を保持して使い回す(DI 注入も可)。旧 `default_scope()` からの移行先としてこのレシピを rules/ とスターター `app/` スケルトンに明記する(申し送り)。
+**記録先の Kernel の決め方**(`registry()`):
+
+1. 呼び出したファイルを、`debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)` のフレームの関数の種類で決める(`@internal` の `Log\CallerFile::fromBacktrace()`)。パスの文字列は比べないため、区切り文字(`/`・`\`)やパスの表記に左右されない。
+   - 各フレームは「どの関数が、どのファイル(`file`)から呼ばれたか」を表す。スタックの先頭から、`class` が `Log` のメソッドの呼び出しか、`class` が無く `function` が `tms_log` の呼び出しを表すフレームが続く間たどり、続いたフレームのうち最後のものの `file` を呼び出したファイルとする。
+   - 続くフレームが無い、または最後のフレームに `file` が無い(`array_map([Log::class, 'error'], ...)` のように内部関数から呼ばれた)場合は、呼び出したファイルを決められないため `KernelException` を投げる。
+   - `eval` したコードのフレームの `file` は `/path/x.php(12) : eval()'d code` の形(入れ子の `eval` では接尾辞が繰り返す)のため、接尾辞を除いて `eval` を書いたファイルのパスにする。PHP 8.3 以降で残る擬似的なファイル名は、ほかに `php -r` の `Command line code` と標準入力の `Standard input code` があるが、どちらも実在するファイルではないため、手順2の実パスの解決で `KernelException` になる。
+   - クラスの無いテンプレートのファイルからの呼び出しも、同じくファイルで決まる。
+   - `debug_backtrace()` の深さは制限しない(連なりが上限で途切れたのか、呼び出し元に達したのかを区別できなくなるため)。
+2. `Kernel::forFile($file)` で、そのファイルの実パス(`realpath()`。取れなければ `KernelException`)を含むルートディレクトリ(`KernelConfig::rootDir()`。実パス。ルート + `DIRECTORY_SEPARATOR` で前方一致)を持つ Kernel を求め、その `logger()` を返す。テーマ形態の Kernel は、有効な子テーマのディレクトリ(`get_stylesheet_directory()` の実パス。親テーマと異なる場合だけ)もルートに含むため、子テーマのテンプレート(`Template::part()` が先に探す)からの呼び出しは親テーマの Kernel に記録される。ルートが入れ子になる場合(例: テーマの中にプラグインの Kernel のルートがある)は、最も長く一致するルートを採る(02-kernel §3.5)。
+3. どの Kernel のルートにも含まれないファイルからの呼び出し(Kernel の boot 前の呼び出し、TMSWP を使わない他のプラグインからの呼び出し等)は、プログラムの誤りとして debug に関係なく `KernelException`(`file '{file}' is not inside the root directory of any booted TMSWP kernel`)を投げる。呼び出したファイルが分からない場合も `KernelException` を投げる。
+
+ルートの判定は、ファイルとルートの両方を実パスにしてから行う。シンボリックリンクを経由したパスは実体の Kernel に解決され、`..` でルートの外へ出るパスは、文字列ではルートで始まっていても、実体の場所(ルートの外)で判定される。
+
+**スコープ付与は不変 `ScopedLog`(§5.3)の1経路のみ**であり、既定スコープのような可変アンビエント状態は持たない(あるコンポーネントが設定した既定スコープが、同じ Kernel の他コンポーネントのスコープなしログ全てに波及する遠隔作用となる。スコープは常に明示引数として静的に追跡できる)。常に自スコープで書きたいコードは `$log = tms_log()->scope('shop');` の戻り値(`LoggerInterface` 実装)を保持して使い回す(DI 注入も可)。旧 `default_scope()` からの移行先としてこのレシピを rules/ とスターター `app/` スケルトンに明記する(申し送り)。
 
 ### 5.3 LoggerRegistry / LogChannel / ScopedLog
 
@@ -864,26 +873,18 @@ final class LoggerRegistry implements LoggerInterface
     use LoggerTrait;
 
     /** @var array<string, LogChannel> */
-    private array $channels = [];
-
-    /** set() が一度でも呼ばれたか(遅延デフォルトチャンネル生成の判定に使う) */
-    private bool $configured = false;
+    private array $channels;
 
     /**
-     * @param list<string> $levels
-     * @param list<string> $scopes
-     * @throws \TMSWP\Core\Exception\InvalidArgumentException $channel が空文字、
-     *         または $levels に不正レベルが含まれるとき
+     * @param array<string, LogChannel> $channels チャンネル名 => 設定。空なら遅延デフォルトチャンネル(§5.4)
+     * @throws \TMSWP\Core\Exception\InvalidArgumentException チャンネル名が空文字のとき
      */
-    public function set(string $channel, LoggerInterface $logger, array $levels = [], array $scopes = []): void;
+    public function __construct(array $channels = []);
 
     public function has(string $channel): bool;
 
     /** @throws \TMSWP\Core\Exception\UnknownLogChannelException */
     public function channel(string $channel): LoggerInterface;
-
-    /** チャンネル削除。未登録名は無視 */
-    public function remove(string $channel): void;
 
     public function scope(string $scope): LoggerInterface;
 
@@ -912,12 +913,16 @@ namespace TMSWP\Core\Log;
 
 use Psr\Log\LoggerInterface;
 
-/** @internal チャンネル設定の値オブジェクト */
+/** チャンネル1つの設定。KernelConfig の logChannels で、チャンネル名をキーにして宣言する */
 final readonly class LogChannel
 {
+    /** PSR-3 のログレベル(Psr\Log\LogLevel の8定数値) */
+    public const array LEVELS = [/* debug, info, notice, warning, error, critical, alert, emergency */];
+
     /**
-     * @param list<string> $levels
-     * @param list<string> $scopes
+     * @param list<string> $levels 受理レベル(Psr\Log\LogLevel 定数値)。空=全レベル
+     * @param list<string> $scopes 受理スコープ。空=全スコープ(スコープなしレコード含む)
+     * @throws \TMSWP\Core\Exception\InvalidArgumentException $levels に不正レベル、$scopes に空文字が含まれるとき
      */
     public function __construct(
         public LoggerInterface $logger,
@@ -956,7 +961,7 @@ final class ScopedLog implements LoggerInterface
 ### 5.4 dispatch() の確定仕様
 
 1. **レベル検証**: `$level` が `Psr\Log\LogLevel` の8定数値(string)のいずれでもなければ `\Psr\Log\InvalidArgumentException`(PSR-3 §1.1 準拠)。
-2. **遅延デフォルトチャンネル**: `$this->channels === [] && !$this->configured` のとき、`set('default', new SimpleLogger())` を実行してから続行する(`set()` 内で `configured = true` になる)。一度でも `set()` が呼ばれたレジストリでは自動生成しない(全チャンネルを `remove()` した状態は「意図的にログ無効」とみなし no-op)。旧 FW で全15プロジェクトが完全コピペで行っていた `Log::set_logger(new SimpleLogger(), 'default')` 定型を不要にする。
+2. **遅延デフォルトチャンネル**: `$this->channels === []`(`KernelConfig` で `logChannels` を宣言していない Kernel)のとき、`default` チャンネルに `new LogChannel(new SimpleLogger())` を加えてから続行する。生成は最初の記録の時点まで遅らせる(`SimpleLogger` の生成が `WP_CONTENT_DIR` を要するため)。`logChannels` を宣言した Kernel では自動生成しない。ログを捨てたい Kernel は `Psr\Log\NullLogger` のチャンネルを宣言する。旧 FW で全15プロジェクトが完全コピペで行っていた `Log::set_logger(new SimpleLogger(), 'default')` 定型を不要にする。
 3. **スコープ注入**: `$scope !== null` かつ `$context` に `_scope` キーが無ければ `$context['_scope'] = $scope` を追加する(ファイル上でスコープを追跡可能にする)。
 4. **チャンネルマッチング**: 各チャンネルについて
    - `matchLevel = $channel->levels === [] || in_array($level, $channel->levels, true)`
@@ -966,7 +971,7 @@ final class ScopedLog implements LoggerInterface
 
 **旧挙動からの意図的変更**: 旧実装は「レコードにスコープが無い場合、scopes 制限付きチャンネルにもマッチする」だったが、新仕様では **scopes 制限付きチャンネルはスコープ一致時のみ受理** する(直感的なフィルタ動作に修正)。
 
-`set()` の検証: `$channel === ''` → `TMSWP\Core\Exception\InvalidArgumentException`。`$levels` の各値もレベル検証する(タイポの早期検出)。`$scopes` は任意文字列(検証なし、空文字のみ不可)。
+構築時の検証: `LoggerRegistry` のチャンネル名が空文字 → `TMSWP\Core\Exception\InvalidArgumentException`。`LogChannel` の `$levels` の各値もレベル検証する(タイポの早期検出)。`$scopes` は任意文字列(検証なし、空文字のみ不可)。どちらも `KernelConfig` の `logChannels` を boot 中に呼んだ時点で投げるため、設定の誤りは debug に関係なく起動時に例外になる(00-overview §5.6)。
 
 ### 5.5 SimpleLogger
 
@@ -1080,7 +1085,7 @@ writeToFile($level, $line):
        初回の失敗だけ wp_trigger_error(SimpleLogger::class . '::log', 同じメッセージ, E_USER_WARNING)
 ```
 
-- 本番でエラー方針(00-overview.md §5.6)が `Log::error()` に頼るため、ファイルに書けない行も捨てずに PHP の `error_log` へ出す。
+- 本番でエラー方針(00-overview.md §5.6)が Kernel のロガーの `error()` に頼るため、ファイルに書けない行も捨てずに PHP の `error_log` へ出す。
 - `wp_trigger_error()` は WordPress 側で `WP_DEBUG` が偽なら何もしない。可視化は SimpleLogger のインスタンスごとに初回の失敗の1回だけとし(書き込みとローテーションの失敗で共通)、同じ原因で毎回通知しない。
 - 書き込みの失敗で例外は投げない(ロガーがアプリの処理を止めない)。
 
@@ -1155,13 +1160,15 @@ function tms_var(string $key, mixed $default = null): mixed
 }
 
 /**
- * ログのレジストリを取得する。Log::registry() への委譲。
+ * 呼び出したファイルの Kernel のログのレジストリを取得する。Log::registry() への委譲。
  *
  *   tms_log()->info('imported', ['count' => $n]);
  *   tms_log()->scope('mail')->error('send failed', ['exception' => $e]);
  *   tms_log()->channel('audit')->info('user updated');
  *
- * @return LoggerRegistry 共有のレジストリ(PSR-3 のロガー)
+ * @throws TMSWP\Core\Exception\KernelException 呼び出したファイルがどの Kernel のルートにも含まれない場合
+ *
+ * @return LoggerRegistry 呼び出したファイルを含むルートディレクトリを持つ Kernel のレジストリ(PSR-3 のロガー)
  */
 function tms_log(): LoggerRegistry
 {
@@ -1172,12 +1179,15 @@ function tms_log(): LoggerRegistry
 - ヘルパは `function_exists` ガードで囲まずに定義する。同名の関数が先に定義されていれば、PHP の「Cannot redeclare」で明示エラーになり、別の実装が黙って使われることはない。
 - 同じファイルが二重に読み込まれることはない。Composer の `autoload.files` は、パッケージ名とパスから作る識別子(`md5('tmswp/core:src/functions.php')`)を `$GLOBALS['__composer_autoload_files']` に記録し、同じ識別子のファイルを1回だけ読む。テーマとプラグインがそれぞれの vendor/ に tmswp/core を持つ場合も識別子は同じになる。
 - 戻り値は `LoggerRegistry`(`LoggerInterface` 実装)なので `->info()` / `->error()` 等がそのまま型安全に呼べる。旧 `iwf_log()->info(...)` の書き味は完全に維持される。
+- 記録先の Kernel は `Log` と同じく呼び出したファイルで決まる(§5.2)。`tms_log()` を定義する functions.php のフレームは読み飛ばすため、`tms_log()` を呼んだファイルで決まる。
 - PSR-3 v3 により `$message` は `string|\Stringable` のみ。旧 FW で見られた配列メッセージは `$context` に渡す(rules/ にレシピを明記)。
 
 ### 5.7 Kernel / Container との統合要件(統合点)
 
-- Kernel は Container に `LoggerRegistry::class` を共有サービスとしてバインドし、その解決値は `Log::registry()` を返すこと(ファサードと DI 経由で同一インスタンスを保証)。
-- Kernel は Log の初期化処理を一切行わない(遅延デフォルトチャンネルにより設定ゼロで動作する)。スターターの `app/` スケルトンには明示設定の例(§利用例)をコメントで含める。
+- Kernel は boot 中に、`KernelConfig::$logChannels` を呼んで自分の `LoggerRegistry` を1つ作り(`logChannels` が null なら空のレジストリ=遅延デフォルトチャンネル)、`Kernel::logger()` で公開する。クロージャの戻り値がチャンネル名(文字列)=> `LogChannel` の空でない配列でなければ、debug に関係なく `KernelException` を投げる(02-kernel §2)。
+- Kernel は Container に `LoggerRegistry::class` をその Kernel のレジストリ(`Kernel::logger()` と同一インスタンス)としてバインドする。DI で受け取る `LoggerRegistry` と、その Kernel のルートの中のファイルから呼ぶ `Log` / `tms_log()` は同じレジストリになる。
+- `Kernel::forFile(string $file)` は、`file` を含むルートディレクトリを持つ Kernel を最も長く一致するルートで返し、無ければ `KernelException` を投げる(02-kernel §3.5)。
+- `logChannels` をクロージャで受け取るのは、`SimpleLogger` 等の `Psr\Log\LoggerInterface` を実装するクラスを、Kernel が psr/log の非互換を検査(02-kernel §3.8)した後で初めて読み込むためである。
 
 ---
 
@@ -1441,15 +1451,25 @@ return ['campaign' => $campaign];
 // 設定ゼロで動く(初回書き込み時に default チャンネル + SimpleLogger が自動登録される)
 tms_log()->info('csv import finished', ['count' => $count]);
 
-// 明示設定(スターター bootstrap の例): エラー以上を別ファイルへ、メール送信ログを分離
+// 明示設定(functions.php の例): エラー以上を別ファイルへ、メール送信ログを分離。チャンネルはこの Kernel だけのもの
 use Psr\Log\LogLevel;
-use TMSWP\Core\Log\Log;
+use TMSWP\Core\Kernel\Kernel;
+use TMSWP\Core\Kernel\KernelConfig;
+use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Log\SimpleLogger;
 
-Log::set('default', new SimpleLogger());
-Log::set('errors', new SimpleLogger(fileNameFormat: 'errors/{date}'),
-    levels: [LogLevel::ERROR, LogLevel::CRITICAL, LogLevel::ALERT, LogLevel::EMERGENCY]);
-Log::set('mail', new SimpleLogger(fileNameFormat: 'mail-{date}'), scopes: ['mail']);
+Kernel::boot(KernelConfig::theme(
+    appDir: __DIR__ . '/app',
+    appNamespace: 'App',
+    logChannels: static fn(): array => [
+        'default' => new LogChannel(new SimpleLogger()),
+        'errors' => new LogChannel(
+            new SimpleLogger(fileNameFormat: 'errors/{date}'),
+            levels: [LogLevel::ERROR, LogLevel::CRITICAL, LogLevel::ALERT, LogLevel::EMERGENCY],
+        ),
+        'mail' => new LogChannel(new SimpleLogger(fileNameFormat: 'mail-{date}'), scopes: ['mail']),
+    ],
+));
 
 // 利用側
 try {
@@ -1487,7 +1507,7 @@ $lead    = Str::excerpt(get_the_content(), 120);
 - **Arr**: 実利用は `get`(21箇所)のドット記法アクセスが中核。deep merge 系(`merge`/`merge_intersect_key` 9箇所)は旧 FW の「options 連想配列」文化の産物であり、新 FW では named arguments + readonly 定義オブジェクト(`PostTypeDefinition` 等)が代替するため収載しない。
 - **Str**: 旧 `Text` の実利用 4 メソッド+FW 内部で必要な命名変換のみ。`auto_link` は WP 標準 `make_clickable()`、`short_hash` は利用側の `hash_hmac` 直接利用(thumbnail 拡張)で代替。`truncate` は WP 依存(タグ除去)が混入していたため、純関数 `truncate` と WP 境界 `excerpt` に分離した。`replace` は旧 `Text::replace` の `$bounds` パラメータ(`%key%` 既定+区切り文字切替)を持たず、`{key}` 構文+`strtr()` 単一パスに固定する(§3.2A。FW 内のプレースホルダ構文を1種類に統一し、再置換バグを構造的に排除する)。
 - **Html**: 旧流暢ビルダ(`__call`/`__get`/ノードコレクション約185行)は全プロジェクト参照ゼロの完全デッドコード(DR-16 で廃止確定)。実利用は `Html::tag()` 経由の属性レンダリングのみで、その実体だった `HtmlTag::parse_attrs` を純関数 `attributes()` として再定義。standalone 属性のホワイトリスト方式は HTML の進化に追随できないため bool 値駆動に変更した。
-- **Log**: 全15プロジェクトがブートで同一の `Log::set_logger` 定型を書き、`iwf_log()` は300箇所で利用された最高頻度 API。チャンネル+levels/scopes フィルタの設計は実証済みのためそのまま踏襲し、(1) `__call`/`__callStatic` を明示メソッド+`LoggerTrait` に置換、(2) ワンショット scope の可変インスタンス状態(書き込み後にクリアする実装)を不変 `ScopedLog` に置換、(3) スコープなしレコードが scopes 制限チャンネルに漏れる旧マッチング規則を修正、(4) 定型ブートを遅延デフォルトチャンネルで不要化、(5) 旧 `default_scope()`(永続アンビエントスコープ)は撤廃し、スコープ付与を不変 `ScopedLog` の1経路に統一した(プロセス共有レジストリ上の可変既定スコープは他コンポーネントのスコープなしログ全てに波及する遠隔作用となるため。自スコープ常用は `$log = tms_log()->scope('shop')` の保持で代替)。
+- **Log**: 全15プロジェクトがブートで同一の `Log::set_logger` 定型を書き、`iwf_log()` は300箇所で利用された最高頻度 API。チャンネル+levels/scopes フィルタの設計は実証済みのためそのまま踏襲し、(1) `__call`/`__callStatic` を明示メソッド+`LoggerTrait` に置換、(2) ワンショット scope の可変インスタンス状態(書き込み後にクリアする実装)を不変 `ScopedLog` に置換、(3) スコープなしレコードが scopes 制限チャンネルに漏れる旧マッチング規則を修正、(4) 定型ブートを遅延デフォルトチャンネルで不要化、(5) 旧 `default_scope()`(永続アンビエントスコープ)は撤廃し、スコープ付与を不変 `ScopedLog` の1経路に統一した(レジストリ上の可変既定スコープは他コンポーネントのスコープなしログ全てに波及する遠隔作用となるため。自スコープ常用は `$log = tms_log()->scope('shop')` の保持で代替)、(6) プロセス全体で1つのレジストリを後勝ちで設定する方式をやめ、チャンネルを Kernel ごとに `KernelConfig` で宣言して、呼び出したファイルの Kernel に記録する(テーマとプラグインの併用で、あとから boot した側の設定が他方のログの出力先を上書きしないため)。
 - **SimpleLogger**: `current_time()` → `wp_date()` への更新(WP タイムゾーン整合の現行推奨 API)、ローテーション皆無 → `maxFiles` 導入、`WP_CONTENT_DIR/iwf2b-log/` が Web から素通しだった問題 → `.htaccess`/`index.php` 自動生成+公開領域外推奨の明文化。オプション連想配列+動的プロパティ代入(`$this->{$arg_key} = $arg_value`)は readonly プロパティ+named arguments に置換。
 
 ---
@@ -1530,7 +1550,14 @@ $lead    = Str::excerpt(get_the_content(), 120);
 
 **Log**
 - [ ] `tms_log()->info('msg')` が設定ゼロで `WP_CONTENT_DIR/tmswp-logs/{Ymd}-{wp_hash 由来の接尾辞}.log` に `{timestamp} [INFO] msg` 形式で追記される(統合テスト)
-- [ ] `Log::set()` を一度でも呼んだ後は遅延デフォルトチャンネルが生成されない
+- [ ] `KernelConfig` で `logChannels` を宣言した Kernel では遅延デフォルトチャンネルが生成されない
+- [ ] テーマとプラグインの2つの Kernel(別のルート)のファイルから呼んだ `Log::error()` / `tms_log()` が、それぞれの Kernel のロガーに記録される。ルートが入れ子なら最も長く一致するルートの Kernel に記録される(統合テスト)
+- [ ] 子テーマのファイルからの `Log::error()` が、親テーマの Kernel に記録される
+- [ ] 呼び出したファイルの判定が、フレームの関数の種類(`Log` のメソッド・`tms_log()`)で行われ、パスの文字列に依存しない(Windows の形のパスのフレームでも、テーマの vendor の中の functions.php ではなく呼び出したファイルになる)。`eval` したコードからの呼び出しは `eval` を書いたファイルになり、内部関数から呼ばれた `Log` は `KernelException` になる
+- [ ] 本番の遅延 boot のキャッチアップで動くアプリのコードからの `Log::error()` が、その Kernel に記録される
+- [ ] どの Kernel のルートにも含まれないファイルからの `Log` / `tms_log()` の呼び出しが、ファイルのパスを含む `KernelException` になる
+- [ ] TMSWP の内部のログ(フックメソッドの失敗・遅延 boot のキャッチアップ)が、扱う Kernel のロガーに記録される(統合テスト)
+- [ ] `Log` にレジストリの差し替え・チャンネル登録の API(`set` / `setRegistry`)が無く、Container の `LoggerRegistry::class` が `Kernel::logger()` と同一インスタンスになる
 - [ ] levels / scopes フィルタが §5.4 のマッチング規則(スコープなしレコードは scopes 制限チャンネルに届かない)どおり動作する
 - [ ] `Log::scope('x')->error(...)` 後に別のログ呼び出しへスコープが残留しない(`ScopedLog` の不変性)
 - [ ] `Log` / `LoggerRegistry` に既定スコープ系 API(`defaultScope` / `setDefaultScope`)が存在せず、スコープ付与経路が `ScopedLog` のみである(scope 指定なしの `log()` は常に scope = null で dispatch される)

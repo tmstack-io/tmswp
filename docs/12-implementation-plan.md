@@ -125,7 +125,7 @@ v0.1.0 → v0.2.0 ─┬→ v0.3.0 ─→ v0.6.0 ─┐
 
 次の方針は v0.1.0 で `00-overview.md` に反映済みであり、各版でコードをこれに揃える。
 
-- エラー方針表(`00-overview.md` §5.6)。設定の誤りは起動時に常に例外、実行時のデータ取得失敗は debug 時は例外・本番は `Log::error()` のうえ既定値、データが無いことはエラーにしない。
+- エラー方針表(`00-overview.md` §5.6)。設定の誤りは起動時に常に例外、実行時のデータ取得失敗は debug 時は例外・本番は Kernel のロガー(`$kernel->logger()`)に `error` で記録したうえで既定値、データが無いことはエラーにしない。
 - `exit` 禁止の例外(`00-overview.md` §3 原則1)。PRG のリダイレクト直後と、設定ページ保存後の `wp_safe_redirect()` 直後に限る。
 - ブロックテーマ・ACF Blocks 向けコード生成・マルチサイトは対象外(`00-overview.md` §2.2)。
 
@@ -210,7 +210,7 @@ TMSWP の主な利用形態は、1 サイト用のテーマ(必要に応じて�
   2. フォームのあるページを自動でページキャッシュから外す(`nocache_headers()` と `DONOTCACHEPAGE`)。
   3. スパム対策(Turnstile、honeypot 等)を差し込む仕組みと、その手本コード。
   4. メール送信の手本となるレシピ rules/form-mail.md。
-- `onComplete` で起きた例外はエラー方針(`00-overview.md` §5.6)に従う。debug 時は例外を投げる。本番では `Log::error()` に記録し、利用者には汎用の送信失敗エラーをフォームに出す。このとき JTI は消費せず、再送できる状態にする。
+- `onComplete` で起きた例外はエラー方針(`00-overview.md` §5.6)に従う。debug 時は例外を投げる。本番では Kernel のロガー(`$kernel->logger()`)に `error` で記録し、利用者には汎用の送信失敗エラーをフォームに出す。このとき JTI は消費せず、再送できる状態にする。
 - 反映先: `05-form.md`、rules/form.md・form-mail.md。担当: v0.4.0-T1・T5。
 
 ## 1.13 ソースの文言とラベル言語の既定
@@ -425,7 +425,7 @@ v0.1.0
 
 #### v0.2.0-T6: 拡張登録・版照合・ラベル言語の既定
 
-- 対象ファイル領域: packages/core/src/Kernel/{Kernel,KernelConfig}.php、packages/core/src/Log/(Kernel ごとのチャネル)、packages/core/src/Post/PostTypeDefinition.php・packages/core/src/Tax/TaxonomyDefinition.php(ラベル言語の既定の参照部分)、packages/core/rules/meta.md・rules/acf.md(例)、packages/core/README.md(利用条件)、docs/00・docs/03・docs/11(例)、docs/01 §3.3、docs/02 §3.2、docs/07 §5
+- 対象ファイル領域: packages/core/src/Kernel/{Kernel,KernelConfig}.php、packages/core/src/Log/(Kernel ごとのチャネル)、packages/core/src/Post/PostTypeDefinition.php・packages/core/src/Tax/TaxonomyDefinition.php(ラベル言語の既定の参照部分)、packages/core/rules/meta.md・rules/acf.md(例)、packages/core/README.md(利用条件)、docs/00・docs/03・docs/11(例)、docs/01 §3.3、docs/02 §3.2、docs/07 §5、packages/core/src/Kernel/{ExtensionInterface,InstalledVersionCheck,PsrInterfaceCheck}.php(新設)、packages/core/src/Log/CallerFile.php(新設。Log の呼び出し元の判定)、packages/core/src/functions.php(`tms_log()`)、packages/core/src/Post/{PostType,PostTypeInitializer}.php・packages/core/src/Tax/{Taxonomy,TaxonomyInitializer}.php(`register()` に Kernel を渡す)、packages/core/tests/Unit/{KernelTest,EntityDefinitionTest,LogTest}.php、packages/core/tests/Unit/{KernelExtensionTest,InstalledVersionCheckTest,PsrInterfaceCheckTest,LogFacadeTest,CallerFileTest}.php(新設)、packages/core/tests/Support/{RecordingExtension,RecordingLogger}.php(新設)、packages/core/tests/fixtures/psr/(新設。古い psr の interface)、packages/core/tests/Integration/KernelBootIntegrationTest.php、packages/thumbnail/tests/Unit/ThumbnailTest.php(Log のグローバルの差し替え API の削除に伴う変更)、tests/fixtures/_wp-cli.php(コメント)、tests/fixtures/themes/tmswp-fixture-theme/{functions.php,parts/log-probe.php}・tests/fixtures/plugins/tmswp-fixture-plugin/{tmswp-fixture-plugin.php,templates/log-probe.php}、starters/theme/functions.php・starters/plugin/plugin.php・examples/sample-site/functions.php(ログの設定の行)、docs/01 §6・§9・§10(ヘルパのガードの記述)・§7.1(ラベル言語)、docs/02 §2・§3・受け入れ基準・利用例、docs/04・docs/09(日本語ラベルの例)、docs/11 §8.4・§9.3(ログの出力先)、docs/01 §4.5(リリース手順の `Kernel::VERSION` の更新)、docs/12 v0.7.0-T1・T2・v0.9.0-T4(完了条件の追加)
 - 完了条件:
   - `KernelConfig` で拡張を Kernel ごとに登録でき、拡張がこの入口だけで有効化される仕組みがある(各拡張の移行は v0.6.0・v0.7.0)。
   - `Kernel::VERSION` があり、起動時に installed.php と照合して食い違いを検出する(統合テスト)。
@@ -510,7 +510,7 @@ v0.2.0
 - 完了条件:
   - エンティティクエリ 3 種が Compare / CastType / SortOrder を受け取り、QueryValidator が無い。
   - 空の IN 指定で 0 件が返り、存在しない FQCN が例外になる。
-  - docs/03 の `WP_Error` の扱いを `00-overview.md` §5.6 の方針表に揃え(debug 時は例外、本番は `Log::error()` のうえで既定値)、実装もそれに従う。
+  - docs/03 の `WP_Error` の扱いを `00-overview.md` §5.6 の方針表に揃え(debug 時は例外、本番は Kernel のロガーに `error` で記録したうえで既定値)、実装もそれに従う。
   - noPaging / offset / page<1 / perPage=0 / 未知の operator / posts_per_page 未指定の扱いが仕様として明示され、テストで固定されている。
 - 検証コマンド: `composer test:unit`、`composer test:integration`、`grep -rn "QueryValidator" packages`(0 件)
 
@@ -563,7 +563,7 @@ v0.2.0
   - 確認画面の有無に関係なく使い捨ての送信トークンで二重送信を防ぎ、確認画面ありの場合は ConfirmToken の jti に一本化されている(§1.12 の 1)。
   - フォームのあるページで `nocache_headers()` と `DONOTCACHEPAGE` が自動で付く(§1.12 の 2)。スパム対策を差し込む仕組みがあり、Turnstile と honeypot の手本コードがある(§1.12 の 3)。
   - JtiStore の DB エラーは例外、CSRF 失敗・改ざん・再送拒否・ファイル消失・onComplete の例外が Log に残る。
-  - onComplete で起きた例外は、debug 時は例外として投げられ、本番は `Log::error()` に記録されて汎用の送信失敗エラーがフォームに出て、JTI が消費されず再送できる(統合テスト)。
+  - onComplete で起きた例外は、debug 時は例外として投げられ、本番は Kernel のロガー(`$kernel->logger()`)に `error` で記録されて汎用の送信失敗エラーがフォームに出て、JTI が消費されず再送できる(統合テスト)。
   - docs/05 のテンプレート前処理の節が明示呼び出し方式(§1.10)だけになっている。ウィザード形式(4 画面以上)は対象外と明記されている。
 - 検証コマンド: `composer test:unit`、`composer test:integration`、`composer analyse`
 
@@ -731,7 +731,7 @@ v0.3.0(v0.2.0 を含む)
 
 - 対象ファイル領域: packages/acf-bridge/src/{AcfFieldAccess,AcfMetaStorage,AcfTypes}.php、packages/acf-bridge/tests/Integration/AcfBridgeIntegrationTest.php、tests/fixtures/themes/tmswp-fixture-theme/(ACF のフィールドグループ)、docs/09 §6・§8・§10
 - 完了条件:
-  - 未設定の正規化と形の不一致(debug は例外、本番は `Log::error()`)が区別され、gallery は要素単位で検査される。
+  - 未設定の正規化と形の不一致(debug は例外、本番は Kernel のロガーに `error` で記録)が区別され、gallery は要素単位で検査される。
   - `has()` がメタの存在で判定し、AcfMetaStorage の getAll / setAll / delete が WpMetaStorage と同じ意味になる。DateTime が `wp_timezone()` で往復する。
   - 実物の ACF で、ACF 管理外・管理下の両方のキーについて、MetaBag 経由の削除と `has()` が正しく動くことを統合テストで確認する。
 - 検証コマンド: `composer test:unit`、`composer test:integration`
@@ -818,6 +818,7 @@ v0.2.0、v0.4.0、v0.6.0
   - 権限の無いユーザーで管理画面が落ちない(統合テスト)。FW が外枠(open・_step・submit・close)とエラー通知を出し、docs/08 §2.3 の例が実在の API で動く。
   - persist がスキーマの型で検証・キャストし、不一致は例外。gettext のソース文字列が英語で ja 訳があり、`wp_die()` が 403 で返る。
   - `KernelConfig` 経由の登録になり、`definition()` の評価が init 以降。debug による分岐が登録した Kernel の debug に従う(§1.7)。
+  - 拡張の内部のログは、静的な `Log` ではなく、登録した Kernel のロガー(`$kernel->logger()`)に記録する(§1.8)。対象: packages/settings-page/src/OptionFormBridge.php の 36・41・65・70 行(`Log::debug`。v0.2.0-T6 の時点の行)。docs/08 の 555 行(v0.2.0-T6 の時点の行)を、Kernel のロガーへの記録の説明に揃える。
   - 保存後の `wp_safe_redirect()` 直後の `exit` が、`00-overview.md` 原則1の例外の範囲に限られている。
 - 検証コマンド: `composer test:unit`、`composer test:integration`
 
@@ -830,6 +831,7 @@ v0.2.0、v0.4.0、v0.6.0
   - `WP_DEBUG` を直接見る箇所が無く、登録した Kernel の debug に従う(§1.7)。
   - REST API が使えることが利用条件として docs/08 と README に明記され、自分の REST ルートが無効化されていると起動後に検出して管理画面で管理者に通知する(§1.15、統合テスト)。REST 以外の経路は無い。
   - `KernelConfig` 経由の登録になり、制約(外部ストレージ非対応等)が docs/08 に書かれている(§1.3)。
+  - 拡張の内部のログは、静的な `Log` ではなく、登録した Kernel のロガー(`$kernel->logger()`)に記録する(§1.8)。対象: packages/thumbnail/src/Thumbnail.php の 44 行(`Log::warning`)、packages/thumbnail/src/RestController.php の 150・158・167 行(`Log::error`)(v0.2.0-T6 の時点の行)。packages/thumbnail/tests/Unit/ThumbnailTest.php の暫定の Kernel の起動(`bootKernelContainingThumbnail()`。packages/thumbnail をルートにして静的な `Log` を記録させる形)をやめる。docs/08 の 145・195・861 行(v0.2.0-T6 の時点の行)を、Kernel のロガーへの記録の説明に揃える。
   - `tms_thumb` を `function_exists` で囲んで定義しておらず、同名の関数が先に定義されている場合に黙ってそちらが使われない(明示エラーになる)。
 - 検証コマンド: `composer test:unit`、`composer test:integration`(実画像の生成)
 
@@ -1003,6 +1005,7 @@ v0.8.0
   - 各パッケージ・スターターのディレクトリに置いたワークフローが split で同期先へ複製され、同期先で動いて、送られたプルリクエストを自動で閉じ、monorepo へ案内する(同期先に試しのプルリクエストを送って確認した)。
   - 送り先への書き込み権限だけを持つトークンを発行し、monorepo の Secrets に `SPLIT_ACCESS_TOKEN` として登録した。トークンは fine-grained PAT。対象は送り先の 7 リポジトリ(`tmstack-io/tmswp-*`)だけ。権限は Contents: Read and write と Workflows: Read and write だけ(同期先の `.github/workflows/` を更新するため Workflows も要る)。トークンの発行と登録は、ユーザーに確認したうえで行った。
   - 各パッケージが Packagist に `tmswp/*` の名前で登録され、v0.9.0 のタグが付いている(§1.16)。main への push・split・Packagist 登録・タグ付けは、毎回ユーザーに確認したうえで、メンテナが `RELEASING.md` の手順で行った。
+  - リリースの版と `Kernel::VERSION`(packages/core/src/Kernel/Kernel.php)が一致することを、タグ付けの前に検査している(`RELEASING.md` の手順、または自動の検査。§1.6)。食い違うと、そのタグの tmswp/core を入れたサイトは boot 時の版の照合で起動しない。
 - 検証コマンド: `composer show tmswp/core --available`(Packagist から取得できる)、`gh repo view tmstack-io/tmswp-core --json hasIssuesEnabled,hasWikiEnabled,isArchived,description`(7 リポジトリで実行)
 
 #### v0.9.0-T5: 利用者のプロジェクトからの導入確認と受け入れ記録

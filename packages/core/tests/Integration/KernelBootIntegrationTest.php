@@ -5,8 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Integration;
 
 use Closure;
-use Psr\Log\AbstractLogger;
-use Stringable;
+use Composer\Autoload\ClassLoader;
 use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Exception\DiscoveryException;
 use TMSWP\Core\Exception\KernelException;
@@ -19,9 +18,11 @@ use TMSWP\Core\Kernel\HookMethodKind;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Kernel\KernelContext;
-use TMSWP\Core\Log\Log;
-use TMSWP\Core\Log\LoggerRegistry;
+use TMSWP\Core\Label\LabelLanguage;
+use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Core\Tests\Support\RecordingExtension;
+use TMSWP\Core\Tests\Support\RecordingLogger;
 use TMSWP\Core\Tests\Support\UsesTempDirectories;
 use WP_Hook;
 use WP_Rewrite;
@@ -35,6 +36,15 @@ final class KernelBootIntegrationTest extends IntegrationTestCase
 
     /** @var list<Closure(string): void> */
     private array $autoloaders = [];
+
+    /** productionThemeConfig()・productionPluginConfig() の Kernel のログを記録するロガー */
+    private RecordingLogger $logger;
+
+    public function set_up(): void
+    {
+        parent::set_up();
+        $this->logger = new RecordingLogger();
+    }
 
     public function tear_down(): void
     {
@@ -312,7 +322,8 @@ PHP);
             new DiscoveredHookMethod($config->appNamespace . '\\Hook\\FileOnlyHook', 'handle', $fileOnlyHook, 15, 0, HookMethodKind::Action),
         ]));
 
-        $messages = $this->captureLogs(static fn(): Kernel => Kernel::boot($config));
+        Kernel::boot($config);
+        $messages = array_column($this->logger->records, 'message');
 
         $filters = $GLOBALS['wp_filter'];
         self::assertIsArray($filters);
@@ -327,6 +338,145 @@ PHP);
         foreach ($messages as $message) {
             self::assertStringNotContainsString('tmswp.discovery', $message);
         }
+    }
+
+    public function testThemeAndPluginKernelsEachRegisterTheSameExtensionClass(): void
+    {
+        $themeExtension = self::themeKernel()->config()->extensions[0] ?? null;
+        $pluginExtension = self::pluginKernel()->config()->extensions[0] ?? null;
+
+        self::assertInstanceOf(RecordingExtension::class, $themeExtension);
+        self::assertInstanceOf(RecordingExtension::class, $pluginExtension);
+        self::assertNotSame($themeExtension, $pluginExtension);
+        // 拡張は自分を登録した Kernel の boot 中に1回だけ呼ばれ、その Kernel の debug を受け取る
+        self::assertSame([['kernel' => self::themeKernel(), 'debug' => true]], $themeExtension->registrations);
+        self::assertSame([['kernel' => self::pluginKernel(), 'debug' => true]], $pluginExtension->registrations);
+    }
+
+    public function testStaticLogCallsAreRecordedInTheKernelOfTheCallerFile(): void
+    {
+        $themeLogger = self::fixtureLogger(self::themeKernel());
+        $pluginLogger = self::fixtureLogger(self::pluginKernel());
+        $themeBefore = \count($themeLogger->records);
+        $pluginBefore = \count($pluginLogger->records);
+
+        // テーマ・プラグインそれぞれのルートの中にある、クラスの無いファイルから呼ぶ
+        require get_stylesheet_directory() . '/parts/log-probe.php';
+        require \dirname((string) self::pluginKernel()->config()->pluginFile) . '/templates/log-probe.php';
+
+        self::assertSame(['tmswp fixture theme log probe'], array_column(\array_slice($themeLogger->records, $themeBefore), 'message'));
+        self::assertSame(['tmswp fixture plugin log probe'], array_column(\array_slice($pluginLogger->records, $pluginBefore), 'message'));
+    }
+
+    public function testStaticLogCallFromFileOutsideEveryKernelRootThrows(): void
+    {
+        $file = realpath($this->createTempDirectory('integration-log-outside')) . '/outside.php';
+        $this->writeFile($file, "<?php\n\ndeclare(strict_types=1);\n\n\\TMSWP\\Core\\Log\\Log::error('lost');\n");
+
+        try {
+            require $file;
+            self::fail('KernelException was not thrown');
+        } catch (KernelException $exception) {
+            self::assertSame("file '{$file}' is not inside the root directory of any booted TMSWP kernel", $exception->getMessage());
+        }
+    }
+
+    public function testInternalLogsAreRecordedInTheKernelTheyHandle(): void
+    {
+        $themeLogger = self::fixtureLogger(self::themeKernel());
+        $themeBefore = \count($themeLogger->records);
+        $config = $this->productionPluginConfig('InternalLog');
+        (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
+
+        // init の後の本番の boot は、遅延 boot のキャッチアップを、その Kernel のログに記録する
+        Kernel::boot($config);
+
+        self::assertContains(
+            "Kernel::boot() was called after the 'init' hook had fired. Boot from the top level of functions.php or the plugin main file.",
+            array_column($this->logger->records, 'message'),
+        );
+        self::assertCount($themeBefore, $themeLogger->records);
+    }
+
+    public function testBootDetectsAnotherVendorBundlingADifferentCoreVersion(): void
+    {
+        // 別のプラグインが vendor/ に別の版の tmswp/core を同梱し、その Composer のオートローダが登録された状態
+        $vendor = $this->createTempDirectory('integration-other-vendor') . '/vendor';
+        self::assertTrue(mkdir($vendor . '/composer', 0775, true));
+        $this->writeFile($vendor . '/composer/installed.php', '<?php return ' . var_export([
+            'root' => ['name' => 'example/other-plugin', 'pretty_version' => 'dev-main', 'version' => 'dev-main', 'reference' => null, 'type' => 'wordpress-plugin', 'install_path' => $vendor . '/composer/../../', 'aliases' => [], 'dev' => false],
+            'versions' => [
+                'tmswp/core' => ['pretty_version' => 'v0.1.0', 'version' => '0.1.0.0', 'reference' => null, 'type' => 'library', 'install_path' => $vendor . '/composer/../tmswp/core', 'aliases' => [], 'dev_requirement' => false],
+            ],
+        ], true) . ';');
+        $loader = new ClassLoader($vendor);
+        $loader->register();
+        $config = $this->productionPluginConfig('VersionMismatch');
+        (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
+
+        try {
+            Kernel::boot($config);
+            self::fail('KernelException was not thrown');
+        } catch (KernelException $exception) {
+            self::assertStringContainsString('do not match the loaded core ' . Kernel::VERSION . ": v0.1.0 at {$vendor}/composer/../tmswp/core", $exception->getMessage());
+        } finally {
+            $loader->unregister();
+        }
+
+        self::assertArrayNotHasKey($config->appNamespace, Kernel::all());
+    }
+
+    public function testKernelLabelLanguageAppliesToDefinitionsWithoutLabelLanguage(): void
+    {
+        $config = $this->productionThemeConfig('JapaneseLabels', LabelLanguage::Ja);
+        $namespace = $config->appNamespace;
+        $postType = 'tmswp_ja_' . substr(md5($namespace), 0, 8);
+        // labelLanguage() を呼ばず、複数形も渡さない(Kernel の既定の Ja で組み立てる)
+        $this->writeFile($config->appDir . '/Post/JapanesePost.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Post;
+
+use TMSWP\\Core\\Attribute\\AsPostType;
+use TMSWP\\Core\\Post\\PostType;
+use TMSWP\\Core\\Post\\PostTypeDefinition;
+
+#[AsPostType]
+final class JapanesePost extends PostType
+{
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('{$postType}')->label('お知らせ');
+    }
+}
+PHP);
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\\Post\\JapanesePost', AsPostType::class, []),
+        ], []));
+
+        try {
+            // init の後の boot のため、投稿タイプはキャッチアップでその場で登録される
+            Kernel::boot($config);
+            $object = get_post_type_object($postType);
+
+            self::assertNotNull($object);
+            self::assertSame('お知らせ', $object->label);
+            self::assertSame('新規お知らせを追加', $object->labels->add_new_item);
+        } finally {
+            unregister_post_type($postType);
+        }
+    }
+
+    /** fixture のテーマ・プラグインが test チャネルに登録した RecordingLogger を返す。 */
+    private static function fixtureLogger(Kernel $kernel): RecordingLogger
+    {
+        $logger = $kernel->logger()->channel('test');
+        self::assertInstanceOf(RecordingLogger::class, $logger);
+
+        return $logger;
     }
 
     /**
@@ -417,7 +567,7 @@ PHP);
             new DiscoveredComponent($namespace . '\\Post\\RewritePost', AsPostType::class, []),
         ], []));
 
-        $this->captureLogs(static fn(): Kernel => Kernel::boot($config));
+        Kernel::boot($config);
         self::assertTrue(post_type_exists($postType));
 
         return $postType;
@@ -467,12 +617,12 @@ PHP);
      * 本番相当(debug=false)のテーマ形態の構成を、一時ディレクトリのテーマで作る。テーマ切替のフックに登録される
      * コールバックは、テストライブラリが tear_down でフックごと元に戻す。
      */
-    private function productionThemeConfig(string $name): KernelConfig
+    private function productionThemeConfig(string $name, LabelLanguage $labelLanguage = LabelLanguage::En): KernelConfig
     {
         $root = $this->createTempDirectory('integration-' . strtolower($name));
         self::assertTrue(mkdir($root . '/app'));
 
-        return KernelConfig::theme($root . '/app', 'TmswpIntegration' . $name . uniqid(), false, false);
+        return KernelConfig::theme($root . '/app', 'TmswpIntegration' . $name . uniqid(), false, false, logChannels: $this->recordLogs(), labelLanguage: $labelLanguage);
     }
 
     private function pluginDiscoveryFile(): DiscoveryFile
@@ -490,40 +640,19 @@ PHP);
         self::assertTrue(mkdir($root . '/app'));
         $this->writeFile($root . '/plugin.php', "<?php\n");
 
-        return KernelConfig::plugin($root . '/plugin.php', $root . '/app', 'TmswpIntegration' . $name . uniqid(), false);
+        return KernelConfig::plugin($root . '/plugin.php', $root . '/app', 'TmswpIntegration' . $name . uniqid(), false, logChannels: $this->recordLogs());
     }
 
     /**
-     * Log の出力先を一時的に差し替えて、ログをファイルに書かずに捕まえる。
+     * Kernel のログを、このテストの RecordingLogger へ送る logChannels を返す(ファイルに書かない)。
      *
-     * @param callable(): mixed $callback
-     *
-     * @return list<string> 記録されたメッセージ
+     * @return Closure(): array<string, LogChannel>
      */
-    private function captureLogs(callable $callback): array
+    private function recordLogs(): Closure
     {
-        $logger = new class extends AbstractLogger {
-            /** @var list<string> */
-            public array $messages = [];
+        $logger = $this->logger;
 
-            /** @param array<mixed> $context */
-            public function log(mixed $level, string|Stringable $message, array $context = []): void
-            {
-                $this->messages[] = (string) $message;
-            }
-        };
-        $registry = new LoggerRegistry();
-        $registry->set('integration', $logger);
-        $previous = Log::registry();
-        Log::setRegistry($registry);
-
-        try {
-            $callback();
-        } finally {
-            Log::setRegistry($previous);
-        }
-
-        return $logger->messages;
+        return static fn(): array => ['integration' => new LogChannel($logger)];
     }
 
     private function writeFile(string $path, string $contents): void

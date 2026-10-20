@@ -15,6 +15,7 @@ use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use Psr\Log\AbstractLogger;
 use RuntimeException;
 use Stringable;
+use TMSWP\Core\Attribute\AsHook;
 use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Attribute\ComponentAttributeInterface;
 use TMSWP\Core\Exception\DiscoveryException;
@@ -24,18 +25,21 @@ use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\DiscoveredHookMethod;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
+use TMSWP\Core\Kernel\ExtensionInterface;
 use TMSWP\Core\Kernel\HookMethodKind;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Kernel\KernelContext;
-use TMSWP\Core\Log\Log;
-use TMSWP\Core\Log\LoggerRegistry;
+use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\Core\Tests\Support\WpdbTestDouble;
 use TMSWP\Core\View\ActionRouter;
 
 final class KernelTest extends UnitTestCase
 {
+    /** @var list<Closure(string): void> tearDown で外す app/ の autoload */
+    private array $autoloaders = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -49,9 +53,12 @@ final class KernelTest extends UnitTestCase
 
     protected function tearDown(): void
     {
+        foreach ($this->autoloaders as $autoloader) {
+            spl_autoload_unregister($autoloader);
+        }
+
         unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions']);
         Kernel::reset();
-        Log::setRegistry(null);
         parent::tearDown();
     }
 
@@ -447,8 +454,8 @@ PHP);
 
     public function testFailingHookMethodIsLoggedAndSkippedInProduction(): void
     {
-        $logger = $this->captureLogs();
-        $filter = $this->bootWithFileOnlyHookMethod('tmswp_failing_filter', 'fail', 2, HookMethodKind::Filter, 2);
+        $logger = new KernelTestLogger();
+        $filter = $this->bootWithFileOnlyHookMethod('tmswp_failing_filter', 'fail', 2, HookMethodKind::Filter, 2, $logger);
 
         // filter は第1引数をそのまま返し、値を変えない
         self::assertSame('original', $filter('original', 'extra'));
@@ -464,9 +471,9 @@ PHP);
 
     public function testFailingActionWithoutArgumentsIsSkippedInProduction(): void
     {
-        $logger = $this->captureLogs();
+        $logger = new KernelTestLogger();
         // Action は宣言した引数の数(0)で登録する。戻り値は WordPress が使わない
-        $action = $this->bootWithFileOnlyHookMethod('tmswp_failing_action', 'failWithoutArguments', 0, HookMethodKind::Action, 0);
+        $action = $this->bootWithFileOnlyHookMethod('tmswp_failing_action', 'failWithoutArguments', 0, HookMethodKind::Action, 0, $logger);
 
         self::assertNull($action());
         self::assertCount(1, $logger->records);
@@ -474,9 +481,9 @@ PHP);
 
     public function testFailingFilterWithoutArgumentsReturnsOriginalValueInProduction(): void
     {
-        $logger = $this->captureLogs();
+        $logger = new KernelTestLogger();
         // 引数を宣言しない Filter も、元の値を返せるよう第1引数を受け取って登録する
-        $filter = $this->bootWithFileOnlyHookMethod('tmswp_failing_zero_filter', 'failWithoutArguments', 0, HookMethodKind::Filter, 1);
+        $filter = $this->bootWithFileOnlyHookMethod('tmswp_failing_zero_filter', 'failWithoutArguments', 0, HookMethodKind::Filter, 1, $logger);
 
         self::assertSame('original', $filter('original'));
         self::assertCount(1, $logger->records);
@@ -492,7 +499,7 @@ PHP);
 
     public function testFailingHookMethodThrowsInDebug(): void
     {
-        $logger = $this->captureLogs();
+        $logger = new KernelTestLogger();
         $appDir = $this->createTempDirectory('failing-debug-hook-app');
         $namespace = 'Example\Tests\FailingDebugHookApp' . uniqid();
         $this->writeFile($appDir . '/Hooks/FailingHook.php', <<<PHP
@@ -519,7 +526,7 @@ PHP);
         $autoload = $this->registerAppAutoloader($namespace, $appDir);
 
         try {
-            $filter = $this->bootAndCaptureHookCallback(KernelConfig::theme($appDir, $namespace, true, false), 'tmswp_failing_debug_filter', 1);
+            $filter = $this->bootAndCaptureHookCallback(KernelConfig::theme($appDir, $namespace, true, false, logChannels: self::recordTo($logger)), 'tmswp_failing_debug_filter', 1);
 
             try {
                 $filter('original');
@@ -536,10 +543,10 @@ PHP);
 
     public function testUnresolvableHookHandlerIsLoggedAndSkippedInProduction(): void
     {
-        $logger = $this->captureLogs();
+        $logger = new KernelTestLogger();
         $appDir = $this->createTempDirectory('stale-hook-app');
         $namespace = 'Example\Tests\StaleHookApp' . uniqid();
-        $config = KernelConfig::theme($appDir, $namespace, false, false);
+        $config = KernelConfig::theme($appDir, $namespace, false, false, logChannels: self::recordTo($logger));
 
         // 探索結果ファイルが古く、削除済みのクラスを指している
         (new DiscoveryFile($config))->write(new DiscoveryResult([], [
@@ -553,10 +560,10 @@ PHP);
 
     public function testLateBootCatchesUpFiredHooksInWordPressFiringOrder(): void
     {
-        $logger = $this->captureLogs();
+        $logger = new KernelTestLogger();
         $appDir = $this->createTempDirectory('catch-up-app');
         $namespace = 'Example\Tests\CatchUpApp' . uniqid();
-        $config = KernelConfig::theme($appDir, $namespace, false, false);
+        $config = KernelConfig::theme($appDir, $namespace, false, false, logChannels: self::recordTo($logger));
         $attribute = KernelTestCatchUpAttribute::class;
 
         // コンポーネントは FQCN の順に並ぶ。フック名の辞書順(init < plugins_loaded)とも priority の順とも違う順にしておく
@@ -682,10 +689,10 @@ PHP);
 
     public function testFailingCatchUpInitializationFailsBootInProduction(): void
     {
-        $this->captureLogs();
+        $logger = new KernelTestLogger();
         $appDir = $this->createTempDirectory('failing-catch-up-app');
         $namespace = 'Example\Tests\FailingCatchUpApp' . uniqid();
-        $config = KernelConfig::theme($appDir, $namespace, false, false);
+        $config = KernelConfig::theme($appDir, $namespace, false, false, logChannels: self::recordTo($logger));
         (new DiscoveryFile($config))->write(new DiscoveryResult([
             new DiscoveredComponent(KernelTestHookProbe::class, AsPostType::class, []),
         ], []));
@@ -699,6 +706,143 @@ PHP);
         }
 
         self::assertSame([], Kernel::all());
+    }
+
+    public function testProductionCatchUpRegistersKernelSoThatAppCodeCanLogToIt(): void
+    {
+        $logger = new KernelTestLogger();
+        $root = $this->createTempDirectory('catch-up-log-root');
+        $appDir = $root . '/app';
+        $namespace = 'Example\Tests\CatchUpLogApp' . uniqid();
+        // register() を上書きする #[AsHook] は、テーマ形態では after_setup_theme(0)で初期化される
+        $this->writeFile($appDir . '/Hook/LateLogHook.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Hook;
+
+use TMSWP\\Core\\Attribute\\AsHook;
+use TMSWP\\Core\\Hook\\Hook;
+use TMSWP\\Core\\Log\\Log;
+
+#[AsHook]
+final class LateLogHook extends Hook
+{
+    public function register(): void
+    {
+        Log::error('logged during catch-up');
+    }
+}
+PHP);
+        $config = KernelConfig::theme($appDir, $namespace, false, false, logChannels: self::recordTo($logger));
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\Hook\LateLogHook', AsHook::class, []),
+        ], []));
+        $GLOBALS['wp_actions'] = ['after_setup_theme' => 1];
+        // テーマ形態の Kernel は、子テーマのディレクトリも forFile() の判定に使う(ここでは子テーマ無し)
+        Functions\when('get_template_directory')->justReturn($config->rootDir());
+        Functions\when('get_stylesheet_directory')->justReturn($config->rootDir());
+        $autoload = $this->registerAppAutoloader($namespace, $appDir);
+
+        try {
+            $kernel = Kernel::boot($config);
+        } finally {
+            spl_autoload_unregister($autoload);
+        }
+
+        // キャッチアップの中のアプリのコードの Log::error() が、この Kernel に記録される
+        self::assertContains('logged during catch-up', array_column($logger->records, 'message'));
+        self::assertSame($kernel, Kernel::get($namespace));
+    }
+
+    public function testFailedCatchUpRemovesKernelThatWasRegisteredForIt(): void
+    {
+        $appDir = $this->createTempDirectory('failed-catch-up-registration-app');
+        $namespace = 'Example\Tests\FailedCatchUpRegistrationApp' . uniqid();
+        $config = KernelConfig::theme($appDir, $namespace, false, false, logChannels: self::recordTo(new KernelTestLogger()));
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\Failing', KernelTestCatchUpAttribute::class, ['hook' => 'init', 'priority' => 10, 'initializer' => KernelTestRegisteredThenFailingInitializer::class]),
+        ], []));
+        $GLOBALS['wp_actions'] = ['init' => 1];
+        KernelTestRegisteredThenFailingInitializer::$registeredDuringCatchUp = null;
+
+        try {
+            Kernel::boot($config);
+            self::fail('RuntimeException was not thrown');
+        } catch (RuntimeException $exception) {
+            self::assertSame('catch-up initialization failed', $exception->getMessage());
+        }
+
+        // キャッチアップの間は登録されていたが、失敗した boot の後には残らない
+        self::assertTrue(KernelTestRegisteredThenFailingInitializer::$registeredDuringCatchUp);
+        self::assertArrayNotHasKey($namespace, Kernel::all());
+    }
+
+    public function testInitializerCanUseServiceRegisteredByExtensionInNormalBoot(): void
+    {
+        $config = $this->extensionServiceConfig('NormalBootService', debug: true);
+        $runner = null;
+        // init は未発火。init 10 のグループは add_action され、発火のときに初期化する
+        Actions\expectAdded('init')->once()->with(Mockery::type(Closure::class), 10, 0)
+            ->whenHappen(static function (Closure $callback) use (&$runner): void {
+                $runner = $callback;
+            });
+
+        $kernel = Kernel::boot($config);
+        self::assertInstanceOf(Closure::class, $runner);
+        $runner();
+
+        self::assertSame([$kernel->container()->get(KernelTestExtensionService::class)], KernelTestServiceUsingInitializer::$resolved);
+    }
+
+    public function testInitializerCanUseServiceRegisteredByExtensionInProductionCatchUp(): void
+    {
+        $config = $this->extensionServiceConfig('CatchUpService', debug: false);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($config->appNamespace . '\Uses', KernelTestCatchUpAttribute::class, ['hook' => 'init', 'priority' => 10, 'initializer' => KernelTestServiceUsingInitializer::class]),
+        ], []));
+        // init は発火済み。キャッチアップの初期化より先に拡張が登録され、サービスを使える
+        $GLOBALS['wp_actions'] = ['init' => 1];
+
+        $kernel = Kernel::boot($config);
+
+        self::assertSame([$kernel->container()->get(KernelTestExtensionService::class)], KernelTestServiceUsingInitializer::$resolved);
+    }
+
+    /**
+     * 拡張が Container に KernelTestExtensionService を入れ、init 10 のコンポーネントの初期化がそれを使う構成を作る。
+     * 本番の構成のコンポーネントは、呼び出し側が探索結果ファイルに書く。
+     */
+    private function extensionServiceConfig(string $name, bool $debug): KernelConfig
+    {
+        KernelTestServiceUsingInitializer::$resolved = [];
+        $root = $this->createTempDirectory('extension-service-' . strtolower($name));
+        $appDir = $root . '/app';
+        $namespace = 'Example\\Tests\\' . $name . uniqid();
+
+        if ($debug) {
+            // debug の boot は appDir を走査するため、init 10 のコンポーネントを app/ に置く
+            $attribute = KernelTestCatchUpAttribute::class;
+            $initializer = KernelTestServiceUsingInitializer::class;
+            $this->writeFile($appDir . '/Uses.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace};
+
+#[\\{$attribute}(hook: 'init', priority: 10, initializer: \\{$initializer}::class)]
+final class Uses
+{
+}
+PHP);
+            $this->autoloaders[] = $this->registerAppAutoloader($namespace, $appDir);
+        } elseif (!mkdir($appDir, 0775, true)) {
+            self::fail("ディレクトリを作成できません: {$appDir}");
+        }
+
+        return KernelConfig::theme($appDir, $namespace, $debug, false, extensions: [new KernelTestServiceExtension()], logChannels: self::recordTo(new KernelTestLogger()));
     }
 
     private function assertLifecycleCallbacksOnlyDeleteRewriteRules(Kernel $kernel, mixed $activate, mixed $deactivate): void
@@ -722,9 +866,9 @@ PHP);
      *
      * @return Closure(mixed...): mixed
      */
-    private function bootWithFileOnlyHookMethod(string $hook, string $method, int $acceptedArgs, HookMethodKind $kind, int $registeredArgs): Closure
+    private function bootWithFileOnlyHookMethod(string $hook, string $method, int $acceptedArgs, HookMethodKind $kind, int $registeredArgs, KernelTestLogger $logger = new KernelTestLogger()): Closure
     {
-        $config = KernelConfig::theme($this->createTempDirectory('hook-method-app'), 'Example\Tests\HookMethodApp' . uniqid(), false, false);
+        $config = KernelConfig::theme($this->createTempDirectory('hook-method-app'), 'Example\Tests\HookMethodApp' . uniqid(), false, false, logChannels: self::recordTo($logger));
         (new DiscoveryFile($config))->write(new DiscoveryResult([], [
             new DiscoveredHookMethod(KernelTestHookProbe::class, $method, $hook, 10, $acceptedArgs, $kind),
         ]));
@@ -750,16 +894,13 @@ PHP);
     }
 
     /**
-     * Log の出力先を、記録を残すだけのロガーに差し替える(tearDown で戻す)。
+     * Kernel のログを、記録を残すだけのロガーへ送る logChannels を返す。
+     *
+     * @return Closure(): array<string, LogChannel>
      */
-    private function captureLogs(): KernelTestLogger
+    private static function recordTo(KernelTestLogger $logger): Closure
     {
-        $logger = new KernelTestLogger();
-        $registry = new LoggerRegistry();
-        $registry->set('test', $logger);
-        Log::setRegistry($registry);
-
-        return $logger;
+        return static fn(): array => ['test' => new LogChannel($logger)];
     }
 
     private function catchUpComponentClass(string $namespace, string $class, string $hook, int $priority): string
@@ -909,6 +1050,51 @@ final readonly class KernelTestCatchUpAttribute implements ComponentAttributeInt
     public function initializerClass(): string
     {
         return $this->initializer;
+    }
+}
+
+/** 拡張が Container に登録するサービスの id(interface のため autowire では解決できない) */
+interface KernelTestExtensionService {}
+
+final class KernelTestExtensionServiceImplementation implements KernelTestExtensionService {}
+
+/**
+ * Container に KernelTestExtensionService を登録する拡張。
+ */
+final class KernelTestServiceExtension implements ExtensionInterface
+{
+    public function register(Kernel $kernel): void
+    {
+        $kernel->container()->set(KernelTestExtensionService::class, new KernelTestExtensionServiceImplementation());
+    }
+}
+
+/**
+ * 初期化で、拡張が登録した KernelTestExtensionService を Container から取る。
+ */
+final class KernelTestServiceUsingInitializer implements ComponentInitializerInterface
+{
+    /** @var list<KernelTestExtensionService> */
+    public static array $resolved = [];
+
+    public function initialize(DiscoveredComponent $component, Kernel $kernel): void
+    {
+        self::$resolved[] = $kernel->container()->get(KernelTestExtensionService::class);
+    }
+}
+
+/**
+ * キャッチアップの初期化の時点で、そのコンポーネントの Kernel がレジストリにあったかを記録してから失敗する。
+ */
+final class KernelTestRegisteredThenFailingInitializer implements ComponentInitializerInterface
+{
+    public static ?bool $registeredDuringCatchUp = null;
+
+    public function initialize(DiscoveredComponent $component, Kernel $kernel): void
+    {
+        self::$registeredDuringCatchUp = \array_key_exists($kernel->config()->appNamespace, Kernel::all());
+
+        throw new RuntimeException('catch-up initialization failed');
     }
 }
 

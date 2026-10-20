@@ -17,8 +17,9 @@ declare(strict_types=1);
 
 /*
  * Composer のオートローダは、実際のテーマ・プラグインと同じくプラグインを読み込む時点で登録する。
- * WP-CLI の phar は --require の後に自身の依存(古い psr/container を含む)のオートローダを先頭に登録するため、
- * ここで登録すると psr/container が phar 側から読まれ、Container の宣言と合わずに止まる。
+ * WP-CLI の phar は --require の後に自身の依存(古い psr/container 1.0 を含む)のオートローダを先頭に登録するため、
+ * ここで登録すると psr/container が phar 側から読まれ、Kernel::boot() がその非互換を検出して KernelException で
+ * 止まる(packages/core/README.md の利用条件)。
  */
 WP_CLI::add_wp_hook('muplugins_loaded', static function (): void {
     require dirname(__DIR__, 2) . '/vendor/autoload.php';

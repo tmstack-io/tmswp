@@ -24,7 +24,7 @@ final class EntityDefinitionTest extends UnitTestCase
             ->hasArchive()
             ->supports('title', 'thumbnail')
             ->taxonomies(DefinitionTaxonomy::class)
-            ->toArgs();
+            ->toArgs(LabelLanguage::En);
 
         $labels = $args['labels'];
         self::assertIsArray($labels);
@@ -48,7 +48,7 @@ final class EntityDefinitionTest extends UnitTestCase
         $args = PostTypeDefinition::create('case')
             ->label('事例')
             ->labelLanguage(LabelLanguage::Ja)
-            ->toArgs();
+            ->toArgs(LabelLanguage::En);
 
         $labels = $args['labels'];
         self::assertIsArray($labels);
@@ -66,7 +66,7 @@ final class EntityDefinitionTest extends UnitTestCase
         $this->expectException(EntityDefinitionException::class);
         $this->expectExceptionMessage("post type 'book' requires a plural label for LabelLanguage::En: pass it as label('Book', '<plural>')");
 
-        $definition->toArgs();
+        $definition->toArgs(LabelLanguage::En);
     }
 
     public function testEnglishTaxonomyLabelWithoutPluralIsRejectedAtArgsBuild(): void
@@ -76,7 +76,7 @@ final class EntityDefinitionTest extends UnitTestCase
         $this->expectException(EntityDefinitionException::class);
         $this->expectExceptionMessage("taxonomy 'genre' requires a plural label for LabelLanguage::En: pass it as label('Genre', '<plural>')");
 
-        $definition->toArgs();
+        $definition->toArgs(LabelLanguage::En);
     }
 
     /** @return iterable<string, array{PostTypeDefinition|TaxonomyDefinition, string}> */
@@ -94,7 +94,7 @@ final class EntityDefinitionTest extends UnitTestCase
         $this->expectException(EntityDefinitionException::class);
         $this->expectExceptionMessage("{$subject} got an empty plural label: pass a non-empty plural, or omit the second argument of label() (null) to omit it");
 
-        $definition->toArgs();
+        $definition->toArgs(LabelLanguage::En);
     }
 
     /** @return iterable<string, array{PostTypeDefinition|TaxonomyDefinition, string}> */
@@ -112,7 +112,7 @@ final class EntityDefinitionTest extends UnitTestCase
         $this->expectException(EntityDefinitionException::class);
         $this->expectExceptionMessage("{$subject} got an empty singular label: pass a non-empty singular to label()");
 
-        $definition->toArgs();
+        $definition->toArgs(LabelLanguage::En);
     }
 
     public function testJapaneseTaxonomyLabelUsesSingularWhenPluralIsOmitted(): void
@@ -121,7 +121,7 @@ final class EntityDefinitionTest extends UnitTestCase
             ->label('ジャンル')
             ->labelLanguage(LabelLanguage::Ja)
             ->labels(['back_to_items' => '← ジャンルへ'])
-            ->toArgs();
+            ->toArgs(LabelLanguage::En);
 
         $labels = $args['labels'];
         self::assertIsArray($labels);
@@ -135,11 +135,49 @@ final class EntityDefinitionTest extends UnitTestCase
         self::assertSame('よく使われているジャンル', $labels['popular_items']);
     }
 
+    /** @return iterable<string, array{PostTypeDefinition|TaxonomyDefinition, string}> */
+    public static function definitionsWithoutLabelLanguage(): iterable
+    {
+        yield 'post type' => [PostTypeDefinition::create('case')->label('事例'), '新規事例を追加'];
+        yield 'taxonomy' => [TaxonomyDefinition::create('genre')->label('ジャンル'), '新規ジャンルを追加'];
+    }
+
+    #[DataProvider('definitionsWithoutLabelLanguage')]
+    public function testUnspecifiedLabelLanguageUsesKernelDefault(PostTypeDefinition|TaxonomyDefinition $definition, string $addNewItem): void
+    {
+        // labelLanguage() を呼ばない定義は、渡された Kernel の既定(Ja)でラベルを作り、複数形を省略できる
+        $labels = $definition->toArgs(LabelLanguage::Ja)['labels'];
+
+        self::assertIsArray($labels);
+        self::assertSame($addNewItem, $labels['add_new_item']);
+    }
+
+    public function testExplicitLabelLanguageTakesPrecedenceOverKernelDefault(): void
+    {
+        $postType = PostTypeDefinition::create('book')->label('Book', 'Books')->labelLanguage(LabelLanguage::En)->toArgs(LabelLanguage::Ja);
+        $taxonomy = TaxonomyDefinition::create('genre')->label('Genre', 'Genres')->labelLanguage(LabelLanguage::En)->toArgs(LabelLanguage::Ja);
+
+        self::assertIsArray($postType['labels']);
+        self::assertSame('Add Book', $postType['labels']['add_new_item']);
+        self::assertIsArray($taxonomy['labels']);
+        self::assertSame('Add Genre', $taxonomy['labels']['add_new_item']);
+    }
+
+    public function testEnglishKernelDefaultStillRequiresPluralForUnspecifiedDefinition(): void
+    {
+        $definition = PostTypeDefinition::create('case')->label('事例');
+
+        $this->expectException(EntityDefinitionException::class);
+        $this->expectExceptionMessage("or select LabelLanguage::Ja with labelLanguage() or KernelConfig's labelLanguage");
+
+        $definition->toArgs(LabelLanguage::En);
+    }
+
     public function testLabelsWithNameAloneAreUsedWithoutGeneration(): void
     {
         $args = PostTypeDefinition::create('book')
             ->labels(['name' => 'Books', 'singular_name' => 'Book'])
-            ->toArgs();
+            ->toArgs(LabelLanguage::En);
 
         self::assertSame('Books', $args['label']);
         self::assertSame(['name' => 'Books', 'singular_name' => 'Book'], $args['labels']);
@@ -162,10 +200,10 @@ final class EntityDefinitionTest extends UnitTestCase
     public function testTaxonomyDefinitionResolvesPostTypeClassReferences(): void
     {
         $args = TaxonomyDefinition::create('product_category')
-            ->label('製品カテゴリ', '製品カテゴリ')
+            ->label('製品カテゴリ')
             ->objectType(DefinitionPostType::class, DefinitionPostType::class)
             ->hierarchical()
-            ->toArgs();
+            ->toArgs(LabelLanguage::Ja);
 
         self::assertTrue($args['hierarchical']);
         self::assertSame(['product'], TaxonomyDefinition::create('product_category')->objectType(DefinitionPostType::class, DefinitionPostType::class)->resolvedObjectTypes());

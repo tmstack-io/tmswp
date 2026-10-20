@@ -560,18 +560,16 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/vendor/autoload.php';
 
-// アプリログの出力先(引数は出力ディレクトリ。{date}.log が日次生成される)。
-// チャンネル・レベル等の調整方法はFW設計書(View/Support/Log)を参照
-\TMSWP\Core\Log\Log::set(
-    'default',
-    new \TMSWP\Core\Log\SimpleLogger(WP_CONTENT_DIR . '/logs')
-);
-
-// FWブート: app/ 配下のAttribute付きクラスを自動探索・登録する。ここにロジックを足さないこと
+// FWブート: app/ 配下のAttribute付きクラスを自動探索・登録する。ここにロジックを足さないこと。
+// logChannels はこのテーマの Kernel だけのログの出力先。SimpleLogger の既定の出力先は WP_CONTENT_DIR/tmswp-logs で、
+// ファイル名は {date}-{推測できない接尾辞}.log が日次生成される。チャンネル・レベル等の調整方法はFW設計書(View/Support/Log)を参照
 \TMSWP\Core\Kernel\Kernel::boot(
     \TMSWP\Core\Kernel\KernelConfig::theme(
         appDir: __DIR__ . '/app',
         appNamespace: 'App',
+        logChannels: static fn(): array => [
+            'default' => new \TMSWP\Core\Log\LogChannel(new \TMSWP\Core\Log\SimpleLogger()),
+        ],
     )
 );
 ```
@@ -783,20 +781,18 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 require_once __DIR__ . '/vendor/autoload.php';
 
-// アプリログの出力先(引数は出力ディレクトリ。{date}.log が日次生成される)。
-// チャンネル・レベル等の調整方法はFW設計書(View/Support/Log)を参照
-\TMSWP\Core\Log\Log::set(
-    'default',
-    new \TMSWP\Core\Log\SimpleLogger( WP_CONTENT_DIR . '/logs' )
-);
-
 // FWブート: app/ 配下のAttribute付きクラスを自動探索・登録する。ここにロジックを足さないこと。
-// file: __FILE__ により、有効化フック(Modelマイグレーション等)とtemplates/フォールバックが自動配線される
+// file: __FILE__ により、有効化フック(Modelマイグレーション等)とtemplates/フォールバックが自動配線される。
+// logChannels はこのプラグインの Kernel だけのログの出力先(テーマや他のプラグインの設定とは別)。SimpleLogger の
+// 既定の出力先は WP_CONTENT_DIR/tmswp-logs で、ファイル名は {date}-{推測できない接尾辞}.log が日次生成される
 \TMSWP\Core\Kernel\Kernel::boot(
     \TMSWP\Core\Kernel\KernelConfig::plugin(
         file: __FILE__,
         appDir: __DIR__ . '/app',
         appNamespace: 'PluginApp',
+        logChannels: static fn(): array => [
+            'default' => new \TMSWP\Core\Log\LogChannel( new \TMSWP\Core\Log\SimpleLogger() ),
+        ],
     )
 );
 ```

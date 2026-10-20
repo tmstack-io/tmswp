@@ -19,7 +19,8 @@ final class PostTypeDefinition
     /** @var array<string, string> */
     private array $labelOverrides = [];
 
-    private LabelLanguage $labelLanguage = LabelLanguage::En;
+    /** null は labelLanguage() が呼ばれていないこと(Kernel の既定 KernelConfig::$labelLanguage を使う) */
+    private ?LabelLanguage $labelLanguage = null;
 
     /** @var array<string, mixed> */
     private array $args = [];
@@ -57,6 +58,7 @@ final class PostTypeDefinition
      * labels を生成する元の表示名を指定する。
      *
      * 英語(LabelLanguage::En)では複数形が必須。日本語(LabelLanguage::Ja)では省略でき、省略時は単数形を複数形にも使う。
+     * 言語は labelLanguage() で指定し、指定しなければ Kernel の既定(KernelConfig の labelLanguage)を使う。
      */
     public function label(string $singular, ?string $plural = null): self
     {
@@ -76,6 +78,9 @@ final class PostTypeDefinition
         return $this;
     }
 
+    /**
+     * ラベルの言語を指定する。指定しなければ Kernel の既定(KernelConfig の labelLanguage)を使う。
+     */
     public function labelLanguage(LabelLanguage $language): self
     {
         $this->assertNotBuiltin(__FUNCTION__);
@@ -258,15 +263,19 @@ final class PostTypeDefinition
         return $this->supports;
     }
 
-    /** @return array<string, mixed> */
-    public function toArgs(): array
+    /**
+     * @param LabelLanguage $defaultLabelLanguage labelLanguage() を指定していないときのラベル言語(Kernel の既定)
+     *
+     * @return array<string, mixed>
+     */
+    public function toArgs(LabelLanguage $defaultLabelLanguage): array
     {
         if ($this->builtin) {
             throw new EntityDefinitionException("builtin post type '{$this->slug}' cannot be converted to register_post_type args");
         }
 
         $args = $this->args;
-        $labels = $this->labelsForArgs();
+        $labels = $this->labelsForArgs($this->labelLanguage ?? $defaultLabelLanguage);
         $args['labels'] = $labels;
         $args['label'] = $labels['name'];
 
@@ -314,7 +323,7 @@ final class PostTypeDefinition
     }
 
     /** @return array<string, string|null> */
-    private function labelsForArgs(): array
+    private function labelsForArgs(LabelLanguage $language): array
     {
         if ($this->singularLabel === null && !\array_key_exists('name', $this->labelOverrides)) {
             throw new EntityDefinitionException("post type '{$this->slug}' requires label() or labels(['name' => ...])");
@@ -335,13 +344,13 @@ final class PostTypeDefinition
         }
 
         // 日本語には複数形が無いため、Ja に限り省略した複数形を単数形で補う。En の省略は設定の誤りとして常に拒否する。
-        $plural = $this->pluralLabel ?? match ($this->labelLanguage) {
+        $plural = $this->pluralLabel ?? match ($language) {
             LabelLanguage::Ja => $this->singularLabel,
-            LabelLanguage::En => throw new EntityDefinitionException("post type '{$this->slug}' requires a plural label for LabelLanguage::En: pass it as label('{$this->singularLabel}', '<plural>')"),
+            LabelLanguage::En => throw new EntityDefinitionException("post type '{$this->slug}' requires a plural label for LabelLanguage::En: pass it as label('{$this->singularLabel}', '<plural>'), or select LabelLanguage::Ja with labelLanguage() or KernelConfig's labelLanguage"),
         };
 
         return array_merge(
-            LabelGenerator::forPostType($this->singularLabel, $plural, $this->labelLanguage, (bool) ($this->args['hierarchical'] ?? false)),
+            LabelGenerator::forPostType($this->singularLabel, $plural, $language, (bool) ($this->args['hierarchical'] ?? false)),
             $this->labelOverrides,
         );
     }

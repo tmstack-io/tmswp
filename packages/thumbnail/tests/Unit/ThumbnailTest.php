@@ -11,9 +11,11 @@ use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LoggerTrait;
 use Stringable;
-use TMSWP\Core\Log\Log;
-use TMSWP\Core\Log\LoggerRegistry;
+use TMSWP\Core\Kernel\Kernel;
+use TMSWP\Core\Kernel\KernelConfig;
+use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Core\Tests\Support\WpdbTestDouble;
 use TMSWP\Thumbnail\Exception\InvalidThumbOptionException;
 use TMSWP\Thumbnail\Exception\InvalidThumbSourceException;
 use TMSWP\Thumbnail\RestController;
@@ -28,7 +30,8 @@ final class ThumbnailTest extends UnitTestCase
     protected function tearDown(): void
     {
         Thumbnail::reset();
-        Log::setRegistry(null);
+        Kernel::reset();
+        unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions']);
         parent::tearDown();
     }
 
@@ -77,10 +80,7 @@ final class ThumbnailTest extends UnitTestCase
 
     public function testUrlReturnsEmptyStringAndLogsWhenDebugIsDisabled(): void
     {
-        $logger = new ThumbnailArrayLogger();
-        $registry = new LoggerRegistry();
-        $registry->set('default', $logger);
-        Log::setRegistry($registry);
+        $logger = $this->bootKernelContainingThumbnail();
         Actions\expectAdded('rest_api_init')->once();
         Functions\when('wp_upload_dir')->justReturn([
             'basedir' => $this->createTempDirectory('thumb-uploads'),
@@ -102,10 +102,7 @@ final class ThumbnailTest extends UnitTestCase
     {
         \define('WP_DEBUG', true);
 
-        $logger = new ThumbnailArrayLogger();
-        $registry = new LoggerRegistry();
-        $registry->set('default', $logger);
-        Log::setRegistry($registry);
+        $logger = $this->bootKernelContainingThumbnail();
         Actions\expectAdded('rest_api_init')->once();
         Functions\when('wp_upload_dir')->justReturn([
             'basedir' => $this->createTempDirectory('thumb-uploads'),
@@ -122,6 +119,34 @@ final class ThumbnailTest extends UnitTestCase
             self::assertCount(1, $logger->records);
             self::assertSame('failed to build thumbnail URL', $logger->records[0]['message']);
         }
+    }
+
+    /**
+     * packages/thumbnail をルートとする Kernel を boot し、そのログを記録するロガーを返す。
+     *
+     * Thumbnail は Kernel を受け取らず(Kernel ごとの拡張への移行は v0.7.0)、Log の静的な呼び出しで記録する。
+     * 記録先は呼び出したファイル(packages/thumbnail/src/Thumbnail.php)を含むルートの Kernel になるため、
+     * packages/thumbnail をルートとする Kernel を起動する。appDir には、走査の対象になるクラスの無い languages/ を使う。
+     */
+    private function bootKernelContainingThumbnail(): ThumbnailArrayLogger
+    {
+        $GLOBALS['wpdb'] = WpdbTestDouble::create();
+        $GLOBALS['wp_version'] = '7.0';
+        $GLOBALS['wp_actions'] = [];
+        $logger = new ThumbnailArrayLogger();
+        // テーマ形態の Kernel は子テーマのディレクトリも記録先の判定に使う(ここでは子テーマ無し)
+        Functions\when('get_template_directory')->justReturn(sys_get_temp_dir());
+        Functions\when('get_stylesheet_directory')->justReturn(sys_get_temp_dir());
+
+        Kernel::boot(KernelConfig::theme(
+            \dirname(__DIR__, 2) . '/languages',
+            'Example\Tests\ThumbnailKernel' . uniqid(),
+            true,
+            false,
+            logChannels: static fn(): array => ['default' => new LogChannel($logger)],
+        ));
+
+        return $logger;
     }
 
     public function testThumbCacheKeyChangesWhenMtimeChanges(): void

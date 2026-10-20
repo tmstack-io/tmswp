@@ -205,10 +205,16 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 
 テーマとプラグインがそれぞれ `vendor/` に tmswp/* を同梱するケース(要件 5)を次のとおり扱う:
 
-- PHP のクラスは最初にオートロードされた定義が勝つ(後続の vendor/ の同名クラスはロードされない)。したがって**同一サイト内の全 TMSWP 利用コンポーネントは tmswp/* のメジャーバージョンを揃えることを運用必須**とする。SemVer 保証(§4.1)により、同一メジャー内の混在は「最も古いマイナーの API で書かれていれば動く」ことが保証される。
+- PHP のクラスは最初にオートロードされた定義が勝つ(後続の vendor/ の同名クラスはロードされない)。したがって**同一サイト内の全 TMSWP 利用コンポーネントは tmswp/* の同じ版を同梱することを必須**とする。`Kernel::boot()` は、読み込まれたすべての vendor の installed.php にある tmswp/core のリリース版を `Kernel::VERSION` と照合し、食い違いを `KernelException` にする(dev 版は照合の対象外。Kernel 設計書 §3.9)。
 - `Kernel::boot()` はコンポーネント(テーマ・各プラグイン)ごとに 1 回ずつ呼ばれる設計であり、複数回ブートは正常系である(多重ブートの整合は Kernel 設計書が定義)。
-- **不特定多数へ配布するプラグイン**(WordPress.org 公開等)では、vendor 衝突を避けるため [strauss](https://github.com/BrianHenryIE/strauss) 等による名前空間プレフィックス化を必須とする。自社案件・受託案件(配布先を管理できる場合)はバージョン統一運用で足り、プレフィックス化は不要。
+- 拡張パッケージ・ログのチャンネル・ラベル言語の既定は、Kernel ごとに `KernelConfig` で宣言する(`extensions`・`logChannels`・`labelLanguage`)。テーマとプラグインがそれぞれ同じ拡張を登録しても、互いの設定を上書きしない(Kernel 設計書 §3.2・§3.10、View/Support/Log 設計書 §5)。
+- 名前空間のプレフィックス化(strauss 等)は行わない(実装計画 §1.16)。
 - 旧 iwf2b(`Iwf2b\` / `iwf_*`)とは名前空間・ヘルパ接頭辞が完全に異なるため、同一サイト内での新旧共存(例: テーマは TMSWP、既存プラグインは iwf2b)に支障はない。
+
+**psr/container・psr/log の利用条件**: tmswp/core は psr/container ^2.0 と psr/log ^3.0 の宣言を前提に `Container`・`LoggerRegistry` 等を実装する。PHP の interface は最初に読み込んだ定義で固定されるため、**他のプラグインや WP-CLI の phar が、古い psr/container(1.x)・psr/log(1.x・2.x)を TMSWP より先に読み込む構成では動かない**。`Kernel::boot()` はこれを検出し、Fatal error の代わりに、その interface を定義したファイルのパスと要求する版を含む `KernelException` で止める(Kernel 設計書 §3.8)。
+
+- WP-CLI の phar は psr/container 1.0 を含み、`--require` 等で TMSWP の Composer のオートローダを phar より前に登録すると(phar は `--require` の後に自身のオートローダを先頭に登録する)、phar 側の interface が読まれる。メッセージのファイルが `phar://` で始まれば、これが原因である。
+- 検出されたときの対処: (1) TMSWP の Composer のオートローダを、テーマ・プラグインの読み込み時(functions.php・プラグイン本体ファイル)に登録する(WP-CLI の `--require` や `wp-cli.yml` の `require` で早く登録しない)。(2) 古い版を読み込む他のプラグインを更新するか、そのプラグインと併用しない。
 
 ### 3.4 FW 同梱 PHPStan 拡張の配置
 
@@ -439,7 +445,7 @@ jobs:
 | タグ | `vX.Y.Z`(annotated tag)。main 上のコミットにのみ打つ。monorepo-builder release 経由でのみ作成 |
 | メンテナンスブランチ | メジャーが進んだ後の旧系列修正用に `1.x` 等を必要時に作成(先行作成しない) |
 | ホットフィックス | 最新タグから `fix/` ブランチ → main へ merge → PATCH リリース。旧系列が必要な場合のみメンテナンスブランチへ cherry-pick |
-| リリース手順 | (1) main で `composer qa` green を確認 → (2) CHANGELOG.md 更新 PR → (3) `vendor/bin/monorepo-builder release vX.Y.Z` → (4) split.yml がタグを複製 → (5) Packagist 反映を確認 |
+| リリース手順 | (1) main で `composer qa` green を確認 → (2) CHANGELOG.md の更新と、`packages/core/src/Kernel/Kernel.php` の `Kernel::VERSION` をリリースの版(`vX.Y.Z` の `X.Y.Z`)へ更新する PR → (3) リリースの版と `Kernel::VERSION` が一致することを確かめてから `vendor/bin/monorepo-builder release vX.Y.Z` → (4) split.yml がタグを複製 → (5) Packagist 反映を確認。`Kernel::VERSION` の更新を忘れると、そのタグの tmswp/core を入れたサイトは boot 時の版の照合(Kernel 設計書 §3.9)が食い違い、起動しなくなる |
 
 ---
 
@@ -524,7 +530,7 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 
 1. グローバル関数の接頭辞は **`tms_`**(DR-01)。これ以外の接頭辞・無接頭辞のグローバル関数定義は全パッケージで禁止。
 2. 定義ファイルはパッケージごとに 1 ファイル: コアは `packages/core/src/functions.php`、拡張は `packages/<pkg>/src/functions.php`。composer `autoload.files` でロードする。
-3. すべてのヘルパは `if (!function_exists('tms_xxx')) { ... }` ガードで包む(同一サイト内に複数 vendor/ が存在するケース(§3.3)で二重定義の fatal を防ぐ。旧 iwf2b の `iwf_*` ヘルパと同じ流儀であり、`iwf_*` とは接頭辞が異なるため併存可能)。
+3. ヘルパは `function_exists` ガードで囲まずに定義する。同名の関数が先に定義されていれば、PHP の「Cannot redeclare」で明示エラーになり、別の実装が黙って使われることはない。同一サイト内に複数 vendor/ が存在するケース(§3.3)でも、Composer の `autoload.files` はパッケージ名とパスから作る識別子で同じファイルを1回だけ読むため、二重定義にはならない(View/Support/Log 設計書 §5.6)。`iwf_*` とは接頭辞が異なるため旧 iwf2b のヘルパとも併存できる。
 4. ヘルパの本体は**静的ファサード 1 メソッドへの単純委譲のみ**とする。ヘルパ内にロジック(条件分岐・ループ・WP 関数呼び出し)を書くことは禁止。テンプレートでの書き味のためだけに存在する。
 5. ヘルパには完全な型宣言と PHPDoc を付ける(委譲先と同一シグネチャ)。`func_get_args()` / 可変引数による暗黙転送は禁止(旧 `iwf_dump` の作りは踏襲しない)。
 6. 新しいヘルパの追加は、本書 §6.2 の予約表への追記を伴う(アーキテクチャ文書の改訂として扱う)。みだりに増やさない。
@@ -551,7 +557,7 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 - gettext の対象となるのは FW がエンドユーザー・管理者に直接見せる文字列のみ: バリデーションエラーメッセージ(Form/Rule)、管理画面通知(Migrator、acf-bridge ドリフト検知等)、WP-CLI 出力の人間向け説明文。
 - ソース文字列は**英語**で書き、`__('...', 'tmswp')` 形式で参照する。日本語は翻訳ファイルとして同梱する(日本製 FW だが、ソース=英語・ja=同梱訳とすることで gettext エコシステムの標準に乗る)。
 - 翻訳対象の文字列は、gettext 関数(`__()`・`_x()`・`_n()` 等)の引数に文字列リテラルで直接書く。`wp i18n make-pot` が抽出するのはこの形だけであり、変数や独自のラッパー関数を経由して渡した文字列は `.pot` に入らない(§7.2 の `update-po` が `.po` からその訳を消す)。
-- **CPT/Taxonomy ラベル自動生成は gettext を使わない**(DR-17)。ja/en の文字列テンプレートを FW 内蔵し、定義側の `labelLanguage` 設定(デフォルト en、日本語サイトでは `LabelLanguage::Ja` を明示)で切り替える。翻訳ファイルの有無・ロケール設定に依存せず決定的に動作する(仕様詳細は PostType / Taxonomy 設計書)。
+- **CPT/Taxonomy ラベル自動生成は gettext を使わない**(DR-17)。ja/en の文字列テンプレートを FW 内蔵し、`KernelConfig` の `labelLanguage`(Kernel ごとの既定。デフォルト en)か定義側の `labelLanguage()` で切り替える(日本語サイトでは Kernel の既定を `LabelLanguage::Ja` にする)。翻訳ファイルの有無・ロケール設定に依存せず決定的に動作する(仕様詳細は PostType / Taxonomy 設計書)。
 
 ### 7.2 翻訳ファイルの配置と命名
 
@@ -740,7 +746,7 @@ my-plugin/
 | app/ サブディレクトリ規約(Post/Tax/Model/SettingsPage/Hook) | 実案件の app/ 構成(`app/Post/*Post.php`、`app/Tax/*Tax.php`、`app/Model/*.php`、`app/SettingsPage/*.php`、`app/Hook.php`)をそのまま規約化。`app/Acf/` は T18 の `app/ACF.php`(コア外 ACF 連携の先行例)を発展させたもの |
 | ext-gd をコアから thumbnail 拡張へ | 旧 composer.json はコアが `ext-gd` を require(サムネイル機能のため)。画像を扱わないプロジェクトにも GD を強制していた |
 | psr/log ^3 へ更新 | 旧は `psr/log ~1.0`(PHP 8 の型付きインターフェースと不整合) |
-| tms_ ヘルパ + function_exists ガード | 旧 `helpers.php` の `iwf_dump` / `iwf_log` / `iwf_thumb` と同じガード方式。`iwf_dump` は Debug 廃止(DR-16)に伴い後継なし。可変引数の暗黙転送(`func_get_args`)は型不能のため禁止に変更 |
+| tms_ ヘルパ(`function_exists` ガードなし) | 旧 `helpers.php` の `iwf_dump` / `iwf_log` / `iwf_thumb` は `function_exists` ガードで囲んでいたが、同名の別実装が黙って使われるため、ガードせずに定義して重複を明示エラーにする。`iwf_dump` は Debug 廃止(DR-16)に伴い後継なし。可変引数の暗黙転送(`func_get_args`)は型不能のため禁止に変更 |
 | FW 拡張パッケージ分離(thumbnail/settings-page) | FW 73 クラス中 27 クラス(37%)が全案件未使用。設定ページ等は一部案件のみの利用で、コア同梱がコアの肥大とテスト負債の原因だった |
 | 利用側 dev-main 参照禁止 | dev-master ピン留め(コミットハッシュ固定)が標準化しており、FW 修正が誰にも届かない状態だった |
 
@@ -777,7 +783,7 @@ my-plugin/
 
 ヘルパ・i18n:
 
-- [ ] グローバル関数はすべて `tms_` 接頭辞 + `function_exists` ガード + §6.2 の予約表掲載のもののみ
+- [ ] グローバル関数はすべて `tms_` 接頭辞 + §6.2 の予約表掲載のもののみで、`function_exists` ガードで囲んでいない
 - [ ] ヘルパ本体が静的ファサード 1 メソッドへの委譲のみで構成されている
 - [ ] 翻訳が `languages/tmswp-{locale}.mo` と同名の `tmswp-{locale}.l10n.php`(`wp i18n make-php` で .po から生成)の併載形式で配置され、`init`(priority 1)でロードされる(ロードコードは .mo パス指定のままで、WP の版による分岐が存在しない)
 
@@ -802,7 +808,7 @@ composer qa   # 上記一括
 php8.3 -l $(git ls-files 'packages/*/src/**/*.php')
 
 # ヘルパ規約
-grep -rn "^function \|^\tfunction " packages/*/src/functions.php   # 直定義(ガード外)が無いこと
+grep -rn "function_exists" packages/*/src/functions.php            # ガードが無いこと
 grep -rln "function tms_" packages/*/src/ --include="*.php" | grep -v functions.php  # functions.php 以外に無いこと
 
 # split 検証(リリース後)

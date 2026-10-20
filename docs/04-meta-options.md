@@ -1307,6 +1307,7 @@ namespace App\Post;
 
 use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Attribute\MetaSchema;
+use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
@@ -1326,7 +1327,7 @@ final class ProductPost extends PostType
 
     public static function definition(): PostTypeDefinition
     {
-        return PostTypeDefinition::create('product')->label('製品', '製品')->hasArchive();
+        return PostTypeDefinition::create('product')->label('製品')->labelLanguage(LabelLanguage::Ja)->hasArchive();
     }
 
     /** 頻出フィールドの明示アクセサ(規約) */
@@ -1357,7 +1358,7 @@ final class CampaignPost extends PostType
     // ACF管理下のキーは acf-json が真実源。PHP側で同一キーを #[MetaSchema] 宣言するとブート時エラー(DR-06)
     public static function definition(): PostTypeDefinition
     {
-        return PostTypeDefinition::create('campaign')->label('キャンペーン', 'キャンペーン');
+        return PostTypeDefinition::create('campaign')->label('キャンペーン')->labelLanguage(LabelLanguage::Ja);
     }
 }
 ```

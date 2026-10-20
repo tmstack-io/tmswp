@@ -45,6 +45,7 @@ declare(strict_types=1);
 namespace App\Post;
 
 use TMSWP\Core\Attribute\AsPostType;
+use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
 
@@ -54,7 +55,8 @@ final class ProductPost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('product')
-            ->label('製品', '製品')
+            ->label('製品')
+            ->labelLanguage(LabelLanguage::Ja)
             ->hasArchive();
     }
 }
@@ -200,7 +202,8 @@ final class LabelGenerator
 - en の文言は WordPress 7.0 コアの既定の英語ラベルに揃え、オブジェクト名(post/posts、tag/tags 等)の部分に単数形・複数形のラベルをそのまま入れる。大文字・小文字は変えず、コアが名詞の前に置く不定冠詞(a/an)は除く(例: `A link to %1$s.`)。ja の文言は FW 独自のテンプレートとする。
 - コアが階層の有無で既定を null にするキー(下表の「階層の有無」列)は、コアと同じく null を返す。階層の有無は `$hierarchical`(定義の `hierarchical` 引数の真偽)で受け取る。
 - 複数形の省略は定義側(`label()`)の規則で扱い、Generator は常に単数形と複数形の両方を受け取る。`LabelLanguage::Ja` では複数形を省略でき、省略時は単数形を複数形にも使う(日本語に複数形が無いため)。`LabelLanguage::En` で複数形が無ければ、labels を組み立てる時点で `EntityDefinitionException`(4.3節)。
-- デフォルト言語は `LabelLanguage::En`。日本語サイトでは定義側で `labelLanguage(LabelLanguage::Ja)` を明示する。
+- 言語は、定義側で `labelLanguage()` を指定すればその言語、指定しなければ Kernel の既定(`KernelConfig` の `labelLanguage`。02-kernel §2)を使う。Kernel の既定の既定値は `LabelLanguage::En`。日本語サイトでは `KernelConfig::theme(..., labelLanguage: LabelLanguage::Ja)` でまとめて指定し、個々の定義では `labelLanguage()` を省略できる。定義の指定は Kernel の既定より優先する。
+- 定義は、`labelLanguage()` を指定していないこと(null)と Kernel の既定を区別して持ち、labels を組み立てる時点(`toArgs(LabelLanguage $defaultLabelLanguage)`。PostTypeInitializer・TaxonomyInitializer が `register($kernel)` 経由で Kernel の既定を渡す)に言語を決める。複数形の規則(En では必須、Ja では省略可)と空文字の拒否は、決まった言語に対して適用する。
 
 **投稿タイプ用テンプレート(全キー確定)**(`%1$s` = 単数形、`%2$s` = 複数形):
 
@@ -361,7 +364,8 @@ final class PostTypeDefinition
     /** @var array<string, string> labels()による部分上書き */
     private array $labelOverrides = [];
 
-    private LabelLanguage $labelLanguage = LabelLanguage::En;
+    /** null は labelLanguage() 未指定(Kernel の既定 KernelConfig::$labelLanguage を使う) */
+    private ?LabelLanguage $labelLanguage = null;
 
     /** @var array<string, mixed> セッターが構築する register_post_type 引数 */
     private array $args = [];
@@ -392,6 +396,7 @@ final class PostTypeDefinition
     public function label(string $singular, ?string $plural = null): self;
     /** @param array<string, string> $labels 自動生成結果へのキー単位上書き */
     public function labels(array $labels): self;
+    /** 指定しなければ Kernel の既定(KernelConfig の labelLanguage)を使う */
     public function labelLanguage(LabelLanguage $language): self;
 
     // ---- 基本属性 ----
@@ -448,8 +453,11 @@ final class PostTypeDefinition
     public function blockEditorPreference(): ?bool;
     /** @return list<string> supports未指定時は [] */
     public function supportsList(): array;
-    /** @return array<string, mixed> register_post_type の $args(builtin時はEntityDefinitionException) */
-    public function toArgs(): array;
+    /**
+     * @param LabelLanguage $defaultLabelLanguage labelLanguage() 未指定時のラベル言語(Kernel の既定)
+     * @return array<string, mixed> register_post_type の $args(builtin時はEntityDefinitionException)
+     */
+    public function toArgs(LabelLanguage $defaultLabelLanguage): array;
 }
 ```
 
@@ -470,9 +478,9 @@ final class PostTypeDefinition
 **`toArgs()`** の構築手順(決定的):
 
 1. builtinなら `EntityDefinitionException`。
-2. labels決定:
+2. labels決定(言語 `$labelLanguage` は、`labelLanguage()` の指定があればそれ、無ければ引数 `$defaultLabelLanguage`):
    - `label()` が呼ばれておらず(単数形が null)、かつ `labelOverrides` に `name` がない → `EntityDefinitionException`(「labelまたはlabels(name)が必須」)。
-   - `label()` が呼ばれている → 単数形・複数形とも、空文字は言語・`labels()` の有無に関係なく `EntityDefinitionException` にする(複数形の省略は null、つまり第2引数を渡さないことで表すため、空文字は常に設定の誤り。メッセージにスラッグを含め、複数形では省略するなら第2引数を渡さない旨も含める)。そのうえで複数形を決める。複数形が渡されていればそれを使う。省略されていれば、`LabelLanguage::Ja` では単数形を使い(日本語に複数形が無いための規則)、`LabelLanguage::En` では `EntityDefinitionException` を投げる(設定の誤りのため debug に関係なく常に投げる。メッセージにスラッグと `label('<単数形>', '<plural>')` の書き方を含める)。
+   - `label()` が呼ばれている → 単数形・複数形とも、空文字は言語・`labels()` の有無に関係なく `EntityDefinitionException` にする(複数形の省略は null、つまり第2引数を渡さないことで表すため、空文字は常に設定の誤り。メッセージにスラッグを含め、複数形では省略するなら第2引数を渡さない旨も含める)。そのうえで複数形を決める。複数形が渡されていればそれを使う。省略されていれば、`LabelLanguage::Ja` では単数形を使い(日本語に複数形が無いための規則)、`LabelLanguage::En` では `EntityDefinitionException` を投げる(設定の誤りのため debug に関係なく常に投げる。メッセージにスラッグと `label('<単数形>', '<plural>')` の書き方、および `labelLanguage()` か `KernelConfig` の `labelLanguage` で Ja を選べることを含める)。
    - そのうえで `LabelGenerator::forPostType($singular, $plural, $labelLanguage, $hierarchical)` で生成し(`$hierarchical` は `$args['hierarchical']` の真偽。未指定は false)、`labelOverrides` をキー単位で上書きマージ(`array_merge(生成, 上書き)`)。
    - `label()` が呼ばれておらず `labelOverrides` のみ → そのまま `labels` に採用。
    - 結果を `$args['labels']` に設定し、`$args['label']` には `labels['name']` を設定。
@@ -510,8 +518,8 @@ abstract class PostType
 
     final public static function slug(): string;
 
-    /** @internal Kernelがinit(優先度10)で正確に1回呼ぶ(1.2節契約3)。重複防止は持たない。 */
-    final public static function register(): void;
+    /** @internal Kernelがinit(優先度10)で、このクラスを探索した Kernel を渡して正確に1回呼ぶ(1.2節契約3)。重複防止は持たない。 */
+    final public static function register(\TMSWP\Core\Kernel\Kernel $kernel): void;
 
     // ---- 取得(?T統一) ----
     final public static function get(\WP_Post|int $post): ?\WP_Post;
@@ -568,7 +576,7 @@ abstract class PostType
      - `get_theme_support('post-thumbnails')` が `true`(全タイプ有効) → 何もしない
      - 配列(対象タイプ限定) → 既存配列とこのスラッグの和集合で `add_theme_support('post-thumbnails', $merged)`
      - 未登録 → `add_theme_support('post-thumbnails', [$def->slug()])`
-   - `register_post_type($def->slug(), $def->toArgs())` を実行。戻り値が `WP_Error` なら `EntityDefinitionException`(エラーメッセージを含める)。
+   - `register_post_type($def->slug(), $def->toArgs($kernel->config()->labelLanguage))` を実行。戻り値が `WP_Error` なら `EntityDefinitionException`(エラーメッセージを含める)。
 4. `blockEditorPreference()` が非null → `add_filter('use_block_editor_for_post_type', $callback, 10, 2)`。callbackは「`$postType === $def->slug()` なら希望値を返し、それ以外は受け取った値を素通しする」クロージャ。
 
 **`get()`**:
@@ -846,7 +854,8 @@ final class TaxonomyDefinition
     /** @var array<string, string> */
     private array $labelOverrides = [];
 
-    private LabelLanguage $labelLanguage = LabelLanguage::En;
+    /** null は labelLanguage() 未指定(Kernel の既定 KernelConfig::$labelLanguage を使う) */
+    private ?LabelLanguage $labelLanguage = null;
 
     /** @var array<string, mixed> */
     private array $args = [];
@@ -872,6 +881,7 @@ final class TaxonomyDefinition
     public function label(string $singular, ?string $plural = null): self;
     /** @param array<string, string> $labels */
     public function labels(array $labels): self;
+    /** 指定しなければ Kernel の既定(KernelConfig の labelLanguage)を使う */
     public function labelLanguage(LabelLanguage $language): self;
 
     // ---- 基本属性 ----
@@ -909,8 +919,11 @@ final class TaxonomyDefinition
     public function isBuiltin(): bool;
     /** @return list<string> 1.5節規約で解決済みの投稿タイプスラッグ */
     public function resolvedObjectTypes(): array;
-    /** @return array<string, mixed> register_taxonomy の $args(builtin時はEntityDefinitionException) */
-    public function toArgs(): array;
+    /**
+     * @param LabelLanguage $defaultLabelLanguage labelLanguage() 未指定時のラベル言語(Kernel の既定)
+     * @return array<string, mixed> register_taxonomy の $args(builtin時はEntityDefinitionException)
+     */
+    public function toArgs(LabelLanguage $defaultLabelLanguage): array;
 }
 ```
 
@@ -946,8 +959,8 @@ abstract class Taxonomy
 
     final public static function slug(): string;
 
-    /** @internal Kernelがinit(優先度9)・PostType群(優先度10)より先に呼ぶ。 */
-    final public static function register(): void;
+    /** @internal Kernelがinit(優先度9)・PostType群(優先度10)より先に、このクラスを探索した Kernel を渡して呼ぶ。 */
+    final public static function register(\TMSWP\Core\Kernel\Kernel $kernel): void;
 
     // ---- 取得(?T統一) ----
     final public static function get(\WP_Term|int $term): ?\WP_Term;
@@ -991,8 +1004,8 @@ abstract class Taxonomy
 2. **builtinの場合**: `resolvedObjectTypes()` の各スラッグに対し `register_taxonomy_for_object_type($def->slug(), $objectType)` を実行する。
    - 対象がbuiltin投稿タイプ(post/page等。コアが `init` 優先度0で登録済み)なら初回試行で成功する(fast-path)。
    - 対象が同一 `init` 内の後続(02文書の属性スケジュール表: PostType群=優先度10)で登録されるCPTの場合、初回試行はfalseを返す(ロード順による未登録であり異常ではない)。**falseになったスラッグのみ**を `init` 優先度11で1回だけ再試行する。
-   - 再試行後もfalseの場合は真の失敗(スラッグtypo・未登録投稿タイプ等)であり、`Log::warning`(Log文書のLogファサード)で警告する。これによりfalseの意味は「再試行前=ロード順起因(正常)」「再試行後=真の失敗」に純化され、warningは常に対処すべき信号になる。
-3. **非builtinの場合**: `register_taxonomy($def->slug(), $def->resolvedObjectTypes(), $def->toArgs())`。戻り値が `WP_Error` なら `EntityDefinitionException`。
+   - 再試行後もfalseの場合は真の失敗(スラッグtypo・未登録投稿タイプ等)であり、渡された Kernel のログ(`$kernel->logger()->warning()`。Log文書 §5.1。TMSWP の内部のログは扱う Kernel を明示して記録する)で警告する。これによりfalseの意味は「再試行前=ロード順起因(正常)」「再試行後=真の失敗」に純化され、warningは常に対処すべき信号になる。
+3. **非builtinの場合**: `register_taxonomy($def->slug(), $def->resolvedObjectTypes(), $def->toArgs($kernel->config()->labelLanguage))`。戻り値が `WP_Error` なら `EntityDefinitionException`。
 
 (注: Kernel契約1.2によりTaxonomy群はPostType群より先に登録される。`register_taxonomy` の `$object_types` は未登録スラッグでも受理されるため、相互参照は同一init内で完結する。)
 
@@ -1404,6 +1417,7 @@ namespace App\Post;
 use App\Tax\BlogCategoryTax;
 use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Attribute\MetaSchema;
+use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Post\PostQuery;
 use TMSWP\Core\Post\PostType;
@@ -1418,7 +1432,8 @@ final class BlogPost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('blog')
-            ->label('ブログ・導入事例', 'ブログ・導入事例')
+            ->label('ブログ・導入事例')
+            ->labelLanguage(LabelLanguage::Ja)
             ->hasArchive()
             ->supports('title', 'editor', 'thumbnail')
             ->rewriteSlug('blog')
@@ -1450,6 +1465,7 @@ namespace App\Tax;
 
 use App\Post\BlogPost;
 use TMSWP\Core\Attribute\AsTaxonomy;
+use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Tax\Taxonomy;
 use TMSWP\Core\Tax\TaxonomyDefinition;
 
@@ -1459,7 +1475,8 @@ final class BlogCategoryTax extends Taxonomy
     public static function definition(): TaxonomyDefinition
     {
         return TaxonomyDefinition::create('blog_category')
-            ->label('ブログカテゴリ', 'ブログカテゴリ')
+            ->label('ブログカテゴリ')
+            ->labelLanguage(LabelLanguage::Ja)
             ->objectType(BlogPost::class)   // FQCN相互参照
             ->hierarchical()
             ->rewriteSlug('blog/category')
@@ -1616,7 +1633,7 @@ $id = ProductPost::create([
 |---|---|---|
 | staticプロパティ宣言(`$post_type`/`$args`)+AbstractSingleton | `definition()` が返す型付きDefinition+純static基底 | 宣言的定義の価値(継承58+42クラスの実績)は維持しつつ、型なし配列とシングルトンのテスト不能性を排除(DR-09) |
 | `get()` のnull/false不統一、slug→タイトル多段解決 | `?T` 統一+`findBy*` 明示分解、タイトル検索廃止 | 同名タイトル取り違え事故源・型不統一の根治 |
-| labels自動生成(英語フォーマット+iwf2bテキストドメイン依存) | en/jaテンプレート内蔵の `LabelGenerator`、gettext非依存 | 既定 en でソース文字列方針に揃え、日本語サイトは `labelLanguage(LabelLanguage::Ja)` で決定的に切り替える(DR-17)。2クラスに重複していた生成コードの一元化 |
+| labels自動生成(英語フォーマット+iwf2bテキストドメイン依存) | en/jaテンプレート内蔵の `LabelGenerator`、gettext非依存 | 既定 en でソース文字列方針に揃え、日本語サイトは `KernelConfig` の `labelLanguage: LabelLanguage::Ja`(Kernel ごと)か定義の `labelLanguage(LabelLanguage::Ja)` で決定的に切り替える(DR-17)。2クラスに重複していた生成コードの一元化 |
 | `$find_args`+`create_args()` | `query()` オーバーライド+クエリビルダ | グローバルスコープ相当の価値は維持し、配列マージの暗黙性を型付きAPIへ |
 | `template`/`thumbnail` 擬似キー | `PostQuery::template()`/`hasThumbnail()` | 実利用39箇所超の高価値機能を明示メソッド化 |
 | `get_thumbnail` の3段フォールバック(本文img抽出+getimagesize) | コアは主経路(WP標準API)のみ+`tmswp/post/thumbnail_fallback` フィルタ | レンダリング中の同期HTTP I/O排除。分割境界は「主経路はコア・本文抽出等のフォールバックは app 側」 |
@@ -1637,13 +1654,14 @@ $id = ProductPost::create([
 
 - [ ] `PostTypeDefinition::create('product')->label('Product', 'Products')->hasArchive()` の `toArgs()` が `public=true`・en自動生成labels・`has_archive=true` を含み、未指定キーを含まない
 - [ ] `labelLanguage(LabelLanguage::Ja)` で日本語labelsに切り替わり、`labels(['menu_name' => '...'])` がキー単位で上書きされる
+- [ ] `labelLanguage()` を指定しない定義が Kernel の既定(`KernelConfig` の `labelLanguage`)の言語で labels を組み立て、Ja なら複数形を省略できる。定義の `labelLanguage()` は Kernel の既定より優先する(Kernel の既定が Ja の統合テストを含む)
 - [ ] label/labels両方未指定の `toArgs()` が `EntityDefinitionException` を投げる
 - [ ] スラッグ形式違反(`create('Invalid Slug!')`、21文字超のpost type、33文字超のtaxonomy)が `EntityDefinitionException` を投げる
 - [ ] `builtin()` 定義に許可外セッターを呼ぶと即 `EntityDefinitionException`
 - [ ] Kernelが収集リストの1巡走査で各エンティティクラスの `register()` を正確に1回だけ呼ぶ(統合テストで呼び出し回数を検証。`register()` 自身は重複防止を持たない)
 - [ ] `supports('thumbnail')` を持つ複数のPostTypeを登録しても `post-thumbnails` テーマサポートが和集合でマージされる
 - [ ] `TaxonomyDefinition::objectType(BlogPost::class)` が登録時に `'blog'` へ解決される。Taxonomy/PostType以外のクラスFQCNは `EntityDefinitionException`
-- [ ] builtinタクソノミーのCPT紐付けで、初回falseになったスラッグのみが `init` 優先度11で再試行されて成功し(警告なし)、未登録投稿タイプ相手は再試行後に `Log::warning` が1回記録される
+- [ ] builtinタクソノミーのCPT紐付けで、初回falseになったスラッグのみが `init` 優先度11で再試行されて成功し(警告なし)、未登録投稿タイプ相手は再試行後に渡された Kernel のロガー(`$kernel->logger()`)に `warning` が1回記録される
 - [ ] `UserRole::register()` が2リクエスト目以降にDB書き込み(`add_role`/`add_cap`)を行わない(`get_role()`/`has_cap()` チェックによる冪等性。統合テストで `update_option` 呼び出し回数を検証)
 
 **取得系(`?T` 統一)**

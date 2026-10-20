@@ -62,7 +62,7 @@ tmswp/acf-bridge は本書のスコープ外(専用文書が定義)。CSVイン�
 ### 例外・ログ・i18n
 
 - 例外は各パッケージの `TMSWP\<Pascal>\Exception\` 配下に置き、すべて `TMSWP\Core\Exception\RuntimeException`(または `LogicException`)を継承する。
-- ログはコアの `TMSWP\Core\Log\Log` ファサード(PSR-3)に統一。`echo` によるログ出力は全パッケージで禁止。
+- ログは、受け取った Kernel の `logger()`(PSR-3)に記録する(Kernel設計書§3.10、View/Support/Log設計書§5.1)。`echo` によるログ出力は全パッケージで禁止。
 - テキストドメインは `tmswp`(DR-17)。拡張独自ドメインは作らない。
 
 ### QA

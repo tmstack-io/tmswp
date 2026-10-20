@@ -24,6 +24,8 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
   - `src/Kernel/DiscoveryFile.php` — `TMSWP\Core\Kernel\DiscoveryFile`(探索結果ファイルの生成と読み込み。§6)
   - `src/Kernel/DiscoverCommand.php` — `TMSWP\Core\Kernel\DiscoverCommand`(WP-CLI `wp tmswp discover`。§3.6)
   - `src/Kernel/ComponentInitializerInterface.php` — `TMSWP\Core\Kernel\ComponentInitializerInterface` (本文書で新設定義)
+  - `src/Kernel/ExtensionInterface.php` — `TMSWP\Core\Kernel\ExtensionInterface`(Kernel ごとに登録する拡張の入口。§3.10)
+  - `src/Kernel/PsrInterfaceCheck.php` / `src/Kernel/InstalledVersionCheck.php` — boot 時の psr/container・psr/log の検査と、tmswp/core の版の照合(`@internal`。§3.8・§3.9)
   - `src/Attribute/ComponentAttributeInterface.php` — `TMSWP\Core\Attribute\ComponentAttributeInterface` (本文書で新設定義)
   - `src/Attribute/Action.php` — `TMSWP\Core\Attribute\Action` (メソッドレベルフック属性。本文書で新設定義。§5)
   - `src/Attribute/Filter.php` — `TMSWP\Core\Attribute\Filter` (メソッドレベルフック属性。本文書で新設定義。§5)
@@ -54,7 +56,9 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
         ▼
 ┌─ Kernel (appNamespaceごとに1インスタンス、staticレジストリで管理) ─┐
 │  1. KernelConfig 検証・正規化(ファクトリ内で実施済み)                │
-│  2. Container 生成・コアサービス登録                                  │
+│     WordPress の版・psr/container と psr/log の宣言・tmswp/core の版  │
+│     の検査(§3.8・§3.9)                                              │
+│  2. Container 生成・コアサービス登録・この Kernel のログのレジストリ  │
 │  3. Discovery::discover()                                             │
 │       ├─ debug時: Discovery::scan() … appDir を毎回走査              │
 │       └─ 本番: DiscoveryFile::load() … 探索結果ファイルのincludeのみ │
@@ -63,6 +67,9 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
 │     add_action 登録                                                    │
 │       ※ ここでは一切インスタンス化しない(即時同期初期化の禁止)       │
 │  5. コンテキスト別の運用フック登録(有効化・無効化フック)            │
+│  6. KernelConfig の extensions を順に register()(§3.10)              │
+│  7. Kernel のレジストリへの登録                                       │
+│  8. 本番の遅延bootのみ: 発火済みフックのキャッチアップ(§3.3)        │
 └────────────────────────────────────────┘
         │ WPライフサイクル進行
         ▼
@@ -141,6 +148,9 @@ final readonly class KernelConfig
      * @param string|null   $pluginFile  プラグイン本体ファイルの絶対実パス。Themeコンテキストでは必ずnull
      * @param bool          $debug       デバッグモード(app/ の走査と探索結果ファイルの読み込みの切替・例外化の挙動を切替)
      * @param bool          $actions     テーマ形態のテンプレート前処理(ActionRouter)を有効化するか(既定 true)。Pluginコンテキストでは常に false へ正規化される(§3.7)
+     * @param list<ExtensionInterface> $extensions この Kernel で有効にする拡張(§3.10)
+     * @param (\Closure(): array<string, \TMSWP\Core\Log\LogChannel>)|null $logChannels この Kernel のログのチャンネルを返すクロージャ(07-support §5)
+     * @param \TMSWP\Core\Label\LabelLanguage $labelLanguage labelLanguage() を指定しない PostTypeDefinition・TaxonomyDefinition のラベル言語(03-entities §2.2)
      */
     private function __construct(
         public KernelContext $context,
@@ -149,6 +159,9 @@ final readonly class KernelConfig
         public ?string $pluginFile,
         public bool $debug,
         public bool $actions,
+        public array $extensions,
+        public ?\Closure $logChannels,
+        public LabelLanguage $labelLanguage,
     ) {
     }
 
@@ -157,6 +170,9 @@ final readonly class KernelConfig
         string $appNamespace = 'App',
         ?bool $debug = null,
         bool $actions = true,
+        array $extensions = [],
+        ?\Closure $logChannels = null,
+        LabelLanguage $labelLanguage = LabelLanguage::En,
     ): self;
 
     public static function plugin(
@@ -164,11 +180,20 @@ final readonly class KernelConfig
         string $appDir,
         string $appNamespace = 'App',
         ?bool $debug = null,
+        array $extensions = [],
+        ?\Closure $logChannels = null,
+        LabelLanguage $labelLanguage = LabelLanguage::En,
     ): self;
 
     /**
+     * テーマ・プラグインのルートディレクトリ = dirname(appDir)。探索結果ファイルの置き場で、
+     * Log の静的な呼び出しが記録先の Kernel を決める範囲でもある(Kernel::forFile())。
+     */
+    public function rootDir(): string;
+
+    /**
      * 探索結果ファイルの絶対パス。appDir の親ディレクトリ(テーマ・プラグインのルート)直下に固定する。
-     * 形式: dirname(appDir) . '/tmswp-discovery.php'
+     * 形式: rootDir() . '/tmswp-discovery.php'
      * 例: '/path/to/wp-content/themes/my-theme/tmswp-discovery.php'
      */
     public function discoveryFile(): string;
@@ -183,7 +208,10 @@ final readonly class KernelConfig
 2. `realpath($appDir)` が `false`、またはディレクトリでない、または読取不可なら例外。メッセージには渡されたパスをそのまま含める(例: `app directory not found: {path}`)。
 3. `plugin()` のみ: `realpath($file)` が `false` またはファイルでないなら例外。さらに `$appDir` が `$file` の属するディレクトリ配下にあることは要求しない(シンボリックリンク構成を許容)。
 4. 探索結果ファイルの置き場は `discoveryFile()` が返す `dirname(appDir) . '/tmswp-discovery.php'` に固定し、引数では変えない(テーマなら `<theme>/tmswp-discovery.php`、プラグインなら `<plugin>/tmswp-discovery.php`)。コードと一緒にコミット・デプロイされる場所に置くためである(§6)。探索結果ファイルは Kernel ごとに1つで、同じ親ディレクトリに複数の appDir を置く構成(`<root>/app-a` と `<root>/app-b`)は同じファイルを共有してしまうため、2つ目の boot が `KernelException` になる(§3 手順2-c)。
-5. `$debug` が null の場合は `defined('WP_DEBUG') && WP_DEBUG` を採用する。`WP_DEBUG` の真偽で決め、`true` との厳密比較はしない(`1` 等の真値でも debug になる)。debug の判定はこの `KernelConfig::$debug` に一本化し、各モジュールは `WP_DEBUG` を直接参照しない(00-overview §5.6)。
+5. `$debug` が null の場合は `defined('WP_DEBUG') && WP_DEBUG` を採用する。`WP_DEBUG` の真偽で決め、`true` との厳密比較はしない(`1` 等の真値でも debug になる)。debug の判定はこの `KernelConfig::$debug` に一本化し、各モジュールは `WP_DEBUG` を直接参照しない(00-overview §5.6)。拡張も、自分を登録した Kernel の `debug` に従う(§3.10)。
+6. `$extensions` に同じクラスの拡張が2つ以上あれば、debug に関係なく例外(`extension {class} is registered more than once in the same kernel`)。別の Kernel が同じクラスの拡張を登録するのは正当である(テーマとプラグインがそれぞれ同じ拡張を使う構成)。
+7. `$logChannels` はここでは呼ばない。boot 中に、psr/log の検査(§3.8)の後で1回だけ呼ぶ(`SimpleLogger` 等の `Psr\Log\LoggerInterface` を実装するクラスを、検査より前に読み込まないため。§3 手順3)。null なら遅延デフォルトチャンネル(07-support §5.4)。
+8. `$labelLanguage` の既定は `LabelLanguage::En`。`labelLanguage()` を指定しない PostTypeDefinition・TaxonomyDefinition は、ラベルを組み立てる時点(初期化時)にこの言語を使う(03-entities §2.2)。
 
 `theme()` は `pluginFile = null`、`context = KernelContext::Theme`、`actions` は引数値(既定 true)で構築する。`plugin()` は `context = KernelContext::Plugin`、`actions = false`(プラグイン形態は ActionRouter を持たない。§3.7)で構築する。
 
@@ -212,6 +240,9 @@ use TMSWP\Core\Container\Container;
 
 final class Kernel
 {
+    /** この tmswp/core の版。boot 時に installed.php の tmswp/core の版と照合する(§3.9)。リリースごとにタグの版へ更新する */
+    public const string VERSION = '0.2.0';
+
     /** @var array<string, self> 正規化済みappNamespace => Kernel のグローバルレジストリ */
     private static array $kernels = [];
 
@@ -223,6 +254,7 @@ final class Kernel
 
     private readonly KernelConfig $config;
     private readonly Container $container;
+    private readonly \TMSWP\Core\Log\LoggerRegistry $logger;
 
     /** @var list<DiscoveredComponent> 発見済みコンポーネント(FQCN昇順) */
     private array $components;
@@ -235,7 +267,7 @@ final class Kernel
     /**
      * FWを起動する。テーマはfunctions.php直下、プラグインは本体ファイル直下で呼ぶこと。
      *
-     * @throws \TMSWP\Core\Exception\KernelException WordPress 7.0 未満(debug に関係なく常に)・多重boot・名前空間/ディレクトリ衝突・遅延boot(debug時)
+     * @throws \TMSWP\Core\Exception\KernelException WordPress 7.0 未満・psr/container と psr/log の非互換・tmswp/core の版の食い違い・logChannels の不正(以上は debug に関係なく常に)・多重boot・名前空間/ディレクトリ衝突・遅延boot(debug時)
      * @throws \TMSWP\Core\Exception\DiscoveryException 探索失敗(debug時)、探索結果ファイルが無い・構成と合わない(本番)
      */
     public static function boot(KernelConfig $config): self;
@@ -253,6 +285,13 @@ final class Kernel
      */
     public static function forClass(string $class): self;
 
+    /**
+     * ファイルの実パス(realpath())を含むルートディレクトリ(KernelConfig::rootDir()。テーマ形態では有効な子テーマのディレクトリも。§3.5)を持つKernelを、最も長く一致するルートで解決する。
+     * Log の静的な呼び出しが記録先の Kernel を決める経路(07-support §5.2)。
+     * @throws \TMSWP\Core\Exception\KernelException ファイルの実パスが取れない、またはどのKernelのルートにも含まれない場合
+     */
+    public static function forFile(string $file): self;
+
     /** @return array<string, self> 正規化済みappNamespace => Kernel */
     public static function all(): array;
 
@@ -265,6 +304,9 @@ final class Kernel
     public function config(): KernelConfig;
 
     public function container(): Container;
+
+    /** この Kernel のログのレジストリ(KernelConfig の logChannels で宣言したチャンネル)。Container の LoggerRegistry::class と同一 */
+    public function logger(): \TMSWP\Core\Log\LoggerRegistry;
 
     /** @return list<DiscoveredComponent> FQCN昇順 */
     public function components(): array;
@@ -279,6 +321,8 @@ final class Kernel
 boot(config):
   0. WordPress の版の検査(下記)。7.0 未満なら
         → throw KernelException("TMSWP requires WordPress 7.0 or later (running {version})")
+     PsrInterfaceCheck::assertCompatible()     // §3.8。PSR の interface を実装するクラスより先に行う
+     InstalledVersionCheck::assertInstalledVersions(Kernel::VERSION)   // §3.9
   1. ns = config.appNamespace
      if self::$kernels に ns が存在
         → throw KernelException("TMSWP kernel for namespace '{ns}' is already booted")
@@ -294,12 +338,16 @@ boot(config):
              上書きし合うのを防ぐ
   3. kernel = new self(config)
      container = new Container()
+     logger = new LoggerRegistry(config.logChannels === null ? [] : (config.logChannels)())
+        // 戻り値がチャンネル名(文字列)=> LogChannel の空でない配列でなければ
+        // → throw KernelException("logChannels must return ...")(debug に関係なく)
      以下のコアサービスを登録:
         container->set(Kernel::class, kernel)                       // 即値
         container->set(KernelConfig::class, config)                 // 即値
         container->set(Container::class, container)                 // 即値(自己参照)
         container->alias(\Psr\Container\ContainerInterface::class, Container::class)
         container->set(DiscoveryFile::class, new DiscoveryFile(config))  // 即値
+        container->set(LoggerRegistry::class, logger)                    // 即値(Kernel::logger() と同一)
         container->set(Discovery::class, fn(Container c) => new Discovery(
             config, c->get(DiscoveryFile::class),
         ))
@@ -308,11 +356,18 @@ boot(config):
      kernel.hookMethods = result.hookMethods
      // 本番(debug=false): 探索結果ファイル1つのincludeのみ。Reflectionゼロ・appクラスのロードゼロ
      // 探索結果ファイルが無い・構成と合わない場合は DiscoveryException(§6)
-  5. kernel.scheduleAll()      // §7。遅延bootの検査を最初に行い、add_filter/add_actionを登録する
-                               // (コンポーネント・MetaSchema・#[Action]/#[Filter])。本番の遅延bootはキャッチアップ
-  6. kernel.registerLifecycleHooks()  // コンテキスト別運用フック(下記)
-  7. kernel.registerActionRouter()    // §3.7。Themeかつconfig.actions=trueのときのみ
-  8. self::$kernels[ns] = kernel      // 手順1〜7がすべて成功してから登録(例外時に半端な状態を残さない)
+  try:
+    5. missed = kernel.scheduleAll()  // §7。遅延bootの検査を最初に行い(debug の遅延bootはここで、何も登録しない
+                                      // うちに例外)、add_filter/add_actionを登録する(コンポーネント・MetaSchema・
+                                      // #[Action]/#[Filter])。発火済みフックのグループ(本番のみ)を返し、まだ実行しない
+    6. kernel.registerLifecycleHooks()  // コンテキスト別運用フック(下記)
+    7. kernel.registerActionRouter()    // §3.7。Themeかつconfig.actions=trueのときのみ
+    7a. config.extensions を渡した順に extension->register(kernel)   // §3.10。キャッチアップより前
+    8. self::$kernels[ns] = kernel      // キャッチアップより前に登録する(§3.3)
+    8a. kernel.catchUp(missed)          // 本番の遅延bootのキャッチアップ(§3.3)。missed が空なら何もしない
+  catch (Throwable e):
+    unset(self::$kernels[ns])          // 手順8で登録した Kernel を取り除く(未登録なら何もしない)
+    throw e                            // 例外はそのまま投げ直す
   9. WP-CLI環境(defined('WP_CLI') && WP_CLI)かつ未登録なら
         WP_CLI::add_command('tmswp discover', new DiscoverCommand()) を登録(§3.6)
         self::$cliRegistered = true
@@ -328,10 +383,10 @@ boot(config):
 
 - **同一 appNamespace への2回目の boot は常に `KernelException`。** 冪等に既存インスタンスを返す仕様にはしない。理由: 同一 functions.php の二重読込や copy&paste 起因の二重bootは構成バグであり、黙って既存を返すと「2回目の config の差分が無視される」というサイレント失敗になる(旧FWの黙殺文化の排除)。
 - 異なる appNamespace + 異なる appDir であれば回数無制限に boot できる(テーマ1 + プラグインN の共存)。
-- 例外発生時、レジストリには登録されない(手順8のレジストリ登録は手順1〜7がすべて成功してから行われる)。
+- 例外発生時、レジストリには残らない。手順8のレジストリ登録は手順1〜7aがすべて成功してから行い、その後の手順8aのキャッチアップ(§3.3)で例外が起きれば、レジストリから取り除いてから例外を投げ直す。
 - debug の遅延boot(§3.3)の検査は、手順5 `scheduleAll` の最初、どのフックの登録(`#[Action]`/`#[Filter]` の `add_filter` を含む)よりも先に行う。そのため遅延bootの例外では、フックは1つも登録されず、初期化も実行されない。
 - 手順5で、探索結果ファイルの属性を復元できない場合(`DiscoveryException`)も、どのフックの登録よりも先に例外になる。
-- 本番の遅延bootのキャッチアップ(§3.3)で初期化が例外(設定の誤り。§7)を投げた場合は、それまでに登録したフックと実行済みの初期化が残る。設定の誤りは直すまで起動できない構成のバグであり、これは許容する。手順6 `registerLifecycleHooks`・手順7 `registerActionRouter` はフック登録のみで例外を投げない。
+- 本番の遅延bootのキャッチアップ(§3.3)で初期化が例外(設定の誤り。§7)を投げた場合は、それまでに登録したフックと実行済みの初期化が残る。設定の誤りは直すまで起動できない構成のバグであり、これは許容する。手順6 `registerLifecycleHooks`・手順7 `registerActionRouter` はフック登録のみで例外を投げない。手順7aの拡張の `register()` が投げた例外も同じく設定の誤りとしてそのまま伝わり、それまでに登録したフックは残る。
 
 #### 3.2 複数Kernel共存時の独立性(テーマ+プラグイン併用)
 
@@ -342,18 +397,21 @@ boot(config):
 | `Kernel::$kernels` レジストリ(プロセス内static) | Container(コアサービス含め完全に別インスタンス) |
 | `tmswp/core` のコード自体(後述の注意参照) | 探索結果ファイル(Kernel ごとに appDir の親ディレクトリに置く) |
 | WP-CLI `tmswp discover`(全Kernel横断で1回登録) | Discovery・components / hookMethods リスト |
-| Log層(グローバル。Log文書参照) | 有効化・無効化フック |
+| | 有効化・無効化フック |
+| | ログのチャンネル(`LoggerRegistry`。Kernel ごとに `KernelConfig` で宣言し、呼び出したファイルの Kernel に記録する。07-support §5) |
+| | 拡張(`KernelConfig` の `extensions`。Kernel ごとにインスタンスを登録する。§3.10) |
+| | ラベル言語の既定(`KernelConfig` の `labelLanguage`) |
 
 - **appNamespace の一意性は boot 時に強制される。** スターター既定の `App` のまま複数のテーマ・プラグインを併用すると2つ目の boot が `KernelException` で停止する。これはPHPレベルでも必然である: 同名 FQCN `App\Foo` が複数の vendor/autoload に登録されると先勝ちで誤ったファイルがロードされるため、FWで救済できない。**rules/ に「配布・併用前提のプラグインは appNamespace を固有名(例: `MyShopPlugin`)へ変更すること」を必須規約として記載する。**
 - 同一 (フック, priority) に複数Kernelのグループランナーが並ぶ場合、実行順は `add_action` の登録順=boot順=WPのロード順(プラグイン → テーマ)となる。**Kernel間でコンポーネントの初期化順に依存してはならない**(規約)。あるKernelのapp/クラスが別Kernelのapp/クラスを参照する構成は禁止し、連携が必要な場合はWPフック(do_action/apply_filters)経由とする。
-- 注意: 各テーマ・プラグインが自前の `vendor/` に `tmswp/core` を抱えるため、**最初にロードされた `tmswp/core` のコードが全Kernelで共有される**(PHPのクラスは再定義できない)。互換性はSemVer(DR-11)で担保し、メジャーバージョンの異なる core を同一サイトで併用することは非サポートと明記する(`Kernel::boot` 内で `Kernel::VERSION` 定数とパッケージバージョンの照合は行わない。クラスが共有される以上検出不能であり、運用ルールとする)。
+- 注意: 各テーマ・プラグインが自前の `vendor/` に `tmswp/core` を抱えるため、**最初にロードされた `tmswp/core` のコードが全Kernelで共有される**(PHPのクラスは再定義できない)。そのため同じサイトのテーマ・プラグインは同じ版の tmswp/core を同梱することを必須とし、boot 時に `Kernel::VERSION`(読み込まれた core の版)と、読み込まれたすべての vendor の installed.php にある tmswp/core の版を照合して、食い違いを `KernelException` にする(§3.9)。クラスは1組しか使われないが、Composer の installed.php は vendor ごとに読まれるため、食い違いはこのデータで検出できる。
 
 #### 3.3 遅延boot(対象フック逸失)時の挙動
 
 `scheduleAll()` は、どのフックを登録するよりも先に、各 (フック名, priority) グループ(コンポーネントの初期化のグループと、MetaSchema の登録(`init` 20))について、そのフックが発火済みかを WordPress のグローバル `$wp_actions` で検査する。`$wp_actions` にキーがある場合(=boot が遅すぎてそのフックが既に発火済み):
 
 - `config.debug === true`: `KernelException("Kernel::boot() was called after the '{hook}' hook had fired. Boot from the top level of functions.php or the plugin main file.")` を投げる。発火済みのグループが複数あるときは、下記の順で最初のグループのフック名を示す。`#[Action]`/`#[Filter]` の `add_filter` を含め、どのフックも登録せず、どのランナーも実行しない。
-- `config.debug === false`(本番): `Log::error()` で同内容を記録した上で、**当該グループのランナーを即時実行する(キャッチアップ)**。サイト全体の機能停止より縮退動作を優先する。キャッチアップは発火済みフックのグループのみで、未発火フックのグループは通常通り `add_action` される(未発火のグループの実行順は WordPress が priority で決める)。
+- `config.debug === false`(本番): その Kernel のログ(`Kernel::logger()->error()`)に同内容を記録した上で、**当該グループのランナーを即時実行する(キャッチアップ)**。キャッチアップは、コアのフックの登録(手順5〜7)、拡張の登録(手順7a)、Kernel のレジストリ(`self::$kernels`)への登録(手順8)の後に実行する(手順8a)。拡張が Container に入れるサービスを、キャッチアップの初期化でも、init 未発火の通常の boot と同じく使えるようにするためである。レジストリに先に登録するのは、キャッチアップで動くアプリのコード(コンポーネントの初期化、`register()` を上書きした `#[AsHook]` 等)が、`Kernel::forClass()` や `Log` の静的な呼び出し(`Kernel::forFile()`)でこの Kernel を引けるようにするためである。キャッチアップの途中で例外が起きたら、レジストリからこの Kernel を取り除いてから例外を投げ直す(boot は例外になり、起動していない Kernel はレジストリに残らない。§3.1)。debug の遅延bootは従来どおり、何も登録しないまま例外にする(下記)。サイト全体の機能停止より縮退動作を優先する。キャッチアップは発火済みフックのグループのみで、未発火フックのグループは通常通り `add_action` される(未発火のグループの実行順は WordPress が priority で決める)。
 
 キャッチアップの順序は、**WordPress でフックが最初に発火した順**、同じフックの中では **priority の昇順**とする(同じ (フック, priority) のグループは1つにまとめてあるため、この2つで順序が決まる)。プラグインの遅延 boot では `plugins_loaded` のグループが `init` のグループより先に動く。最初に発火した順は `$wp_actions` のキーの並びから取る。`do_action()` / `do_action_ref_array()` はフックが初めて発火したときに `$wp_actions` へキーを足し、2回目以降は値(発火回数)を増やすだけなので、キーの並びが最初に発火した順になる(WP 7.0 の wp-includes/plugin.php の `do_action()`・`do_action_ref_array()`。PHP の配列は挿入順を保つ)。`$wp_actions` が配列でなければ発火済みのフックが分からないため、`KernelException` を投げる。
 
@@ -384,6 +442,7 @@ boot(config):
 
 - `get($appNamespace)`: 入力を `trim($appNamespace, '\\')` で正規化して完全一致検索。不在なら `KernelException("no TMSWP kernel booted for namespace '{ns}'")`。
 - `forClass($class)`: レジストリ内の各 ns について `str_starts_with($class, $ns . '\\')` を判定し、一致した中で最長の ns を持つ Kernel を返す(boot時に入れ子名前空間を禁止しているため一致は高々1つだが、アルゴリズムとしては最長一致で定義する)。一致なしは `KernelException("class '{fqcn}' does not belong to any booted TMSWP application")`。null や空文字を返すサイレント失敗は禁止。
+- `forFile($file)`: `realpath($file)` でファイルを実パスにする(シンボリックリンクや `..` を含む別の表記でも、実体の場所で判定する。存在しない等で実パスが取れなければ、パスを含む `KernelException("cannot resolve the real path of '{file}' to find its TMSWP kernel")`)。そのうえで、レジストリ内の各 Kernel の各ルート(実パス)について `str_starts_with($realFile, $root . DIRECTORY_SEPARATOR)` を判定し、一致した中で最長のルートを持つ Kernel を返す。Kernel のルートは `$kernel->config()->rootDir()` で、Theme コンテキストの Kernel では、有効な子テーマのディレクトリ(`get_stylesheet_directory()` の実パス)が親テーマのディレクトリ(`get_template_directory()` の実パス)と異なる場合に、それもルートに含める(`Template::part()` は子テーマのテンプレートを先に探すため、子テーマのテンプレートから `Log` を呼べるようにする)。子テーマのディレクトリは判定のたびに取る。Theme コンテキストの Kernel は functions.php で boot され、WordPress 7.0 の wp-settings.php は `setup_theme` の発火と `wp_templating_constants()`・`wp_set_template_globals()` の後に有効なテーマの functions.php を読み込むため、レジストリにテーマの Kernel がある時点で有効なテーマは決まっている。テーマのディレクトリの実パスが取れなければ `KernelException`。ルートは入れ子になりうる(例: テーマの中にプラグインのルートがある。appDir の入れ子は boot で禁止しているが、ルートの入れ子は禁止しない)ため、最長一致で定義する。一致なしは `KernelException("file '{file}' is not inside the root directory of any booted TMSWP kernel")`(実パスが表記と異なるときは `(real path '{realFile}')` も含める)。Log の静的な呼び出しが記録先の Kernel を決めるのに使う(07-support §5.2)。
 - `all()`: レジストリのコピーを返す(内部配列への参照を漏らさない)。キーは正規化済みappNamespace。
 - `reset()`: プロセス内の静的な状態を起動前に戻す。行うのは次の4つだけである。(a) `self::$kernels = []`(Kernel のレジストリ) (b) `self::$cliRegistered = false`(`wp tmswp discover` の登録済みフラグ) (c) `self::$textdomainRegistered = false`(FW の翻訳を読み込む `init` 1 のローダーの登録済みフラグ) (d) `MigrateCommand::reset()`(`wp tmswp migrate` の登録済みフラグ。Model文書)。これにより、reset 後の boot はこれらの登録をもう一度行う。登録済み `add_action` の解除は行わない(Brain Monkey 環境ではフック自体がモックであり、統合テストでは1テスト1プロセスで運用する)。`@internal` を付与し、PHPStan ルールで、PHPUnit の `TestCase` の子孫クラスの外からの参照を報告する(識別子 `tmswp.kernelReset`)。ルールは PHPStan が渡すノードの種類ごとに3つあり(`KernelResetOutsideTestRule`=静的呼び出しとインスタンス経由の呼び出し、`KernelResetStaticCallableOutsideTestRule`=`Kernel::reset(...)`、`KernelResetMethodCallableOutsideTestRule`=`$kernel->reset(...)`)、判定は `KernelResetCallChecker` が共有する。packages/core/phpstan/extension.neon で登録する。
   - メソッド名: `reset` の識別子と、型が定数文字列で `reset` に一致する式(`Kernel::{'reset'}()`、`$method = 'reset'; Kernel::$method(...)`。大文字・小文字を区別しない)。定数に定まらない動的な名前は判定できないため対象外。
@@ -423,6 +482,58 @@ registerActionRouter():
 - **プラグイン形態では ActionRouter を生成しない。** プラグインはトップレベルテンプレートを供給する機構を持たないため `template_include` への介入が意味を持たない。プラグイン側のテンプレート前処理に相当するロジックは `#[AsHook]` クラスの `#[Action]`/`#[Filter]` メソッド(§5)へ書く。
 - `actions/` ディレクトリ名は **`'actions'` 固定**(テーマルート直下。リネーム不可)。配置決定木・静的検査・rules/ が無設定で同一前提を共有するための決定的規約である。
 - dispatch の正準手順(子→親テーマ解決、static クロージャ内 include、戻り値契約 `array`→View変数バッグ / `ActionRouter::notFound()`→404強制 / `null`→no-op、`$template` の無加工返却原則)・`actions` ファイル規約・`View` 変数バッグ・グローバルヘルパ `tms_var()` は View/Support/Log 文書が定義する。本文書が確定するのは「いつ・どの形態で生成し、どのフックへ登録するか」のみである。
+
+#### 3.8 psr/container・psr/log の非互換の検出
+
+TMSWP の `Container` は `Psr\Container\ContainerInterface` を、`LoggerRegistry`・`ScopedLog`・`SimpleLogger` は `Psr\Log\LoggerInterface` を実装し、レベル別メソッドを `Psr\Log\LoggerTrait` から取り込む。PHP は interface・trait を最初に読み込んだ定義で固定するため、他のプラグインや WP-CLI の phar が古い psr/container・psr/log を先に読み込むと、TMSWP のクラスを読み込んだ時点で宣言が合わずに Fatal error になる。例えば WP-CLI の phar は psr/container 1.0 を含み、その `get($id)` は引数の型が無いため、`Container::get(string $id)` は引数の型を狭めることになる。
+
+boot は手順0で、PSR の interface を実装する TMSWP のクラスを読み込む前に、`PsrInterfaceCheck::assertCompatible()` で次の宣言を検査する。対象は、TMSWP のクラスが実装・取り込むメソッドに限る(Fatal error になるのはこれらの宣言が合わないときである)。
+
+| interface・trait | 要求する版 | 照合する宣言(引数の型の並びと戻り値の型) |
+|---|---|---|
+| `Psr\Container\ContainerInterface` | psr/container ^2.0 | `get(string)`、`has(string): bool` |
+| `Psr\Log\LoggerInterface` | psr/log ^3.0 | レベル別の8メソッドが `(string\|Stringable, array): void`、`log((型なし), string\|Stringable, array): void` |
+| `Psr\Log\LoggerTrait` | psr/log ^3.0 | LoggerInterface と同じ9メソッド(`log` は abstract) |
+
+- 宣言は、tmswp/core の composer.json が要求する版(psr/container 2・psr/log 3)と同じであることを求める。メソッドの過不足(interface のメソッド、trait の abstract メソッド)も違いとして扱う。union 型はメンバーを並べ替えて比べる。
+- 未読み込みの interface・trait は、この検査で(最初に登録されたオートローダから)読み込む。読み込まれた定義がそのまま検査の対象になる。
+- 合わなければ debug に関係なく `KernelException` を投げる。メッセージには、要求する版、その interface・trait を定義したファイル(`ReflectionClass::getFileName()` をそのまま。WP-CLI の phar なら `phar://.../vendor/psr/container/...` になり、原因が分かる)、違う宣言を含める。
+- 利用条件(他のプラグインや WP-CLI の phar が古い psr/container・psr/log を先に読み込む構成では動かないこと、検出されたときの対処)は 01-architecture §3.3 と packages/core/README.md に記す。
+
+#### 3.9 tmswp/core の版の照合
+
+boot は手順0で、`InstalledVersionCheck::assertInstalledVersions(Kernel::VERSION)` により、Composer の `InstalledVersions::getAllRawData()`(登録済みのすべての Composer のオートローダの vendor の installed.php のデータ)にある tmswp/core の版を `Kernel::VERSION` と照合する。
+
+- 照合の対象は、tmswp/core を実際に入れた記載(`pretty_version` がある記載)のうち、版がリリース版の形(`x.y.z`。タグの `vX.Y.Z` の先頭の `v` は除いて比べる)のものに限る。
+- **dev 版は照合の対象外とする。** `dev-*` のブランチ、monorepo の path repository、`x.y.x-dev` のブランチの別名、プレリリース(`x.y.z-beta1` 等)は、`Kernel::VERSION` と比べられる版を持たないためである。replace・provide だけの記載(monorepo のルートが `tmswp/core` を replace する等)も、tmswp/core を入れたものではないため対象外とする。これは黙った代替経路ではなく、照合の範囲の定義である。
+- 対象の版が `Kernel::VERSION` と食い違えば、debug に関係なく `KernelException` を投げる。メッセージには、食い違う版と、その記載の `install_path`(`{vendor}/composer/../tmswp/core` の形で、どの vendor かが分かる)を含める。
+- `Composer\InstalledVersions` が無い(Composer 2 のオートローダを通さずに読み込んだ)場合は、照合できないため `KernelException` を投げる。
+- `Kernel::VERSION` は、リリースのたびにタグの版(先頭の `v` を除く)へ更新する。
+
+#### 3.10 拡張の登録
+
+拡張パッケージ(acf-bridge・settings-page・thumbnail・ja-toolkit)は、`KernelConfig` の `extensions` に渡したインスタンスだけで有効になる(各拡張の移行は 08・09 の担当版で行う)。
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace TMSWP\Core\Kernel;
+
+interface ExtensionInterface
+{
+    /**
+     * 登録した Kernel の boot 中に1回呼ばれる。debug は $kernel->config()->debug、ログは $kernel->logger()、
+     * サービスは $kernel->container() から取る。投げた例外は boot の例外としてそのまま伝わる。
+     */
+    public function register(Kernel $kernel): void;
+}
+```
+
+- boot の手順7a で、`extensions` に渡した順に1回ずつ `register($kernel)` を呼ぶ。本番の遅延bootのキャッチアップ(手順8a)より前なので、拡張が Container に入れたサービスはキャッチアップの初期化でも使える。プラグインの有効化のサンドボックス(`WP_SANDBOX_SCRAPING`。§1)では、コンポーネントの初期化と同じく呼ばない。
+- 拡張は、受け取った Kernel の debug に従い(`WP_DEBUG` を直接見ない)、ログは受け取った Kernel の `logger()` に記録する(07-support §5.1)。拡張のクラスは先に読み込まれた tmswp/* の1組が全 Kernel で共有されるため、プロセス全体の static な状態に Kernel ごとの設定を持たない。
+- 同じ Kernel に同じクラスの拡張を2回登録すると、`KernelConfig` の生成時に例外になる(§2 手順6)。テーマとプラグインが、それぞれの Kernel に同じクラスの拡張を登録するのは正当である。
 
 ## 4. Discovery
 
@@ -799,7 +910,7 @@ final readonly class Filter
 - **WordPress に登録する引数の数**: `#[Action]` は acceptedArgs のまま登録する。`#[Filter]` は `max(1, acceptedArgs)` で登録し、引数を宣言しないメソッドでも第1引数(フィルタ対象の値)を受け取る。本番で失敗したときに元の値を返すためである(下記「失敗の隔離」)。どちらも、メソッドには受け取った引数を acceptedArgs の数に切り詰めて(`array_slice($args, 0, acceptedArgs)`)渡す。
 - `#[Action]` と `#[Filter]` に機構上の差はない(WPの `add_action()` は `add_filter()` の別名であり、登録はどちらも `add_filter()` で行う。§7)。意味の区別を宣言として残すために2クラスへ分ける。`#[Filter]` メソッドは必ず値を返すこと(rules/ に記載)。
 - **呼び出しの型変換**: フック発火時、Kernel はメソッドを `call_user_func_array([$handler, $method], $args)` で呼ぶ。WordPress の `WP_Hook` と同じく内部関数を経由して呼ぶため、strict_types に関係なく WordPress 本来の弱い型変換が効く(数値文字列を `int` 引数に渡すフックが通る)。`$callback(...$args)` や名前空間付きの `\call_user_func_array()` は、PHP がコンパイル時に直接の呼び出しへ置き換え、Kernel のファイルの strict_types が効いて TypeError になるため使わない(php-cs-fixer の `native_function_invocation` から `call_user_func_array` を除外している)。
-- **失敗の隔離**: メソッドの呼び出し(Container からのハンドラの解決を含む)が例外を投げた場合、エラー方針(00-overview §5.6)に従う。debug 時はそのまま投げる。本番は `Log::error('tmswp.kernel: hook method {class}::{method} failed on {hook}', [class, method, hook, exception])` に記録してそのメソッドだけをスキップし、第1引数をそのまま返す(filter の値を変えない。action の戻り値は WordPress が使わない)。同じフックの他のコールバックは WordPress がそのまま続けて呼ぶ。`#[Filter]` は引数を宣言しないメソッドでも第1引数を受け取るため、常に元の値を返せる。引数を宣言しない `#[Action]` は第1引数を受け取らないため `null` を返す(action の戻り値は使われない)。
+- **失敗の隔離**: メソッドの呼び出し(Container からのハンドラの解決を含む)が例外を投げた場合、エラー方針(00-overview §5.6)に従う。debug 時はそのまま投げる。本番はその Kernel のロガー(`$this->logger->error('tmswp.kernel: hook method {class}::{method} failed on {hook}', [class, method, hook, exception])`)に記録してそのメソッドだけをスキップし、第1引数をそのまま返す(filter の値を変えない。action の戻り値は WordPress が使わない)。同じフックの他のコールバックは WordPress がそのまま続けて呼ぶ。`#[Filter]` は引数を宣言しないメソッドでも第1引数を受け取るため、常に元の値を返せる。引数を宣言しない `#[Action]` は第1引数を受け取らないため `null` を返す(action の戻り値は使われない)。
 - 真に動的な登録(ループでフック名を生成する等、メソッド属性で表現できないケース)に限り、Hook 基底の `register()` オーバーライドを例外手段として使う(次項)。`register()` をオーバーライドしたクラスのみが初期化タイミング表(§7)の priority 0 でインスタンス化される。rules/・利用例の第一級の書き方は `#[Action]` / `#[Filter]` に一本化する。
 
 ### #[AsHook] / Hook 基底 / HookInitializer(本文書が正準定義)
@@ -1036,15 +1147,18 @@ scheduleAll():
                 return call_user_func_array([container->get(hm.class), hm.method],
                     array_slice($args, 0, hm.acceptedArgs))
             catch \Throwable e:                       // §5 の「失敗の隔離」
-                debug ? throw e : (Log::error; return $args[0] ?? null)
+                debug ? throw e : (this.logger.error; return $args[0] ?? null)
         }, hm.priority, hm.kind->registeredArgs(hm.acceptedArgs))   // Filter は max(1, acceptedArgs)
      // #[Action] も add_filter で登録する(add_action は add_filter の別名。§5)。
      // クロージャが捕捉するのは DiscoveredHookMethod(FQCN文字列とメソッド名)のみで、
      // Hookクラスはフック発火時の container->get() まで未ロード(遅延)
   4. for (hook, priority, runner) in pending:
         add_action(hook, runner, priority, 0)          // グループごとに1クロージャ
-     for (hook, priority, runner) in missed:          // 本番のみ
-        Log::error(遅延boot); runner()                // キャッチアップ
+  5. return missed                                    // キャッチアップは boot の手順8a(catchUp)で、拡張とレジストリへの登録の後に実行する
+
+catchUp(missed):                   // 本番の遅延bootのみ。boot の手順8a(§3.3)。missed が空なら何もしない
+  for (hook, priority, runner) in missed:          // (最初に発火した順, priority) の昇順に並べ済み
+     this.logger.error(遅延boot); runner()        // キャッチアップ。失敗は boot の catch でレジストリから取り除いて投げ直す
 
 runInitializer(c, attr):           // 失敗は設定の誤り。debug に関係なく例外をそのまま投げる
   initializer = container->get(attr->initializerClass())
@@ -1443,6 +1557,7 @@ namespace App\Post;
 
 use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Attribute\MetaSchema;
+use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
@@ -1455,7 +1570,7 @@ final class ProductPost extends PostType
 
     public static function definition(): PostTypeDefinition
     {
-        return PostTypeDefinition::create('product')->label('製品', '製品')->hasArchive();
+        return PostTypeDefinition::create('product')->label('製品')->labelLanguage(LabelLanguage::Ja)->hasArchive();
     }
 }
 ```
@@ -1569,7 +1684,7 @@ final class ContainerTest extends TestCase
 | Loaderコンストラクタが `src/Iwf2b` を自己スキャンし、コア同梱具象(Post/PagePost/CategoryTax/PostTagTax、abstract漏れのAbstractUser)を無条件初期化 | 走査範囲を appDir に構成上限定+`TMSWP` 名前空間を予約として boot 時に拒否(§2・§4)。コアに自動初期化される具象を置かない |
 | ロード順が RecursiveDirectoryIterator の列挙順(OS・FS依存・非決定) | files/components を strcmp ソート。環境非依存の決定的順序を受け入れ基準で保証(§4) |
 | `get_dependencies()` の間接循環(A→B→A)が無限再帰でクラッシュ。直接自己依存しか検出しない | 静的依存宣言そのものを廃止(初期化順はタイミング表で固定)。インスタンス依存はコンテナの解決スタックで間接循環まで検出し、チェーン付き `CircularDependencyException`(§7・§8) |
-| 依存先が auto_init=false / 走査対象外だと初期化を黙ってスキップ。`ReflectionException` も `continue` で黙殺 | 探索失敗・初期化失敗は debug に関係なく常に例外(設定の誤り)。本番で隔離するのはフックメソッドの実行時の失敗と遅延 boot のキャッチアップだけで、必ず `Log::error` に記録する。黙殺経路ゼロ(§4・§7) |
+| 依存先が auto_init=false / 走査対象外だと初期化を黙ってスキップ。`ReflectionException` も `continue` で黙殺 | 探索失敗・初期化失敗は debug に関係なく常に例外(設定の誤り)。本番で隔離するのはフックメソッドの実行時の失敗と遅延 boot のキャッチアップだけで、必ずその Kernel のロガー(`$kernel->logger()`)に `error` で記録する。黙殺経路ゼロ(§4・§7) |
 | `bootstrap()` 呼出位置で `initialize()` が即時同期実行され、フック登録が早すぎ/遅すぎる事故 | boot は add_action のみ。全初期化をWPフックに整合させ、正準タイミング表で固定。遅延bootは検出して例外/ログ+キャッチアップ(§3.3・§7) |
 | `AbstractSingleton` の `final private __construct` + `static::$instances` でDI・モック・テスト不能。`func_get_args` 転送はデッドコード | PSR-11コンテナ+コンストラクタ注入。ファサードは無状態の薄い皮で、`Kernel::reset()` によりテスト隔離可能(§8) |
 | 起動規約が未文書化(リポジトリ内に bootstrap 呼び出し例ゼロ)で、利用側は暗黙知のコピペ | `Kernel::boot()` + `KernelConfig` ファクトリを正準ブートAPIとして文書化し、スターターに同梱(DR-13) |
@@ -1611,9 +1726,17 @@ final class ContainerTest extends TestCase
 - [ ] `Kernel::reset()` 後に同一名前空間で再bootできる(テスト隔離)
 - [ ] `Kernel::boot()` が、WordPress 7.0 未満(`$wp_version` の最初の `-` より前を比べる。`6.9-RC1` を含む)で debug に関係なく `KernelException` を投げ、`7.0-RC1` 等の 7.0 のリリース候補・開発版と 7.0 以降は受け付ける。`$wp_version` が無いと `KernelException` を投げる
 - [ ] `KernelConfig` の debug を省略すると、`WP_DEBUG` の真偽が既定値になる(`1` 等の真値でも true、未定義・偽値なら false)
+- [ ] `KernelConfig` の `extensions` の拡張が、boot 中に渡した順で1回ずつ、その Kernel を受け取って呼ばれ、拡張はその Kernel の debug を受け取る。同じ Kernel に同じクラスの拡張を2回渡すと debug に関係なく `KernelException` になり、別の Kernel が同じクラスを登録するのは通る。プラグインの有効化のサンドボックスでは呼ばれない
+- [ ] `KernelConfig` の `logChannels` で宣言したチャンネルが `Kernel::logger()`(Container の `LoggerRegistry::class` と同一)になり、戻り値がチャンネル名 => `LogChannel` の空でない配列でなければ boot が `KernelException` になる
+- [ ] 他の vendor の installed.php の tmswp/core のリリース版が `Kernel::VERSION` と食い違うと、boot が版と install_path を含む `KernelException` になる。同じ版・dev 版・プレリリース・replace だけの記載は通る
+- [ ] 古い psr/container(1.0)・psr/log(1.x)の interface を先に読み込んだ別プロセスで、boot が、interface を定義したファイルと要求する版を含む `KernelException` になり、`Container`・`LoggerRegistry` は読み込まれない
+- [ ] `Kernel::forFile()` が最も長く一致するルートの Kernel を返し、どのルートにも含まれないファイルで `KernelException` を投げる。子テーマが有効なとき、子テーマのファイルはテーマの Kernel に解決され、プラグインの Kernel のルートには含まれない
+- [ ] 本番の遅延bootのキャッチアップで動くアプリのコードの `Log::error()` が、その Kernel に記録される。キャッチアップが失敗した boot の後、`Kernel::all()` にその Kernel が残らない
+- [ ] 拡張の `register()` が Container に入れたサービスを、init 10 の初期化が、init 未発火の通常の boot と、init 発火済みの本番の遅延boot(キャッチアップ)の両方で使える
+- [ ] `Kernel::forFile()` が、シンボリックリンクを経由したパスを実体の Kernel に解決し、`..` でルートの外へ出るパスと存在しないパスで `KernelException` を投げる
 - [ ] 本番の遅延bootのキャッチアップが、`$wp_actions` で最初に発火した順、同じフックの中では priority の昇順で実行される(`plugins_loaded` のグループが `init` より先。MetaSchema の登録(`init` 20)も同じ規則)。未発火のフックのグループは `add_action` される。debug の遅延bootは、最初に発火したフックのグループで `KernelException` になり、`#[Action]`/`#[Filter]` を含めどのフックも登録せず、どのグループも実行しない
 - [ ] コンポーネントの初期化の失敗(Initializer の例外、`ComponentInitializerInterface` を実装しない Initializer、探索結果ファイルの属性を復元できない)が、本番(debug=false)でも例外になる(例: `PostType` を継承しない `#[AsPostType]` のコンポーネントの初期化)。本番のキャッチアップ中の失敗では boot が例外になる
-- [ ] `#[Action]`/`#[Filter]` メソッドの失敗(Container での解決の失敗を含む)が、debug では例外のまま伝わり、本番では `Log::error()` に記録されてそのメソッドだけスキップされ、第1引数が返る。引数を宣言しない `#[Filter]` も第1引数を受け取って登録され、失敗時は元の値を、成功時はメソッドの戻り値を返し、メソッドには引数を渡さない(宣言引数数に切り詰める)
+- [ ] `#[Action]`/`#[Filter]` メソッドの失敗(Container での解決の失敗を含む)が、debug では例外のまま伝わり、本番ではその Kernel のロガー(`$kernel->logger()`)に `error` で記録されてそのメソッドだけスキップされ、第1引数が返る。引数を宣言しない `#[Filter]` も第1引数を受け取って登録され、失敗時は元の値を、成功時はメソッドの戻り値を返し、メソッドには引数を渡さない(宣言引数数に切り詰める)
 - [ ] 有効化・無効化のコールバックが `delete_option('rewrite_rules')` と `tmswp/activated`・`tmswp/deactivated` の発火だけを行い(`flush_rewrite_rules()`・`add_option()` を呼ばない)、boot が毎リクエストの確認(`init` での `get_option()` 等)を登録しない
 - [ ] PHPStan ルールが、PHPUnit の `TestCase` の子孫クラスの外からの `Kernel::reset()` の参照(静的呼び出し、インスタンス経由の呼び出し、両者の第一級 callable、定数文字列のメソッド名、`class-string<Kernel>`・定数文字列のクラス名)を報告し、子孫クラスの中(クロージャを含む)、Kernel 以外の `reset()`、定数に定まらない名前、callable の配列・文字列は報告しない(§3.5)
 
@@ -1625,6 +1748,9 @@ final class ContainerTest extends TestCase
 - [ ] `#[Action]`/`#[Filter]` メソッドが宣言どおりの(フック, priority)と、引数の数(`#[Action]` は宣言引数数、`#[Filter]` は `max(1, 宣言引数数)`)で `add_filter` 登録され、フック発火時に Container 経由で1回だけインスタンス化されて呼ばれる。属性宣言のみ(`register()` 非オーバーライド)の `#[AsHook]` クラスは宣言フックの発火までロードされない(`get_declared_classes()` の差分で検証)
 - [ ] Kernel が各コンポーネントの Initializer(エンティティ基底の `register()` を含む)を1リクエスト内で正確に1回だけ呼ぶ(Initializerへのスパイで検証。register() 側に再入ガードは存在しない)
 - [ ] テーマ(`App`)+プラグイン(`MyShopPlugin`)の2 Kernel併用で、Container・探索結果ファイル・components が相互に独立し、`Kernel::all()` が2件を返す
+- [ ] テーマとプラグインの2つの Kernel が、それぞれ同じクラスの拡張を登録して共存し、各拡張が自分を登録した Kernel だけを受け取る
+- [ ] 他の vendor(別のプラグインの Composer のオートローダ)の installed.php に別の版の tmswp/core があると、boot が `KernelException` になる
+- [ ] Kernel の `labelLanguage` が Ja のとき、`labelLanguage()` を指定しない投稿タイプのラベルが日本語で登録される
 - [ ] `#[Action]`/`#[Filter]` メソッドが WordPress と同じ弱い型変換で呼ばれ、数値文字列を `int` 引数に渡すフックが通る
 - [ ] テーマ切替(`after_switch_theme`)とプラグイン有効化で `rewrite_rules` が消え、次のリクエストで CPT のルールを含めて作り直される。プラグイン無効化で `rewrite_rules` が消え、次のリクエスト(CPT が登録されない)のルールにその CPT のルールが残らない
 - [ ] 前提の確認: `rewrite_rules` が空のとき、WordPress が `wp_loaded` より前に作り直したルールを保存せず、`wp_loaded` での作り直しを登録する

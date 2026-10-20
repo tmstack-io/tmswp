@@ -19,7 +19,7 @@ final class PostTypeInitializer implements ComponentInitializerInterface
             throw new DiscoveryException("post type component must extend PostType: {$component->class}");
         }
 
-        $component->class::register();
+        $component->class::register($kernel);
 
         $registry = $kernel->container()->get(MetaSchemaRegistry::class);
 

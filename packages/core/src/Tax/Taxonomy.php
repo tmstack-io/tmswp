@@ -8,7 +8,7 @@ use TMSWP\Core\Entity\WpBridge;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\EntityPersistenceException;
 use TMSWP\Core\Kernel\Kernel;
-use TMSWP\Core\Log\Log;
+use TMSWP\Core\Log\LoggerRegistry;
 use TMSWP\Core\Meta\MetaBag;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
 use WP_Error;
@@ -27,13 +27,16 @@ abstract class Taxonomy
         return self::definitionFor(static::class)->slug();
     }
 
-    final public static function register(): void
+    /**
+     * タクソノミーを登録する。TaxonomyInitializer が、このクラスを探索した Kernel を渡して呼ぶ。
+     */
+    final public static function register(Kernel $kernel): void
     {
         $definition = self::definitionFor(static::class);
         $slug = $definition->slug();
 
         if ($definition->isBuiltin()) {
-            self::registerBuiltinObjectTypes($definition);
+            self::registerBuiltinObjectTypes($definition, $kernel->logger());
 
             return;
         }
@@ -42,7 +45,7 @@ abstract class Taxonomy
             throw new EntityDefinitionException("taxonomy is already registered: {$slug}");
         }
 
-        $registered = WpBridge::call('register_taxonomy', $slug, $definition->resolvedObjectTypes(), $definition->toArgs());
+        $registered = WpBridge::call('register_taxonomy', $slug, $definition->resolvedObjectTypes(), $definition->toArgs($kernel->config()->labelLanguage));
 
         if ($registered instanceof WP_Error) {
             throw new EntityDefinitionException($registered->get_error_message());
@@ -199,7 +202,7 @@ abstract class Taxonomy
         return self::$definitions[$class];
     }
 
-    private static function registerBuiltinObjectTypes(TaxonomyDefinition $definition): void
+    private static function registerBuiltinObjectTypes(TaxonomyDefinition $definition, LoggerRegistry $logger): void
     {
         $retry = [];
 
@@ -213,10 +216,10 @@ abstract class Taxonomy
             return;
         }
 
-        add_action('init', static function () use ($definition, $retry): void {
+        add_action('init', static function () use ($definition, $retry, $logger): void {
             foreach ($retry as $objectType) {
                 if (!register_taxonomy_for_object_type($definition->slug(), $objectType)) {
-                    Log::warning("failed to attach taxonomy '{$definition->slug()}' to post type '{$objectType}'");
+                    $logger->warning("failed to attach taxonomy '{$definition->slug()}' to post type '{$objectType}'");
                 }
             }
         }, 11, 0);

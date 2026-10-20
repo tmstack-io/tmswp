@@ -19,7 +19,7 @@ final class TaxonomyInitializer implements ComponentInitializerInterface
             throw new DiscoveryException("taxonomy component must extend Taxonomy: {$component->class}");
         }
 
-        $component->class::register();
+        $component->class::register($kernel);
 
         $registry = $kernel->container()->get(MetaSchemaRegistry::class);
 

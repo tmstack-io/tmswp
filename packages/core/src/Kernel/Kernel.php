@@ -11,7 +11,7 @@ use TMSWP\Core\Attribute\ComponentAttributeInterface;
 use TMSWP\Core\Container\Container;
 use TMSWP\Core\Exception\DiscoveryException;
 use TMSWP\Core\Exception\KernelException;
-use TMSWP\Core\Log\Log;
+use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Log\LoggerRegistry;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
 use TMSWP\Core\Model\Connection;
@@ -24,6 +24,12 @@ use WP_CLI;
 
 final class Kernel
 {
+    /**
+     * この tmswp/core の版。boot 時に、読み込まれたすべての vendor の installed.php にある tmswp/core の版と照合する
+     * (InstalledVersionCheck)。リリースのたびに、タグの版(先頭の v を除く)に合わせて更新する。
+     */
+    public const string VERSION = '0.2.0';
+
     /** 対応する WordPress の下限の版(D-09) */
     private const string MIN_WORDPRESS_VERSION = '7.0';
 
@@ -38,6 +44,8 @@ final class Kernel
 
     private readonly Container $container;
 
+    private readonly LoggerRegistry $logger;
+
     /** @var list<DiscoveredComponent> */
     private array $components = [];
 
@@ -48,13 +56,14 @@ final class Kernel
     {
         $this->config = $config;
         $this->container = new Container();
+        $this->logger = new LoggerRegistry(self::logChannels($config));
 
         $this->container->set(self::class, $this);
         $this->container->set(KernelConfig::class, $config);
         $this->container->set(Container::class, $this->container);
         $this->container->alias(ContainerInterface::class, Container::class);
         $this->container->set(DiscoveryFile::class, new DiscoveryFile($config));
-        $this->container->set(LoggerRegistry::class, static fn(): LoggerRegistry => Log::registry());
+        $this->container->set(LoggerRegistry::class, $this->logger);
         $this->container->set(Connection::class, static fn(): Connection => Connection::fromGlobal());
         $this->container->set(Migrator::class, static function (Container $container): Migrator {
             $connection = $container->get(Connection::class);
@@ -73,6 +82,9 @@ final class Kernel
     public static function boot(KernelConfig $config): self
     {
         self::assertSupportedWordPress();
+        // Container・LoggerRegistry 等の PSR の interface を実装するクラスは、この検査の後で初めて読み込む
+        PsrInterfaceCheck::assertCompatible();
+        InstalledVersionCheck::assertInstalledVersions(self::VERSION);
         self::assertCanBoot($config);
 
         $kernel = new self($config);
@@ -90,14 +102,27 @@ final class Kernel
             return $kernel;
         }
 
-        $kernel->scheduleAll();
-        $kernel->registerTemplateFallback();
-        $kernel->registerLifecycleHooks();
-        $kernel->registerModelMigrator();
-        $kernel->registerActionRouter();
-        self::registerTextdomainLoader();
+        try {
+            // debug の遅延 boot の検査(何も登録しないうちに例外)と、コアのフックの登録
+            $missed = $kernel->scheduleAll();
+            $kernel->registerTemplateFallback();
+            $kernel->registerLifecycleHooks();
+            $kernel->registerModelMigrator();
+            $kernel->registerActionRouter();
+            self::registerTextdomainLoader();
+            // 拡張が Container に入れるサービスを、キャッチアップの初期化でも使えるよう、キャッチアップより先に登録する
+            $kernel->registerExtensions();
+            // キャッチアップで動くアプリのコードが Kernel::forClass()・forFile()(Log の静的な呼び出し)で
+            // この Kernel を引けるよう、キャッチアップより先にレジストリに登録する
+            self::$kernels[$config->appNamespace] = $kernel;
+            $kernel->catchUp($missed);
+        } catch (Throwable $exception) {
+            // boot が失敗したら、起動していない Kernel をレジストリに残さないよう取り除いてから、例外をそのまま投げ直す
+            unset(self::$kernels[$config->appNamespace]);
 
-        self::$kernels[$config->appNamespace] = $kernel;
+            throw $exception;
+        }
+
         self::registerCliCommand();
 
         return $kernel;
@@ -133,6 +158,43 @@ final class Kernel
         return $matchedKernel;
     }
 
+    /**
+     * ファイルの実パス(realpath())を含むルートディレクトリ(rootDirs()。実パス)を持つ Kernel を、最も長く一致する
+     * ルートで解決する。Log の静的な呼び出しが、記録先の Kernel を決めるのに使う。
+     *
+     * @throws KernelException ファイルの実パスが取れない(存在しない等)、またはどの Kernel のルートにも含まれない場合
+     */
+    public static function forFile(string $file): self
+    {
+        // ルートは実パスのため、ファイルも実パスにしてから比べる(シンボリックリンクや `..` を含む別の表記でも、
+        // 実体の場所で判定する)
+        $realFile = realpath($file);
+
+        if ($realFile === false) {
+            throw new KernelException("cannot resolve the real path of '{$file}' to find its TMSWP kernel");
+        }
+
+        $matchedRoot = null;
+        $matchedKernel = null;
+
+        foreach (self::$kernels as $kernel) {
+            foreach ($kernel->rootDirs() as $root) {
+                if (str_starts_with($realFile, $root . DIRECTORY_SEPARATOR) && ($matchedRoot === null || \strlen($root) > \strlen($matchedRoot))) {
+                    $matchedRoot = $root;
+                    $matchedKernel = $kernel;
+                }
+            }
+        }
+
+        if (!$matchedKernel instanceof self) {
+            $real = $realFile === $file ? '' : " (real path '{$realFile}')";
+
+            throw new KernelException("file '{$file}'{$real} is not inside the root directory of any booted TMSWP kernel");
+        }
+
+        return $matchedKernel;
+    }
+
     /** @return array<string, self> */
     public static function all(): array
     {
@@ -158,6 +220,14 @@ final class Kernel
     public function container(): Container
     {
         return $this->container;
+    }
+
+    /**
+     * この Kernel のログのレジストリ。チャネルは KernelConfig の logChannels で宣言する。
+     */
+    public function logger(): LoggerRegistry
+    {
+        return $this->logger;
     }
 
     /** @return list<DiscoveredComponent> */
@@ -227,9 +297,14 @@ final class Kernel
      * コンポーネントの初期化・MetaSchema の登録・`#[Action]` / `#[Filter]` のメソッドを、WordPress のフックに登録する(§7)。
      *
      * 遅延 boot の検査(発火済みのフックがあるか)は、どのフックを登録するよりも先に行う。debug では何も登録・
-     * 実行しないまま例外を投げ、本番では発火済みのフックの処理をその場で実行する(キャッチアップ。§3.3)。
+     * 実行しないまま例外を投げる。本番では発火済みのフックのグループを返し、boot() が拡張とレジストリへの登録の後で
+     * catchUp() に渡す(キャッチアップ。§3.3)。
+     *
+     * @throws KernelException debug の遅延 boot の場合
+     *
+     * @return list<array{hook: string, priority: int, runner: Closure(): void}> 発火済みのグループ(キャッチアップの順)
      */
-    private function scheduleAll(): void
+    private function scheduleAll(): array
     {
         $groups = $this->componentGroups();
         // MetaSchema の登録(init 20)も、コンポーネントの初期化と同じ順序の規則で扱う
@@ -276,9 +351,18 @@ final class Kernel
             add_action($group['hook'], $group['runner'], $group['priority'], 0);
         }
 
-        // 本番の遅延 boot は、発火済みのフックの処理をその場で実行して縮退動作させる(キャッチアップ。§3.3)
+        return $missed;
+    }
+
+    /**
+     * 本番の遅延 boot で、発火済みのフックの処理をその場で実行して縮退動作させる(キャッチアップ。§3.3)。
+     *
+     * @param list<array{hook: string, priority: int, runner: Closure(): void}> $missed scheduleAll() が返したグループ
+     */
+    private function catchUp(array $missed): void
+    {
         foreach ($missed as $group) {
-            Log::error(self::lateBootMessage($group['hook']));
+            $this->logger->error(self::lateBootMessage($group['hook']));
             ($group['runner'])();
         }
     }
@@ -366,8 +450,8 @@ final class Kernel
      * Filter は引数を宣言しないメソッドでも第1引数を受け取って登録する(HookMethodKind::registeredArgs())ため、
      * メソッドには宣言した引数の数に切り詰めて渡す。
      *
-     * 失敗はエラー方針(00-overview.md §5.6)で隔離する。debug では例外をそのまま投げ、本番では Log::error() に
-     * 記録してこのメソッドだけをスキップし、第1引数をそのまま返す(filter の値を変えない。action の戻り値は使われない)。
+     * 失敗はエラー方針(00-overview.md §5.6)で隔離する。debug では例外をそのまま投げ、本番ではこの Kernel のログに
+     * error で記録してこのメソッドだけをスキップし、第1引数をそのまま返す(filter の値を変えない。action の戻り値は使われない)。
      *
      * @param array<int|string, mixed> $args WordPress から受け取った引数
      */
@@ -386,7 +470,7 @@ final class Kernel
                 throw $exception;
             }
 
-            Log::error('tmswp.kernel: hook method {class}::{method} failed on {hook}', [
+            $this->logger->error('tmswp.kernel: hook method {class}::{method} failed on {hook}', [
                 'class' => $hookMethod->class,
                 'method' => $hookMethod->method,
                 'hook' => $hookMethod->hook,
@@ -446,6 +530,94 @@ final class Kernel
 
         add_action('after_switch_theme', $activate, 10, 0);
         add_action('switch_theme', $deactivate, 10, 0);
+    }
+
+    /**
+     * forFile() が判定に使うルートディレクトリ。KernelConfig::rootDir() に加え、テーマ形態では、有効な子テーマの
+     * ディレクトリ(get_stylesheet_directory() の実パス)が親テーマ(get_template_directory() の実パス)と異なる場合に
+     * それも含める。Template::part() は子テーマのテンプレートを探すため、子テーマのファイルからの Log の呼び出しを
+     * テーマの Kernel に記録できるようにする。
+     *
+     * 子テーマのディレクトリは判定のたびに取る。テーマ形態の Kernel は functions.php で boot するため、レジストリに
+     * テーマの Kernel がある時点では WordPress は有効なテーマを決めている(wp-settings.php は setup_theme の後に
+     * 有効なテーマの functions.php を読み込む)。
+     *
+     * @throws KernelException テーマのディレクトリの実パスが取れない場合
+     *
+     * @return list<string>
+     */
+    private function rootDirs(): array
+    {
+        $roots = [$this->config->rootDir()];
+
+        if ($this->config->context !== KernelContext::Theme) {
+            return $roots;
+        }
+
+        $stylesheet = self::realThemeDirectory(get_stylesheet_directory());
+
+        if ($stylesheet !== self::realThemeDirectory(get_template_directory())) {
+            $roots[] = $stylesheet;
+        }
+
+        return $roots;
+    }
+
+    /**
+     * @throws KernelException ディレクトリが存在しない場合
+     */
+    private static function realThemeDirectory(string $directory): string
+    {
+        $real = realpath($directory);
+
+        if ($real === false) {
+            throw new KernelException("cannot resolve the theme directory: {$directory}");
+        }
+
+        return rtrim($real, '/\\');
+    }
+
+    /**
+     * KernelConfig の extensions を、渡した順に1回ずつ登録する。プラグインの有効化のサンドボックスでは、コンポーネントの
+     * 初期化と同じく呼ばない。
+     */
+    private function registerExtensions(): void
+    {
+        foreach ($this->config->extensions as $extension) {
+            $extension->register($this);
+        }
+    }
+
+    /**
+     * KernelConfig の logChannels を呼び、チャネルの宣言を検証する。null なら空(遅延デフォルトチャネル)を返す。
+     *
+     * @throws KernelException 戻り値がチャネル名 => LogChannel の空でない配列でない場合(設定の誤り)
+     *
+     * @return array<string, LogChannel>
+     */
+    private static function logChannels(KernelConfig $config): array
+    {
+        if ($config->logChannels === null) {
+            return [];
+        }
+
+        $channels = ($config->logChannels)();
+
+        if (!\is_array($channels) || $channels === []) {
+            throw new KernelException('logChannels must return a non-empty array of channel name => ' . LogChannel::class . '; omit logChannels to use the default channel');
+        }
+
+        $validated = [];
+
+        foreach ($channels as $name => $channel) {
+            if (!\is_string($name) || !$channel instanceof LogChannel) {
+                throw new KernelException('logChannels must return channel name (string) => ' . LogChannel::class . ', got ' . get_debug_type($name) . ' => ' . get_debug_type($channel));
+            }
+
+            $validated[$name] = $channel;
+        }
+
+        return $validated;
     }
 
     private function isPluginActivationSandbox(): bool

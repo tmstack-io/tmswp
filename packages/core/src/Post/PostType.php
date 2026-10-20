@@ -28,7 +28,10 @@ abstract class PostType
         return self::definitionFor(static::class)->slug();
     }
 
-    final public static function register(): void
+    /**
+     * 投稿タイプを登録する。PostTypeInitializer が、このクラスを探索した Kernel を渡して呼ぶ。
+     */
+    final public static function register(Kernel $kernel): void
     {
         $definition = self::definitionFor(static::class);
         $slug = $definition->slug();
@@ -51,7 +54,7 @@ abstract class PostType
             self::mergeThumbnailSupport($slug);
         }
 
-        $registered = WpBridge::call('register_post_type', $slug, $definition->toArgs());
+        $registered = WpBridge::call('register_post_type', $slug, $definition->toArgs($kernel->config()->labelLanguage));
 
         if ($registered instanceof WP_Error) {
             throw new EntityDefinitionException($registered->get_error_message());

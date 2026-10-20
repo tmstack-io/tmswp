@@ -19,6 +19,7 @@ use stdClass;
 use Stringable;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\UnknownLogChannelException;
+use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Log\LoggerRegistry;
 use TMSWP\Core\Log\SimpleLogger;
 use TMSWP\Core\Tests\Support\UnitTestCase;
@@ -27,14 +28,14 @@ final class LogTest extends UnitTestCase
 {
     public function testRegistryDispatchesByLevelAndScopeWithoutScopeLeak(): void
     {
-        $registry = new LoggerRegistry();
         $default = new ArrayLogger();
         $mail = new ArrayLogger();
         $errors = new ArrayLogger();
-
-        $registry->set('default', $default);
-        $registry->set('mail', $mail, scopes: ['mail']);
-        $registry->set('errors', $errors, levels: [LogLevel::ERROR]);
+        $registry = new LoggerRegistry([
+            'default' => new LogChannel($default),
+            'mail' => new LogChannel($mail, scopes: ['mail']),
+            'errors' => new LogChannel($errors, levels: [LogLevel::ERROR]),
+        ]);
 
         $registry->info('plain');
         $registry->scope('mail')->error('failed', ['id' => 10]);
@@ -47,16 +48,40 @@ final class LogTest extends UnitTestCase
         self::assertArrayNotHasKey('_scope', $default->records[2]['context']);
     }
 
-    public function testRegistryDoesNotRecreateDefaultChannelAfterExplicitConfiguration(): void
+    public function testRegistryWithDeclaredChannelsNeverCreatesDefaultChannel(): void
     {
-        $registry = new LoggerRegistry();
         $logger = new ArrayLogger();
+        $registry = new LoggerRegistry(['errors' => new LogChannel($logger, levels: [LogLevel::ERROR])]);
 
-        $registry->set('default', $logger);
-        $registry->remove('default');
+        // 宣言したチャネルが受け付けない記録は、どこにも出ない(default チャネルを作らない)
         $registry->info('ignored');
 
         self::assertSame([], $logger->records);
+        self::assertFalse($registry->has('default'));
+    }
+
+    public function testRegistryRejectsEmptyChannelName(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('log channel must not be empty');
+
+        new LoggerRegistry(['' => new LogChannel(new ArrayLogger())]);
+    }
+
+    public function testLogChannelRejectsUnknownLevel(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('unknown log level: fatal');
+
+        new LogChannel(new ArrayLogger(), levels: ['fatal']);
+    }
+
+    public function testLogChannelRejectsEmptyScope(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('log scope must not be empty');
+
+        new LogChannel(new ArrayLogger(), scopes: ['']);
     }
 
     public function testRegistryRejectsUnknownLevelAndChannel(): void
