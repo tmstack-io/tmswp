@@ -7,6 +7,7 @@ namespace TMSWP\Core\Query;
 use ArrayIterator;
 use Countable;
 use IteratorAggregate;
+use TMSWP\Core\Exception\InvalidArgumentException;
 
 /**
  * @template T
@@ -17,13 +18,27 @@ final readonly class PageResult implements IteratorAggregate, Countable
 {
     /**
      * @param list<T> $items
+     *
+     * @throws InvalidArgumentException total が負、perPage・currentPage が1未満の場合
      */
     public function __construct(
         public array $items,
         public int $total,
         public int $perPage,
         public int $currentPage,
-    ) {}
+    ) {
+        if ($total < 0) {
+            throw new InvalidArgumentException("PageResult total must be 0 or greater, {$total} given");
+        }
+
+        if ($perPage < 1) {
+            throw new InvalidArgumentException("PageResult perPage must be 1 or greater, {$perPage} given");
+        }
+
+        if ($currentPage < 1) {
+            throw new InvalidArgumentException("PageResult currentPage must be 1 or greater, {$currentPage} given");
+        }
+    }
 
     public function totalPages(): int
     {

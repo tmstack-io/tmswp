@@ -10,6 +10,7 @@ use TMSWP\Core\Attribute\AsTaxonomy;
 use TMSWP\Core\Exception\EntityDataException;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\InvalidArgumentException;
+use TMSWP\Core\Exception\QueryException;
 use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
@@ -26,6 +27,7 @@ use TMSWP\Core\Tests\Support\RecordingLogger;
 use TMSWP\Core\Tests\Support\UsesTempDirectories;
 use TMSWP\Core\User\UserRole;
 use TMSWP\Core\User\UserRoleDefinition;
+use WP_Error;
 
 /**
  * エンティティの builtin のアダプタ・ロールの差分の通知・キャッチアップでの再試行・ファサードの実行時の扱い
@@ -384,6 +386,130 @@ PHP);
     }
 
     /**
+     * debug の Kernel(fixture のテーマ)では、WordPress の関数が返した WP_Error は QueryException になる。「該当なし」
+     * (タームが付いていない・条件に合うタームが無い)は例外にせず、空の結果を返す。
+     */
+    public function testWpErrorThrowsQueryExceptionInDebugWhileNoMatchIsEmpty(): void
+    {
+        $productPost = self::fixtureClass(self::THEME_NAMESPACE . '\\Post\\ProductPost', PostType::class);
+        $category = self::fixtureClass(self::THEME_NAMESPACE . '\\Tax\\ProductCategoryTaxonomy', Taxonomy::class);
+        $postId = self::createPost($productPost::slug());
+        $termId = wp_insert_term('WP_Error link', $category::slug());
+        self::assertIsArray($termId);
+
+        self::assertSame([], $productPost::terms($postId, $category));
+        self::assertSame([], $category::query()->search('tmswp-no-such-term')->get());
+        self::assertNull($category::query()->search('tmswp-no-such-term')->url());
+
+        $unregistered = $this->declareThemeTaxonomy('tmswp_unregistered');
+        $invalidTaxonomy = 'returned WP_Error invalid_taxonomy: Invalid taxonomy.';
+        $cases = [
+            'PostType::terms' => [static fn(): mixed => $productPost::terms($postId, 'tmswp_unregistered'), "get_the_terms() {$invalidTaxonomy} ({$productPost})"],
+            'TermQuery::get' => [static fn(): mixed => $unregistered::query()->get(), "get_terms() {$invalidTaxonomy} ({$unregistered})"],
+            'TermQuery::first' => [static fn(): mixed => $unregistered::query()->first(), "get_terms() {$invalidTaxonomy} ({$unregistered})"],
+            'TermQuery::ids' => [static fn(): mixed => $unregistered::query()->ids(), "get_terms() {$invalidTaxonomy} ({$unregistered})"],
+            'TermQuery::count' => [static fn(): mixed => $unregistered::query()->count(), "get_terms() {$invalidTaxonomy} ({$unregistered})"],
+            'Taxonomy::get' => [static fn(): mixed => $unregistered::get((int) $termId['term_id']), "get_term() {$invalidTaxonomy} ({$unregistered})"],
+        ];
+
+        foreach ($cases as $name => [$call, $message]) {
+            try {
+                $call();
+                self::fail("QueryException was not thrown for {$name}");
+            } catch (QueryException $exception) {
+                self::assertSame($message, $exception->getMessage(), $name);
+            }
+        }
+
+        add_filter('term_link', static fn(): WP_Error => new WP_Error('tmswp_forced', 'Forced error.'));
+
+        foreach (['Taxonomy::url' => static fn(): mixed => $category::url((int) $termId['term_id']), 'TermQuery::url' => static fn(): mixed => $category::query()->url()] as $name => $call) {
+            try {
+                $call();
+                self::fail("QueryException was not thrown for {$name}");
+            } catch (QueryException $exception) {
+                self::assertSame("get_term_link() returned WP_Error tmswp_forced: Forced error. ({$category})", $exception->getMessage(), $name);
+            }
+        }
+    }
+
+    /** 本番の Kernel では、WP_Error は例外にせず、その Kernel のロガーに error で記録して既定値を返す。 */
+    public function testWpErrorIsLoggedAndReturnsDefaultInProduction(): void
+    {
+        $config = $this->productionPluginConfig('WpError');
+        $namespace = $config->appNamespace;
+        $taxonomy = 'tmswp_lost_' . substr(md5($namespace), 0, 8);
+        $this->writeFile($config->appDir . '/Post/LostPost.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Post;
+
+use TMSWP\\Core\\Post\\PostType;
+use TMSWP\\Core\\Post\\PostTypeDefinition;
+
+final class LostPost extends PostType
+{
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::builtin('post');
+    }
+}
+PHP);
+        $this->writeFile($config->appDir . '/Tax/LostTaxonomy.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Tax;
+
+use TMSWP\\Core\\Tax\\Taxonomy;
+use TMSWP\\Core\\Tax\\TaxonomyDefinition;
+
+final class LostTaxonomy extends Taxonomy
+{
+    public static function definition(): TaxonomyDefinition
+    {
+        return TaxonomyDefinition::create('{$taxonomy}')->label('Lost', 'Losts');
+    }
+}
+PHP);
+        $this->registerAppAutoloader($config);
+        // どちらのクラスも探索結果に含めない(タクソノミーは登録されない)
+        (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
+        Kernel::boot($config);
+        $lostPost = self::fixtureClass($namespace . '\\Post\\LostPost', PostType::class);
+        $lostTaxonomy = self::fixtureClass($namespace . '\\Tax\\LostTaxonomy', Taxonomy::class);
+        $postId = self::createPost('post');
+        $before = \count($this->logger->records);
+
+        self::assertSame([], $lostPost::terms($postId, $taxonomy));
+        self::assertSame([], $lostTaxonomy::query()->get());
+        self::assertNull($lostTaxonomy::query()->first());
+        self::assertSame([], $lostTaxonomy::query()->ids());
+        self::assertSame(0, $lostTaxonomy::query()->count());
+        self::assertNull($lostTaxonomy::get(1));
+
+        $record = static fn(string $function, string $class): array => [
+            'level' => 'error',
+            'message' => 'tmswp.entity: {function}() returned WP_Error {code}: {message} ({class})',
+            'context' => ['function' => $function, 'code' => 'invalid_taxonomy', 'message' => 'Invalid taxonomy.', 'class' => $class],
+        ];
+        self::assertSame(
+            [
+                $record('get_the_terms', $lostPost),
+                $record('get_terms', $lostTaxonomy),
+                $record('get_terms', $lostTaxonomy),
+                $record('get_terms', $lostTaxonomy),
+                $record('get_terms', $lostTaxonomy),
+                $record('get_term', $lostTaxonomy),
+            ],
+            \array_slice($this->logger->records, $before),
+        );
+    }
+
+    /**
      * meta() は、無い対象・スコープ外の対象を、定義の誤り(EntityDefinitionException)ではなく呼び出しの誤りとして
      * InvalidArgumentException にする。
      */
@@ -448,6 +574,40 @@ PHP);
         clean_term_cache([$firstId, $secondId], $taxonomy);
 
         return $firstId;
+    }
+
+    /**
+     * fixture のテーマの名前空間(debug の Kernel)に、WordPress に登録しないタクソノミーのクラスを宣言する。クラス名は
+     * 呼び出しごとに変える(同じプロセスで同じクラスを二度宣言できないため)。
+     *
+     * @return class-string<Taxonomy>
+     */
+    private function declareThemeTaxonomy(string $slug): string
+    {
+        $shortName = 'UnregisteredTaxonomy' . bin2hex(random_bytes(4));
+        $file = $this->createTempDirectory('theme-taxonomy') . '/' . $shortName . '.php';
+        $namespace = self::THEME_NAMESPACE . '\\Probe';
+        $this->writeFile($file, <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace};
+
+use TMSWP\\Core\\Tax\\Taxonomy;
+use TMSWP\\Core\\Tax\\TaxonomyDefinition;
+
+final class {$shortName} extends Taxonomy
+{
+    public static function definition(): TaxonomyDefinition
+    {
+        return TaxonomyDefinition::create('{$slug}')->label('Unregistered', 'Unregistered');
+    }
+}
+PHP);
+        require $file;
+
+        return self::fixtureClass($namespace . '\\' . $shortName, Taxonomy::class);
     }
 
     /** app/ のクラスを、名前空間に対応するパスから読み込む autoload を登録する(tear_down で外す)。 */

@@ -111,7 +111,7 @@ SQLに埋め込まれる識別子(テーブル名・カラム名・エイリア�
 |---|---|
 | `SchemaException` | TableDefinitionの定義不正(識別子不正・PK未定義・名前長超過・デフォルト値にクォート文字等) |
 | `MigrationException` | dbDelta実行後にエラーまたは残差分が検出された場合 |
-| `InvalidQueryException` | QueryBuilderのAPI誤用(不正演算子・raw断片規約違反・offset単独指定・WHEREなしupdate/delete等)。**実行前**に検出される静的な誤り |
+| `InvalidQueryException` | QueryBuilderのAPI誤用(不正演算子・raw断片規約違反・offset単独指定・WHEREなしupdate/delete等)。**実行前**に検出される静的な誤り。エンティティのクエリ3種の矛盾する指定(`03-entities.md` §7.5)にも使う |
 | `QueryException` | クエリ**実行時**のDBエラー(`wpdb->last_error`非空、`query()`がfalse等)。メッセージに失敗SQL(prepare適用後)と`last_error`を含める |
 | `HydrationException` | DTOハイドレーション失敗(列欠落・型変換不能・コンストラクタ非public等) |
 
@@ -544,10 +544,10 @@ enum SortOrder: string
 運用規則(確定):
 
 - enum→SQL/WP引数文字列への変換は、各句の構築時に`->value`で**1箇所**で行う(backing valueがそのままWP/SQLの期待文字列)。
-- enum化の対象は真に閉じた3軸(compare/type/direction)に限定する。開いた・拡張余地のある値空間(エンティティクエリの`status()`、`whereTerm()`の`$field`/`$operator`等)は文字列のまま据え置く(開いた値空間へのenum強制は柔軟性を損なう)。
+- enum化の対象は閉じた値空間に限定する。本文書の3軸(compare/type/direction)に加え、エンティティクエリの`whereTerm()`のfield/operatorも閉じた値空間であり、03-entities.md §7.2が`TermField`/`TermOperator`として定義する(WP_Tax_Queryは未知のoperatorの句を無視して全件を返すため)。開いた・拡張余地のある値空間(エンティティクエリの`status()`等)は文字列のまま据え置く(開いた値空間へのenum強制は柔軟性を損なう)。
 - Model層`QueryBuilder`の`where()`の`$operator`は、`<>`を含みIN/BETWEEN等を専用メソッド(`whereIn`/`whereBetween`)が担う独自の小集合のため、`Compare`を適用せず文字列許可リスト(振る舞い仕様参照)のまま据え置く。
 - `string|SortOrder`等のunion両対応は契約が二重になるため採らない。
-- limit/offset等の数値バリデーション(`InvalidQueryException`、エンティティクエリ側は`QueryException`)はenum化の対象外であり存置する。
+- limit/offset等の数値バリデーション(`InvalidQueryException`、エンティティクエリ側は`InvalidArgumentException`。03-entities.md §7.5)はenum化の対象外であり存置する。
 
 #### シグネチャ
 

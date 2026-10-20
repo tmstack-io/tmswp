@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tax;
 
+use TMSWP\Core\Entity\WpErrorHandler;
 use TMSWP\Core\Exception\EntityDataException;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\EntityPersistenceException;
@@ -71,6 +72,10 @@ abstract class Taxonomy
         }
 
         $resolved = get_term($term, static::slug());
+
+        if ($resolved instanceof WP_Error) {
+            return WpErrorHandler::handle($resolved, static::class, 'get_term', null);
+        }
 
         if (!$resolved instanceof WP_Term || $resolved->taxonomy !== static::slug()) {
             return null;
@@ -144,7 +149,11 @@ abstract class Taxonomy
 
         $url = get_term_link($resolved);
 
-        return $url instanceof WP_Error ? null : $url;
+        if ($url instanceof WP_Error) {
+            return WpErrorHandler::handle($url, static::class, 'get_term_link', null);
+        }
+
+        return $url;
     }
 
     /** @return list<WP_Term> */

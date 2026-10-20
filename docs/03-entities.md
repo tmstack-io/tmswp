@@ -20,10 +20,10 @@ WordPressの3種のエンティティ(投稿タイプ・タクソノミー・ユ
 | `Tax\` | `Taxonomy`(基底), `TaxonomyDefinition`, `TermQuery` |
 | `User\` | `UserRole`(基底), `UserRoleDefinition`, `UserQuery` |
 | `Label\` | `LabelLanguage`(enum), `LabelGenerator` |
-| `Query\` | `PageResult` |
+| `Query\` | `PageResult`, `TermField`(enum), `TermOperator`(enum) |
 | `Exception\` | `EntityDefinitionException`, `EntityPersistenceException`, `EntityDataException`, `QueryException` |
 
-`Label\`・`Query\`・`Thumbnail`・例外4種は本文書が完全定義する(他文書は本文書の定義に従う)。
+`Label\`・`Query\`(`PageResult`・`TermField`・`TermOperator`)・`Thumbnail`・例外4種は本文書が完全定義する(他文書は本文書の定義に従う)。クエリの比較演算子・キャスト型・並び順のenum(`Query\Compare`・`Query\CastType`・`Query\SortOrder`)は06文書が正準定義し、エンティティのクエリ3種もそれを受け取る。
 
 ## 依存文書
 
@@ -80,10 +80,12 @@ final class ProductPost extends PostType
 | 種別 | 規約 |
 |---|---|
 | 単体取得(`get()` / `findBy*()` / `first()` / `firstTerm()` / `current()`) | 見つからない・スコープ不一致なら **null**(`?WP_Post` / `?WP_Term` / `?WP_User` / `?Thumbnail`) |
-| URL取得(`permalink()` / `archiveUrl()` / `url()` / `authorUrl()` / `thumbnailUrl()`) | 解決不能なら **null**(`?string`)。WP関数の `false` / `WP_Error` 戻りはすべてnullへ正規化 |
-| 複数取得(`get()` / `ids()` / `terms()` / `parents()` / `all()`) | 常に **配列**(`list<T>`)。`WP_Error` は空配列へ正規化 |
+| URL取得(`permalink()` / `archiveUrl()` / `url()` / `authorUrl()` / `thumbnailUrl()`) | 解決不能なら **null**(`?string`)。WP関数の `false`(該当なし)はnull。`WP_Error` は1.7節のエラー方針に従う(本番の既定値はnull) |
+| 複数取得(`get()` / `ids()` / `terms()` / `parents()` / `all()`) | 常に **配列**(`list<T>`)。該当なしは空配列。`WP_Error` は1.7節のエラー方針に従う(本番の既定値は空配列) |
 | 判定(`is()` / `exists()`) | 常に **bool** |
 | 書き込み(`create()`) | 成功時 **int**(ID)。失敗時は `EntityPersistenceException` をthrow(`WP_Error` は返さない) |
+
+「該当なし」と「エラー」は区別する。WP関数が返す `false`・空配列・null(タームが付いていない、条件に合うレコードが無い等)は該当なしであり、上の表の正常な結果で返す。WP関数が返す `WP_Error` はエラーであり、黙って空配列・null・0に変えない(1.7節)。
 
 ### 1.4 ID解決規約(多段文字列フォールバックの全廃)
 
@@ -101,12 +103,16 @@ final class ProductPost extends PostType
 
 ```
 入力: string $ref
-1. class_exists($ref) が false → $ref をスラッグ文字列としてそのまま返す
-2. class_exists($ref) が true:
-   a. $ref が期待する基底(PostType または Taxonomy)のサブクラス → $ref::slug() を返す
-   b. サブクラスでない → EntityDefinitionException をthrow
+1. $ref が `\` を含まない → $ref をスラッグ文字列としてそのまま返す(クラスの有無を調べない)
+2. $ref が `\` を含む → クラスの参照とみなす:
+   a. class_exists($ref) が false → EntityDefinitionException をthrow
+     (メッセージ: class '{$ref}' does not exist)
+   b. $ref が期待する基底(PostType または Taxonomy)のサブクラス → $ref::slug() を返す
+   c. サブクラスでない → EntityDefinitionException をthrow
      (メッセージにはクラス名と期待基底名を含める)
 ```
+
+WordPressのスラッグは `\` を含まないため、`\` を含む文字列をスラッグとして渡すことはない。存在しないクラスの指定(クラス名の誤り・autoloadの設定漏れ)は設定の誤り(00-overview §5.6)であり、スラッグとして黙って素通しせず、debugに関係なく例外にする。名前空間の無いクラスは `\` を含まないため参照できない(appのクラスは常に名前空間を持つ)。
 
 実装はコア内部の私的ヘルパ(`@internal`)に集約してよい。解決はargs構築時(`toArgs()` / クエリ実行時)に遅延実行する。`definition()` 構築時点で相互参照先クラスのロードを強制しないこと(循環参照回避)。
 
@@ -153,7 +159,7 @@ final class EntityDataException extends RuntimeException
 {
 }
 
-/** クエリビルダの使用方法不正(不正なdirection・compare・limit等)とクエリの実行失敗。 */
+/** クエリの実行時の失敗。エンティティ層では WordPress の関数が返した WP_Error を表し、debug のときだけ投げる(下記)。 */
 class QueryException extends RuntimeException
 {
 }
@@ -165,7 +171,9 @@ class QueryException extends RuntimeException
 
 - `EntityDefinitionException` は設定の誤り(定義の宣言の誤り・存在しないbuiltinのアダプタ先・登録の失敗・FQCN解決失敗)に限って使い、debugに関係なく投げる。実行時のデータには使わない。
 - 実行時のデータの不整合(`parents()` の深さの超過。5.3節・9.2節)は実行時のデータ取得の失敗として扱う。debugでは `EntityDataException` を投げ、本番ではそのエンティティクラスのKernel(`Kernel::forClass(static::class)`)のロガーに `error` で記録して既定値(空配列)を返す。
-- データが無いこと(投稿・ターム・ユーザーが無い、アイキャッチ未設定等)はエラーにせず、1.3節の正常な結果(null・空配列・false)で返す。
+- WordPressの関数が返す `WP_Error`(`get_terms()`・`get_the_terms()`・`get_term()`・`get_term_link()`。存在しないタクソノミーの `invalid_taxonomy` 等)は、実行時のデータ取得の失敗として扱う。debugでは `QueryException`(メッセージは `{関数名}() returned WP_Error {コード}: {メッセージ} ({エンティティクラス})`)を投げ、本番ではそのエンティティクラスのKernel(`Kernel::forClass()`)のロガーに `error`(メッセージは `tmswp.entity: {function}() returned WP_Error {code}: {message} ({class})`)で記録して既定値(複数取得は空配列、単体取得・URLはnull、`count()` は0)を返す。この扱いはコア内部のヘルパ(`Entity\WpErrorHandler`。`@internal`)の1か所に置き、各メソッドはそこへ委ねる。`WP_Error` を返し得ないWP関数(`WP_Query`・`WP_User_Query` 等)には適用しない。
+- データが無いこと(投稿・ターム・ユーザーが無い、アイキャッチ未設定、タームが付いていない、条件に合うレコードが無い等)はエラーにせず、1.3節の正常な結果(null・空配列・false)で返す。
+- クエリビルダの使い方の誤りは、debugに関係なくその場で投げる。値の誤り(`limit()` が1未満、`offset()` が負、`paginate()` のページ・1ページの件数が1未満、`PageResult` の不正な値)は `InvalidArgumentException`、指定どうしの矛盾(`noPaging()` と `paginate()` の併用、`limit()` の無い `offset()` 等。7.5節)は `InvalidQueryException`(`LogicException` を継承する。06文書 R4のModel層と同じ使い分け)。比較演算子・キャスト型・並び順・`whereTerm()` のfield/operatorはenumで受けるため、未知の値は型の段階で渡せない。
 - `meta()` だけは対象のエンティティを前提とするため、無い対象・スコープ外の対象は呼び出しの誤りとして、debugに関係なく `InvalidArgumentException`(`TMSWP\Core\Exception\`。`07-support.md` §6)を投げる(5.3節)。存在しない対象へのメタの書き込みを防ぐためで、04文書の `ObjectType::resolveId()` が不正なIDと種別の違うオブジェクトを `InvalidArgumentException` にするのと同じ扱いである。
 
 ### 1.8 WordPressの関数に渡す引数の型
@@ -326,14 +334,15 @@ final readonly class PageResult implements \IteratorAggregate, \Countable
      * @param int     $total       条件全体の総件数
      * @param int     $perPage     1ページあたり件数(>= 1)
      * @param int     $currentPage 現在ページ(1始まり)
+     *
+     * @throws \TMSWP\Core\Exception\InvalidArgumentException total < 0、perPage < 1、currentPage < 1 の場合
      */
     public function __construct(
         public array $items,
         public int $total,
         public int $perPage,
         public int $currentPage,
-    ) {
-    }
+    );
 
     /** 総ページ数。total=0 のとき 0。 */
     public function totalPages(): int;     // (int) ceil($this->total / $this->perPage)
@@ -350,7 +359,7 @@ final readonly class PageResult implements \IteratorAggregate, \Countable
 }
 ```
 
-`totalPages()` は `paginate_links(['total' => $page->totalPages(), 'current' => $page->currentPage])` にそのまま渡せる値とする。
+`totalPages()` は `paginate_links(['total' => $page->totalPages(), 'current' => $page->currentPage])` にそのまま渡せる値とする。コンストラクタは `total` が負、`perPage`・`currentPage` が1未満の値を `InvalidArgumentException` で拒否する(`totalPages()` のゼロ除算を防ぐ)。
 
 ---
 
@@ -650,7 +659,7 @@ PHPDocの `@return MetaBag<static>` は必須である。`MetaBag` は04文書�
 
 **`thumbnailUrl()`**: `static::thumbnail($post, $size)?->url`。ダミー画像は呼び出し側の `?? $dummyUrl` で表現する(旧 `dummy_image` 引数は廃止)。
 
-**`terms()`**: `get($post)` → null時 `[]`。taxonomyを1.5節規約で解決し `get_the_terms($post, $taxonomy)`(WPのオブジェクトタームキャッシュを内包するため旧FWの手動キャッシュ管理は廃止)。`false` / `WP_Error` は `[]`。戻りは `array_values()` で `list<\WP_Term>` に正規化。
+**`terms()`**: `get($post)` → null時 `[]`。taxonomyを1.5節規約で解決し `get_the_terms($post, $taxonomy)`(WPのオブジェクトタームキャッシュを内包するため旧FWの手動キャッシュ管理は廃止)。`false`(タームが付いていない)は `[]`。`WP_Error`(存在しないタクソノミー等)は1.7節のエラー方針に従う(debugは `QueryException`、本番はKernelのロガーに `error` で記録して `[]`)。戻りは `array_values()` で `list<\WP_Term>` に正規化。
 
 **`firstTerm()`**: `terms()` の先頭、空ならnull。
 
@@ -722,7 +731,12 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Post;
 
+use TMSWP\Core\Query\CastType;
+use TMSWP\Core\Query\Compare;
 use TMSWP\Core\Query\PageResult;
+use TMSWP\Core\Query\SortOrder;
+use TMSWP\Core\Query\TermField;
+use TMSWP\Core\Query\TermOperator;
 
 final class PostQuery
 {
@@ -732,8 +746,8 @@ final class PostQuery
     /** @var list<array<string, mixed>> meta_query句(relation AND) */
     private array $metaClauses = [];
 
-    /** @var array<string, array<string, mixed>> 名前付きmeta句(orderByMeta用) */
-    private array $namedMetaClauses = [];
+    /** @var list<array<int|string, string|array<string, string>>> orderByMeta()の並び替えだけに使う句のグループ(7.7節) */
+    private array $orderMetaGroups = [];
 
     /** @var list<array<string, mixed>> tax_query句(relation AND) */
     private array $taxClauses = [];
@@ -744,16 +758,31 @@ final class PostQuery
     /** @var array<string, mixed> withArgs()による生引数(最後にマージ) */
     private array $rawArgs = [];
 
+    /** @var array<string, true> 空のIN指定を受けた条件。1つでもあれば結果は0件と確定する(7.6節) */
+    private array $emptyIn = [];
+
+    /** @var list<int>|null idIn()のID(nullはidIn()を呼んでいない)。idNotIn()のIDは差し引いて渡す(7.6節) */
+    private ?array $idIn = null;
+    /** @var list<int> */
+    private array $idNotIn = [];
+
+    private ?int $limit = null;
+    private ?int $offset = null;
+    private bool $noPaging = false;
+
     private function __construct(
         private readonly string $postType,
     ) {
     }
 
-    /** @param class-string<PostType> $postTypeClass */
+    /**
+     * クエリは必ずエンティティクラスから作る(スラッグを直接受けるファクトリは持たない。3クエリで揃え、WP_Errorの記録先の
+     * Kernelをエンティティクラスで決めるため。1.7節)。PostTypeクラスを定義していない
+     * 投稿タイプ(コアの post・他プラグインの投稿タイプ)は、PostTypeDefinition::builtin() のアダプタ(4.2節)を定義して使う。
+     *
+     * @param class-string<PostType> $postTypeClass
+     */
     public static function of(string $postTypeClass): self;
-
-    /** クラスを定義していない投稿タイプ向け(スラッグ直指定)。 */
-    public static function ofType(string $postTypeSlug): self;
 
     // ---- スコープ ----
     public function status(string ...$status): self;
@@ -765,7 +794,7 @@ final class PostQuery
     public function idIn(int ...$ids): self;
     public function idNotIn(int ...$ids): self;
 
-    public function whereMeta(string $key, mixed $value, string $compare = '=', string $type = 'CHAR'): self;
+    public function whereMeta(string $key, mixed $value, Compare $compare = Compare::Eq, CastType $type = CastType::Char): self;
     public function whereMetaExists(string $key): self;
     public function whereMetaNotExists(string $key): self;
 
@@ -773,7 +802,7 @@ final class PostQuery
      * @param string                       $taxonomy スラッグまたはTaxonomyサブクラスFQCN
      * @param int|string|list<int|string>  $terms
      */
-    public function whereTerm(string $taxonomy, int|string|array $terms, string $field = 'slug', string $operator = 'IN'): self;
+    public function whereTerm(string $taxonomy, int|string|array $terms, TermField $field = TermField::Slug, TermOperator $operator = TermOperator::In): self;
 
     /** 固定ページテンプレートで絞り込む(_wp_page_template疑似キー。旧FWの'template'キー後継)。 */
     public function template(string $templateFile): self;
@@ -782,11 +811,11 @@ final class PostQuery
     public function hasThumbnail(bool $has = true): self;
 
     // ---- 並び順 ----
-    public function orderBy(string $field, string $direction = 'ASC'): self;
+    public function orderBy(string $field, SortOrder $direction = SortOrder::Asc): self;
     public function orderByDesc(string $field): self;
-    public function orderByMeta(string $metaKey, string $direction = 'ASC', bool $numeric = false): self;
+    public function orderByMeta(string $metaKey, SortOrder $direction = SortOrder::Asc, CastType $type = CastType::Char): self;
 
-    // ---- 件数・ページング ----
+    // ---- 件数・ページング(7.5節) ----
     public function limit(int $limit): self;
     public function offset(int $offset): self;
     public function noPaging(): self;
@@ -817,50 +846,132 @@ final class PostQuery
 }
 ```
 
+`whereTerm()` のfieldとoperatorは、`Query\` のenumで受け取る(未知の値は型の段階で渡せない。WP_Tax_Queryは未知のoperatorの句を無視して全件を返すため、文字列では受けない)。
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace TMSWP\Core\Query;
+
+/** tax_query の句の field(terms の値をタームのどの列と照合するか) */
+enum TermField: string
+{
+    case Slug = 'slug';
+    case TermId = 'term_id';
+    case Name = 'name';
+    case TermTaxonomyId = 'term_taxonomy_id';
+}
+
+/** tax_query の句の operator。EXISTS/NOT EXISTS は含まない */
+enum TermOperator: string
+{
+    case In = 'IN';
+    case NotIn = 'NOT IN';
+    case And = 'AND';
+}
+```
+
 ### 7.3 引数変換仕様(決定的マッピング)
 
 | メソッド | WP_Query引数 |
 |---|---|
 | (常時) | `post_type` = スコープのスラッグ(最終段で強制注入。`withArgs` でも上書き不可) |
-| (既定) | `post_status` = `['publish']`、`ignore_sticky_posts` = `true` |
-| `status(...$s)` | `post_status` = `$s` |
+| (既定) | `post_status` = `['publish']`、`ignore_sticky_posts` = `true`、`posts_per_page` = `-1`(件数を指定しない場合は全件。サイトの設定 `posts_per_page` に依存させない。7.5節) |
+| `status(...$s)` | `post_status` = `$s`(空は0件。7.6節) |
 | `anyStatus()` | `post_status` = `'any'` |
 | `search($k)` | `s` = `$k` |
 | `author($a)` | `author` = ID(WP_Userは `->ID`) |
 | `parent($p)` | `post_parent` = ID |
-| `slugIn(...$s)` | `post_name__in` = `$s` |
-| `idIn(...$ids)` | `post__in` = `$ids` |
-| `idNotIn(...$ids)` | `post__not_in` = `$ids` |
-| `whereMeta($key, $value, $compare, $type)` | `meta_query` 句 `['key' => $key, 'value' => $value, 'compare' => $compare, 'type' => $type]` を追加(relation AND) |
+| `slugIn(...$s)` | `post_name__in` = `$s`(空は0件) |
+| `idIn(...$ids)` | `post__in` = `$ids` から `idNotIn()` のIDを差し引いたID(空は0件。7.6節) |
+| `idNotIn(...$ids)` | `idIn()` が無ければ `post__not_in` = `$ids`、あれば `post__in` から差し引いて `post__not_in` は渡さない(空は条件なし) |
+| `whereMeta($key, $value, $compare, $type)` | `meta_query` 句 `['key' => $key, 'value' => $value, 'compare' => $compare->value, 'type' => $type->value]` を追加(relation AND)。`Compare::In` と空の配列は0件、`Compare::NotIn` と空の配列は句を足さない |
 | `whereMetaExists($key)` / `whereMetaNotExists($key)` | `meta_query` 句 `['key' => $key, 'compare' => 'EXISTS'\|'NOT EXISTS']` |
-| `whereTerm($tax, $terms, $field, $operator)` | `tax_query` 句 `['taxonomy' => 解決済スラッグ, 'field' => $field, 'terms' => (array) $terms, 'operator' => $operator]`(relation AND) |
-| `template($file)` | `meta_query` 句 `['key' => '_wp_page_template', 'value' => $file]` |
+| `whereTerm($tax, $terms, $field, $operator)` | `tax_query` 句 `['taxonomy' => 解決済スラッグ, 'field' => $field->value, 'terms' => (array) $terms, 'operator' => $operator->value]`(relation AND)。空の `$terms` は、`TermOperator::In`・`And` では0件、`NotIn` では句を足さない |
+| `template($file)` | `meta_query` 句 `['key' => '_wp_page_template', 'value' => $file, 'compare' => '=', 'type' => 'CHAR']` |
 | `hasThumbnail($has)` | `meta_query` 句 `['key' => '_thumbnail_id', 'compare' => $has ? 'EXISTS' : 'NOT EXISTS']` |
-| `orderBy($f, $d)` | `orderby[$f] = $d`(複数呼び出しで累積。同一fieldは上書き) |
-| `orderByMeta($key, $d, $numeric)` | 名前付きmeta句 `tms_order_{n}`(`['key' => $key, 'compare' => 'EXISTS', 'type' => $numeric ? 'NUMERIC' : 'CHAR']`)を追加し、`orderby['tms_order_{n}'] = $d`。`{n}` は呼び出し順の0始まり連番 |
-| `limit($n)` | `posts_per_page` = `$n`(`-1` は全件。`0` 以下(-1除く)は `QueryException`) |
-| `offset($n)` | `offset` = `$n`(負値は `QueryException`) |
-| `noPaging()` | `nopaging` = `true` |
+| `orderBy($f, $d)` | `orderby[$f] = $d->value`(複数呼び出しで累積。同一fieldは上書き) |
+| `orderByMeta($key, $d, $type)` | 並び替え専用の句のグループ(7.7節)を `meta_query` に追加し、`orderby['tms_order_{n}'] = $d->value`。`{n}` は呼び出し順の0始まり連番 |
+| `limit($n)` | `posts_per_page` = `$n`(`$n < 1` は `InvalidArgumentException`) |
+| `offset($n)` | `offset` = `$n`(負値は `InvalidArgumentException`) |
+| `noPaging()` | `nopaging` = `true`(`posts_per_page` は既定の `-1`) |
 | `ignoreSticky($b)` | `ignore_sticky_posts` = `$b` |
 
-**バリデーション**: `$direction` は大文字小文字を無視して `ASC`/`DESC` のみ許可(正規化して保持)、`$compare` はWPの許可リスト(`=`, `!=`, `>`, `>=`, `<`, `<=`, `LIKE`, `NOT LIKE`, `IN`, `NOT IN`, `BETWEEN`, `NOT BETWEEN`, `EXISTS`, `NOT EXISTS`, `REGEXP`, `NOT REGEXP`, `RLIKE`)、`$type` は(`NUMERIC`, `BINARY`, `CHAR`, `DATE`, `DATETIME`, `DECIMAL`, `SIGNED`, `TIME`, `UNSIGNED`)のみ。違反は `QueryException`。
+**値の検証**: 比較演算子・キャスト型・並び順は06文書の `Compare`・`CastType`・`SortOrder`、`whereTerm()` のfield・operatorは `TermField`・`TermOperator` で受けるため、未知の値は型の段階で渡せない(EXISTS/NOT EXISTSは `whereMetaExists()`/`whereMetaNotExists()` に一本化し、`Compare` に含めない)。件数の値と指定どうしの矛盾は7.5節で検証する。
 
-**`toArgs()` のマージ順(決定的)**: ①既定値 → ②セッター由来 `$args` → ③`meta_query`(無名句+名前付き句、`relation => 'AND'`。句が1つでもrelationを付ける) → ④`tax_query`(同上) → ⑤`orderby` / 対応する `order` 削除(連想配列形式を使う) → ⑥`rawArgs`(`withArgs`) → ⑦`post_type` 強制再注入。
+**`toArgs()` のマージ順(決定的)**: (1)既定値(`posts_per_page` は `limit()` の値、無ければ `-1`) → (2)セッター由来 `$args` → (3)`offset`・`nopaging`・`post__in`/`post__not_in`(7.6節の差し引きの後) → (4)`meta_query`(無名句+並び替え専用の句のグループ、`relation => 'AND'`。句が1つでもrelationを付ける) → (5)`tax_query`(同上) → (6)`orderby` / 対応する `order` 削除(連想配列形式を使う) → (7)`rawArgs`(`withArgs`) → (8)`post_type` 強制再注入 → (9)結果が0件と確定している場合(7.6節)は `post__in` = `[0]`・`ignore_sticky_posts` = `true` を強制注入。`limit()` の無い `offset()` は `toArgs()` が `InvalidQueryException` を投げる(7.5節)。
 
 ### 7.4 終端メソッド仕様
 
 | メソッド | 追加引数 | 振る舞い |
 |---|---|---|
-| `get()` | `no_found_rows=true` | `(new \WP_Query($args))->posts` を `list<\WP_Post>` で返す(`fields` 指定があっても無視し、必ずWP_Postで返すため `fields` キーは強制unset) |
-| `first()` | `posts_per_page=1`, `no_found_rows=true` | 先頭1件 or null |
+| `get()` | `no_found_rows=true` | `(new \WP_Query($args))->posts` を `list<\WP_Post>` で返す(`fields` 指定があっても無視し、必ずWP_Postで返すため `fields` キーは強制unset)。件数を指定しなければ全件 |
+| `first()` | `posts_per_page=1`, `no_found_rows=true`、`nopaging` を除く | 先頭1件 or null。`limit()`・`noPaging()` に関係なく常に1件だけ取得し、全件を読み込まない。`offset()` は効く |
 | `ids()` | `fields='ids'`, `no_found_rows=true` | `list<int>` |
-| `count()` | `fields='ids'`, `posts_per_page=1`, `paged=1`, `no_found_rows=false` | `(int) $query->found_posts` |
-| `exists()` | — | `first() !== null` と等価(実装は `ids()` + `posts_per_page=1` でよい) |
+| `count()` | `fields='ids'`, `posts_per_page=1`, `paged=1`, `no_found_rows=false`、`offset`・`nopaging` を除く | `(int) $query->found_posts`。条件に合う全体の件数で、`limit()`・`offset()`・`noPaging()` は無視する |
+| `exists()` | — | `first() !== null` と等価 |
 | `url()` | — | `first()` のパーマリンク。null連鎖 |
-| `paginate($perPage, $page)` | `posts_per_page=$perPage`, `paged=$page`, `no_found_rows=false` | `$perPage < 1` は `QueryException`。`$page` がnullなら `max(1, (int) get_query_var('paged') ?: (int) get_query_var('page') ?: 1)` で解決。`PageResult<\WP_Post>` を返す(`total` = `found_posts`、`items` = `posts`) |
+| `paginate($perPage, $page)` | `posts_per_page=$perPage`, `paged=$page`, `no_found_rows=false` | `$perPage < 1`・`$page < 1` は `InvalidArgumentException`。`noPaging()`・`offset()`・`limit()` との併用は `InvalidQueryException`。`$page` がnullなら `max(1, (int) get_query_var('paged') ?: (int) get_query_var('page') ?: 1)` で解決。`PageResult<\WP_Post>` を返す(`total` = `found_posts`、`items` = `posts`) |
 | `wpQuery()` | — | `new \WP_Query(toArgs())` をそのまま返す(`no_found_rows` を設定しない=WP標準ページネーション可能) |
 
 終端メソッドが追加する引数はビルダ状態を変更しない(`toArgs()` の結果をローカルに複製して使う)。
+
+結果が0件と確定している場合(7.6節)、すべての終端メソッドは `WP_Query` を実行せずに空の結果を返す。`get()`・`first()`・`ids()`・`count()`・`exists()`・`url()` は `[]`・null・`[]`・0・false・null、`paginate()` は `new PageResult([], 0, $perPage, $page ?? 1)`(`$page` を省略しても現在のページを解決せず(`get_query_var()` を呼ばず)、1ページ目にする)、`wpQuery()` は検索を実行していない空の `WP_Query` を返す。引数の検証(`paginate()` の値と矛盾する指定、`limit()` の無い `offset()`)は、この場合も先に行う。
+
+`wpQuery()` が0件と確定した場合に返す `WP_Query` は、引数なしで作る(`WP_Query::__construct()` は引数が空なら検索しない)。そのうえで `posts` = `[]`・`post_count` = 0・`found_posts` = 0・`max_num_pages` = 0 を設定し(`have_posts()` はfalse)、`query`・`query_vars` に `toArgs()`((9)の `post__in = [0]` を含む)を入れる。`get_posts()` で検索をやり直しても0件になる。
+
+### 7.5 件数・ページングの規則(3クエリ共通)
+
+PostQuery・TermQuery・UserQueryに共通する件数・ページングの規則。WordPressの既定(サイトの設定による件数の上限、件数の上限が無いときの `offset` の無視等)に暗黙に依存させない。
+
+- **件数の既定**: 件数を指定しない `get()`・`ids()` は全件を返す。PostQueryは `posts_per_page = -1` を明示し(WP_Queryは指定が無いとサイトの設定 `posts_per_page`(既定10件)で切る)、TermQuery・UserQueryは `number` を渡さない(`get_terms()`・`WP_User_Query` の既定は全件)。3クエリとも同じく全件になる。
+- **値の検証**: `limit($n)` は `$n < 1`、`offset($n)` は `$n < 0`、`paginate($perPage, $page)` は `$perPage < 1`・`$page < 1` を `InvalidArgumentException` にする(UserQueryの負のoffsetによるSQLエラー、`PageResult` のゼロ除算を防ぐ)。全件は `limit()` を呼ばないこと(PostQueryは `noPaging()` でも明示できる)で表し、`limit(-1)`・`limit(0)` は受け付けない。`PageResult` のコンストラクタも同じ値を拒否する(3節)。
+- **矛盾する指定**: 次は `InvalidQueryException` にする。
+  - `noPaging()` と `limit()`・`offset()`・`paginate()` の併用(PostQuery。呼ぶ順に関係なく)
+  - `offset()` と `paginate()` の併用(PostQuery・UserQuery。WP_Queryは `offset` があると `paged` を無視する)
+  - `limit()` と `paginate()` の併用(PostQuery・UserQuery。どちらも件数の指定であり、片方を黙って置き換えない)
+  - `limit()` の無い `offset()`(3クエリ。WordPressは件数の上限が無いと `offset` を無視する)。`toArgs()` と、それを使う `get()`・`ids()`・`wp*Query()` で投げる。06文書の `QueryBuilder` の「offset単独指定」と同じ扱い
+  - TermQueryの2組目の並び替え(10.2節)
+- **終端メソッドとの関係**: `first()` は `limit()`・`noPaging()` に関係なく1件だけ取得し、`offset()` は効く(`limit()` の無い `offset()` でも使える)。`count()` は条件に合う全体の件数を返し、`limit()`・`offset()`・`noPaging()` を無視する。`paginate()` は件数・位置を自分で決めるため、`limit()`・`offset()`・`noPaging()` と併用できない(上記)。TermQueryは `paginate()` を持たない(10.3節)。
+
+### 7.6 空のIN指定(3クエリ共通)
+
+WordPressは空のIN指定(`post__in = []`・`post_name__in = []`・`include = []`・`object_ids = []`・`slug = []` 等)を「条件なし」と扱い、全件を返す。関連IDが0件のとき(`idIn(...$relatedIds)` の `$relatedIds` が空等)に全件が返る事故を防ぐため、3クエリは空のIN指定を「結果が0件と確定した状態」として持つ。
+
+| 指定 | 空の場合 |
+|---|---|
+| PostQuery: `idIn()`・`slugIn()`・`status()`、`whereTerm()`(`TermOperator::In`・`And`) | 結果は0件 |
+| TermQuery: `idIn()`・`slugIn()`・`forPost()` | 結果は0件 |
+| UserQuery: `idIn()` | 結果は0件 |
+| 3クエリ: `whereMeta($key, [], Compare::In)` | 結果は0件 |
+| 3クエリ: `idNotIn()`、`whereMeta($key, [], Compare::NotIn)`、PostQueryの `whereTerm()`(`TermOperator::NotIn`) | 何もしない(条件なし) |
+
+- 同じ引数を設定するセッター(`idIn()` 等)は後勝ちであり、空の指定の後に値のある指定をすると0件の確定は取り消される。句を足すメソッド(`whereMeta()`・`whereTerm()`)の空のIN指定は取り消せない。
+- **`idIn()` と `idNotIn()` の併用**: WordPressは包含のIDを指定すると除外のIDを無視する(WP 7.0の `WP_Query` は `post__in` があると `post__not_in` を、`WP_Term_Query` は `include` があると `exclude` を、`WP_User_Query` は `include` があると `exclude` を使わない)。3クエリは終端で、`idIn()` のIDから `idNotIn()` のIDを差し引いた集合だけを包含のID(`post__in`・`include`)として渡し、除外のIDは渡さない。差し引いた結果が空なら、空のIN指定と同じく0件と確定する。呼ぶ順に関係ない。`withArgs()` で渡した `post__in`・`post__not_in`・`include`・`exclude` は差し引かず、WordPressにそのまま渡す。
+- 0件と確定したクエリの終端メソッドは、`wpQuery()`・`wpTermQuery()`・`wpUserQuery()` を含めて、WordPressの検索を実行せずに空の結果を返す(7.4節・10.3節・13.2節)。WordPressのオブジェクトを返すメソッドは、検索を実行していない空のオブジェクトを返す。
+- `toArgs()` は、WordPressに渡しても0件になる引数(存在しないID 0への絞り込み。PostQueryは `post__in = [0]`、TermQuery・UserQueryは `include = [0]`)を最終段で強制注入する。`toArgs()` の結果を `WP_Query` 等へ直接渡した場合や、空のオブジェクトで検索をやり直した場合も全件にならない。
+
+### 7.7 orderByMeta の並び(3クエリ共通)
+
+`orderByMeta($key, $direction, $type)` は並び替えだけに使い、結果を絞り込まない。メタを保存していないレコードも結果に残す。
+
+- `meta_query` に次の句のグループを足し、名前付きの句 `tms_order_{n}` で並び替える。
+
+  ```php
+  [
+      'relation' => 'OR',
+      'tms_order_{n}' => ['key' => $key, 'compare' => 'NOT EXISTS', 'type' => $type->value],
+      ['key' => $key, 'compare' => 'EXISTS'],
+  ]
+  ```
+
+- NOT EXISTSとEXISTSをORで結ぶため、グループは常に真であり絞り込みにならない。並び替えに名前付きのNOT EXISTSの句を使うのは、WP_Meta_QueryがNOT EXISTSの句だけをメタキーを `ON` に含む `LEFT JOIN` にするためで、その句の値はメタを持つレコードではその値、持たないレコードではNULLになる(EXISTSの句の `JOIN` はメタキーを `ON` に含まず、ほかのメタの行と結び付くため、並び替えに使うとメタを持たないレコードの位置がほかのメタの値で変わる)。
+- **メタの無いレコードの並び位置**: NULLとして並ぶため、`SortOrder::Asc` では先頭、`SortOrder::Desc` では末尾になる(MySQL・MariaDBのNULLの並び)。メタの無いレコードどうしの順は定めない。
+- **件数**: 並び替えは件数を変えない。`count()` は3クエリとも、メタの無いレコードがほかのメタを複数行持っていても重複して数えない。PostQueryは `found_posts`(`GROUP BY` した行の数)、UserQueryは `get_total()`(グループのOR関係で付く `DISTINCT` の後の行の数)で数えるため、グループを残しても正しい。TermQueryは `fields='count'` が重複を除かないため、並び替えを除いて数える(10.3節)。
+- グループのNOT EXISTSの句により、WP_Meta_Queryはクエリの `JOIN` をすべて `LEFT JOIN` にする。ほかの `whereMeta()` の句は値の条件を `WHERE` に持つため、結果は変わらない。
+- 純粋な絞り込み(メタを持つレコードだけ)が必要な場合は、`whereMetaExists($key)` を併用する。
 
 ---
 
@@ -1059,7 +1170,7 @@ abstract class Taxonomy
 **`get()`**:
 
 - `\WP_Term` 渡し: `taxonomy` プロパティ一致を検証。不一致null。
-- int渡し: `<= 0` null。`get_term($id, static::slug())` が `WP_Error`/null ならnull。
+- int渡し: `<= 0` null。`get_term($id, static::slug())` がnull(該当なし)ならnull。`WP_Error`(タクソノミーが未登録等)は1.7節のエラー方針に従う(本番の既定値はnull)。
 
 **`findBySlug()` / `findByName()`**: `get_term_by('slug'|'name', $value, static::slug())`。falseはnull。旧FWの「slug→name」二段フォールバックは廃止し、2つの明示メソッドに分解。
 
@@ -1068,9 +1179,9 @@ abstract class Taxonomy
 **`url()`**:
 
 - string渡しは `findBySlug()` で解決。`get()`/解決失敗はnull。
-- `get_term_link($term)` が `WP_Error` ならnull。
+- `get_term_link($term)` が `WP_Error` を返した場合は1.7節のエラー方針に従う(本番の既定値はnull)。
 
-**`parents()`**: `parent` プロパティを `get_term((int) $parent, static::slug())` でたどる(`WP_Error`/nullで打ち切り)。深さ100の超過(`parent` の循環等)の扱い(debugは `EntityDataException`、本番はKernelのロガーに `error` で記録して空配列)・戻り順・`$includeSelf` の意味はPostTypeと同一(5.3節)。
+**`parents()`**: `parent` プロパティを `get()`(`get_term((int) $parent, static::slug())`)でたどる(nullで打ち切り。`WP_Error` は `get()` と同じく1.7節のエラー方針に従う)。深さ100の超過(`parent` の循環等)の扱い(debugは `EntityDataException`、本番はKernelのロガーに `error` で記録して空配列)・戻り順・`$includeSelf` の意味はPostTypeと同一(5.3節)。
 
 **`create()`**: `wp_insert_term($name, static::slug(), $args)`。`WP_Error` は `EntityPersistenceException::fromWpError()`。成功時は戻り配列の `term_id`(int)を返す。
 
@@ -1089,6 +1200,10 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tax;
 
+use TMSWP\Core\Query\CastType;
+use TMSWP\Core\Query\Compare;
+use TMSWP\Core\Query\SortOrder;
+
 final class TermQuery
 {
     /** @var GetTermsArgs stubs の get_terms() の $args(WP_Term_Query::__construct() の $query と同じ)と同じ配列の形(1.8節) */
@@ -1097,23 +1212,35 @@ final class TermQuery
     /** @var list<array<string, mixed>> */
     private array $metaClauses = [];
 
-    /** @var array<string, array<string, mixed>> */
-    private array $namedMetaClauses = [];
+    /** @var list<array<int|string, string|array<string, string>>> orderByMeta()の並び替えだけに使う句のグループ(7.7節) */
+    private array $orderMetaGroups = [];
 
-    /** @var array<string, string> */
-    private array $orderBy = [];
+    /** @var array{0: string, 1: string}|null orderby と order(WP_Term_Queryは並び替えを1組しか受け付けない) */
+    private ?array $orderBy = null;
 
     /** @var GetTermsArgs */
     private array $rawArgs = [];
 
+    /** @var array<string, true> 空のIN指定を受けた条件(7.6節) */
+    private array $emptyIn = [];
+
+    /** @var list<int>|null idIn()のID(nullはidIn()を呼んでいない)。idNotIn()のIDは差し引いて渡す(7.6節) */
+    private ?array $idIn = null;
+    /** @var list<int> */
+    private array $idNotIn = [];
+
+    private ?int $limit = null;
+    private ?int $offset = null;
+
+    /** @param class-string<Taxonomy> $taxonomyClass WP_Errorの記録先のKernelを決める(1.7節) */
     private function __construct(
+        private readonly string $taxonomyClass,
         private readonly string $taxonomy,
     ) {
     }
 
-    /** @param class-string<Taxonomy> $taxonomyClass */
+    /** @param class-string<Taxonomy> $taxonomyClass クラスを定義していないタクソノミーは builtin() のアダプタ(8.2節)を定義して使う */
     public static function of(string $taxonomyClass): self;
-    public static function ofTaxonomy(string $taxonomySlug): self;
 
     // ---- スコープ ----
     /** 既定はhide_empty=false(WP既定のtrueから変更。テンプレートのナビ用途を優先)。 */
@@ -1129,16 +1256,16 @@ final class TermQuery
     /** 指定投稿に付与されたタームに絞る。 */
     public function forPost(\WP_Post|int ...$posts): self;
 
-    public function whereMeta(string $key, mixed $value, string $compare = '=', string $type = 'CHAR'): self;
+    public function whereMeta(string $key, mixed $value, Compare $compare = Compare::Eq, CastType $type = CastType::Char): self;
     public function whereMetaExists(string $key): self;
     public function whereMetaNotExists(string $key): self;
 
     // ---- 並び順 ----
-    public function orderBy(string $field, string $direction = 'ASC'): self;
+    public function orderBy(string $field, SortOrder $direction = SortOrder::Asc): self;
     public function orderByDesc(string $field): self;
-    public function orderByMeta(string $metaKey, string $direction = 'ASC', bool $numeric = false): self;
+    public function orderByMeta(string $metaKey, SortOrder $direction = SortOrder::Asc, CastType $type = CastType::Char): self;
 
-    // ---- 件数 ----
+    // ---- 件数(7.5節) ----
     public function limit(int $limit): self;
     public function offset(int $offset): self;
 
@@ -1169,33 +1296,37 @@ final class TermQuery
 | メソッド | WP_Term_Query引数 |
 |---|---|
 | (常時) | `taxonomy` = スコープのスラッグ(最終段で強制注入) |
-| (既定) | `hide_empty` = `false` |
+| (既定) | `hide_empty` = `false`。`number` は渡さない(件数を指定しない場合は全件。7.5節) |
 | `hideEmpty($b)` | `hide_empty` = `$b` |
 | `search($k)` | `search` = `$k` |
 | `parent($p)` | `parent` = ID |
 | `childrenOf($t)` | `child_of` = ID |
-| `slugIn(...$s)` | `slug` = `$s` |
-| `idIn(...$ids)` | `include` = `$ids` |
-| `idNotIn(...$ids)` | `exclude` = `$ids` |
-| `forPost(...$p)` | `object_ids` = ID配列 |
-| `whereMeta*` / `orderByMeta` | PostQueryと同一方式(`meta_query` + 名前付き句 `tms_order_{n}`) |
-| `orderBy($f, $d)` | `orderby` / `order`。複数指定時は最初の1組のみ有効とし、2組目以降の `orderBy()` 呼び出しは `QueryException`(WP_Term_Queryは複数orderbyの連想配列をサポートしないため。`orderByMeta` との併用も不可) |
-| `limit($n)` | `number` = `$n`(`0` は全件=WP仕様。負値は `QueryException`) |
-| `offset($n)` | `offset` = `$n` |
+| `slugIn(...$s)` | `slug` = `$s`(空は0件。7.6節) |
+| `idIn(...$ids)` | `include` = `$ids` から `idNotIn()` のIDを差し引いたID(空は0件。7.6節) |
+| `idNotIn(...$ids)` | `idIn()` が無ければ `exclude` = `$ids`、あれば `include` から差し引いて `exclude` は渡さない(空は条件なし) |
+| `forPost(...$p)` | `object_ids` = ID配列(空は0件) |
+| `whereMeta*` / `orderByMeta` | PostQueryと同一方式(`meta_query`、空のIN指定、並び替え専用の句のグループ `tms_order_0`。7.6節・7.7節) |
+| `orderBy($f, $d)` | `orderby` = `$f` / `order` = `$d->value`。並び替えは1組だけで、2組目の `orderBy()`・`orderByMeta()` の呼び出しは `InvalidQueryException`(WP_Term_Queryは複数orderbyの連想配列をサポートしないため。`orderByMeta` との併用も不可) |
+| `orderByMeta($key, $d, $type)` | 並び替え専用の句のグループを足し、`orderby` = `'tms_order_0'` / `order` = `$d->value` |
+| `limit($n)` | `number` = `$n`(`$n < 1` は `InvalidArgumentException`) |
+| `offset($n)` | `offset` = `$n`(負値は `InvalidArgumentException`。`limit()` の無い `offset()` は `toArgs()` で `InvalidQueryException`) |
 
-バリデーション規則(direction/compare/type)はPostQueryと同一。マージ順も同一(taxonomy強制注入で終わる)。
+値の検証(enum)はPostQueryと同一。マージ順も同一(taxonomy強制注入の後、0件と確定していれば `include` = `[0]` を強制注入して終わる)。
 
 ### 10.3 終端メソッド仕様
 
 | メソッド | 振る舞い |
 |---|---|
-| `get()` | `get_terms(toArgs())`。`WP_Error` は `[]`。`array_values()` で `list<\WP_Term>` |
-| `first()` | `number=1` を適用して先頭 or null |
-| `ids()` | `fields='ids'` で `list<int>`(`WP_Error` は `[]`) |
-| `count()` | `fields='count'` で実行し `(int)` キャスト(`WP_Error` は `0`) |
+| `get()` | `get_terms(toArgs())`。`array_values()` で `list<\WP_Term>` |
+| `first()` | `number=1` を適用して先頭 or null(`limit()` に関係なく1件。`offset()` は効く) |
+| `ids()` | `fields='ids'` で `list<int>` |
+| `count()` | `fields='count'` で実行し `(int)` キャスト。`number`・`offset` と並び替え(`orderby`・`order`、`orderByMeta()` の並び替え専用の句のグループ)は渡さない(条件に合う全体の件数)。`whereMeta()` 等の絞り込みと `withArgs()` の引数は渡す。並び替え専用の句のグループを残すと、そのメタが無いタームがほかのメタの行と結び付き、`fields='count'` の `SELECT DISTINCT COUNT(*)` が重複を除かないため件数が多くなる |
 | `exists()` | `first() !== null` 相当 |
-| `url()` | `first()` → `get_term_link`。`WP_Error`/該当なしはnull(旧 `get_term_link($args)` の後継。既定hide_empty=falseのため旧FWの強制falseと同等の挙動) |
+| `url()` | `first()` → `get_term_link`。該当なしはnull(旧 `get_term_link($args)` の後継。既定hide_empty=falseのため旧FWの強制falseと同等の挙動) |
 | `wpTermQuery()` | `new \WP_Term_Query(toArgs())` |
+
+- `get_terms()`・`get_term_link()` が返す `WP_Error`(タクソノミーが未登録の `invalid_taxonomy` 等)は、1.7節のエラー方針に従う。debugでは `QueryException`、本番では `of()` に渡したタクソノミークラスのKernelのロガーに `error` で記録して既定値(`get()`・`ids()` は `[]`、`first()`・`url()` はnull、`count()` は0)を返す。
+- 0件と確定している場合(7.6節)、すべての終端メソッドは `get_terms()` を呼ばずに空の結果を返す。`wpTermQuery()` は引数なしで作った `WP_Term_Query`(`__construct()` は引数が空なら検索しない)に、`terms` = `[]` と、`query_vars` = `toArgs()`(`include = [0]` を含む)を設定して返す。`get_terms()` で検索をやり直しても0件になる。
 
 ページネーションは提供しない(`limit()`+`offset()`+`count()` で構成可能。タームの paginate 需要は実利用調査でゼロ)。
 
@@ -1365,7 +1496,10 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\User;
 
+use TMSWP\Core\Query\CastType;
+use TMSWP\Core\Query\Compare;
 use TMSWP\Core\Query\PageResult;
+use TMSWP\Core\Query\SortOrder;
 
 final class UserQuery
 {
@@ -1375,20 +1509,33 @@ final class UserQuery
     /** @var list<array<string, mixed>> */
     private array $metaClauses = [];
 
-    /** @var array<string, array<string, mixed>> */
-    private array $namedMetaClauses = [];
+    /** @var list<array<int|string, string|array<string, string>>> orderByMeta()の並び替えだけに使う句のグループ(7.7節) */
+    private array $orderMetaGroups = [];
+
+    /** @var array<string, string> */
+    private array $orderBy = [];
 
     /** @var WpUserQueryArgs */
     private array $rawArgs = [];
+
+    /** @var array<string, true> 空のIN指定を受けた条件(7.6節) */
+    private array $emptyIn = [];
+
+    /** @var list<int>|null idIn()のID(nullはidIn()を呼んでいない)。idNotIn()のIDは差し引いて渡す(7.6節) */
+    private ?array $idIn = null;
+    /** @var list<int> */
+    private array $idNotIn = [];
+
+    private ?int $limit = null;
+    private ?int $offset = null;
 
     private function __construct(
         private readonly string $role,
     ) {
     }
 
-    /** @param class-string<UserRole> $userRoleClass */
+    /** @param class-string<UserRole> $userRoleClass クラスを定義していないロールは builtin() のアダプタ(11.2節)を定義して使う */
     public static function of(string $userRoleClass): self;
-    public static function ofRole(string $role): self;
 
     // ---- スコープ ----
     /**
@@ -1399,17 +1546,17 @@ final class UserQuery
     public function idIn(int ...$ids): self;
     public function idNotIn(int ...$ids): self;
 
-    public function whereMeta(string $key, mixed $value, string $compare = '=', string $type = 'CHAR'): self;
+    public function whereMeta(string $key, mixed $value, Compare $compare = Compare::Eq, CastType $type = CastType::Char): self;
     public function whereMetaExists(string $key): self;
     public function whereMetaNotExists(string $key): self;
 
     // ---- 並び順 ----
     /** $field: login / email / registered / display_name / ID / include / meta_value 等(WP_User_Query準拠) */
-    public function orderBy(string $field, string $direction = 'ASC'): self;
+    public function orderBy(string $field, SortOrder $direction = SortOrder::Asc): self;
     public function orderByDesc(string $field): self;
-    public function orderByMeta(string $metaKey, string $direction = 'ASC', bool $numeric = false): self;
+    public function orderByMeta(string $metaKey, SortOrder $direction = SortOrder::Asc, CastType $type = CastType::Char): self;
 
-    // ---- 件数・ページング ----
+    // ---- 件数・ページング(7.5節) ----
     public function limit(int $limit): self;
     public function offset(int $offset): self;
 
@@ -1442,24 +1589,28 @@ final class UserQuery
 | メソッド | WP_User_Query引数 |
 |---|---|
 | (常時) | `role` = スコープのロール(最終段で強制注入)。`fields` = `'all'` 既定 |
-| (既定) | `count_total` = `false` |
+| (既定) | `count_total` = `false`。`number` は渡さない(件数を指定しない場合は全件。7.5節) |
 | `search($k, ...$c)` | `search` = ワイルドカード処理後の `$k`、`$c` 非空なら `search_columns` = `$c` |
-| `idIn` / `idNotIn` | `include` / `exclude` |
-| `whereMeta*` / `orderByMeta` | PostQueryと同一方式(`meta_query` + 名前付き句 `tms_order_{n}`、`orderby[tms_order_{n}]`) |
-| `orderBy($f, $d)` | `orderby[$f] = $d`(WP_User_Queryは連想配列orderbyをサポート。複数累積可) |
-| `limit($n)` | `number` = `$n`(`-1` は全件。`0` 以下(-1除く)は `QueryException`) |
-| `offset($n)` | `offset` = `$n` |
+| `idIn` / `idNotIn` | `include` / `exclude`(`idIn()` の空は0件、`idNotIn()` の空は条件なし。併用すると `include` から差し引いたIDだけを渡す。7.6節) |
+| `whereMeta*` / `orderByMeta` | PostQueryと同一方式(`meta_query`、空のIN指定、並び替え専用の句のグループ `tms_order_{n}` と `orderby[tms_order_{n}]`。7.6節・7.7節) |
+| `orderBy($f, $d)` | `orderby[$f] = $d->value`(WP_User_Queryは連想配列orderbyをサポート。複数累積可) |
+| `limit($n)` | `number` = `$n`(`$n < 1` は `InvalidArgumentException`) |
+| `offset($n)` | `offset` = `$n`(負値は `InvalidArgumentException`。`limit()` の無い `offset()` は `toArgs()` で `InvalidQueryException`) |
+
+値の検証(enum)とマージ順はPostQueryと同一(role強制注入の後、0件と確定していれば `include` = `[0]` を強制注入して終わる)。
 
 | 終端 | 振る舞い |
 |---|---|
 | `get()` | `(new \WP_User_Query($args))->get_results()` を `list<\WP_User>` で |
-| `first()` | `number=1` → 先頭 or null |
+| `first()` | `number=1` → 先頭 or null(`limit()` に関係なく1件。`offset()` は効く) |
 | `ids()` | `fields='ID'` → `list<int>`(各要素を `(int)` キャスト) |
-| `count()` | `fields='ID'`, `number=1`, `count_total=true` → `(int) $query->get_total()` |
+| `count()` | `fields='ID'`, `number=1`, `count_total=true`、`offset` を除く → `(int) $query->get_total()`(条件に合う全体の件数) |
 | `exists()` | `first() !== null` 相当 |
 | `url()` | `first()` → `get_author_posts_url()`。該当なしnull |
-| `paginate($perPage, $page)` | `number=$perPage`, `offset=($page - 1) * $perPage`, `count_total=true`。`$page` 解決規則はPostQueryと同一。`PageResult<\WP_User>`(`total` = `get_total()`) |
+| `paginate($perPage, $page)` | `number=$perPage`, `offset=($page - 1) * $perPage`, `count_total=true`。`$perPage < 1`・`$page < 1` は `InvalidArgumentException`、`offset()`・`limit()` との併用は `InvalidQueryException`。`$page` 解決規則はPostQueryと同一。`PageResult<\WP_User>`(`total` = `get_total()`) |
 | `wpUserQuery()` | `new \WP_User_Query(toArgs())` |
+
+0件と確定している場合(7.6節)、すべての終端メソッドは `WP_User_Query` を実行せずに空の結果を返す。`paginate()` の扱いはPostQueryと同一(7.4節。`$page` を省略しても現在のページを解決しない)。`wpUserQuery()` は引数なしで作った `WP_User_Query`(`__construct()` は引数が空なら検索しない)に、`query_vars` = `toArgs()`(`include = [0]` を含む)を設定し、`get_results()`・`get_total()` が返す `results` = `[]`・`total_users` = 0 を設定して返す。`results`・`total_users` はprivateであり、`WP_User_Query` が互換のために `__set()` での書き込みを許しているため、`__set()` を呼んで設定する。
 
 ---
 
@@ -1656,10 +1807,11 @@ foreach (BusinessTax::all() as $term) {
 <?php
 // page-members.php — ページネーション
 use App\User\ContractorUser;
+use TMSWP\Core\Query\SortOrder;
 
 $page = ContractorUser::query()
     ->whereMeta('prefecture', '東京都')
-    ->orderBy('registered', 'DESC')
+    ->orderBy('registered', SortOrder::Desc)
     ->paginate(perPage: 20);
 
 foreach ($page as $user) {
@@ -1732,7 +1884,8 @@ $id = ProductPost::create([
 
 - [ ] `get()`/`findBySlug()`/`findByName()`/`findByEmail()`/`findByLogin()`/`first()`/`firstTerm()`/`current()` の戻り値型宣言がすべて `?WP_Post`/`?WP_Term`/`?WP_User` である(falseを返すメソッドが存在しない)
 - [ ] `ProductPost::get($pagePost)`(タイプ不一致)・`get(0)`・`get(-1)` がnull
-- [ ] `permalink()`/`archiveUrl()`/`url()`/`authorUrl()`/`thumbnailUrl()` がWP関数のfalse/WP_Errorをnullへ正規化する
+- [ ] `permalink()`/`archiveUrl()`/`url()`/`authorUrl()`/`thumbnailUrl()` が、WP関数の「該当なし」の `false` をnullへ正規化する
+- [ ] URL取得でWP関数が返す `WP_Error` を、debugでは `QueryException` にし、本番ではそのエンティティクラスのKernelのロガーに `error` で記録してnullにする(1.3節・1.7節)
 - [ ] `thumbnail()` がアイキャッチなし+フォールバック未登録でnull、`tmswp/post/thumbnail_fallback` にThumbnailを返すフィルタを登録するとそれを返す。Thumbnail以外の返却値は無視される
 - [ ] `thumbnail()` のaltが `_wp_attachment_image_alt` メタのみから解決される(メタが空なら `''`。添付の `post_excerpt`/`post_title` へはフォールバックしない)
 - [ ] `parents()` が「ルート祖先→直近親」順で返り、深さ100超(親の循環)はdebugで `EntityDataException`、本番でKernelのロガーへの `error` の記録と空配列になる(PostType・Taxonomy)
@@ -1743,10 +1896,19 @@ $id = ProductPost::create([
 
 - [ ] `PostQuery::toArgs()` が7.3節のマッピング表どおりの引数を生成する(ユニットテストで全メソッドを網羅)
 - [ ] `post_type`/`taxonomy`/`role` が `withArgs()` でも上書きできない
-- [ ] 既定値: PostQueryは `post_status=['publish']`+`ignore_sticky_posts=true`、TermQueryは `hide_empty=false`、UserQueryは `count_total=false`
-- [ ] 不正な `direction`/`compare`/`type`/`limit(0)`/`paginate(0)` が `QueryException` を投げる
-- [ ] `orderByMeta()` が名前付きmeta_query句(`tms_order_0`...)と連想配列orderbyを生成する
-- [ ] `TermQuery::orderBy()` の2回目呼び出しが `QueryException`
+- [ ] 既定値: PostQueryは `post_status=['publish']`+`ignore_sticky_posts=true`+`posts_per_page=-1`、TermQueryは `hide_empty=false`、UserQueryは `count_total=false`
+- [ ] 3クエリが比較演算子・キャスト型・並び順を `Compare`・`CastType`・`SortOrder`、`whereTerm()` のfield・operatorを `TermField`・`TermOperator` で受け取り、文字列と実行時の許可リストで受けるAPIが無い
+- [ ] 件数を指定しない `get()` が、サイトの `posts_per_page` の設定に関係なく全件を返す(統合テスト)
+- [ ] `limit(0)`・`limit(-1)`・負の `offset()`・`paginate(0)`・`paginate($n, 0)`・不正な値の `PageResult` が `InvalidArgumentException` を投げる
+- [ ] `noPaging()` と `limit()`・`offset()`・`paginate()` の併用、`offset()`・`limit()` と `paginate()` の併用、`limit()` の無い `offset()` が `InvalidQueryException` を投げる
+- [ ] `first()` が `noPaging()`・`limit()` に関係なく1件だけ取得する(統合テストでSQLの `LIMIT 0, 1` を確認)
+- [ ] 空のIN指定(7.6節の表)と `idIn()` から `idNotIn()` を差し引いた空で、`wpQuery()`・`wpTermQuery()`・`wpUserQuery()` と `$page` を省略した `paginate()` を含むすべての終端メソッドが、WordPressの検索を実行せず(検索のフックが呼ばれない)に空の結果を返し、同じ指定をWordPressに直接渡すと全件が返る(統合テスト)。空の除外は条件なしになる
+- [ ] `orderByMeta()` を付けても `count()` が変わらない(並び替えのメタが無いレコードがほかのメタを複数行持つ場合と、`whereMeta()` との組み合わせを含む3クエリの統合テスト)
+- [ ] `idIn()` と `idNotIn()` の併用で、除外したIDが結果に含まれず(WordPressに直接渡すと含まれる)、すべて除外すると0件になる(3クエリの統合テスト)
+- [ ] `orderByMeta()` が並び替え専用の句のグループ(7.7節)と `tms_order_{n}` の並び替えを生成し、メタを持たないレコードを結果から落とさず、ASCでは先頭、DESCでは末尾に並べる(3クエリの統合テスト)
+- [ ] `TermQuery::orderBy()` の2回目呼び出し(`orderByMeta()` を含む)が `InvalidQueryException`
+- [ ] `WP_Error`(存在しないタクソノミー等)が、debugでは `QueryException`、本番ではKernelのロガーへの `error` の記録と既定値になり、該当なし(タームが付いていない等)は例外にならない(統合テスト)
+- [ ] `\` を含む文字列で存在しないクラスを指定すると `EntityDefinitionException` になる(統合テスト)
 - [ ] `paginate()` が `PageResult` を返し、`total`/`totalPages()`/`hasNext()` が統合テスト(wp-env、投稿25件×perPage 10)で正しい
 - [ ] `whereTerm(BlogCategoryTax::class, ...)` がスラッグへ解決される
 - [ ] `count()` が件数のみ取得し全件をロードしない(`fields=ids` + `posts_per_page=1` の引数生成をユニットで検証)

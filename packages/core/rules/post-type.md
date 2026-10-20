@@ -51,6 +51,40 @@ final class NewsPost extends PostType
 <?php endforeach; ?>
 ```
 
+## クエリの書き方
+
+`query()` が返す `PostQuery` は、比較演算子・キャスト型・並び順を `TMSWP\Core\Query\` の enum(`Compare`・`CastType`・`SortOrder`)で受け取る。`whereTerm()` の field・operator も enum(`TermField`・`TermOperator`)で受け取る。タクソノミー・ロールのクエリ(`TermQuery`・`UserQuery`)も同じ。
+
+```php
+<?php
+
+use App\Post\NewsPost;
+use TMSWP\Core\Query\CastType;
+use TMSWP\Core\Query\Compare;
+use TMSWP\Core\Query\SortOrder;
+use TMSWP\Core\Query\TermField;
+
+$relatedIds = array_map('intval', (array) get_post_meta(get_the_ID(), 'related_news', false));
+
+// relatedIds が空なら、WordPress を呼ばずに空の配列を返す(全件にならない)
+$related = NewsPost::query()->idIn(...$relatedIds)->get();
+
+$pickup = NewsPost::query()
+    ->whereMeta('priority', 3, Compare::Gte, CastType::Numeric)
+    ->whereTerm('category', [12, 15], TermField::TermId)
+    ->orderByMeta('priority', SortOrder::Desc, CastType::Numeric)
+    ->limit(5)
+    ->get();
+
+$page = NewsPost::query()->orderByDesc('date')->paginate(10);
+```
+
+- 件数を指定しない `get()` は全件を返す(管理画面の「1ページに表示する最大投稿数」は効かない)。件数を絞るときは `limit()` を呼ぶ。
+- `idIn()`・`slugIn()` 等の IN の指定が空なら結果は0件になる。`idNotIn()` 等の除外が空なら条件なしになる。`idIn()` と `idNotIn()` を併用すると、除外した ID を差し引いた ID に絞る。
+- `orderByMeta()` は並び替えだけで、メタの無い投稿も結果に残る(ASC では先頭、DESC では末尾)。メタのある投稿だけにするときは `whereMetaExists()` を併用する。
+- `offset()` は `limit()` と一緒に使う。`noPaging()` と `limit()`・`offset()`・`paginate()`、`limit()`・`offset()` と `paginate()` は併用できない(例外になる)。`first()` は常に1件だけ取得する。
+- タクソノミーは、スラッグの代わりに Taxonomy クラスの FQCN(`NewsCategoryTax::class`)を渡せる。存在しないクラスは例外になる。
+
 ## アイキャッチ未設定時のフォールバック画像
 
 `PostType::thumbnail()` はアイキャッチが未設定のときに `tmswp/post/thumbnail_fallback` フィルタを呼ぶ。フィルタは `?TMSWP\Core\Post\Thumbnail $thumbnail, WP_Post $post, string|array $size` を受け取り、代替画像がある場合だけ `TMSWP\Core\Post\Thumbnail` DTO を返す。それ以外の戻り値は無視される。
@@ -119,6 +153,7 @@ final class ThumbnailFallbackHook extends Hook
 ## してはいけないこと
 
 - `register_post_type()` や `add_action('init', ...)` を自分で書かない。
+- 件数を絞りたいクエリで `limit()` を省かない(省くと全件を読み込む)。
 - `definition()` の中で WP 関数や `__()` を呼ばない。Kernel が boot の時点(init より前)でメタスキーマの登録のために呼び、結果を使い回す。
 - `functions.php` に投稿タイプ関連のロジックを書かない。
 - 1クラスで複数投稿タイプを定義しない。

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Core\Post;
 
 use TMSWP\Core\Entity\EntityReference;
+use TMSWP\Core\Entity\WpErrorHandler;
 use TMSWP\Core\Exception\EntityDataException;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\EntityPersistenceException;
@@ -218,7 +219,12 @@ abstract class PostType
 
         $terms = get_the_terms($resolved, EntityReference::taxonomySlug($taxonomy));
 
-        if (!\is_array($terms)) {
+        if ($terms instanceof WP_Error) {
+            return WpErrorHandler::handle($terms, static::class, 'get_the_terms', []);
+        }
+
+        // false はタームが付いていない(該当なし)
+        if ($terms === false) {
             return [];
         }
 
