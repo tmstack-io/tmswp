@@ -22,6 +22,8 @@ final class ModelIntegrationTest extends IntegrationTestCase
     {
         // テスト中の CREATE TABLE はテストライブラリにより一時テーブルになり、接続が続く限り残るため削除する
         self::wpdb()->query('DROP TABLE IF EXISTS ' . self::wpdb()->prefix . self::TABLE);
+        // admin_init はプラグインの fixture の SpiedModel(Initializer の記録用)のテーブルも作る
+        self::wpdb()->query('DROP TABLE IF EXISTS ' . self::wpdb()->prefix . 'tmswp_fixture_spied');
 
         parent::tear_down();
     }

@@ -6,7 +6,10 @@ namespace TMSWP\Core\Tests\Integration;
 
 use Closure;
 use Composer\Autoload\ClassLoader;
+use ReflectionProperty;
 use TMSWP\Core\Attribute\AsPostType;
+use TMSWP\Core\Attribute\AsTaxonomy;
+use TMSWP\Core\Attribute\AsUserRole;
 use TMSWP\Core\Exception\DiscoveryException;
 use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\DiscoveredComponent;
@@ -20,10 +23,15 @@ use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Kernel\KernelContext;
 use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Log\LogChannel;
+use TMSWP\Core\Model\Migrator;
+use TMSWP\Core\Model\Model;
+use TMSWP\Core\Option\OptionRepositoryFactory;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
 use TMSWP\Core\Tests\Support\RecordingExtension;
+use TMSWP\Core\Tests\Support\RecordingInitializer;
 use TMSWP\Core\Tests\Support\RecordingLogger;
 use TMSWP\Core\Tests\Support\UsesTempDirectories;
+use TMSWP\Core\View\ActionRouter;
 use WP_Hook;
 use WP_Rewrite;
 
@@ -233,6 +241,349 @@ PHP);
         }
 
         self::assertSame($queries, $wpdb->num_queries);
+    }
+
+    /**
+     * init より前の boot は、投稿タイプ・タクソノミー・ロールをその場で登録せず(init 9 / 10 に予約するだけ)、
+     * DB にも触れない(即時同期初期化の禁止)。
+     */
+    public function testBootBeforeInitRegistersNoEntitiesAndQueriesNothing(): void
+    {
+        $config = $this->productionThemeConfig('BeforeInit');
+        $namespace = $config->appNamespace;
+        $suffix = substr(md5($namespace), 0, 8);
+        $postType = 'tmswp_bi_' . $suffix;
+        $taxonomy = 'tmswp_bit_' . $suffix;
+        $role = 'tmswp_bir_' . $suffix;
+        $this->writeFile($config->appDir . '/Entity/BeforeInitPost.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Entity;
+
+use TMSWP\\Core\\Post\\PostType;
+use TMSWP\\Core\\Post\\PostTypeDefinition;
+
+final class BeforeInitPost extends PostType
+{
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('{$postType}')->label('Before', 'Befores');
+    }
+}
+PHP);
+        $this->writeFile($config->appDir . '/Entity/BeforeInitTaxonomy.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Entity;
+
+use TMSWP\\Core\\Tax\\Taxonomy;
+use TMSWP\\Core\\Tax\\TaxonomyDefinition;
+
+final class BeforeInitTaxonomy extends Taxonomy
+{
+    public static function definition(): TaxonomyDefinition
+    {
+        return TaxonomyDefinition::create('{$taxonomy}')->label('Before', 'Befores')->objectType(BeforeInitPost::class);
+    }
+}
+PHP);
+        $this->writeFile($config->appDir . '/Entity/BeforeInitRole.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Entity;
+
+use TMSWP\\Core\\User\\UserRole;
+use TMSWP\\Core\\User\\UserRoleDefinition;
+
+final class BeforeInitRole extends UserRole
+{
+    public static function definition(): UserRoleDefinition
+    {
+        return UserRoleDefinition::create('{$role}')->label('Before')->capabilities('read');
+    }
+}
+PHP);
+        $this->registerAppAutoloader($config);
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\\Entity\\BeforeInitPost', AsPostType::class, []),
+            new DiscoveredComponent($namespace . '\\Entity\\BeforeInitRole', AsUserRole::class, []),
+            new DiscoveredComponent($namespace . '\\Entity\\BeforeInitTaxonomy', AsTaxonomy::class, []),
+        ], []));
+        $wpdb = self::wpdb();
+        $before = self::registeredCallbacks();
+
+        // テーマの functions.php の読み込み時(after_setup_theme の前)の状態で boot する。書き換えた $wp_actions は
+        // 確かめた後で戻す(戻した後の $wp_actions は init 発火済みを示すため、did_action() はその前に読む)
+        $actions = $GLOBALS['wp_actions'];
+        self::assertIsArray($actions);
+        $position = array_search('after_setup_theme', array_keys($actions), true);
+        self::assertIsInt($position);
+        $GLOBALS['wp_actions'] = \array_slice($actions, 0, $position, true);
+
+        // 確かめる主張に反して登録された場合も、後のテストに残さないよう必ず取り消す
+        try {
+            try {
+                $queries = $wpdb->num_queries;
+                $postTypeRegistrations = did_action('registered_post_type');
+                $taxonomyRegistrations = did_action('registered_taxonomy');
+
+                Kernel::boot($config);
+
+                self::assertSame($queries, $wpdb->num_queries);
+                self::assertSame($postTypeRegistrations, did_action('registered_post_type'));
+                self::assertSame($taxonomyRegistrations, did_action('registered_taxonomy'));
+            } finally {
+                $GLOBALS['wp_actions'] = $actions;
+            }
+
+            self::assertFalse(post_type_exists($postType));
+            self::assertFalse(taxonomy_exists($taxonomy));
+            self::assertNull(get_role($role));
+
+            // 登録は init に予約されている(タクソノミー 9、投稿タイプとロール 10、MetaSchema 20)
+            $initCallbacks = array_values(array_filter(
+                array_diff_key(self::registeredCallbacks(), $before),
+                static fn(array $callback): bool => $callback['hook'] === 'init',
+            ));
+            self::assertSame([9, 10, 20], array_column($initCallbacks, 'priority'));
+
+            // 空振りしていないことの確認: 予約されたコールバックを WordPress の init と同じ順に実行すると登録される
+            foreach ($initCallbacks as $callback) {
+                self::assertIsCallable($callback['function']);
+                \call_user_func($callback['function']);
+            }
+
+            self::assertTrue(post_type_exists($postType));
+            self::assertContains($postType, get_taxonomy($taxonomy)->object_type ?? []);
+            self::assertNotNull(get_role($role));
+        } finally {
+            unregister_taxonomy($taxonomy);
+            unregister_post_type($postType);
+            remove_role($role);
+        }
+    }
+
+    /**
+     * 本番相当(debug=false)の boot が、#[Action]/#[Filter] のメソッドを宣言どおりのフック・priority と、引数の数
+     * (Action は宣言した引数の数、Filter は max(1, 宣言した引数の数))で登録し、フックが発火するまでそのクラスを
+     * 読み込まない。debug の boot は走査ですべてのクラスを読み込むため、読み込まないことは本番だけで成り立つ。
+     */
+    public function testProductionBootRegistersHookMethodsAsDeclaredWithoutLoadingTheirClass(): void
+    {
+        $scanConfig = $this->productionPluginConfig('HookMethodScan');
+        $config = $this->productionPluginConfig('HookMethodRegistration');
+        $source = static fn(string $namespace): string => <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Hook;
+
+use TMSWP\\Core\\Attribute\\Action;
+use TMSWP\\Core\\Attribute\\AsHook;
+use TMSWP\\Core\\Attribute\\Filter;
+use TMSWP\\Core\\Hook\\Hook;
+
+#[AsHook]
+final class RegistrationHook extends Hook
+{
+    #[Action('tmswp_integration/action_none', 5)]
+    public function actionNone(): void
+    {
+    }
+
+    #[Action('tmswp_integration/action_three', 15)]
+    public function actionThree(string \$first, string \$second, string \$third): void
+    {
+        do_action('tmswp_integration/action_three_handled', \$first . \$second . \$third);
+    }
+
+    #[Filter('tmswp_integration/filter_none', 25)]
+    public function filterNone(): string
+    {
+        return 'replaced';
+    }
+
+    #[Filter('tmswp_integration/filter_two', 35)]
+    public function filterTwo(string \$value, string \$suffix): string
+    {
+        return \$value . \$suffix;
+    }
+}
+PHP;
+        $this->writeFile($scanConfig->appDir . '/Hook/RegistrationHook.php', $source($scanConfig->appNamespace));
+        $this->writeFile($config->appDir . '/Hook/RegistrationHook.php', $source($config->appNamespace));
+        $this->registerAppAutoloader($scanConfig);
+        $this->registerAppAutoloader($config);
+        $class = $config->appNamespace . '\\Hook\\RegistrationHook';
+
+        // 探索結果ファイルは、同じソースを別の名前空間に置いて走査した結果から作る。走査はクラスを読み込むため、
+        // boot する名前空間のクラスは走査しない
+        $scanned = (new Discovery($scanConfig, new DiscoveryFile($scanConfig)))->scan();
+        (new DiscoveryFile($config))->write(new DiscoveryResult([], array_map(
+            static fn(DiscoveredHookMethod $method): DiscoveredHookMethod => new DiscoveredHookMethod(
+                $class,
+                $method->method,
+                $method->hook,
+                $method->priority,
+                $method->acceptedArgs,
+                $method->kind,
+            ),
+            $scanned->hookMethods,
+        )));
+        self::assertFalse(class_exists($class, false));
+        $declared = get_declared_classes();
+
+        Kernel::boot($config);
+
+        $loaded = array_filter(
+            array_diff(get_declared_classes(), $declared),
+            static fn(string $declaredClass): bool => str_starts_with($declaredClass, $config->appNamespace . '\\'),
+        );
+        self::assertSame([], array_values($loaded));
+        self::assertFalse(class_exists($class, false));
+
+        $filters = $GLOBALS['wp_filter'];
+        self::assertIsArray($filters);
+        $expected = [
+            'tmswp_integration/action_none' => ['priority' => 5, 'acceptedArgs' => 0],
+            'tmswp_integration/action_three' => ['priority' => 15, 'acceptedArgs' => 3],
+            'tmswp_integration/filter_none' => ['priority' => 25, 'acceptedArgs' => 1],
+            'tmswp_integration/filter_two' => ['priority' => 35, 'acceptedArgs' => 2],
+        ];
+
+        foreach ($expected as $hook => ['priority' => $priority, 'acceptedArgs' => $acceptedArgs]) {
+            $wpHook = $filters[$hook] ?? null;
+            self::assertInstanceOf(WP_Hook::class, $wpHook, $hook);
+            self::assertSame([$priority], array_keys($wpHook->callbacks), $hook);
+            $entries = $wpHook->callbacks[$priority];
+            self::assertIsArray($entries, $hook);
+            self::assertCount(1, $entries, $hook);
+            $entry = array_values($entries)[0];
+            self::assertIsArray($entry, $hook);
+            self::assertSame($acceptedArgs, $entry['accepted_args'] ?? null, $hook);
+        }
+
+        // 最初の発火でクラスが読み込まれ、メソッドは宣言した数の引数で呼ばれる
+        self::assertSame('a-b', apply_filters('tmswp_integration/filter_two', 'a', '-b', 'ignored'));
+        self::assertTrue(class_exists($class, false));
+        self::assertSame('replaced', apply_filters('tmswp_integration/filter_none', 'original'));
+        do_action('tmswp_integration/action_three', 'x', 'y', 'z', 'ignored');
+        self::assertSame(1, did_action('tmswp_integration/action_three_handled'));
+    }
+
+    /**
+     * Kernel は各コンポーネントの Initializer を、1リクエスト(WordPress の読み込み)で1回だけ呼ぶ。fixture には、
+     * fixture に現れるコンポーネントの属性の種類(AsHook・AsModel・AsOptionGroup・AsTaxonomy・AsPostType・
+     * AsUserRole)ごとに、RecordedComponent でその属性を包んだコンポーネントを置いている。スパイの
+     * RecordingInitializer が呼び出しを記録してから、本来の Initializer(エンティティ基底の register() を含む)に委ねる。
+     */
+    public function testKernelCallsEachInitializerExactlyOnceInARequest(): void
+    {
+        $plugin = self::PLUGIN_NAMESPACE;
+        $theme = self::THEME_NAMESPACE;
+
+        // WordPress が発火する順(plugins_loaded → init)、同じフックの中は priority の順に並ぶ
+        self::assertSame(
+            [
+                ['kernel' => $plugin, 'component' => "{$plugin}\\Hook\\SpiedHook", 'hook' => 'plugins_loaded', 'priority' => 0],
+                ['kernel' => $plugin, 'component' => "{$plugin}\\Model\\SpiedModel", 'hook' => 'plugins_loaded', 'priority' => 1],
+                ['kernel' => $plugin, 'component' => "{$plugin}\\Option\\SpiedOption", 'hook' => 'init', 'priority' => 5],
+                ['kernel' => $theme, 'component' => "{$theme}\\Spy\\SpiedTaxonomy", 'hook' => 'init', 'priority' => 9],
+                ['kernel' => $theme, 'component' => "{$theme}\\Spy\\SpiedPost", 'hook' => 'init', 'priority' => 10],
+                ['kernel' => $theme, 'component' => "{$theme}\\Spy\\SpiedRole", 'hook' => 'init', 'priority' => 10],
+            ],
+            RecordingInitializer::$calls,
+        );
+
+        // 委ねた先の Initializer が登録している
+        self::assertNotFalse(has_filter('tmswp_fixture_plugin/spied_hook_registered'));
+        self::assertSame(
+            [self::fixtureClass("{$plugin}\\Model\\SpiedModel", Model::class)],
+            self::pluginKernel()->container()->get(Migrator::class)->models(),
+        );
+        // OptionRepositoryFactory::preload() は列挙型ごとのリポジトリを作って控える。SpiedOption は #[AsOptionGroup] も
+        // 持つため、控えがあることだけでは、どちらのコンポーネントの初期化で作られたかは区別できない
+        $repositories = (new ReflectionProperty(OptionRepositoryFactory::class, 'repositories'))
+            ->getValue(self::pluginKernel()->container()->get(OptionRepositoryFactory::class));
+        self::assertIsArray($repositories);
+        self::assertArrayHasKey("{$plugin}\\Option\\SpiedOption", $repositories);
+        self::assertTrue(taxonomy_exists('tmswp_spied_tax'));
+        self::assertTrue(post_type_exists('tmswp_spied'));
+        self::assertContains('tmswp_spied', get_taxonomy('tmswp_spied_tax')->object_type ?? []);
+        self::assertNotNull(get_role('tmswp_spied'));
+    }
+
+    /**
+     * テーマとプラグインの2つの Kernel は、Container・探索結果ファイル・components を共有しない。統合テストは
+     * Kernel のレジストリを戻さない(他のテストが boot した Kernel も残る)ため、Kernel::all() は件数ではなく
+     * 2つの Kernel が含まれることで確かめる。
+     */
+    public function testThemeAndPluginKernelsAreIndependent(): void
+    {
+        $theme = self::themeKernel();
+        $plugin = self::pluginKernel();
+        $all = Kernel::all();
+
+        self::assertSame($theme, $all[self::THEME_NAMESPACE] ?? null);
+        self::assertSame($plugin, $all[self::PLUGIN_NAMESPACE] ?? null);
+
+        self::assertNotSame($theme->container(), $plugin->container());
+        self::assertSame($theme, $theme->container()->get(Kernel::class));
+        self::assertSame($plugin, $plugin->container()->get(Kernel::class));
+
+        self::assertSame(get_stylesheet_directory() . '/tmswp-discovery.php', $theme->container()->get(DiscoveryFile::class)->path());
+        self::assertSame(\dirname((string) $plugin->config()->pluginFile) . '/tmswp-discovery.php', $plugin->container()->get(DiscoveryFile::class)->path());
+
+        $themeClasses = array_map(static fn(DiscoveredComponent $component): string => $component->class, $theme->components());
+        $pluginClasses = array_map(static fn(DiscoveredComponent $component): string => $component->class, $plugin->components());
+        self::assertNotSame([], $themeClasses);
+        self::assertNotSame([], $pluginClasses);
+        self::assertSame([], array_values(array_intersect($themeClasses, $pluginClasses)));
+
+        foreach ($themeClasses as $class) {
+            self::assertStringStartsWith(self::THEME_NAMESPACE . '\\', $class);
+        }
+
+        foreach ($pluginClasses as $class) {
+            self::assertStringStartsWith(self::PLUGIN_NAMESPACE . '\\', $class);
+        }
+    }
+
+    /**
+     * テーマ形態の Kernel は template_include(priority 100)に ActionRouter::dispatch を1本登録する。
+     * `actions: false` のテーマ形態と、プラグイン形態(actions は false に正規化される)の Kernel は登録しない。
+     */
+    public function testOnlyThemeKernelsWithActionsRegisterTheActionRouter(): void
+    {
+        // fixture のテーマ(actions の既定は true)の Kernel が、WordPress の読み込みで1本登録している
+        self::assertTrue(self::themeKernel()->config()->actions);
+        self::assertSame([['priority' => 100, 'acceptedArgs' => 1]], self::actionRouterCallbacks());
+
+        $withoutActions = $this->productionThemeConfig('WithoutActions');
+        $plugin = $this->productionPluginConfig('PluginActionRouter');
+        self::assertFalse($withoutActions->actions);
+        self::assertFalse($plugin->actions);
+
+        foreach ([$withoutActions, $plugin] as $config) {
+            (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
+            Kernel::boot($config);
+
+            self::assertCount(1, self::actionRouterCallbacks(), $config->appNamespace);
+        }
+
+        // 比べ方の確認: actions: true のテーマ形態の Kernel は1本足す
+        $withActions = $this->productionThemeConfig('WithActions', actions: true);
+        (new DiscoveryFile($withActions))->write(new DiscoveryResult([], []));
+        Kernel::boot($withActions);
+
+        self::assertCount(2, self::actionRouterCallbacks());
     }
 
     public function testFixtureKernelsAreBootedInDebugModeByWordPressLoading(): void
@@ -480,6 +831,31 @@ PHP);
     }
 
     /**
+     * template_include に登録された ActionRouter::dispatch のコールバックを返す。
+     *
+     * @return list<array{priority: int, acceptedArgs: int}>
+     */
+    private static function actionRouterCallbacks(): array
+    {
+        $routers = [];
+
+        foreach (self::registeredCallbacks() as $callback) {
+            $function = $callback['function'];
+
+            if (
+                $callback['hook'] === 'template_include'
+                && \is_array($function)
+                && ($function[0] ?? null) instanceof ActionRouter
+                && ($function[1] ?? null) === 'dispatch'
+            ) {
+                $routers[] = ['priority' => $callback['priority'], 'acceptedArgs' => $callback['acceptedArgs']];
+            }
+        }
+
+        return $routers;
+    }
+
+    /**
      * 次のリクエストでルールが必要になったときの rewrite_rules を返す。
      *
      * 同じプロセスの WP_Rewrite は、ルールを作るたびに CPT のパーマリンク構造から作ったルールを extra_rules_top に
@@ -521,7 +897,7 @@ PHP);
     /**
      * 登録済みのフックのコールバックを、フック・priority・WordPress の ID で一意なキーにして返す。
      *
-     * @return array<string, array{hook: string, function: mixed, acceptedArgs: int}>
+     * @return array<string, array{hook: string, priority: int, function: mixed, acceptedArgs: int}>
      */
     private static function registeredCallbacks(): array
     {
@@ -543,6 +919,7 @@ PHP);
                     self::assertIsInt($acceptedArgs);
                     $callbacks["{$hook}\n{$priority}\n{$id}"] = [
                         'hook' => (string) $hook,
+                        'priority' => (int) $priority,
                         'function' => $entry['function'] ?? null,
                         'acceptedArgs' => $acceptedArgs,
                     ];
@@ -617,12 +994,12 @@ PHP);
      * 本番相当(debug=false)のテーマ形態の構成を、一時ディレクトリのテーマで作る。テーマ切替のフックに登録される
      * コールバックは、テストライブラリが tear_down でフックごと元に戻す。
      */
-    private function productionThemeConfig(string $name, LabelLanguage $labelLanguage = LabelLanguage::En): KernelConfig
+    private function productionThemeConfig(string $name, LabelLanguage $labelLanguage = LabelLanguage::En, bool $actions = false): KernelConfig
     {
         $root = $this->createTempDirectory('integration-' . strtolower($name));
         self::assertTrue(mkdir($root . '/app'));
 
-        return KernelConfig::theme($root . '/app', 'TmswpIntegration' . $name . uniqid(), false, false, logChannels: $this->recordLogs(), labelLanguage: $labelLanguage);
+        return KernelConfig::theme($root . '/app', 'TmswpIntegration' . $name . uniqid(), false, $actions, logChannels: $this->recordLogs(), labelLanguage: $labelLanguage);
     }
 
     private function pluginDiscoveryFile(): DiscoveryFile

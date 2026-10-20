@@ -7,6 +7,7 @@ namespace TmswpFixtureTheme\Post;
 use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
+use TmswpFixtureTheme\Tax\ProductTagTaxonomy;
 
 #[AsPostType]
 final class ProductPost extends PostType
@@ -18,6 +19,7 @@ final class ProductPost extends PostType
             ->hasArchive()
             ->showInRest()
             ->supports('title', 'thumbnail')
+            ->taxonomies(ProductTagTaxonomy::class)
             ->rewriteSlug('tmswp_product');
     }
 }

@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Unit;
 
+use ArgumentCountError;
 use Attribute;
 use Brain\Monkey\Actions;
 use Brain\Monkey\Filters;
 use Brain\Monkey\Functions;
 use Closure;
+use Error;
 use Mockery;
+use ParseError;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use Psr\Log\AbstractLogger;
@@ -18,6 +21,8 @@ use Stringable;
 use TMSWP\Core\Attribute\AsHook;
 use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Attribute\ComponentAttributeInterface;
+use TMSWP\Core\Attribute\MetaSchema;
+use TMSWP\Core\Exception\ContainerException;
 use TMSWP\Core\Exception\DiscoveryException;
 use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\ComponentInitializerInterface;
@@ -31,9 +36,15 @@ use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Kernel\KernelContext;
 use TMSWP\Core\Log\LogChannel;
+use TMSWP\Core\Meta\MetaSchemaRegistry;
+use TMSWP\Core\Meta\MetaValueType;
+use TMSWP\Core\Meta\ObjectType;
+use TMSWP\Core\Post\PostType;
+use TMSWP\Core\Post\PostTypeDefinition;
 use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\Core\Tests\Support\WpdbTestDouble;
 use TMSWP\Core\View\ActionRouter;
+use TypeError;
 
 final class KernelTest extends UnitTestCase
 {
@@ -316,6 +327,309 @@ PHP);
 
         self::assertSame($kernel, Kernel::get($namespace));
         self::assertCount(1, $kernel->components());
+    }
+
+    public function testSecondBootOfSameNamespaceIsRejected(): void
+    {
+        $namespace = 'Example\Tests\DoubleBootApp' . uniqid();
+        $first = Kernel::boot(KernelConfig::theme($this->createTempDirectory('double-boot-first'), $namespace, true, false));
+
+        foreach ([true, false] as $debug) {
+            try {
+                Kernel::boot(KernelConfig::theme($this->createTempDirectory('double-boot-second'), $namespace, $debug, false));
+                self::fail('KernelException was not thrown');
+            } catch (KernelException $exception) {
+                self::assertSame("TMSWP kernel for namespace '{$namespace}' is already booted", $exception->getMessage());
+            }
+        }
+
+        self::assertSame([$namespace => $first], Kernel::all());
+    }
+
+    /**
+     * 先に boot する Kernel と後に boot する Kernel の (appNamespace, ルートからの appDir の相対パス)。
+     * 名前空間の {NS} は一意な名前空間に置き換える。
+     *
+     * @return iterable<string, array{array{string, string}, array{string, string}, string}>
+     */
+    public static function conflictingKernels(): iterable
+    {
+        yield '入れ子の名前空間(親が先)' => [['{NS}', 'first/app'], ['{NS}\Sub', 'second/app'], 'nested app namespaces are forbidden: {SECOND_NS}, {FIRST_NS}'];
+        yield '入れ子の名前空間(子が先)' => [['{NS}\Sub', 'first/app'], ['{NS}', 'second/app'], 'nested app namespaces are forbidden: {SECOND_NS}, {FIRST_NS}'];
+        yield '同一の appDir' => [['{NS}A', 'first/app'], ['{NS}B', 'first/app'], 'shared or nested app directories are forbidden: {SECOND_DIR}, {FIRST_DIR}'];
+        yield '入れ子の appDir(親が先)' => [['{NS}A', 'first/app'], ['{NS}B', 'first/app/sub'], 'shared or nested app directories are forbidden: {SECOND_DIR}, {FIRST_DIR}'];
+        yield '入れ子の appDir(子が先)' => [['{NS}A', 'first/app/sub'], ['{NS}B', 'first/app'], 'shared or nested app directories are forbidden: {SECOND_DIR}, {FIRST_DIR}'];
+    }
+
+    /**
+     * @param array{string, string} $first
+     * @param array{string, string} $second
+     */
+    #[DataProvider('conflictingKernels')]
+    public function testBootRejectsConflictingKernelWithoutTouchingTheFirstDiscoveryFile(array $first, array $second, string $message): void
+    {
+        $root = $this->createTempDirectory('conflicting-kernels');
+        $namespace = 'Example\Tests\ConflictingApp' . uniqid();
+        [$firstConfig, $secondConfig] = array_map(function (array $kernel) use ($root, $namespace): KernelConfig {
+            [$appNamespace, $appDir] = $kernel;
+            $this->writeFile("{$root}/{$appDir}/.keep", '');
+
+            return KernelConfig::theme("{$root}/{$appDir}", str_replace('{NS}', $namespace, $appNamespace), false, false);
+        }, [$first, $second]);
+        (new DiscoveryFile($firstConfig))->write(new DiscoveryResult([], []));
+        $contents = file_get_contents($firstConfig->discoveryFile());
+        Kernel::boot($firstConfig);
+
+        try {
+            Kernel::boot($secondConfig);
+            self::fail('KernelException was not thrown');
+        } catch (KernelException $exception) {
+            self::assertSame(
+                strtr($message, [
+                    '{FIRST_NS}' => $firstConfig->appNamespace,
+                    '{SECOND_NS}' => $secondConfig->appNamespace,
+                    '{FIRST_DIR}' => $firstConfig->appDir,
+                    '{SECOND_DIR}' => $secondConfig->appDir,
+                ]),
+                $exception->getMessage(),
+            );
+        }
+
+        // 拒否した Kernel は登録されないため、探索コマンドが先の Kernel の探索結果ファイルを上書きすることもない
+        self::assertSame([$firstConfig->appNamespace], array_keys(Kernel::all()));
+        self::assertSame($contents, file_get_contents($firstConfig->discoveryFile()));
+    }
+
+    public function testForClassReturnsTheKernelOwningTheClass(): void
+    {
+        $base = 'Example\Tests\ForClass' . uniqid();
+        // 探索結果ファイルを共有しないよう、それぞれのルートの下に appDir を置く
+        $theme = Kernel::boot(KernelConfig::theme($this->createAppDirectory('for-class-theme'), $base . '\App', true, false));
+        $plugin = Kernel::boot(KernelConfig::theme($this->createAppDirectory('for-class-plugin'), $base . '\Shop', true, false));
+
+        self::assertSame($theme, Kernel::forClass($base . '\App\Post\ProductPost'));
+        self::assertSame($plugin, Kernel::forClass($base . '\Shop\Hook\CartHook'));
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function classesOutsideKernels(): iterable
+    {
+        yield '名前が Kernel の名前空間で始まる別の名前空間' => ['{BASE}\AppX\Foo'];
+        yield '親の名前空間' => ['{BASE}\Foo'];
+        yield '無関係の名前空間' => ['Example\Unrelated\Foo'];
+    }
+
+    #[DataProvider('classesOutsideKernels')]
+    public function testForClassRejectsClassOutsideBootedKernels(string $class): void
+    {
+        $base = 'Example\Tests\ForClassMissing' . uniqid();
+        Kernel::boot(KernelConfig::theme($this->createTempDirectory('for-class-missing'), $base . '\App', true, false));
+        $class = str_replace('{BASE}', $base, $class);
+
+        $this->expectException(KernelException::class);
+        $this->expectExceptionMessage("class '{$class}' does not belong to any booted TMSWP application");
+
+        Kernel::forClass($class);
+    }
+
+    public function testResetAllowsBootingSameNamespaceAgain(): void
+    {
+        $config = KernelConfig::theme($this->createTempDirectory('reset-app'), 'Example\Tests\ResetApp' . uniqid(), true, false);
+        $first = Kernel::boot($config);
+
+        Kernel::reset();
+        self::assertSame([], Kernel::all());
+
+        $second = Kernel::boot($config);
+
+        self::assertNotSame($first, $second);
+        self::assertSame([$config->appNamespace => $second], Kernel::all());
+    }
+
+    public function testBootFromExtensionRegisterIsRejected(): void
+    {
+        $namespace = 'Example\Tests\ReentrantExtension' . uniqid();
+        $inner = KernelConfig::theme($this->createAppDirectory('reentrant-extension-inner'), $namespace . '\Sub', true, false);
+        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-extension-outer'), $namespace, true, false, extensions: [new KernelTestBootingExtension($inner)]);
+
+        // 外側の Kernel はまだレジストリに無いため、再入を禁止しなければ入れ子の名前空間の検査をすり抜ける
+        $this->assertReentrantBootIsRejected($outer, $inner);
+    }
+
+    public function testBootOfParentNamespaceFromLogChannelsIsRejected(): void
+    {
+        $namespace = 'Example\Tests\ReentrantParent' . uniqid();
+        $inner = KernelConfig::theme($this->createAppDirectory('reentrant-parent-inner'), $namespace, true, false);
+        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-parent-outer'), $namespace . '\Sub', true, false, logChannels: self::bootingLogChannels($inner));
+
+        $this->assertReentrantBootIsRejected($outer, $inner);
+    }
+
+    public function testBootOfSameNamespaceFromLogChannelsIsRejected(): void
+    {
+        $namespace = 'Example\Tests\ReentrantSame' . uniqid();
+        $inner = KernelConfig::theme($this->createAppDirectory('reentrant-same-inner'), $namespace, true, false);
+        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-same-outer'), $namespace, true, false, logChannels: self::bootingLogChannels($inner));
+
+        $this->assertReentrantBootIsRejected($outer, $inner);
+    }
+
+    public function testBootFromProductionCatchUpInitializerIsRejected(): void
+    {
+        $namespace = 'Example\Tests\ReentrantCatchUp' . uniqid();
+        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-catch-up-outer'), $namespace, false, false, logChannels: self::recordTo(new KernelTestLogger()));
+        (new DiscoveryFile($outer))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\Booting', KernelTestCatchUpAttribute::class, ['hook' => 'init', 'priority' => 10, 'initializer' => KernelTestBootingInitializer::class]),
+        ], []));
+        KernelTestBootingInitializer::$config = KernelConfig::theme($this->createAppDirectory('reentrant-catch-up-inner'), $namespace . '\Sub', true, false);
+        // init は発火済み。init 10 の初期化は、外側の Kernel をレジストリに登録した後のキャッチアップで動く
+        $GLOBALS['wp_actions'] = ['init' => 1];
+
+        $this->assertReentrantBootIsRejected($outer, KernelTestBootingInitializer::$config);
+    }
+
+    #[RunInSeparateProcess]
+    public function testPluginActivationSandboxBootDoesNotBlockLaterBoot(): void
+    {
+        \define('WP_SANDBOX_SCRAPING', true);
+
+        $pluginFile = $this->writeFile($this->createTempDirectory('sandbox-reentry-root') . '/plugin.php', "<?php\n");
+        Functions\when('TMSWP\Core\Kernel\register_activation_hook')->justReturn();
+        Functions\when('TMSWP\Core\Kernel\register_deactivation_hook')->justReturn();
+        $sandboxed = Kernel::boot(KernelConfig::plugin($pluginFile, $this->createAppDirectory('sandbox-reentry-plugin'), 'Example\Tests\SandboxReentryPlugin' . uniqid(), true));
+
+        // サンドボックスの boot は途中で return するが、boot の進行中の印は外れている
+        $theme = Kernel::boot(KernelConfig::theme($this->createAppDirectory('sandbox-reentry-theme'), 'Example\Tests\SandboxReentryTheme' . uniqid(), true, false));
+
+        self::assertSame([$sandboxed->config()->appNamespace => $sandboxed, $theme->config()->appNamespace => $theme], Kernel::all());
+    }
+
+    /**
+     * 探索結果ファイルの属性を復元できない場合、本番(debug=false)でも boot が DiscoveryException になる。
+     * 最後の要素は、属性クラスとして autoload で読み込ませるファイルの内容(null なら読み込ませない)。属性クラス・
+     * メッセージ・ファイルの内容の {NS} は一意な名前空間に置き換える。
+     *
+     * @return iterable<string, array{non-empty-string, array<array-key, mixed>, string, class-string|null, string|null}>
+     */
+    public static function unrestorableAttributes(): iterable
+    {
+        yield '属性クラスが無い' => ['Example\Tests\MissingAttribute', [], 'component attribute class not found: Example\Tests\MissingAttribute', null, null];
+        yield 'ComponentAttributeInterface を実装しない' => [KernelTestHookProbe::class, [], "attribute class '" . KernelTestHookProbe::class . "' does not implement ComponentAttributeInterface", null, null];
+        yield '必須の引数が無い' => [KernelTestCatchUpAttribute::class, ['hook' => 'init'], 'failed to restore component attribute ' . KernelTestCatchUpAttribute::class, ArgumentCountError::class, null];
+        yield '引数の型が違う' => [KernelTestCatchUpAttribute::class, ['hook' => 'init', 'priority' => 'ten'], 'failed to restore component attribute ' . KernelTestCatchUpAttribute::class, TypeError::class, null];
+        yield '属性クラスの autoload で Error(未定義の親クラス)' => ['{NS}\BrokenAttribute', [], 'failed to restore component attribute {NS}\BrokenAttribute', Error::class, "<?php\n\nnamespace {NS};\n\nfinal class BrokenAttribute extends MissingParent\n{\n}\n"];
+        yield '属性クラスの autoload で ParseError(構文の誤り)' => ['{NS}\BrokenAttribute', [], 'failed to restore component attribute {NS}\BrokenAttribute', ParseError::class, "<?php\n\nnamespace {NS};\n\nfinal class BrokenAttribute {\n"];
+    }
+
+    /**
+     * @param non-empty-string $attributeClass
+     * @param array<array-key, mixed> $arguments
+     * @param class-string|null $previous
+     */
+    #[DataProvider('unrestorableAttributes')]
+    public function testUnrestorableAttributeFailsBootInProduction(string $attributeClass, array $arguments, string $message, ?string $previous, ?string $attributeSource): void
+    {
+        $config = KernelConfig::theme($this->createTempDirectory('unrestorable-attribute-app'), 'Example\Tests\UnrestorableAttributeApp' . uniqid(), false, false);
+        $attributeNamespace = 'Example\Tests\UnrestorableAttribute' . uniqid();
+        $attributeClass = str_replace('{NS}', $attributeNamespace, $attributeClass);
+        $message = str_replace('{NS}', $attributeNamespace, $message);
+
+        if ($attributeSource !== null) {
+            // 属性クラスのファイルは app/ の外に置き、通常の autoload で読み込ませる
+            $attributeDir = $this->createTempDirectory('unrestorable-attribute-class');
+            $this->writeFile($attributeDir . '/BrokenAttribute.php', str_replace('{NS}', $attributeNamespace, $attributeSource));
+            $this->autoloaders[] = $this->registerAppAutoloader($attributeNamespace, $attributeDir);
+        }
+
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($config->appNamespace . '\Component', $attributeClass, $arguments),
+        ], []));
+
+        try {
+            Kernel::boot($config);
+            self::fail('DiscoveryException was not thrown');
+        } catch (DiscoveryException $exception) {
+            self::assertStringContainsString($message, $exception->getMessage());
+            self::assertStringEndsWith("; regenerate the discovery file with 'wp tmswp discover' and deploy it together with the code", $exception->getMessage());
+            self::assertSame($previous, $exception->getPrevious() === null ? null : $exception->getPrevious()::class);
+        }
+
+        self::assertSame([], KernelTestRecordingInitializer::$initialized);
+        self::assertSame([], Kernel::all());
+    }
+
+    /**
+     * 本番の遅延 boot のキャッチアップで、MetaSchema の登録(init 20)は init 9・10 のコンポーネントの初期化より後、
+     * init 30 の初期化より前に動く。init 9 の初期化が登録したエンティティのメタを register_post_meta() するかどうかと、
+     * その呼び出しの位置で順序を確かめる。
+     */
+    public function testLateBootCatchUpRunsMetaSchemaRegistrationAfterInitNineAndTen(): void
+    {
+        $config = KernelConfig::theme($this->createTempDirectory('catch-up-meta-app'), 'Example\Tests\CatchUpMetaApp' . uniqid(), false, false, logChannels: self::recordTo(new KernelTestLogger()));
+        $namespace = $config->appNamespace;
+        $attribute = KernelTestCatchUpAttribute::class;
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\A', $attribute, ['hook' => 'init', 'priority' => 30]),
+            new DiscoveredComponent($namespace . '\B', $attribute, ['hook' => 'init', 'priority' => 10]),
+            new DiscoveredComponent($namespace . '\C', $attribute, ['hook' => 'init', 'priority' => 9, 'initializer' => KernelTestMetaEntityInitializer::class]),
+        ], []));
+        $GLOBALS['wp_actions'] = ['plugins_loaded' => 1, 'init' => 1];
+        Functions\when('register_post_meta')->alias(static function (string $postType, string $key): bool {
+            KernelTestRecordingInitializer::$initialized[] = "register_post_meta({$postType}, {$key})";
+
+            return true;
+        });
+
+        Kernel::boot($config);
+
+        self::assertSame(
+            [$namespace . '\C', $namespace . '\B', 'register_post_meta(tmswp_kernel_meta, tmswp_kernel_note)', $namespace . '\A'],
+            KernelTestRecordingInitializer::$initialized,
+        );
+    }
+
+    public function testUnresolvableHookHandlerThrowsInDebug(): void
+    {
+        $appDir = $this->createTempDirectory('unresolvable-debug-hook-app');
+        $namespace = 'Example\Tests\UnresolvableDebugHookApp' . uniqid();
+        $this->writeFile($appDir . '/Hooks/NeedsValueHook.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Hooks;
+
+use TMSWP\\Core\\Attribute\\Filter;
+use TMSWP\\Core\\Attribute\\AsHook;
+use TMSWP\\Core\\Hook\\Hook;
+
+#[AsHook]
+final class NeedsValueHook extends Hook
+{
+    // Container が autowire で解決できない組み込み型の引数
+    public function __construct(private string \$value)
+    {
+    }
+
+    #[Filter('tmswp_unresolvable_debug_filter')]
+    public function filter(string \$value): string
+    {
+        return \$this->value . \$value;
+    }
+}
+PHP);
+        $logger = new KernelTestLogger();
+        $this->autoloaders[] = $this->registerAppAutoloader($namespace, $appDir);
+        $filter = $this->bootAndCaptureHookCallback(KernelConfig::theme($appDir, $namespace, true, false, logChannels: self::recordTo($logger)), 'tmswp_unresolvable_debug_filter', 1);
+
+        try {
+            $filter('original');
+            self::fail('ContainerException was not thrown');
+        } catch (ContainerException $exception) {
+            self::assertStringContainsString("{$namespace}\\Hooks\\NeedsValueHook", $exception->getMessage());
+        }
+
+        self::assertSame([], $logger->records);
     }
 
     /** @return iterable<string, array{string}> */
@@ -845,6 +1159,45 @@ PHP);
         return KernelConfig::theme($appDir, $namespace, $debug, false, extensions: [new KernelTestServiceExtension()], logChannels: self::recordTo(new KernelTestLogger()));
     }
 
+    /**
+     * $outer の boot の途中で $inner の boot が呼ばれる構成で、内側の boot が KernelException になり、外側の boot も
+     * その例外で失敗してレジストリに何も残らないことを確かめる。その後、外側と同じ名前空間を普通に boot できる
+     * (boot の進行中の印が外れている)ことも確かめる。
+     */
+    private function assertReentrantBootIsRejected(KernelConfig $outer, KernelConfig $inner): void
+    {
+        try {
+            Kernel::boot($outer);
+            self::fail('KernelException was not thrown');
+        } catch (KernelException $exception) {
+            self::assertSame(
+                "cannot boot the TMSWP kernel for namespace '{$inner->appNamespace}' while the kernel for namespace '{$outer->appNamespace}' is booting; boot each kernel from the top level of functions.php or the plugin main file",
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertSame([], Kernel::all());
+
+        $GLOBALS['wp_actions'] = [];
+        $kernel = Kernel::boot(KernelConfig::theme($this->createAppDirectory('reentrant-reboot'), $outer->appNamespace, true, false));
+
+        self::assertSame([$outer->appNamespace => $kernel], Kernel::all());
+    }
+
+    /**
+     * 呼ばれると $config の Kernel を boot する logChannels を返す。
+     *
+     * @return Closure(): array<string, LogChannel>
+     */
+    private static function bootingLogChannels(KernelConfig $config): Closure
+    {
+        return static function () use ($config): array {
+            Kernel::boot($config);
+
+            return ['test' => new LogChannel(new KernelTestLogger())];
+        };
+    }
+
     private function assertLifecycleCallbacksOnlyDeleteRewriteRules(Kernel $kernel, mixed $activate, mixed $deactivate): void
     {
         self::assertInstanceOf(Closure::class, $activate);
@@ -980,6 +1333,18 @@ PHP;
         return $autoload;
     }
 
+    /** ルートの一時ディレクトリの下に app/ を作り、そのパスを返す。 */
+    private function createAppDirectory(string $prefix): string
+    {
+        $appDir = $this->createTempDirectory($prefix) . '/app';
+
+        if (!mkdir($appDir)) {
+            self::fail("ディレクトリを作成できません: {$appDir}");
+        }
+
+        return $appDir;
+    }
+
     private function writeFile(string $path, string $contents): string
     {
         $dir = \dirname($path);
@@ -1070,6 +1435,38 @@ final class KernelTestServiceExtension implements ExtensionInterface
 }
 
 /**
+ * register() の中で別の Kernel を boot する拡張(boot の再入の禁止を確かめる)。
+ */
+final readonly class KernelTestBootingExtension implements ExtensionInterface
+{
+    public function __construct(
+        private KernelConfig $config,
+    ) {}
+
+    public function register(Kernel $kernel): void
+    {
+        Kernel::boot($this->config);
+    }
+}
+
+/**
+ * 初期化の中で、$config の Kernel を boot する(boot の再入の禁止を確かめる)。
+ */
+final class KernelTestBootingInitializer implements ComponentInitializerInterface
+{
+    public static ?KernelConfig $config = null;
+
+    public function initialize(DiscoveredComponent $component, Kernel $kernel): void
+    {
+        if (self::$config === null) {
+            throw new RuntimeException('KernelTestBootingInitializer::$config is not set');
+        }
+
+        Kernel::boot(self::$config);
+    }
+}
+
+/**
  * 初期化で、拡張が登録した KernelTestExtensionService を Container から取る。
  */
 final class KernelTestServiceUsingInitializer implements ComponentInitializerInterface
@@ -1109,6 +1506,32 @@ final class KernelTestRecordingInitializer implements ComponentInitializerInterf
     public function initialize(DiscoveredComponent $component, Kernel $kernel): void
     {
         self::$initialized[] = $component->class;
+    }
+}
+
+/**
+ * メタを1つ宣言する投稿タイプ。KernelTestMetaEntityInitializer が MetaSchemaRegistry に登録する。
+ */
+final class KernelTestMetaPost extends PostType
+{
+    #[MetaSchema(type: MetaValueType::String)]
+    public const META_NOTE = 'tmswp_kernel_note';
+
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('tmswp_kernel_meta');
+    }
+}
+
+/**
+ * KernelTestMetaPost を MetaSchemaRegistry に登録し、初期化されたコンポーネントのクラス名を記録する。
+ */
+final class KernelTestMetaEntityInitializer implements ComponentInitializerInterface
+{
+    public function initialize(DiscoveredComponent $component, Kernel $kernel): void
+    {
+        $kernel->container()->get(MetaSchemaRegistry::class)->registerEntity(KernelTestMetaPost::class, ObjectType::Post, 'tmswp_kernel_meta');
+        KernelTestRecordingInitializer::$initialized[] = $component->class;
     }
 }
 

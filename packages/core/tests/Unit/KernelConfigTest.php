@@ -83,15 +83,88 @@ final class KernelConfigTest extends UnitTestCase
     public function testItRejectsReservedNamespace(): void
     {
         $this->expectException(KernelException::class);
+        $this->expectExceptionMessage('app namespace is reserved by TMSWP core: TMSWP\\App');
 
         KernelConfig::theme($this->createTempDirectory('reserved'), 'TMSWP\\App');
     }
 
     public function testItRejectsMissingAppDirectory(): void
     {
-        $this->expectException(KernelException::class);
+        $appDir = sys_get_temp_dir() . '/tmswp-missing-app-dir';
 
-        KernelConfig::theme(sys_get_temp_dir() . '/tmswp-missing-app-dir', 'Example\\Missing');
+        $this->expectException(KernelException::class);
+        $this->expectExceptionMessage("app directory not found: {$appDir}");
+
+        KernelConfig::theme($appDir, 'Example\\Missing');
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function invalidNamespaces(): iterable
+    {
+        yield '空' => ['', 'app namespace must not be empty'];
+        yield '区切り文字だけ' => ['\\', 'app namespace must not be empty'];
+        yield '数字で始まる' => ['1App', 'invalid app namespace: 1App'];
+        yield '識別子に使えない文字' => ['Example\\My-App', 'invalid app namespace: Example\\My-App'];
+        yield '空の区切り' => ['Example\\\\App', 'invalid app namespace: Example\\\\App'];
+    }
+
+    #[DataProvider('invalidNamespaces')]
+    public function testThemeRejectsInvalidNamespace(string $namespace, string $message): void
+    {
+        $this->expectException(KernelException::class);
+        $this->expectExceptionMessage($message);
+
+        KernelConfig::theme($this->createTempDirectory('invalid-namespace'), $namespace);
+    }
+
+    #[DataProvider('invalidNamespaces')]
+    public function testPluginRejectsInvalidNamespace(string $namespace, string $message): void
+    {
+        $pluginFile = $this->writeFile($this->createTempDirectory('invalid-namespace-plugin') . '/plugin.php', "<?php\n");
+
+        $this->expectException(KernelException::class);
+        $this->expectExceptionMessage($message);
+
+        KernelConfig::plugin($pluginFile, $this->createTempDirectory('invalid-namespace-plugin-app'), $namespace);
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function missingPluginFiles(): iterable
+    {
+        yield '存在しないファイル' => ['/missing.php'];
+        yield 'ディレクトリ' => [''];
+    }
+
+    #[DataProvider('missingPluginFiles')]
+    public function testPluginRejectsMissingPluginFile(string $suffix): void
+    {
+        $file = $this->createTempDirectory('missing-plugin-file') . $suffix;
+
+        $this->expectException(KernelException::class);
+        $this->expectExceptionMessage("plugin file not found: {$file}");
+
+        KernelConfig::plugin($file, $this->createTempDirectory('missing-plugin-file-app'), 'Example\\MissingPluginFile');
+    }
+
+    public function testPluginRejectsMissingAppDirectory(): void
+    {
+        $pluginFile = $this->writeFile($this->createTempDirectory('missing-plugin-app-root') . '/plugin.php', "<?php\n");
+        $appDir = \dirname($pluginFile) . '/app';
+
+        $this->expectException(KernelException::class);
+        $this->expectExceptionMessage("app directory not found: {$appDir}");
+
+        KernelConfig::plugin($pluginFile, $appDir, 'Example\\MissingPluginApp');
+    }
+
+    public function testPluginRejectsReservedNamespace(): void
+    {
+        $pluginFile = $this->writeFile($this->createTempDirectory('reserved-plugin') . '/plugin.php', "<?php\n");
+
+        $this->expectException(KernelException::class);
+        $this->expectExceptionMessage('app namespace is reserved by TMSWP core: TMSWP');
+
+        KernelConfig::plugin($pluginFile, $this->createTempDirectory('reserved-plugin-app'), '\\TMSWP\\');
     }
 
     private function writeFile(string $file, string $contents): string

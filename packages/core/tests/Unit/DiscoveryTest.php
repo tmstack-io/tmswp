@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Unit;
 
+use ArrayObject;
 use Error;
 use ParseError;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -11,6 +12,8 @@ use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use TMSWP\Core\Exception\DiscoveryException;
 use TMSWP\Core\Hook\Hook;
+use TMSWP\Core\Kernel\DiscoveredComponent;
+use TMSWP\Core\Kernel\DiscoveredHookMethod;
 use TMSWP\Core\Kernel\Discovery;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
@@ -374,6 +377,331 @@ PHP);
         self::assertInstanceOf(Error::class, $exception->getPrevious());
     }
 
+    /**
+     * 結果の並びは、ファイル名の順(候補ファイルの相対パスの strcmp 順)とも、ファイルの作成順とも違う。
+     * components は (class, attributeClass)、hookMethods は (class, method, hook) の中で priority と kind の順に並ぶ。
+     * FQCN の区切り文字 '\' はパスの区切り文字 '/' より後に並ぶため、FooA は Foo/Bar より先、HookA は Hook/Sub/Entry より先になる。
+     */
+    public function testItOrdersResultsIndependentlyOfFileNamesAndCreationOrder(): void
+    {
+        $namespace = $this->runtimeNamespace();
+        $root = $this->createTempDirectory('ordering');
+        $this->writeOrderingApp($root, $namespace, false);
+        $loaded = new ArrayObject();
+        $this->registerAppAutoloader($namespace, $root . '/app', $loaded);
+
+        $result = $this->scan($namespace, $root . '/app');
+
+        // 候補ファイルは相対パスの strcmp 順に読む
+        self::assertSame(
+            ['Attribute\\AlphaMark', 'Attribute\\ZetaMark', 'Foo\\Bar', 'FooA', 'Hook\\Sub\\Entry', 'HookA'],
+            array_map(static fn(string $class): string => substr($class, \strlen($namespace) + 1), $loaded->getArrayCopy()),
+        );
+        self::assertSame(
+            [
+                ["{$namespace}\\FooA", "{$namespace}\\Attribute\\AlphaMark", ['foo-a']],
+                ["{$namespace}\\Foo\\Bar", "{$namespace}\\Attribute\\AlphaMark", ['alpha']],
+                ["{$namespace}\\Foo\\Bar", "{$namespace}\\Attribute\\ZetaMark", ['zeta']],
+            ],
+            array_map(static fn(DiscoveredComponent $component): array => [$component->class, $component->attributeClass, $component->attributeArguments], $result->components),
+        );
+        self::assertSame(
+            [
+                ["{$namespace}\\HookA", 'only', 'tmswp_order', 10, 'action'],
+                ["{$namespace}\\Hook\\Sub\\Entry", 'alpha', 'tmswp_same', 10, 'action'],
+                ["{$namespace}\\Hook\\Sub\\Entry", 'alpha', 'tmswp_same', 10, 'filter'],
+                ["{$namespace}\\Hook\\Sub\\Entry", 'middle', 'tmswp_a', 10, 'filter'],
+                ["{$namespace}\\Hook\\Sub\\Entry", 'middle', 'tmswp_z', 10, 'action'],
+                ["{$namespace}\\Hook\\Sub\\Entry", 'zeta', 'tmswp_b', 10, 'filter'],
+                ["{$namespace}\\Hook\\Sub\\Entry", 'zeta', 'tmswp_b', 20, 'action'],
+            ],
+            array_map(
+                static fn(DiscoveredHookMethod $hookMethod): array => [$hookMethod->class, $hookMethod->method, $hookMethod->hook, $hookMethod->priority, $hookMethod->kind->value],
+                $result->hookMethods,
+            ),
+        );
+    }
+
+    /**
+     * 同じファイル群を逆の順で作成した2つのルートを、同じ名前空間でそれぞれ別の PHP プロセスで走査すると、探索結果ファイルの内容が一致する。
+     */
+    public function testResultsAreIdenticalWhenFilesAreCreatedInReverseOrder(): void
+    {
+        $script = $this->writeRenderScript();
+        $namespace = 'Example\\Tests\\OrderingApp';
+        $outputs = [];
+
+        foreach ([false, true] as $reverse) {
+            $root = $this->createTempDirectory('ordering-' . ($reverse ? 'reversed' : 'forward'));
+            $this->writeOrderingApp($root, $namespace, $reverse);
+            $outputs[] = $this->runPhp($script, $root, $namespace);
+        }
+
+        self::assertStringContainsString("'hook' => 'tmswp_same'", $outputs[0]);
+        self::assertStringNotContainsString('DiscoveryException', $outputs[0]);
+        self::assertSame($outputs[0], $outputs[1]);
+    }
+
+    public function testItRejectsFileDefiningClassInAnotherNamespace(): void
+    {
+        $namespace = $this->runtimeNamespace();
+        $appDir = $this->createTempDirectory('namespace-mismatch-app');
+        $this->writePhpFile($appDir, 'Post/ProductPost.php', "<?php\n\nnamespace {$namespace}\\Posts;\n\nfinal class ProductPost\n{\n}\n");
+        $this->registerAppAutoloader($namespace, $appDir);
+
+        $exception = $this->scanFailure($namespace, $appDir);
+
+        $file = $this->realPath($appDir . '/Post/ProductPost.php');
+        self::assertStringStartsWith("file {$file} is expected to define class {$namespace}\\Post\\ProductPost; ", $exception->getMessage());
+        self::assertStringEndsWith("; file: {$file}; class: {$namespace}\\Post\\ProductPost", $exception->getMessage());
+    }
+
+    public function testItRejectsClassNameCaseMismatch(): void
+    {
+        $namespace = $this->runtimeNamespace();
+        $appDir = $this->createTempDirectory('case-mismatch-app');
+        // PHP のクラス名は大文字小文字を区別しないため、class_exists() は成功してしまう
+        $this->writePhpFile($appDir, 'ProductPost.php', "<?php\n\nnamespace {$namespace};\n\nfinal class Productpost\n{\n}\n");
+        $this->registerAppAutoloader($namespace, $appDir);
+
+        $exception = $this->scanFailure($namespace, $appDir);
+
+        $file = $this->realPath($appDir . '/ProductPost.php');
+        self::assertSame(
+            "class name case mismatch for {$namespace}\\ProductPost; reflection returned {$namespace}\\Productpost; file: {$file}; class: {$namespace}\\ProductPost",
+            $exception->getMessage(),
+        );
+    }
+
+    public function testItRejectsClassLoadedFromAnotherFile(): void
+    {
+        $namespace = $this->runtimeNamespace();
+        $appDir = $this->createTempDirectory('other-file-app');
+        $otherDir = $this->createTempDirectory('other-file');
+        $source = "<?php\n\nnamespace {$namespace};\n\nfinal class Moved\n{\n}\n";
+        $this->writePhpFile($appDir, 'Moved.php', $source);
+        // 同じクラスを app/ の外のファイルから先に読み込んでおく(古いクラスマップ等)
+        $this->writePhpFile($otherDir, 'Moved.php', $source);
+        require $otherDir . '/Moved.php';
+        $this->registerAppAutoloader($namespace, $appDir);
+
+        $exception = $this->scanFailure($namespace, $appDir);
+
+        $file = $this->realPath($appDir . '/Moved.php');
+        self::assertSame(
+            "class {$namespace}\\Moved was loaded from a different file; expected {$file}; file: {$file}; class: {$namespace}\\Moved",
+            $exception->getMessage(),
+        );
+    }
+
+    /**
+     * ABSPATH の定義(symlink を経由するか・末尾の区切り文字を付けるか)と、属性引数・フック名に書いたパスの表記の組み合わせ。
+     * WordPress の ABSPATH は末尾に区切り文字を付けて定義される。
+     *
+     * @return iterable<string, array{bool, string, bool, bool}>
+     */
+    public static function absPathNotations(): iterable
+    {
+        yield '実ディレクトリ・末尾に区切り文字・属性引数' => [false, '/', false, false];
+        yield '実ディレクトリ・区切り文字なし・フック名' => [false, '', false, true];
+        yield 'symlink の表記・末尾に区切り文字・属性引数' => [true, '/', false, false];
+        yield 'symlink の表記・区切り文字なし・フック名' => [true, '', false, true];
+        yield 'symlink の実パス・末尾に区切り文字・フック名' => [true, '/', true, true];
+        yield 'symlink の実パス・区切り文字なし・属性引数' => [true, '', true, false];
+    }
+
+    /**
+     * 定数は取り消せずプロセス全体に漏れるので、分離プロセス内でだけ定義する。
+     */
+    #[DataProvider('absPathNotations')]
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testItRejectsPathUnderAbsPath(bool $linked, string $suffix, bool $resolved, bool $inHookName): void
+    {
+        $namespace = $this->runtimeNamespace();
+        $root = $this->createTempDirectory('abspath-app');
+        $base = $this->realPath($this->createTempDirectory('abspath'));
+        mkdir($base . '/wordpress');
+        $link = $base . '/link';
+        self::assertTrue(symlink($base . '/wordpress', $link));
+
+        try {
+            $abspath = $linked ? $link : $base . '/wordpress';
+            \define('ABSPATH', $abspath . $suffix);
+            $written = ($resolved ? $this->realPath($abspath) : $abspath) . '/wp-includes/x.php';
+
+            if ($inHookName) {
+                $this->writeAssetsApp($root, $namespace, "['styles/main.css' => 'main']", var_export($written, true));
+            } else {
+                $this->writeAssetsApp($root, $namespace, var_export(['path' => $written], true), "'init'");
+            }
+
+            $exception = $this->scanFailure($namespace, $root . '/app');
+
+            $matchedRoot = $resolved ? $this->realPath($abspath) : $abspath;
+            self::assertStringContainsString(
+                ($inHookName ? "hook name of {$namespace}\\Hook\\ProbeHook::handle" : "attribute argument of {$namespace}\\Assets")
+                . " contains the environment-dependent path {$matchedRoot}: '{$written}'",
+                $exception->getMessage(),
+            );
+        } finally {
+            // 一時ディレクトリの後始末は symlink を rmdir しようとして失敗するため、先にリンクだけ消す
+            unlink($link);
+        }
+    }
+
+    public function testItSkipsInterfacesTraitsLowercaseFilesAndClassesWithoutAttributes(): void
+    {
+        $namespace = $this->runtimeNamespace();
+        $appDir = $this->createTempDirectory('skipped-app');
+        $this->writeMarkAttribute($appDir, $namespace, 'Mark');
+        // interface・trait は、コンポーネント属性やフック属性を持っていても走査の対象にしない
+        $this->writePhpFile($appDir, 'Contract/Marked.php', "<?php\n\nnamespace {$namespace}\\Contract;\n\n#[\\{$namespace}\\Attribute\\Mark]\ninterface Marked\n{\n}\n");
+        $this->writePhpFile($appDir, 'Concern/Hooked.php', <<<PHP
+<?php
+
+namespace {$namespace}\\Concern;
+
+use TMSWP\\Core\\Attribute\\Action;
+
+trait Hooked
+{
+    #[Action('init')]
+    public function handle(): void
+    {
+    }
+}
+PHP);
+        // 小文字で始まるファイルはクラスのファイルとみなさず、読み込まない
+        $this->writePhpFile($appDir, 'helpers.php', "<?php\n\nthrow new \\RuntimeException('helpers.php must not be loaded by the scan');\n");
+        $this->writePhpFile($appDir, 'Support/format.php', "<?php\n\nthrow new \\RuntimeException('format.php must not be loaded by the scan');\n");
+        $this->writePhpFile($appDir, 'Plain.php', "<?php\n\nnamespace {$namespace};\n\nfinal class Plain\n{\n}\n");
+        $this->writePhpFile($appDir, 'Marked.php', "<?php\n\nnamespace {$namespace};\n\n#[Attribute\\Mark]\nfinal class Marked\n{\n}\n");
+        $this->registerAppAutoloader($namespace, $appDir);
+
+        $result = $this->scan($namespace, $appDir);
+
+        self::assertSame(
+            [["{$namespace}\\Marked", "{$namespace}\\Attribute\\Mark"]],
+            array_map(static fn(DiscoveredComponent $component): array => [$component->class, $component->attributeClass], $result->components),
+        );
+        self::assertSame([], $result->hookMethods);
+        self::assertTrue(interface_exists("{$namespace}\\Contract\\Marked", false));
+        self::assertTrue(trait_exists("{$namespace}\\Concern\\Hooked", false));
+    }
+
+    public function testItRejectsComponentAttributeOnAbstractClass(): void
+    {
+        $namespace = $this->runtimeNamespace();
+        $appDir = $this->createTempDirectory('abstract-component-app');
+        $this->writeMarkAttribute($appDir, $namespace, 'Mark');
+        $this->writePhpFile($appDir, 'BasePost.php', "<?php\n\nnamespace {$namespace};\n\n#[Attribute\\Mark]\nabstract class BasePost\n{\n}\n");
+        $this->registerAppAutoloader($namespace, $appDir);
+
+        $exception = $this->scanFailure($namespace, $appDir);
+
+        self::assertStringStartsWith("component attribute on non-instantiable class {$namespace}\\BasePost; file: {$this->realPath($appDir . '/BasePost.php')}", $exception->getMessage());
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function misusedHookMethods(): iterable
+    {
+        yield 'static メソッドの #[Action]' => ["#[Action('init')]\n    public static function handle(): void", 'handle'];
+        yield 'protected メソッドの #[Filter]' => ["#[Filter('the_title')]\n    protected function handle(string \$title): string", 'handle'];
+        yield 'private メソッドの #[Action]' => ["#[Action('init')]\n    private function handle(): void", 'handle'];
+        yield '可変長引数のメソッドの #[Filter]' => ["#[Filter('the_title')]\n    public function handle(mixed ...\$args): mixed", 'handle'];
+    }
+
+    #[DataProvider('misusedHookMethods')]
+    public function testItRejectsHookAttributeOnUnsupportedMethod(string $method, string $methodName): void
+    {
+        $namespace = $this->runtimeNamespace();
+        $appDir = $this->createTempDirectory('misused-hook-method-app');
+        $this->writePhpFile($appDir, 'Hooks/MisusedHook.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Hooks;
+
+use TMSWP\\Core\\Attribute\\Action;
+use TMSWP\\Core\\Attribute\\AsHook;
+use TMSWP\\Core\\Attribute\\Filter;
+use TMSWP\\Core\\Hook\\Hook;
+
+#[AsHook]
+final class MisusedHook extends Hook
+{
+    {$method}
+    {
+        throw new \\LogicException('not called');
+    }
+}
+PHP);
+        $this->registerAppAutoloader($namespace, $appDir);
+
+        $exception = $this->scanFailure($namespace, $appDir);
+
+        self::assertStringStartsWith(
+            "method-level hook attributes require public non-static methods without variadic parameters: {$namespace}\\Hooks\\MisusedHook::{$methodName}; file: {$this->realPath($appDir . '/Hooks/MisusedHook.php')}",
+            $exception->getMessage(),
+        );
+    }
+
+    public function testItRejectsHookClassRegisteringNoHooks(): void
+    {
+        $namespace = $this->runtimeNamespace();
+        $appDir = $this->createTempDirectory('empty-hook-app');
+        $this->writePhpFile($appDir, 'Hooks/EmptyHook.php', <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Hooks;
+
+use TMSWP\\Core\\Attribute\\AsHook;
+use TMSWP\\Core\\Hook\\Hook;
+
+#[AsHook]
+final class EmptyHook extends Hook
+{
+    public function helper(): void
+    {
+    }
+}
+PHP);
+        $this->registerAppAutoloader($namespace, $appDir);
+
+        $exception = $this->scanFailure($namespace, $appDir);
+
+        self::assertStringStartsWith("hook class {$namespace}\\Hooks\\EmptyHook registers no hooks; file: {$this->realPath($appDir . '/Hooks/EmptyHook.php')}", $exception->getMessage());
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function objectAttributeArguments(): iterable
+    {
+        yield '引数そのもの' => ['new \\ArrayObject()'];
+        yield '配列の値' => ["['styles' => new \\ArrayObject()]"];
+        yield '入れ子の配列の値' => ["['styles' => ['main' => new \\ArrayObject()]]"];
+    }
+
+    #[DataProvider('objectAttributeArguments')]
+    public function testItRejectsObjectInAttributeArguments(string $argument): void
+    {
+        $namespace = $this->runtimeNamespace();
+        $appDir = $this->createTempDirectory('object-argument-app');
+        $this->writeMarkAttribute($appDir, $namespace, 'Mark');
+        $this->writePhpFile($appDir, 'Marked.php', "<?php\n\nnamespace {$namespace};\n\n#[Attribute\\Mark({$argument})]\nfinal class Marked\n{\n}\n");
+        $this->registerAppAutoloader($namespace, $appDir);
+
+        $exception = $this->scanFailure($namespace, $appDir);
+
+        self::assertStringStartsWith(
+            "attribute arguments must be exportable to the discovery file (scalar/array/enum); file: {$this->realPath($appDir . '/Marked.php')}; class: {$namespace}\\Marked",
+            $exception->getMessage(),
+        );
+    }
+
     /** @return iterable<string, array{string}> */
     public static function environmentDependentAttributeArguments(): iterable
     {
@@ -545,6 +873,36 @@ PHP);
      */
     public function testRenderedDiscoveryFileIsIdenticalAcrossRootsUnlessArgumentsContainAbsolutePaths(): void
     {
+        $script = $this->writeRenderScript();
+
+        [[$first, $firstRoot], [$second, $secondRoot]] = $this->renderInTwoRoots($script, 'portable', "['styles/main.css' => ['media' => 'all']]", "'init'");
+        self::assertStringContainsString("'styles/main.css' => [", $first);
+        self::assertStringContainsString("'hook' => 'init'", $first);
+        self::assertSame($first, $second);
+        self::assertStringNotContainsString($firstRoot, $first);
+        self::assertStringNotContainsString($secondRoot, $second);
+
+        $assetsError = 'DiscoveryException: attribute argument of Example\\Tests\\PortableApp\\Assets contains the environment-dependent path ';
+        $hookError = 'DiscoveryException: hook name of Example\\Tests\\PortableApp\\Hook\\ProbeHook::handle contains the environment-dependent path ';
+        $failures = [
+            [$assetsError, $this->renderInTwoRoots($script, 'value', "['styles' => ['main' => __DIR__ . '/main.css']]", "'init'")],
+            [$assetsError, $this->renderInTwoRoots($script, 'key', "[__DIR__ . '/main.css' => 'main']", "'init'")],
+            [$hookError, $this->renderInTwoRoots($script, 'hook', "['styles/main.css' => ['media' => 'all']]", "__DIR__ . '/x'")],
+        ];
+
+        foreach ($failures as [$prefix, $outputs]) {
+            foreach ($outputs as [$output, $root]) {
+                self::assertStringStartsWith($prefix . $root . ': ', $output);
+            }
+        }
+    }
+
+    /**
+     * 引数のルートの app/ を走査して探索結果ファイルの内容を出力する PHP スクリプトを書き、そのパスを返す。
+     * DiscoveryException は、例外の種類とメッセージを出力する。
+     */
+    private function writeRenderScript(): string
+    {
         $script = $this->createTempDirectory('render-script') . '/render.php';
         $this->writePhpFile(\dirname($script), 'render.php', <<<'PHP'
 <?php
@@ -576,26 +934,7 @@ try {
 }
 PHP);
 
-        [[$first, $firstRoot], [$second, $secondRoot]] = $this->renderInTwoRoots($script, 'portable', "['styles/main.css' => ['media' => 'all']]", "'init'");
-        self::assertStringContainsString("'styles/main.css' => [", $first);
-        self::assertStringContainsString("'hook' => 'init'", $first);
-        self::assertSame($first, $second);
-        self::assertStringNotContainsString($firstRoot, $first);
-        self::assertStringNotContainsString($secondRoot, $second);
-
-        $assetsError = 'DiscoveryException: attribute argument of Example\\Tests\\PortableApp\\Assets contains the environment-dependent path ';
-        $hookError = 'DiscoveryException: hook name of Example\\Tests\\PortableApp\\Hook\\ProbeHook::handle contains the environment-dependent path ';
-        $failures = [
-            [$assetsError, $this->renderInTwoRoots($script, 'value', "['styles' => ['main' => __DIR__ . '/main.css']]", "'init'")],
-            [$assetsError, $this->renderInTwoRoots($script, 'key', "[__DIR__ . '/main.css' => 'main']", "'init'")],
-            [$hookError, $this->renderInTwoRoots($script, 'hook', "['styles/main.css' => ['media' => 'all']]", "__DIR__ . '/x'")],
-        ];
-
-        foreach ($failures as [$prefix, $outputs]) {
-            foreach ($outputs as [$output, $root]) {
-                self::assertStringStartsWith($prefix . $root . ': ', $output);
-            }
-        }
+        return $script;
     }
 
     /**
@@ -690,6 +1029,156 @@ PHP);
         $this->registerAppAutoloader($namespace, $root . '/app');
     }
 
+    /**
+     * 結果の並びを確かめる app/ をルートの下に書く。$reverse なら作成の順を逆にする。
+     * 作成の順はファイル名の順とも、期待する結果の並びとも違う。
+     */
+    private function writeOrderingApp(string $root, string $namespace, bool $reverse): void
+    {
+        $appDir = $root . '/app';
+        $files = [
+            'HookA.php' => <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace};
+
+use TMSWP\\Core\\Attribute\\Action;
+use TMSWP\\Core\\Attribute\\AsHook;
+use TMSWP\\Core\\Hook\\Hook;
+
+#[AsHook]
+final class HookA extends Hook
+{
+    #[Action('tmswp_order')]
+    public function only(): void
+    {
+    }
+}
+PHP,
+            'Foo/Bar.php' => <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Foo;
+
+use {$namespace}\\Attribute\\AlphaMark;
+use {$namespace}\\Attribute\\ZetaMark;
+
+// 宣言の順は attributeClass の順と逆にする
+#[ZetaMark('zeta')]
+#[AlphaMark('alpha')]
+final class Bar
+{
+}
+PHP,
+            'Attribute/ZetaMark.php' => $this->markAttributeSource($namespace, 'ZetaMark'),
+            'Hook/Sub/Entry.php' => <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Hook\\Sub;
+
+use TMSWP\\Core\\Attribute\\Action;
+use TMSWP\\Core\\Attribute\\AsHook;
+use TMSWP\\Core\\Attribute\\Filter;
+use TMSWP\\Core\\Hook\\Hook;
+
+// メソッドの宣言の順と、各メソッドの属性の順(#[Action] が先に集まる)は、期待する並びと違う
+#[AsHook]
+final class Entry extends Hook
+{
+    #[Action('tmswp_b', priority: 20)]
+    #[Filter('tmswp_b', priority: 10)]
+    public function zeta(mixed \$value = null): mixed
+    {
+        return \$value;
+    }
+
+    #[Action('tmswp_z')]
+    #[Filter('tmswp_a')]
+    public function middle(mixed \$value = null): mixed
+    {
+        return \$value;
+    }
+
+    #[Filter('tmswp_same')]
+    #[Action('tmswp_same')]
+    public function alpha(mixed \$value = null): mixed
+    {
+        return \$value;
+    }
+}
+PHP,
+            'FooA.php' => <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace};
+
+#[Attribute\\AlphaMark('foo-a')]
+final class FooA
+{
+}
+PHP,
+            'Attribute/AlphaMark.php' => $this->markAttributeSource($namespace, 'AlphaMark'),
+        ];
+
+        if ($reverse) {
+            $files = array_reverse($files, true);
+        }
+
+        foreach ($files as $relativePath => $contents) {
+            $this->writePhpFile($appDir, $relativePath, $contents);
+        }
+    }
+
+    /** 値を1つ受け取るコンポーネント属性を app/Attribute/{$name}.php に書く。 */
+    private function writeMarkAttribute(string $appDir, string $namespace, string $name): void
+    {
+        $this->writePhpFile($appDir, "Attribute/{$name}.php", $this->markAttributeSource($namespace, $name));
+    }
+
+    private function markAttributeSource(string $namespace, string $name): string
+    {
+        return <<<PHP
+<?php
+
+declare(strict_types=1);
+
+namespace {$namespace}\\Attribute;
+
+use TMSWP\\Core\\Attribute\\ComponentAttributeInterface;
+use TMSWP\\Core\\Hook\\HookInitializer;
+use TMSWP\\Core\\Kernel\\KernelContext;
+
+#[\\Attribute(\\Attribute::TARGET_CLASS)]
+final class {$name} implements ComponentAttributeInterface
+{
+    public function __construct(public mixed \$value = null) {}
+
+    public function hookName(KernelContext \$context): string
+    {
+        return 'init';
+    }
+
+    public function hookPriority(): int
+    {
+        return 10;
+    }
+
+    public function initializerClass(): string
+    {
+        return HookInitializer::class;
+    }
+}
+PHP;
+    }
+
     private function realPath(string $path): string
     {
         $realPath = realpath($path);
@@ -739,10 +1228,13 @@ PHP);
         return 'Example\\Tests\\RuntimeApp' . uniqid();
     }
 
-    private function registerAppAutoloader(string $namespace, string $appDir): void
+    /**
+     * @param ArrayObject<int, string>|null $loaded 渡すと、読み込んだクラス名を読み込んだ順に記録する
+     */
+    private function registerAppAutoloader(string $namespace, string $appDir, ?ArrayObject $loaded = null): void
     {
         $prefix = $namespace . '\\';
-        $loader = static function (string $class) use ($appDir, $prefix): void {
+        $loader = static function (string $class) use ($appDir, $prefix, $loaded): void {
             if (!str_starts_with($class, $prefix)) {
                 return;
             }
@@ -754,6 +1246,7 @@ PHP);
                 return;
             }
 
+            $loaded?->append($class);
             require $file;
         };
 

@@ -36,6 +36,13 @@ final class Kernel
     /** @var array<string, self> */
     private static array $kernels = [];
 
+    /**
+     * boot が進行中の Kernel の名前空間(進行中でなければ null)。logChannels・拡張の register() の時点では外側の
+     * Kernel はまだレジストリに無いため、そこから別の boot を呼ぶと、assertCanBoot() の同一・入れ子の名前空間や
+     * appDir の検査をすり抜ける。それを防ぐため、キャッチアップの初期化からの boot も含め、boot の再入を禁止する印として持つ。
+     */
+    private static ?string $booting = null;
+
     private static bool $cliRegistered = false;
 
     private static bool $textdomainRegistered = false;
@@ -79,7 +86,31 @@ final class Kernel
         });
     }
 
+    /**
+     * Kernel を起動してレジストリに登録する(§3)。
+     *
+     * boot の途中(拡張の register()・logChannels・キャッチアップで動く初期化)から別の Kernel を boot することは
+     * できない。テーマは functions.php、プラグインはプラグインのファイルで、それぞれ独立に boot する。
+     *
+     * @throws KernelException 別の Kernel の boot が進行中の場合や、WordPress の版・名前空間・appDir 等の検査に失敗した場合
+     */
     public static function boot(KernelConfig $config): self
+    {
+        if (self::$booting !== null) {
+            throw new KernelException("cannot boot the TMSWP kernel for namespace '{$config->appNamespace}' while the kernel for namespace '" . self::$booting . "' is booting; boot each kernel from the top level of functions.php or the plugin main file");
+        }
+
+        self::$booting = $config->appNamespace;
+
+        try {
+            return self::bootKernel($config);
+        } finally {
+            // 成功・失敗・プラグインの有効化のサンドボックスでの早期 return のどれでも印を外す
+            self::$booting = null;
+        }
+    }
+
+    private static function bootKernel(KernelConfig $config): self
     {
         self::assertSupportedWordPress();
         // Container・LoggerRegistry 等の PSR の interface を実装するクラスは、この検査の後で初めて読み込む

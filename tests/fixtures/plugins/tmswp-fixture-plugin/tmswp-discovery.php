@@ -8,7 +8,36 @@ return [
     'schema' => 4,
     'appNamespace' => 'TmswpFixturePlugin',
     'appDir' => 'app',
-    'components' => [],
+    'components' => [
+        [
+            'class' => 'TmswpFixturePlugin\\Hook\\SpiedHook',
+            'attributeClass' => 'TMSWP\\Core\\Tests\\Support\\RecordedComponent',
+            'attributeArguments' => [
+                'TMSWP\\Core\\Attribute\\AsHook',
+            ],
+        ],
+        [
+            'class' => 'TmswpFixturePlugin\\Model\\SpiedModel',
+            'attributeClass' => 'TMSWP\\Core\\Tests\\Support\\RecordedComponent',
+            'attributeArguments' => [
+                'TMSWP\\Core\\Attribute\\AsModel',
+            ],
+        ],
+        [
+            'class' => 'TmswpFixturePlugin\\Option\\SpiedOption',
+            'attributeClass' => 'TMSWP\\Core\\Attribute\\AsOptionGroup',
+            'attributeArguments' => [
+                'prefix' => 'tmswp_fixture_spied_',
+            ],
+        ],
+        [
+            'class' => 'TmswpFixturePlugin\\Option\\SpiedOption',
+            'attributeClass' => 'TMSWP\\Core\\Tests\\Support\\RecordedComponent',
+            'attributeArguments' => [
+                'TMSWP\\Core\\Attribute\\AsOptionGroup',
+            ],
+        ],
+    ],
     'hookMethods' => [
         [
             'class' => 'TmswpFixturePlugin\\Hook\\PluginProbeHook',

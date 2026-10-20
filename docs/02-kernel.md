@@ -246,6 +246,9 @@ final class Kernel
     /** @var array<string, self> 正規化済みappNamespace => Kernel のグローバルレジストリ */
     private static array $kernels = [];
 
+    /** @var string|null boot が進行中の Kernel の appNamespace(boot の再入の禁止。§3.1) */
+    private static ?string $booting = null;
+
     /** @var bool WP-CLIコマンド登録済みフラグ(プロセス内で1回のみ登録) */
     private static bool $cliRegistered = false;
 
@@ -267,7 +270,7 @@ final class Kernel
     /**
      * FWを起動する。テーマはfunctions.php直下、プラグインは本体ファイル直下で呼ぶこと。
      *
-     * @throws \TMSWP\Core\Exception\KernelException WordPress 7.0 未満・psr/container と psr/log の非互換・tmswp/core の版の食い違い・logChannels の不正(以上は debug に関係なく常に)・多重boot・名前空間/ディレクトリ衝突・遅延boot(debug時)
+     * @throws \TMSWP\Core\Exception\KernelException WordPress 7.0 未満・psr/container と psr/log の非互換・tmswp/core の版の食い違い・logChannels の不正(以上は debug に関係なく常に)・boot の再入(別の Kernel の boot の途中からの boot)・多重boot・名前空間/ディレクトリ衝突・遅延boot(debug時)
      * @throws \TMSWP\Core\Exception\DiscoveryException 探索失敗(debug時)、探索結果ファイルが無い・構成と合わない(本番)
      */
     public static function boot(KernelConfig $config): self;
@@ -319,6 +322,11 @@ final class Kernel
 
 ```
 boot(config):
+  再入の検査(§3.1): 別の Kernel の boot が進行中(self::$booting !== null)なら
+        → throw KernelException("cannot boot the TMSWP kernel for namespace '{ns}' while the kernel
+          for namespace '{booting}' is booting; ...")
+     self::$booting = config.appNamespace とし、以下の手順0〜10を try で囲む。finally で
+     self::$booting = null に戻す(成功・例外・プラグインの有効化のサンドボックスでの早期 return のどれでも)
   0. WordPress の版の検査(下記)。7.0 未満なら
         → throw KernelException("TMSWP requires WordPress 7.0 or later (running {version})")
      PsrInterfaceCheck::assertCompatible()     // §3.8。PSR の interface を実装するクラスより先に行う
@@ -383,6 +391,7 @@ boot(config):
 
 - **同一 appNamespace への2回目の boot は常に `KernelException`。** 冪等に既存インスタンスを返す仕様にはしない。理由: 同一 functions.php の二重読込や copy&paste 起因の二重bootは構成バグであり、黙って既存を返すと「2回目の config の差分が無視される」というサイレント失敗になる(旧FWの黙殺文化の排除)。
 - 異なる appNamespace + 異なる appDir であれば回数無制限に boot できる(テーマ1 + プラグインN の共存)。
+- **boot の途中から別の Kernel を boot することはできない(再入の禁止)。** logChannels(手順3)・拡張の `register()`(手順7a)・本番の遅延bootのキャッチアップで動く初期化(手順8a)の中から `Kernel::boot()` を呼ぶと、内側の boot は `KernelException`(進行中の名前空間と、新しく boot しようとした名前空間を含む)になり、外側の boot もその例外で失敗する(レジストリには何も残らない)。理由: 手順8より前の logChannels・拡張の `register()` の時点では外側の Kernel はまだレジストリに無いため、再入を許すと手順1・2の同一・入れ子の名前空間・appDir の検査をすり抜け、`forClass()` の一致が1つに決まる前提(§3.5)も崩れる。キャッチアップの初期化からの boot も、経路ごとに条件を分けず同じく禁止する。正しい構成では boot の中から boot する必要は無い(テーマは functions.php、プラグインはプラグインのファイルで、それぞれ独立に boot する)。進行中の印(`self::$booting`)は boot の終わりに finally で必ず外すため、失敗した boot の後でも次の boot はこの検査に掛からない。
 - 例外発生時、レジストリには残らない。手順8のレジストリ登録は手順1〜7aがすべて成功してから行い、その後の手順8aのキャッチアップ(§3.3)で例外が起きれば、レジストリから取り除いてから例外を投げ直す。
 - debug の遅延boot(§3.3)の検査は、手順5 `scheduleAll` の最初、どのフックの登録(`#[Action]`/`#[Filter]` の `add_filter` を含む)よりも先に行う。そのため遅延bootの例外では、フックは1つも登録されず、初期化も実行されない。
 - 手順5で、探索結果ファイルの属性を復元できない場合(`DiscoveryException`)も、どのフックの登録よりも先に例外になる。
@@ -444,7 +453,7 @@ boot(config):
 - `forClass($class)`: レジストリ内の各 ns について `str_starts_with($class, $ns . '\\')` を判定し、一致した中で最長の ns を持つ Kernel を返す(boot時に入れ子名前空間を禁止しているため一致は高々1つだが、アルゴリズムとしては最長一致で定義する)。一致なしは `KernelException("class '{fqcn}' does not belong to any booted TMSWP application")`。null や空文字を返すサイレント失敗は禁止。
 - `forFile($file)`: `realpath($file)` でファイルを実パスにする(シンボリックリンクや `..` を含む別の表記でも、実体の場所で判定する。存在しない等で実パスが取れなければ、パスを含む `KernelException("cannot resolve the real path of '{file}' to find its TMSWP kernel")`)。そのうえで、レジストリ内の各 Kernel の各ルート(実パス)について `str_starts_with($realFile, $root . DIRECTORY_SEPARATOR)` を判定し、一致した中で最長のルートを持つ Kernel を返す。Kernel のルートは `$kernel->config()->rootDir()` で、Theme コンテキストの Kernel では、有効な子テーマのディレクトリ(`get_stylesheet_directory()` の実パス)が親テーマのディレクトリ(`get_template_directory()` の実パス)と異なる場合に、それもルートに含める(`Template::part()` は子テーマのテンプレートを先に探すため、子テーマのテンプレートから `Log` を呼べるようにする)。子テーマのディレクトリは判定のたびに取る。Theme コンテキストの Kernel は functions.php で boot され、WordPress 7.0 の wp-settings.php は `setup_theme` の発火と `wp_templating_constants()`・`wp_set_template_globals()` の後に有効なテーマの functions.php を読み込むため、レジストリにテーマの Kernel がある時点で有効なテーマは決まっている。テーマのディレクトリの実パスが取れなければ `KernelException`。ルートは入れ子になりうる(例: テーマの中にプラグインのルートがある。appDir の入れ子は boot で禁止しているが、ルートの入れ子は禁止しない)ため、最長一致で定義する。一致なしは `KernelException("file '{file}' is not inside the root directory of any booted TMSWP kernel")`(実パスが表記と異なるときは `(real path '{realFile}')` も含める)。Log の静的な呼び出しが記録先の Kernel を決めるのに使う(07-support §5.2)。
 - `all()`: レジストリのコピーを返す(内部配列への参照を漏らさない)。キーは正規化済みappNamespace。
-- `reset()`: プロセス内の静的な状態を起動前に戻す。行うのは次の4つだけである。(a) `self::$kernels = []`(Kernel のレジストリ) (b) `self::$cliRegistered = false`(`wp tmswp discover` の登録済みフラグ) (c) `self::$textdomainRegistered = false`(FW の翻訳を読み込む `init` 1 のローダーの登録済みフラグ) (d) `MigrateCommand::reset()`(`wp tmswp migrate` の登録済みフラグ。Model文書)。これにより、reset 後の boot はこれらの登録をもう一度行う。登録済み `add_action` の解除は行わない(Brain Monkey 環境ではフック自体がモックであり、統合テストでは1テスト1プロセスで運用する)。`@internal` を付与し、PHPStan ルールで、PHPUnit の `TestCase` の子孫クラスの外からの参照を報告する(識別子 `tmswp.kernelReset`)。ルールは PHPStan が渡すノードの種類ごとに3つあり(`KernelResetOutsideTestRule`=静的呼び出しとインスタンス経由の呼び出し、`KernelResetStaticCallableOutsideTestRule`=`Kernel::reset(...)`、`KernelResetMethodCallableOutsideTestRule`=`$kernel->reset(...)`)、判定は `KernelResetCallChecker` が共有する。packages/core/phpstan/extension.neon で登録する。
+- `reset()`: プロセス内の静的な状態を起動前に戻す。行うのは次の4つだけである。(a) `self::$kernels = []`(Kernel のレジストリ) (b) `self::$cliRegistered = false`(`wp tmswp discover` の登録済みフラグ) (c) `self::$textdomainRegistered = false`(FW の翻訳を読み込む `init` 1 のローダーの登録済みフラグ) (d) `MigrateCommand::reset()`(`wp tmswp migrate` の登録済みフラグ。Model文書)。これにより、reset 後の boot はこれらの登録をもう一度行う。boot の進行中の印(`self::$booting`)は boot の finally で必ず外れる(§3.1)ため、reset() では扱わない。登録済み `add_action` の解除は行わない(Brain Monkey 環境ではフック自体がモックであり、統合テストでは1テスト1プロセスで運用する)。`@internal` を付与し、PHPStan ルールで、PHPUnit の `TestCase` の子孫クラスの外からの参照を報告する(識別子 `tmswp.kernelReset`)。ルールは PHPStan が渡すノードの種類ごとに3つあり(`KernelResetOutsideTestRule`=静的呼び出しとインスタンス経由の呼び出し、`KernelResetStaticCallableOutsideTestRule`=`Kernel::reset(...)`、`KernelResetMethodCallableOutsideTestRule`=`$kernel->reset(...)`)、判定は `KernelResetCallChecker` が共有する。packages/core/phpstan/extension.neon で登録する。
   - メソッド名: `reset` の識別子と、型が定数文字列で `reset` に一致する式(`Kernel::{'reset'}()`、`$method = 'reset'; Kernel::$method(...)`。大文字・小文字を区別しない)。定数に定まらない動的な名前は判定できないため対象外。
   - 呼び出し先: クラス名(`use` の別名を含む)、式の型のオブジェクトのクラス名(`$kernel::reset()`・`$kernel->reset()`)、`class-string<Kernel>` の型、定数文字列のクラス名のどれかが `Kernel`(またはそのサブクラス)であるもの。
   - テストのクラスの中(クロージャを含む)は許可される。`call_user_func` 等に渡す callable の配列・文字列(`[Kernel::class, 'reset']`、`'TMSWP\Core\Kernel\Kernel::reset'`)は対象外である。
@@ -531,7 +540,7 @@ interface ExtensionInterface
 }
 ```
 
-- boot の手順7a で、`extensions` に渡した順に1回ずつ `register($kernel)` を呼ぶ。本番の遅延bootのキャッチアップ(手順8a)より前なので、拡張が Container に入れたサービスはキャッチアップの初期化でも使える。プラグインの有効化のサンドボックス(`WP_SANDBOX_SCRAPING`。§1)では、コンポーネントの初期化と同じく呼ばない。
+- boot の手順7a で、`extensions` に渡した順に1回ずつ `register($kernel)` を呼ぶ。本番の遅延bootのキャッチアップ(手順8a)より前なので、拡張が Container に入れたサービスはキャッチアップの初期化でも使える。プラグインの有効化のサンドボックス(`WP_SANDBOX_SCRAPING`。§1)では、コンポーネントの初期化と同じく呼ばない。`register()` の中から別の Kernel を boot すると `KernelException` になる(boot の再入の禁止。§3.1)。
 - 拡張は、受け取った Kernel の debug に従い(`WP_DEBUG` を直接見ない)、ログは受け取った Kernel の `logger()` に記録する(07-support §5.1)。拡張のクラスは先に読み込まれた tmswp/* の1組が全 Kernel で共有されるため、プロセス全体の static な状態に Kernel ごとの設定を持たない。
 - 同じ Kernel に同じクラスの拡張を2回登録すると、`KernelConfig` の生成時に例外になる(§2 手順6)。テーマとプラグインが、それぞれの Kernel に同じクラスの拡張を登録するのは正当である。
 
@@ -591,7 +600,7 @@ final readonly class DiscoveryResult
 {
     /**
      * @param list<DiscoveredComponent>  $components  (class, attributeClass) 複合キー昇順
-     * @param list<DiscoveredHookMethod> $hookMethods (class, method, hook, priority) 複合キー昇順
+     * @param list<DiscoveredHookMethod> $hookMethods (class, method, hook, priority, kind) 複合キー昇順
      */
     public function __construct(
         public array $components,
@@ -624,8 +633,10 @@ final readonly class DiscoveredComponent
 
     /**
      * 属性インスタンスを再構築する。呼び出しごとに新規生成(軽量・readonlyのためメモ化しない)。
-     * 属性クラスが存在しない/ComponentAttributeInterface非実装の場合は DiscoveryException
-     * (探索結果ファイルが古いシナリオ。例外化/ログの分岐は呼出側=Kernelが行うため、本メソッドは常に投げる)。
+     * 属性クラスが存在しない/ComponentAttributeInterface非実装/属性の生成で例外(引数の不一致による ArgumentCountError・
+     * TypeError 等の Error を含む)が起きた場合は DiscoveryException。生成で起きた例外は previous に持ち、メッセージには
+     * 探索結果ファイルの作り直しの案内(`wp tmswp discover`)を含める。コンストラクタが投げた DiscoveryException は包まずにそのまま投げる
+     * (探索結果ファイルが古いシナリオ。設定の誤りのため、本メソッドも呼出側の Kernel も debug に関係なく投げる)。
      */
     public function attribute(): ComponentAttributeInterface;
 }
@@ -730,7 +741,8 @@ scan():
           (ReflectionMethod('register') の getDeclaringClass() が Hook 基底以外)
           ときのみ components[] へ追加する(register() 例外手段の priority 0
           初期化対象。§7)。オーバーライドなしの #[AsHook] クラスは components に
-          現れず、フック発火まで決してロードされない(遅延ロードの構造的保証)
+          現れず、本番(debug=false)の boot ではフック発火までロードされない
+          (遅延ロードの構造的保証。debug の boot はこの走査でクラスを読み込む)
         - それ以外の属性: components[] = new DiscoveredComponent(fqcn, 属性FQCN, args)
         ※1クラスに異種のコンポーネント属性が複数付与されている場合は属性ごとに
           1レコード生成する(同一属性の重複付与はIS_REPEATABLE未指定のためPHPが拒否する)
@@ -1114,7 +1126,7 @@ write(result):
 
 | 機構 | フック | priority | 形態・発火条件 | 内容(概要。詳細は各文書) |
 |---|---|---|---|---|
-| `#[Action]` / `#[Filter]` メソッド | 属性が宣言した各フック | 属性宣言値(既定 10) | 両形態。boot手順5(scheduleAll)で登録、宣言フック発火時に実行 | `add_filter($hook, クロージャ, $priority, $kind->registeredArgs($acceptedArgs))` を直接登録(`#[Filter]` は最低 1。§5)。クロージャは発火時に `container->get($class)` してメソッドを呼ぶため、**Hookクラスはフック発火まで未ロード(遅延)**。acceptedArgs はメソッド宣言引数数から自動導出(§4・§5) |
+| `#[Action]` / `#[Filter]` メソッド | 属性が宣言した各フック | 属性宣言値(既定 10) | 両形態。boot手順5(scheduleAll)で登録、宣言フック発火時に実行 | `add_filter($hook, クロージャ, $priority, $kind->registeredArgs($acceptedArgs))` を直接登録(`#[Filter]` は最低 1。§5)。クロージャは発火時に `container->get($class)` してメソッドを呼ぶため、**本番(debug=false)の boot では、Hookクラスはフック発火まで未ロード(遅延)**(debug の boot は走査(§4)でクラスを読み込む)。acceptedArgs はメソッド宣言引数数から自動導出(§4・§5) |
 | `ActionRouter` | `template_include` | 100 | テーマ形態のみ・フロント本描画リクエストのみ(REST/admin-ajax/管理画面/WP-CLIでは未発火) | 確定済み `$template` に対応する `actions/{テンプレート相対パス}.php` を子→親テーマの順に探索し、存在すれば static クロージャで include(可視変数=$wp_queryのみ)。戻り値契約 `array`→View変数バッグ / `ActionRouter::notFound()`→404強制 / `null`→no-op。`$template` は常に無加工で返す(404強制時のみ `get_404_template()` 差し替え)。Discovery非関与・ファイル存在で完全オプトイン(§3.7。実行機構は View/Support/Log 文書) |
 
 補足仕様:
@@ -1151,7 +1163,8 @@ scheduleAll():
         }, hm.priority, hm.kind->registeredArgs(hm.acceptedArgs))   // Filter は max(1, acceptedArgs)
      // #[Action] も add_filter で登録する(add_action は add_filter の別名。§5)。
      // クロージャが捕捉するのは DiscoveredHookMethod(FQCN文字列とメソッド名)のみで、
-     // Hookクラスはフック発火時の container->get() まで未ロード(遅延)
+     // 本番(debug=false)の boot では、Hookクラスはフック発火時の container->get() まで未ロード(遅延。
+     // debug の boot は走査(§4)でクラスを読み込む)
   4. for (hook, priority, runner) in pending:
         add_action(hook, runner, priority, 0)          // グループごとに1クロージャ
   5. return missed                                    // キャッチアップは boot の手順8a(catchUp)で、拡張とレジストリへの登録の後に実行する
@@ -1181,7 +1194,7 @@ runInitializer(c, attr):           // 失敗は設定の誤り。debug に関係
 - 異なるフック間: WPのフック発火順。
 - 同一フック・異なるpriority間: priority昇順(WP仕様)。
 - 同一(フック, priority)・同一Kernel内のコンポーネント初期化: **components の FQCN 昇順**(グループランナーが1クロージャで順次実行するため、他プラグインの add_action に割り込まれない)。
-- 同一(フック, priority)内の `#[Action]`/`#[Filter]` メソッド間: hookMethods の (class, method, hook, priority) 昇順=登録順。コンポーネント初期化グループとの相対順は「hookMethods 先・グループランナー後」(scheduleAll の手順3・4の順)で決定的だが、この相対順に依存してはならない(規約)。
+- 同一(フック, priority)内の `#[Action]`/`#[Filter]` メソッド間: hookMethods の (class, method, hook, priority, kind) 昇順=登録順。コンポーネント初期化グループとの相対順は「hookMethods 先・グループランナー後」(scheduleAll の手順3・4の順)で決定的だが、この相対順に依存してはならない(規約)。
 - 同一(フック, priority)・複数Kernel間: boot順(=WPロード順)。Kernel間の順序依存は規約で禁止(§3.2)。
 
 旧FWの静的 `$dependencies` 配列による依存宣言は**廃止**する。初期化順の制御手段はこの表のフック/priorityのみであり、コンポーネント間にグラフ状の依存宣言機構を持たない(よって初期化順での循環依存は構造的に発生しない)。インスタンスレベルの依存はコンストラクタ注入で表現し、循環は Container が検出する(§8)。
@@ -1575,7 +1588,7 @@ final class ProductPost extends PostType
 }
 ```
 
-### Hookはメソッド属性で宣言する(クラスは発火まで未ロード)
+### Hookはメソッド属性で宣言する(本番の boot ではクラスは発火まで未ロード)
 
 ```php
 <?php
@@ -1613,7 +1626,7 @@ final class ProductHook extends Hook
 }
 ```
 
-`register()` をオーバーライドしないため、このクラスは boot 時には一切ロードされず、宣言した各フックの発火時に初めて Container 経由でインスタンス化される(§4・§7)。
+`register()` をオーバーライドしないため、このクラスは本番(debug=false)の boot 時には一切ロードされず、宣言した各フックの発火時に初めて Container 経由でインスタンス化される(§4・§7)。debug の boot は走査(§4)でクラスを読み込む。
 
 ### app側サービスとコンストラクタ注入
 
@@ -1694,13 +1707,14 @@ final class ContainerTest extends TestCase
 
 # 受け入れ基準
 
-実装は以下をすべて満たすこと。検証は `composer qa`(= lint + analyse + test)および wp-env 統合テストで行う。
+実装は以下をすべて満たすこと。検証は `composer qa`(= lint + analyse + discover:check + test)および wp-env 統合テストで行う。
 
 ## 機能(ユニットテストで検証)
 
 - [ ] `KernelConfig::theme()/plugin()` が不正入力(不在ディレクトリ・不正名前空間・`TMSWP` 予約・プラグインファイル不在)で `KernelException` を投げ、メッセージに対象パス/名前空間を含む
 - [ ] 同一 appNamespace への2回目の `Kernel::boot()` が `KernelException` になる(多重boot禁止)
 - [ ] 入れ子の appNamespace(`App` と `App\Sub`)・入れ子/同一の appDir・探索結果ファイルが同じになる兄弟の appDir の boot が `KernelException` になり、先に boot した Kernel の探索結果ファイルは上書きされない
+- [ ] boot の途中(拡張の `register()`・`logChannels`・キャッチアップの初期化)から別の Kernel を boot すると `KernelException` になり、外側の boot も失敗してレジストリに何も残らない。失敗した boot の後でも、同じ名前空間を boot できる
 - [ ] `Kernel::forClass()` が最長一致でKernelを返し、未該当FQCNで `KernelException` を投げる(null返しのサイレント失敗がない)
 - [ ] Container: `set`(Closure/object/string束縛)・単段 `alias`・autowire が共有(シングルトン)スコープで動作し、公開APIが `set` / `alias` / `get` / `has` のみである(`factory()` / `make()` / 多段aliasが存在しない)
 - [ ] Container: 間接循環依存(A→B→A、3クラス以上の循環含む)が**無限再帰せず** `CircularDependencyException` となり、メッセージに解決チェーン全体(`A -> B -> A`)を含む
@@ -1709,7 +1723,7 @@ final class ContainerTest extends TestCase
 - [ ] Container: クラス名・interface名のidへの、型の合わないインスタンス・クラスの束縛・alias が登録の時点で `ContainerException` になり、factory の結果の型の食い違いは `get()` の時点で `ContainerException` になる(alias を経由しても同じ)。PHPStan が `get(Foo::class)` を `Foo` と推論する
 - [ ] Container: factory の中で投げられた例外が、id を含む `ContainerException` に包まれて `previous` に元の例外を持ち、`NotFoundException`・`CircularDependencyException` は二重に包まれない
 - [ ] 全パッケージの `src/` の例外クラスが `TmswpExceptionInterface` を実装する(§9)
-- [ ] Discovery: 同一のapp/ファイル群に対し、ファイル作成順・列挙順を入れ替えても(テストでイテレータ順をシャッフルしても)`DiscoveryResult` が完全一致する(決定的ロード順=components の (class, attributeClass) の strcmp ソート+hookMethods の (class, method, hook, priority) ソート。数字だけのフック名も strcmp の順になる)
+- [ ] Discovery: 同一のapp/ファイル群に対し、ファイルの列挙順・作成順に関係なく、`DiscoveryResult` が同じ内容・同じ並びになる(components は (class, attributeClass)、hookMethods は (class, method, hook) の中で priority と kind の順。文字列は strcmp で比べ、数字だけのフック名も strcmp の順になる)。候補ファイルは appDir からの相対パスの strcmp 順に読む
 - [ ] Discovery: クラス名とファイル名/名前空間の不一致が debug に関係なく `DiscoveryException`(ファイルパス・期待FQCN入り)になる。黙殺・スキップされる分岐が存在しない
 - [ ] Discovery: 走査中のオートロードで起きた Error(ParseError・未定義の親クラスを含む)と、属性の読み取りで起きた Error(属性クラスの ParseError・属性引数の未定義のクラス定数)が、元の例外を previous に持ち、クラス名とファイルを含む `DiscoveryException` になる
 - [ ] Discovery: 属性引数(配列のキーと値。入れ子を含む)とフック名に、Kernel のルート・ABSPATH・WP_CONTENT_DIR が区切り文字の境界で現れると探索失敗になる(ルート /srv/a に対し /srv/a・/srv/a/x.php・file:///srv/a/x は失敗、/srv/abc・/srv/a-b は通る)。ABSPATH・WP_CONTENT_DIR は設定された値の表記と実パスのどちらで現れても失敗になり(symlink のときは両方、末尾に区切り文字を付けた定義も同じ)、ディレクトリが存在しないときは環境パスを含まない app の探索が成功する。同じソースを絶対パスの違う2つのルートに置いて生成した探索結果ファイルが、バイト単位で一致する
@@ -1735,7 +1749,7 @@ final class ContainerTest extends TestCase
 - [ ] 拡張の `register()` が Container に入れたサービスを、init 10 の初期化が、init 未発火の通常の boot と、init 発火済みの本番の遅延boot(キャッチアップ)の両方で使える
 - [ ] `Kernel::forFile()` が、シンボリックリンクを経由したパスを実体の Kernel に解決し、`..` でルートの外へ出るパスと存在しないパスで `KernelException` を投げる
 - [ ] 本番の遅延bootのキャッチアップが、`$wp_actions` で最初に発火した順、同じフックの中では priority の昇順で実行される(`plugins_loaded` のグループが `init` より先。MetaSchema の登録(`init` 20)も同じ規則)。未発火のフックのグループは `add_action` される。debug の遅延bootは、最初に発火したフックのグループで `KernelException` になり、`#[Action]`/`#[Filter]` を含めどのフックも登録せず、どのグループも実行しない
-- [ ] コンポーネントの初期化の失敗(Initializer の例外、`ComponentInitializerInterface` を実装しない Initializer、探索結果ファイルの属性を復元できない)が、本番(debug=false)でも例外になる(例: `PostType` を継承しない `#[AsPostType]` のコンポーネントの初期化)。本番のキャッチアップ中の失敗では boot が例外になる
+- [ ] コンポーネントの初期化の失敗(Initializer の例外、`ComponentInitializerInterface` を実装しない Initializer、探索結果ファイルの属性を復元できない)が、本番(debug=false)でも例外になる(例: `PostType` を継承しない `#[AsPostType]` のコンポーネントの初期化)。属性を復元できない場合(属性クラスが無い・`ComponentAttributeInterface` を実装しない・属性の生成で例外が起きる)は、メッセージに探索結果ファイルの作り直しの案内(`wp tmswp discover`)を含む `DiscoveryException` になり、属性の生成で起きた例外(引数の不一致による `ArgumentCountError`・`TypeError` 等の Error を含む)を previous に持つ。本番のキャッチアップ中の失敗では boot が例外になる
 - [ ] `#[Action]`/`#[Filter]` メソッドの失敗(Container での解決の失敗を含む)が、debug では例外のまま伝わり、本番ではその Kernel のロガー(`$kernel->logger()`)に `error` で記録されてそのメソッドだけスキップされ、第1引数が返る。引数を宣言しない `#[Filter]` も第1引数を受け取って登録され、失敗時は元の値を、成功時はメソッドの戻り値を返し、メソッドには引数を渡さない(宣言引数数に切り詰める)
 - [ ] 有効化・無効化のコールバックが `delete_option('rewrite_rules')` と `tmswp/activated`・`tmswp/deactivated` の発火だけを行い(`flush_rewrite_rules()`・`add_option()` を呼ばない)、boot が毎リクエストの確認(`init` での `get_option()` 等)を登録しない
 - [ ] PHPStan ルールが、PHPUnit の `TestCase` の子孫クラスの外からの `Kernel::reset()` の参照(静的呼び出し、インスタンス経由の呼び出し、両者の第一級 callable、定数文字列のメソッド名、`class-string<Kernel>`・定数文字列のクラス名)を報告し、子孫クラスの中(クロージャを含む)、Kernel 以外の `reset()`、定数に定まらない名前、callable の配列・文字列は報告しない(§3.5)
@@ -1745,9 +1759,9 @@ final class ContainerTest extends TestCase
 - [ ] 本番相当(debug=false)で、探索結果ファイルが無いと boot が例外になる。ファイルがあれば走査せずに起動する(app/ を走査すれば見つかるクラスのフックが登録されず、そのクラスもロードされず、ファイルにだけ書いたフックが登録される)
 - [ ] `boot()` 直後(フック発火前)の時点で `register_post_type` / `register_taxonomy` / `add_role` / DB書込が一切発生していない(即時同期初期化の禁止)
 - [ ] init 完走後、`#[AsTaxonomy]`(init 9)→`#[AsPostType]`(init 10)の順で登録され、`PostTypeDefinition` の taxonomies 連携が機能する
-- [ ] `#[Action]`/`#[Filter]` メソッドが宣言どおりの(フック, priority)と、引数の数(`#[Action]` は宣言引数数、`#[Filter]` は `max(1, 宣言引数数)`)で `add_filter` 登録され、フック発火時に Container 経由で1回だけインスタンス化されて呼ばれる。属性宣言のみ(`register()` 非オーバーライド)の `#[AsHook]` クラスは宣言フックの発火までロードされない(`get_declared_classes()` の差分で検証)
+- [ ] `#[Action]`/`#[Filter]` メソッドが宣言どおりの(フック, priority)と、引数の数(`#[Action]` は宣言引数数、`#[Filter]` は `max(1, 宣言引数数)`)で `add_filter` 登録され、フック発火時に Container 経由で1回だけインスタンス化されて呼ばれる。属性宣言のみ(`register()` 非オーバーライド)の `#[AsHook]` クラスは、本番相当(debug=false)の boot で、宣言フックの発火までロードされない(`get_declared_classes()` の差分で検証。debug の boot は走査ですべてのクラスを読み込む)
 - [ ] Kernel が各コンポーネントの Initializer(エンティティ基底の `register()` を含む)を1リクエスト内で正確に1回だけ呼ぶ(Initializerへのスパイで検証。register() 側に再入ガードは存在しない)
-- [ ] テーマ(`App`)+プラグイン(`MyShopPlugin`)の2 Kernel併用で、Container・探索結果ファイル・components が相互に独立し、`Kernel::all()` が2件を返す
+- [ ] テーマ(`App`)+プラグイン(`MyShopPlugin`)の2 Kernel併用で、Container・探索結果ファイル・components が相互に独立し、`Kernel::all()` にテーマとプラグインの2つの Kernel が含まれる
 - [ ] テーマとプラグインの2つの Kernel が、それぞれ同じクラスの拡張を登録して共存し、各拡張が自分を登録した Kernel だけを受け取る
 - [ ] 他の vendor(別のプラグインの Composer のオートローダ)の installed.php に別の版の tmswp/core があると、boot が `KernelException` になる
 - [ ] Kernel の `labelLanguage` が Ja のとき、`labelLanguage()` を指定しない投稿タイプのラベルが日本語で登録される
@@ -1762,17 +1776,17 @@ final class ContainerTest extends TestCase
 ## 品質
 
 - [ ] `composer analyse`: PHPStan level max・baselineなしで通過(szepeviktor/phpstan-wordpress)
-- [ ] `composer lint`: PSR-12 + `declare(strict_types=1)` 全ファイル適用
-- [ ] Kernel/Discovery/Container/DiscoveryFile/KernelConfig に `__callStatic` / `extract()` / グローバル可変状態(`Kernel::$kernels`・`$cliRegistered`・`$textdomainRegistered` を除く)が存在しない
+- [ ] `composer lint`: PER Coding Style 2.0(php-cs-fixer の `@PER-CS2x0`)+ `declare(strict_types=1)` 全ファイル適用
+- [ ] Kernel/Discovery/Container/DiscoveryFile/KernelConfig に `__callStatic` / `extract()` / グローバル可変状態(`Kernel::$kernels`・`$booting`・`$cliRegistered`・`$textdomainRegistered` を除く)が存在しない。グローバル変数は、ソースのトークンで `global` 文を禁止し、`$GLOBALS` はクラスごとに許可した名前を `$x = $GLOBALS['<名前>'] ?? null;`(代入先はスーパーグローバル・`$this` 以外の変数)で読む形だけを許可して確かめる。参照(`=&` 等)でわざと作った別名への代入と、可変変数による `${'GLOBALS'}` は対象外
 - [ ] KernelConfig・Container・DiscoveryFile・DiscoveryResult・DiscoveredComponent のユニットテストがWP関数のスタブなし(または Brain Monkey の最小スタブのみ)で動作する
 
 ## 検証コマンド
 
 ```bash
-composer lint     # php-cs-fixer (PSR-12 + strict_types)
+composer lint     # php-cs-fixer (@PER-CS2x0 + strict_types)
 composer analyse  # PHPStan level max
-composer test     # PHPUnit 11 ユニット層(Brain Monkey)
-composer qa       # 上記一括
+composer test     # test:unit(PHPUnit 11 ユニット層、Brain Monkey)+ test:integration(wp-env 統合層)
+composer qa       # lint + analyse + discover:check + test を一括
 # 統合層
 composer wp:start && composer test:integration   # 正式コマンド名はQA文書に従う
 composer discover:check                            # fixture の探索結果ファイルの照合(wp-env)

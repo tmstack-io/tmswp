@@ -42,7 +42,33 @@ return [
             'attributeArguments' => [],
         ],
         [
+            'class' => 'TmswpFixtureTheme\\Spy\\SpiedPost',
+            'attributeClass' => 'TMSWP\\Core\\Tests\\Support\\RecordedComponent',
+            'attributeArguments' => [
+                'TMSWP\\Core\\Attribute\\AsPostType',
+            ],
+        ],
+        [
+            'class' => 'TmswpFixtureTheme\\Spy\\SpiedRole',
+            'attributeClass' => 'TMSWP\\Core\\Tests\\Support\\RecordedComponent',
+            'attributeArguments' => [
+                'TMSWP\\Core\\Attribute\\AsUserRole',
+            ],
+        ],
+        [
+            'class' => 'TmswpFixtureTheme\\Spy\\SpiedTaxonomy',
+            'attributeClass' => 'TMSWP\\Core\\Tests\\Support\\RecordedComponent',
+            'attributeArguments' => [
+                'TMSWP\\Core\\Attribute\\AsTaxonomy',
+            ],
+        ],
+        [
             'class' => 'TmswpFixtureTheme\\Tax\\ProductCategoryTaxonomy',
+            'attributeClass' => 'TMSWP\\Core\\Attribute\\AsTaxonomy',
+            'attributeArguments' => [],
+        ],
+        [
+            'class' => 'TmswpFixtureTheme\\Tax\\ProductTagTaxonomy',
             'attributeClass' => 'TMSWP\\Core\\Attribute\\AsTaxonomy',
             'attributeArguments' => [],
         ],

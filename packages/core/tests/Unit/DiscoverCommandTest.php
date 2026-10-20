@@ -7,6 +7,8 @@ namespace TMSWP\Core\Tests\Unit;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use RuntimeException;
 use TMSWP\Core\Kernel\DiscoverCommand;
+use TMSWP\Core\Kernel\Discovery;
+use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Tests\Support\UnitTestCase;
@@ -99,6 +101,24 @@ final class DiscoverCommandTest extends UnitTestCase
         self::assertFileDoesNotExist($beta->discoveryFile());
     }
 
+    /**
+     * 探索コマンドは debug に関係なく走査するため、本番(debug=false)の Kernel でも走査の失敗で非0で終わり、ファイルを書かない。
+     */
+    #[RunInSeparateProcess]
+    public function testItReportsScanFailureOfProductionKernel(): void
+    {
+        $this->loadWpCliDouble();
+        $config = $this->bootKernel('Production', debug: false);
+        $contents = file_get_contents($config->discoveryFile());
+        // ファイルの場所から期待する名前空間と違う名前空間でクラスを定義する
+        $this->writeFile($config->appDir . '/Broken.php', "<?php\n\nnamespace {$config->appNamespace}\\Other;\n\nfinal class Broken\n{\n}\n");
+
+        $error = $this->runFailing(new DiscoverCommand(), []);
+
+        self::assertStringContainsString("file {$config->appDir}/Broken.php is expected to define class {$config->appNamespace}\\Broken", $error);
+        self::assertSame($contents, file_get_contents($config->discoveryFile()));
+    }
+
     private function loadWpCliDouble(): void
     {
         $file = $this->createTempDirectory('wp-cli-double') . '/WP_CLI.php';
@@ -131,12 +151,12 @@ PHP);
         require $file;
     }
 
-    private function bootKernel(string $suffix): KernelConfig
+    private function bootKernel(string $suffix, bool $debug = true): KernelConfig
     {
         $root = $this->createTempDirectory('discover-command-' . strtolower($suffix));
         self::assertTrue(mkdir($root . '/app'));
         $namespace = 'Example\\Tests\\DiscoverCommand' . $suffix . uniqid();
-        $config = KernelConfig::theme($root . '/app', $namespace, true, false);
+        $config = KernelConfig::theme($root . '/app', $namespace, $debug, false);
         $this->writeHookClass($config, 'ProbeHook', 'tmswp_probe_hook_' . strtolower($suffix));
 
         spl_autoload_register(static function (string $class) use ($namespace, $root): void {
@@ -146,6 +166,11 @@ PHP);
                 require $file;
             }
         });
+
+        if (!$debug) {
+            // 本番の boot は探索結果ファイルを読むため、先に作っておく
+            (new DiscoveryFile($config))->write((new Discovery($config, new DiscoveryFile($config)))->scan());
+        }
 
         Kernel::boot($config);
 

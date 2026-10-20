@@ -410,7 +410,7 @@ final readonly class AsSettingsPage implements ComponentAttributeInterface
 }
 ```
 
-引数なしのマーカー属性。定義の実体は `definition()` が持つ(コアの `#[AsPostType]` + `definition()` 規約と相似形に揃える)。`admin_menu` はフロント・REST・WP-CLIでは発火しないため、管理画面以外のリクエストでは設定ページクラスのロード・初期化が一切行われない。
+引数なしのマーカー属性。定義の実体は `definition()` が持つ(コアの `#[AsPostType]` + `definition()` 規約と相似形に揃える)。`admin_menu` はフロント・REST・WP-CLIでは発火しないため、本番(debug=false)の boot では、管理画面以外のリクエストで設定ページクラスのロード・初期化が一切行われない(debug の boot は走査(02-kernel §4)でクラスを読み込む)。
 
 ### `TMSWP\SettingsPage\SettingsPageInitializer`
 

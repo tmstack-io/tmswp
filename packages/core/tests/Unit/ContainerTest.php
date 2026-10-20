@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Unit;
 
 use Closure;
+use Error;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Container\ContainerExceptionInterface;
+use ReflectionClass;
+use ReflectionMethod;
 use RuntimeException;
 use stdClass;
 use TMSWP\Core\Container\Container;
@@ -14,6 +17,7 @@ use TMSWP\Core\Exception\CircularDependencyException;
 use TMSWP\Core\Exception\ContainerException;
 use TMSWP\Core\Exception\NotFoundException;
 use TMSWP\Core\Tests\Support\UnitTestCase;
+use TypeError;
 
 final class ContainerTest extends UnitTestCase
 {
@@ -47,6 +51,104 @@ final class ContainerTest extends UnitTestCase
         $this->expectException(NotFoundException::class);
 
         (new Container())->get('TMSWP\\Core\\Tests\\Unit\\MissingContainerEntry');
+    }
+
+    public function testPublicApiIsLimitedToSetAliasGetAndHas(): void
+    {
+        $methods = array_map(
+            static fn(ReflectionMethod $method): string => $method->getName(),
+            (new ReflectionClass(Container::class))->getMethods(ReflectionMethod::IS_PUBLIC),
+        );
+        sort($methods);
+
+        // factory() / make() のような、共有しない生成の API は無い
+        self::assertSame(['alias', 'get', 'has', 'set'], $methods);
+    }
+
+    /** @return iterable<string, array{Closure(Container): void, string}> */
+    public static function stringBindings(): iterable
+    {
+        yield 'サービス名からクラスへの束縛' => [static function (Container $container): void {
+            $container->set('service', FactoryService::class);
+        }, 'service'];
+        yield 'interface から実装への束縛' => [static function (Container $container): void {
+            $container->set(ContainerContract::class, ContainerContractImplementation::class);
+        }, ContainerContract::class];
+    }
+
+    /**
+     * string 束縛の解決結果は共有され、get() のたびに作り直さない。
+     *
+     * @param Closure(Container): void $configure
+     */
+    #[DataProvider('stringBindings')]
+    public function testStringBindingsAreShared(Closure $configure, string $id): void
+    {
+        $container = new Container();
+        $configure($container);
+
+        $first = $container->get($id);
+
+        self::assertIsObject($first);
+        self::assertSame($first, $container->get($id));
+    }
+
+    public function testCircularDependencyOfThreeClassesReportsTheWholeChain(): void
+    {
+        try {
+            (new Container())->get(ContainerCycleA::class);
+            self::fail('CircularDependencyException was not thrown');
+        } catch (CircularDependencyException $exception) {
+            self::assertSame(
+                'circular dependency: ' . implode(' -> ', [ContainerCycleA::class, ContainerCycleB::class, ContainerCycleC::class, ContainerCycleA::class]),
+                $exception->getMessage(),
+            );
+        }
+    }
+
+    /** @return iterable<string, array{Closure(Container): void, string}> */
+    public static function forbiddenRegistrations(): iterable
+    {
+        yield '登録済みのインスタンスへの再登録' => [static function (Container $container): void {
+            $container->set(ContainerDependency::class, new ContainerDependency());
+            $container->set(ContainerDependency::class, static fn(): ContainerDependency => new ContainerDependency());
+        }, "cannot redefine resolved container entry '" . ContainerDependency::class . "'"];
+        yield 'get() で解決した id への再登録' => [static function (Container $container): void {
+            $container->set('service', FactoryService::class);
+            $container->get('service');
+            $container->set('service', static fn(): FactoryService => new FactoryService());
+        }, "cannot redefine resolved container entry 'service'"];
+        yield 'alias を経由した、解決済みの id への再登録' => [static function (Container $container): void {
+            $container->set('service', FactoryService::class);
+            $container->alias(FactoryService::class, 'service');
+            $container->get(FactoryService::class);
+            $container->set(FactoryService::class, new FactoryService());
+        }, "cannot redefine resolved container entry 'service'"];
+        yield '解決済みの id を alias にする' => [static function (Container $container): void {
+            $container->set('service', FactoryService::class);
+            $container->get('service');
+            $container->alias('service', FactoryService::class);
+        }, "cannot alias resolved container entry 'service'"];
+        yield '自己参照の alias' => [static function (Container $container): void {
+            $container->alias('service', 'service');
+        }, "container alias 'service' cannot reference itself"];
+        yield 'alias を指す alias(連鎖)' => [static function (Container $container): void {
+            $container->set('service', FactoryService::class);
+            $container->alias('first', 'service');
+            $container->alias('second', 'first');
+        }, "container alias 'second' cannot reference another alias 'first'"];
+    }
+
+    /**
+     * @param Closure(Container): void $register
+     */
+    #[DataProvider('forbiddenRegistrations')]
+    public function testForbiddenRegistrationsFail(Closure $register, string $message): void
+    {
+        $this->expectException(ContainerException::class);
+        $this->expectExceptionMessage($message);
+
+        $register(new Container());
     }
 
     /**
@@ -201,6 +303,34 @@ final class ContainerTest extends UnitTestCase
             self::assertStringContainsString('factory failed', $exception->getMessage());
             self::assertSame($failure, $exception->getPrevious());
             self::assertNull($failure->getPrevious());
+        }
+    }
+
+    /**
+     * factory が投げる Error(Exception ではない Throwable)。
+     *
+     * @return iterable<string, array{Error}>
+     */
+    public static function factoryErrors(): iterable
+    {
+        yield 'TypeError' => [new TypeError('factory type error')];
+        yield 'Error' => [new Error('factory error')];
+    }
+
+    #[DataProvider('factoryErrors')]
+    public function testFactoryErrorsAreWrappedInContainerExceptionWithTheId(Error $failure): void
+    {
+        $container = new Container();
+        $container->set('erroring-service', static fn(): never => throw $failure);
+
+        try {
+            $container->get('erroring-service');
+            self::fail('an Error thrown by a factory must be rethrown as ContainerException');
+        } catch (ContainerException $exception) {
+            self::assertSame(ContainerException::class, $exception::class);
+            self::assertStringContainsString("'erroring-service'", $exception->getMessage());
+            self::assertStringContainsString($failure->getMessage(), $exception->getMessage());
+            self::assertSame($failure, $exception->getPrevious());
         }
     }
 
@@ -437,6 +567,27 @@ final readonly class ContainerCircularB
 {
     public function __construct(
         public ContainerCircularA $dependency,
+    ) {}
+}
+
+final readonly class ContainerCycleA
+{
+    public function __construct(
+        public ContainerCycleB $dependency,
+    ) {}
+}
+
+final readonly class ContainerCycleB
+{
+    public function __construct(
+        public ContainerCycleC $dependency,
+    ) {}
+}
+
+final readonly class ContainerCycleC
+{
+    public function __construct(
+        public ContainerCycleA $dependency,
     ) {}
 }
 

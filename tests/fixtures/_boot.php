@@ -35,6 +35,32 @@ tests_add_filter('init', static function (): void {
 }, 0);
 
 /*
+ * WordPress の読み込み中(wp_loaded の前)の投稿タイプ・タクソノミーの登録(register_post_type()・
+ * register_taxonomy() の呼び出し)を、呼ばれた順に控える。init の中で呼ばれたものは、そのときの init の priority も
+ * 控える。統合テストが、1リクエストでの fixture の登録の順序と回数を確かめる。
+ */
+$GLOBALS['tmswp_tests_registrations'] = [];
+$recordRegistration = static function (string $kind, string $name): void {
+    // テスト中の登録(遅延 boot のキャッチアップ等)は読み込みの記録に混ぜない
+    if (did_action('wp_loaded') > 0) {
+        return;
+    }
+
+    $init = $GLOBALS['wp_filter']['init'] ?? null;
+    $GLOBALS['tmswp_tests_registrations'][] = [
+        'kind' => $kind,
+        'name' => $name,
+        'initPriority' => doing_action('init') && $init instanceof WP_Hook ? $init->current_priority() : null,
+    ];
+};
+tests_add_filter('registered_taxonomy', static function (string $taxonomy) use ($recordRegistration): void {
+    $recordRegistration('taxonomy', $taxonomy);
+});
+tests_add_filter('registered_post_type', static function (string $postType) use ($recordRegistration): void {
+    $recordRegistration('post_type', $postType);
+});
+
+/*
  * WordPress の読み込みを終えた時点の登録済みメタキーを控える。WP のテストライブラリは各テストの
  * tear_down で登録済みメタキーをすべて解除するため、IntegrationTestCase が各テストの前にこれを戻す。
  */
