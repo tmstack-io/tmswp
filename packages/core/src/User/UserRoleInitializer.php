@@ -19,7 +19,7 @@ final class UserRoleInitializer implements ComponentInitializerInterface
             throw new DiscoveryException("user role component must extend UserRole: {$component->class}");
         }
 
-        $component->class::register();
+        $component->class::register($kernel);
 
         $registry = $kernel->container()->get(MetaSchemaRegistry::class);
 

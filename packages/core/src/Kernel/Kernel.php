@@ -59,6 +59,14 @@ final class Kernel
     /** @var list<DiscoveredHookMethod> */
     private array $hookMethods = [];
 
+    /**
+     * キャッチアップ(§3.3)でこれから実行するグループ((最初に発火した順, priority) の昇順)。キャッチアップ中でなければ
+     * null。defer() が、発火済みのフックへの予約をこの中に入れる。
+     *
+     * @var list<array{hook: string, priority: int, runner: Closure(): void, deferred: bool}>|null
+     */
+    private ?array $catchUpQueue = null;
+
     private function __construct(KernelConfig $config)
     {
         $this->config = $config;
@@ -268,6 +276,48 @@ final class Kernel
     }
 
     /**
+     * コールバックを、フック $hook の priority $priority の時点で引数なしで実行するよう予約する(§3.3)。
+     *
+     * 通常は add_action() で登録する。本番の遅延 boot のキャッチアップの最中に、発火済みのフックへ予約した場合は、
+     * add_action() では二度と実行されないため、キャッチアップの残りのグループの中の (最初に発火した順, priority) の
+     * 位置(同じ位置のグループの後)に入れて実行する。コンポーネントの初期化が、同じ Kernel の後の priority の初期化を
+     * 待って行う処理(builtin のタクソノミーの紐付けの再試行。03-entities §9.2)に使う。
+     *
+     * @internal
+     *
+     * @param Closure(): void $callback
+     */
+    public function defer(string $hook, int $priority, Closure $callback): void
+    {
+        if ($this->catchUpQueue === null) {
+            add_action($hook, $callback, $priority, 0);
+
+            return;
+        }
+
+        $firedOrder = self::firedHookOrder();
+
+        if (!\array_key_exists($hook, $firedOrder)) {
+            add_action($hook, $callback, $priority, 0);
+
+            return;
+        }
+
+        $position = \count($this->catchUpQueue);
+
+        foreach ($this->catchUpQueue as $index => $queued) {
+            $byFiredOrder = $firedOrder[$queued['hook']] <=> $firedOrder[$hook];
+
+            if (($byFiredOrder !== 0 ? $byFiredOrder : $queued['priority'] <=> $priority) > 0) {
+                $position = $index;
+                break;
+            }
+        }
+
+        array_splice($this->catchUpQueue, $position, 0, [['hook' => $hook, 'priority' => $priority, 'runner' => $callback, 'deferred' => true]]);
+    }
+
+    /**
      * WordPress の版が下限未満なら起動を拒否する。設定の誤りなので、debug に関係なく常に例外にする。
      *
      * 版は WordPress が wp-includes/version.php で公開する `$wp_version` から取る。WordPress 自身の
@@ -392,9 +442,28 @@ final class Kernel
      */
     private function catchUp(array $missed): void
     {
+        $queue = [];
+
         foreach ($missed as $group) {
-            $this->logger->error(self::lateBootMessage($group['hook']));
-            ($group['runner'])();
+            $queue[] = ['hook' => $group['hook'], 'priority' => $group['priority'], 'runner' => $group['runner'], 'deferred' => false];
+        }
+
+        $this->catchUpQueue = $queue;
+
+        try {
+            // 実行中のグループが defer() で予約したものも、この列に入って順に実行される(列は finally まで null にならない)
+            while ($this->catchUpQueue !== null && $this->catchUpQueue !== []) {
+                $group = array_shift($this->catchUpQueue);
+
+                // 遅延 boot の記録は、発火済みのグループごとに1回。defer() で予約したものは記録しない
+                if (!$group['deferred']) {
+                    $this->logger->error(self::lateBootMessage($group['hook']));
+                }
+
+                ($group['runner'])();
+            }
+        } finally {
+            $this->catchUpQueue = null;
         }
     }
 

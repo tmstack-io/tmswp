@@ -7,6 +7,7 @@ namespace TMSWP\Core\User;
 use TMSWP\Core\Entity\WpBridge;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\EntityPersistenceException;
+use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Meta\MetaBag;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
@@ -26,13 +27,24 @@ abstract class UserRole
         return self::definitionFor(static::class)->role();
     }
 
-    final public static function register(): void
+    /**
+     * ロールを登録する。UserRoleInitializer が、このクラスを探索した Kernel を渡して呼ぶ。
+     *
+     * WordPress はロールを DB(wp_user_roles オプション)に保存するため、add_role() は初回だけ行い、cap は欠けている
+     * ものだけを足す。表示名の変更と宣言から外した cap は DB に反映しない(自動では消さない)ため、宣言と DB の差分を
+     * 渡された Kernel のロガーに warning で記録して知らせる。
+     */
+    final public static function register(Kernel $kernel): void
     {
         $definition = self::definitionFor(static::class);
         $role = get_role($definition->role());
 
         if ($definition->isBuiltin() && !$role instanceof WP_Role) {
             throw new EntityDefinitionException("builtin role does not exist: {$definition->role()}");
+        }
+
+        if (!$definition->isBuiltin() && $role instanceof WP_Role) {
+            self::warnDrift($definition, $role, $kernel);
         }
 
         if (!$definition->isBuiltin() && !$role instanceof WP_Role) {
@@ -110,13 +122,20 @@ abstract class UserRole
         return UserQuery::of(static::class);
     }
 
-    /** @return MetaBag<static> */
+    /**
+     * 対象のユーザーのメタの MetaBag を返す。対象が無い、またはこのクラスのスコープ外の場合は、存在しない対象へのメタの
+     * 書き込みを防ぐため、呼び出しの誤りとして例外にする(存在は get()・is() で確かめてから呼ぶ)。
+     *
+     * @throws InvalidArgumentException 対象が無い、またはこのクラスのスコープ外の場合
+     *
+     * @return MetaBag<static>
+     */
     final public static function meta(WP_User|int $user): MetaBag
     {
         $resolved = static::get($user);
 
         if (!$resolved instanceof WP_User) {
-            throw new EntityDefinitionException('cannot create MetaBag for missing or mismatched user');
+            throw new InvalidArgumentException('cannot create MetaBag for missing or mismatched user');
         }
 
         $registry = Kernel::forClass(static::class)->container()->get(MetaSchemaRegistry::class);
@@ -170,5 +189,31 @@ abstract class UserRole
         }
 
         return self::$definitions[$class];
+    }
+
+    /**
+     * 既存の(builtin でない)ロールについて、宣言と DB の差分(表示名の違い・宣言に無い cap)を warning で記録する。
+     * builtin のロールは表示名を宣言できず、宣言に無い cap を持つのが普通なので対象にしない。
+     */
+    private static function warnDrift(UserRoleDefinition $definition, WP_Role $role, Kernel $kernel): void
+    {
+        $storedLabel = wp_roles()->role_names[$definition->role()] ?? null;
+
+        if ($storedLabel !== $definition->roleLabel()) {
+            $kernel->logger()->warning('tmswp.user_role: the label of role {role} in the database ({stored}) differs from the declared label ({declared}); add_role() runs only once, so remove the role to apply the declared label', [
+                'role' => $definition->role(),
+                'stored' => $storedLabel,
+                'declared' => $definition->roleLabel(),
+            ]);
+        }
+
+        $undeclared = array_values(array_diff(array_map(strval(...), array_keys($role->capabilities)), $definition->capabilityList()));
+
+        if ($undeclared !== []) {
+            $kernel->logger()->warning('tmswp.user_role: role {role} has capabilities that are not declared: {capabilities}; capabilities removed from the declaration stay in the database until removed explicitly', [
+                'role' => $definition->role(),
+                'capabilities' => implode(', ', $undeclared),
+            ]);
+        }
     }
 }

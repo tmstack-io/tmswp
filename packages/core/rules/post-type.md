@@ -55,7 +55,9 @@ final class NewsPost extends PostType
 
 `PostType::thumbnail()` はアイキャッチが未設定のときに `tmswp/post/thumbnail_fallback` フィルタを呼ぶ。フィルタは `?TMSWP\Core\Post\Thumbnail $thumbnail, WP_Post $post, string|array $size` を受け取り、代替画像がある場合だけ `TMSWP\Core\Post\Thumbnail` DTO を返す。それ以外の戻り値は無視される。
 
-本文先頭の `<img src>` を使う場合は、抽出規則を app 側の要件に合わせて実装する。遅延読み込み属性や `srcset` を優先したい場合も、このクラス内で拡張する。
+本文先頭の `<img src>` を使う場合は、抽出規則を app 側の要件に合わせて実装する。`width`・`height` には画像の実寸を渡す。`$size` は要求したサイズであり、画像の実寸ではないため、そのまま渡さない。メディアライブラリの画像(ブロックエディタが付ける `wp-image-<ID>` クラスを持つ画像)なら `wp_get_attachment_image_src()` で要求したサイズの URL と実寸を取り、それ以外の画像は実寸が分からないので `null` を渡す(`img()` は `width`・`height` を出力しない)。遅延読み込み属性や `srcset` を優先したい場合も、このクラス内で拡張する。
+
+`Thumbnail::img()` は `src` を `esc_url()` でエスケープし、許可されないプロトコル(`javascript:` 等)の URL は例外にする。フィルタで返す URL は `esc_url_raw()` 等で `http`・`https` に絞っておく。
 
 `app/Hook/ThumbnailFallbackHook.php`:
 
@@ -85,7 +87,20 @@ final class ThumbnailFallbackHook extends Hook
             return $thumbnail;
         }
 
-        if (preg_match('/<img[^>]+src=["\']([^"\']+)["\']/i', $post->post_content, $matches) !== 1) {
+        if (preg_match('/<img\s[^>]*>/i', $post->post_content, $tag) !== 1) {
+            return null;
+        }
+
+        // メディアライブラリの画像は、要求したサイズの URL と実寸を使う
+        if (preg_match('/\bwp-image-(\d+)\b/', $tag[0], $id) === 1) {
+            $src = wp_get_attachment_image_src((int) $id[1], $size);
+
+            if (is_array($src)) {
+                return new Thumbnail($src[0], $src[1], $src[2], '');
+            }
+        }
+
+        if (preg_match('/\ssrc=["\']([^"\']+)["\']/i', $tag[0], $matches) !== 1) {
             return null;
         }
 
@@ -95,23 +110,8 @@ final class ThumbnailFallbackHook extends Hook
             return null;
         }
 
-        $dimensions = $this->dimensions($size);
-
-        return new Thumbnail($url, $dimensions['width'] ?? null, $dimensions['height'] ?? null, '');
-    }
-
-    /**
-     * @param string|array<int> $size
-     *
-     * @return array{width: int, height: int}|null
-     */
-    private function dimensions(string|array $size): ?array
-    {
-        if (!is_array($size) || !isset($size[0], $size[1]) || !is_int($size[0]) || !is_int($size[1])) {
-            return null;
-        }
-
-        return ['width' => $size[0], 'height' => $size[1]];
+        // メディアライブラリに無い画像は実寸が分からないため、width・height を渡さない
+        return new Thumbnail($url, null, null, '');
     }
 }
 ```

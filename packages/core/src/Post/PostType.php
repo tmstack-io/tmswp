@@ -6,8 +6,10 @@ namespace TMSWP\Core\Post;
 
 use TMSWP\Core\Entity\EntityReference;
 use TMSWP\Core\Entity\WpBridge;
+use TMSWP\Core\Exception\EntityDataException;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\EntityPersistenceException;
+use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Meta\MetaBag;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
@@ -18,6 +20,9 @@ use WP_Term;
 
 abstract class PostType
 {
+    /** parents() がたどる親の数の上限。超えたら post_parent の循環等のデータの不整合として扱う */
+    private const int MAX_PARENT_DEPTH = 100;
+
     /** @var array<class-string<self>, PostTypeDefinition> */
     private static array $definitions = [];
 
@@ -37,6 +42,11 @@ abstract class PostType
         $slug = $definition->slug();
 
         if ($definition->isBuiltin()) {
+            // アダプタ先が無いのは設定の誤り(スラッグの誤り・登録が init 10 より後等)。黙って supports を足さず例外にする
+            if (!post_type_exists($slug)) {
+                throw new EntityDefinitionException("builtin post type does not exist: {$slug}");
+            }
+
             foreach ($definition->supportsList() as $feature) {
                 add_post_type_support($slug, $feature);
             }
@@ -107,13 +117,20 @@ abstract class PostType
         return PostQuery::of(static::class);
     }
 
-    /** @return MetaBag<static> */
+    /**
+     * 対象の投稿のメタの MetaBag を返す。対象が無い、またはこのクラスのスコープ外の場合は、存在しない対象へのメタの
+     * 書き込みを防ぐため、呼び出しの誤りとして例外にする(存在は get()・is() で確かめてから呼ぶ)。
+     *
+     * @throws InvalidArgumentException 対象が無い、またはこのクラスのスコープ外の場合
+     *
+     * @return MetaBag<static>
+     */
     final public static function meta(WP_Post|int $post): MetaBag
     {
         $resolved = static::get($post);
 
         if (!$resolved instanceof WP_Post) {
-            throw new EntityDefinitionException('cannot create MetaBag for missing or mismatched post');
+            throw new InvalidArgumentException('cannot create MetaBag for missing or mismatched post');
         }
 
         $registry = Kernel::forClass(static::class)->container()->get(MetaSchemaRegistry::class);
@@ -232,7 +249,7 @@ abstract class PostType
         $parents = $includeSelf ? [$resolved] : [];
         $current = $resolved;
 
-        for ($depth = 0; $depth < 100; ++$depth) {
+        for ($depth = 0; $depth < self::MAX_PARENT_DEPTH; ++$depth) {
             if ((int) $current->post_parent <= 0) {
                 return array_reverse($parents);
             }
@@ -247,7 +264,7 @@ abstract class PostType
             $current = $parent;
         }
 
-        throw new EntityDefinitionException('post parent depth exceeded 100');
+        return self::parentDepthExceeded($resolved->ID);
     }
 
     /** @param array<string, mixed> $postarr */
@@ -326,11 +343,38 @@ abstract class PostType
             return;
         }
 
+        // 他のプラグインのフィルタが bool 以外(null 等)を返すこともあるため、引数は型で縛らない。対象外の投稿タイプの
+        // 値は受け取ったまま返し、扱いは WordPress(戻り値の真偽で判定する)に任せる
         add_filter(
             'use_block_editor_for_post_type',
-            static fn(bool $useBlockEditor, string $postType): bool => $postType === $definition->slug() ? $preference : $useBlockEditor,
+            static fn(mixed $useBlockEditor, mixed $postType): mixed => $postType === $definition->slug() ? $preference : $useBlockEditor,
             10,
             2,
         );
+    }
+
+    /**
+     * 親の深さの超過(post_parent の循環等のデータの不整合)を、エラー方針(00-overview.md §5.6)の実行時のデータ取得の
+     * 失敗として扱う。debug では例外を投げ、本番ではこのクラスの Kernel のロガーに error で記録して空配列を返す。
+     *
+     * @throws EntityDataException debug の場合
+     *
+     * @return list<WP_Post>
+     */
+    private static function parentDepthExceeded(int $postId): array
+    {
+        $kernel = Kernel::forClass(static::class);
+
+        if ($kernel->config()->debug) {
+            throw new EntityDataException("post parent depth of post {$postId} exceeded " . self::MAX_PARENT_DEPTH . ' (' . static::class . ')');
+        }
+
+        $kernel->logger()->error('tmswp.post: post parent depth of post {post} exceeded {limit} ({class})', [
+            'post' => $postId,
+            'limit' => self::MAX_PARENT_DEPTH,
+            'class' => static::class,
+        ]);
+
+        return [];
     }
 }

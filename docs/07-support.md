@@ -790,7 +790,7 @@ final class Html
 **チャンネルは Kernel ごとに分かれる。** テーマと複数のプラグインがそれぞれ Kernel を boot するサイトでも、チャンネルの宣言は各 Kernel の `KernelConfig` に閉じ、他の Kernel の宣言で上書きされない(プロセス全体で1つのレジストリを差し替える API は持たない)。記録先の Kernel は次のとおり決まる。
 
 - アプリのコードからの静的な呼び出し(`Log::error()` 等、`tms_log()`): 呼び出したファイルを含むルートディレクトリ(`KernelConfig::rootDir()` = appDir の親)を持つ Kernel(§5.2)。
-- TMSWP の内部(`TMSWP\` の名前空間のクラス): 扱う Kernel を明示して、その `Kernel::logger()` に記録する(例: Kernel のフックメソッドの失敗とキャッチアップ、`Taxonomy::register()`、拡張)。テーマとプラグインで同梱する tmswp/core の版が別でも、クラスは先に読み込まれた側の1組だけが使われ、内部のクラスのファイルの場所では Kernel を決められないためである。
+- TMSWP の内部(`TMSWP\` の名前空間のクラス): 扱う Kernel を明示して、その `Kernel::logger()` に記録する(例: Kernel のフックメソッドの失敗とキャッチアップ、`Taxonomy::register()`・`UserRole::register()`、エンティティの `parents()`(エンティティクラスの `Kernel::forClass()`)、拡張)。テーマとプラグインで同梱する tmswp/core の版が別でも、クラスは先に読み込まれた側の1組だけが使われ、内部のクラスのファイルの場所では Kernel を決められないためである。
 
 ### 5.2 Log(静的ファサード)
 

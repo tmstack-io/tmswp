@@ -313,6 +313,14 @@ final class Kernel
 
     /** @return list<DiscoveredComponent> FQCN昇順 */
     public function components(): array;
+
+    /**
+     * コールバックを (フック, priority) の時点で引数なしで実行するよう予約する(§3.3)。通常は add_action() と同じ。
+     * 本番の遅延bootのキャッチアップ中に発火済みのフックへ予約したものは、キャッチアップの中で実行する。
+     * @internal コンポーネントの初期化が、同じ Kernel の後の priority の初期化を待つ処理に使う(03-entities §9.2)
+     * @param \Closure(): void $callback
+     */
+    public function defer(string $hook, int $priority, \Closure $callback): void;
 }
 ```
 
@@ -423,6 +431,8 @@ boot(config):
 - `config.debug === false`(本番): その Kernel のログ(`Kernel::logger()->error()`)に同内容を記録した上で、**当該グループのランナーを即時実行する(キャッチアップ)**。キャッチアップは、コアのフックの登録(手順5〜7)、拡張の登録(手順7a)、Kernel のレジストリ(`self::$kernels`)への登録(手順8)の後に実行する(手順8a)。拡張が Container に入れるサービスを、キャッチアップの初期化でも、init 未発火の通常の boot と同じく使えるようにするためである。レジストリに先に登録するのは、キャッチアップで動くアプリのコード(コンポーネントの初期化、`register()` を上書きした `#[AsHook]` 等)が、`Kernel::forClass()` や `Log` の静的な呼び出し(`Kernel::forFile()`)でこの Kernel を引けるようにするためである。キャッチアップの途中で例外が起きたら、レジストリからこの Kernel を取り除いてから例外を投げ直す(boot は例外になり、起動していない Kernel はレジストリに残らない。§3.1)。debug の遅延bootは従来どおり、何も登録しないまま例外にする(下記)。サイト全体の機能停止より縮退動作を優先する。キャッチアップは発火済みフックのグループのみで、未発火フックのグループは通常通り `add_action` される(未発火のグループの実行順は WordPress が priority で決める)。
 
 キャッチアップの順序は、**WordPress でフックが最初に発火した順**、同じフックの中では **priority の昇順**とする(同じ (フック, priority) のグループは1つにまとめてあるため、この2つで順序が決まる)。プラグインの遅延 boot では `plugins_loaded` のグループが `init` のグループより先に動く。最初に発火した順は `$wp_actions` のキーの並びから取る。`do_action()` / `do_action_ref_array()` はフックが初めて発火したときに `$wp_actions` へキーを足し、2回目以降は値(発火回数)を増やすだけなので、キーの並びが最初に発火した順になる(WP 7.0 の wp-includes/plugin.php の `do_action()`・`do_action_ref_array()`。PHP の配列は挿入順を保つ)。`$wp_actions` が配列でなければ発火済みのフックが分からないため、`KernelException` を投げる。
+
+**初期化からの予約(`defer()`)**: コンポーネントの初期化が、同じ Kernel の後の priority の初期化を待って行う処理(builtin のタクソノミーの紐付けの再試行を `init` 11 で行う。03-entities §9.2)は、`add_action()` ではなく `Kernel::defer($hook, $priority, $callback)` で予約する。キャッチアップ中でなければ `add_action($hook, $callback, $priority, 0)` と同じである。キャッチアップの最中に発火済みのフックへ予約した場合は、`add_action()` では二度と実行されないため、キャッチアップの残りのグループの中の (最初に発火した順, priority) の位置(同じ位置のグループの後)に入れて、キャッチアップの中で実行する。例えば `init` 9 のグループの中で `init` 11 に予約したものは、`init` 10 のグループの後、`init` 20(MetaSchema の登録)の前に実行される。予約したものには遅延bootのログを記録しない(ログは発火済みのグループごとに1回)。未発火のフックへの予約は、キャッチアップ中でも `add_action()` で登録する。
 
 これは「即時同期初期化の禁止」(DR-04)の例外ではなく、誤用に対する縮退仕様である。正常な boot 位置(functions.php / プラグイン本体の直下)ではキャッチアップは決して発生しない。
 
@@ -1120,7 +1130,7 @@ write(result):
 | `#[AsOptionGroup]` | `init` | `init` | 5 | OptionSchema の register_setting 等(Option文書) |
 | `#[AsTaxonomy]` | `init` | `init` | 9 | register_taxonomy + register_term_meta(Tax/Meta文書) |
 | `#[AsPostType]` | `init` | `init` | 10 | register_post_type + register_post_meta(Post/Meta文書) |
-| `#[AsUserRole]` | `init` | `init` | 10 | ロール定義の登録。DB書込(add_role)はUserRole層が差分検出して冪等に行う(User文書) |
+| `#[AsUserRole]` | `init` | `init` | 10 | ロール定義の登録。DB書込(add_role)はUserRole層が差分検出して冪等に行い、宣言とDBの差分(表示名・宣言に無いcap)は Kernel のロガーに warning で通知する(User文書) |
 
 メソッドレベル `#[Action]` / `#[Filter]`(Discovery が hookMethods として収集。§4・§5)と ActionRouter(テンプレート前処理。Discovery 非関与)はこの属性スケジューリング表の外にあり、boot 時に直接フック登録される(下表)。
 
@@ -1170,8 +1180,15 @@ scheduleAll():
   5. return missed                                    // キャッチアップは boot の手順8a(catchUp)で、拡張とレジストリへの登録の後に実行する
 
 catchUp(missed):                   // 本番の遅延bootのみ。boot の手順8a(§3.3)。missed が空なら何もしない
-  for (hook, priority, runner) in missed:          // (最初に発火した順, priority) の昇順に並べ済み
-     this.logger.error(遅延boot); runner()        // キャッチアップ。失敗は boot の catch でレジストリから取り除いて投げ直す
+  this.catchUpQueue = missed                       // (最初に発火した順, priority) の昇順に並べ済み
+  try:
+     while catchUpQueue が空でない:
+        (hook, priority, runner, deferred) = catchUpQueue の先頭を取り出す
+        if !deferred: this.logger.error(遅延boot)
+        runner()                                   // キャッチアップ。失敗は boot の catch でレジストリから取り除いて投げ直す
+                                                   // runner の中の defer() は catchUpQueue の (発火順, priority) の位置に入る(§3.3)
+  finally:
+     this.catchUpQueue = null                      // キャッチアップ中でなければ defer() は add_action
 
 runInitializer(c, attr):           // 失敗は設定の誤り。debug に関係なく例外をそのまま投げる
   initializer = container->get(attr->initializerClass())
@@ -1184,7 +1201,7 @@ runInitializer(c, attr):           // 失敗は設定の誤り。debug に関係
 
 補足(`#[Action]`/`#[Filter]` 登録の確定仕様):
 
-- 遅延boot検査(`$wp_actions`)とキャッチアップ(§3.3)は、コンポーネント初期化グループと MetaSchema の登録に適用する。`#[Action]`/`#[Filter]` はハンドラ登録であり「過去の発火に対するキャッチアップ」が定義できないためキャッチアップの対象外とする。ただし debug の遅延boot例外は `#[Action]`/`#[Filter]` の登録よりも前に投げるため、例外のときは `#[Action]`/`#[Filter]` も登録されない(§3.1)。
+- 遅延boot検査(`$wp_actions`)とキャッチアップ(§3.3)は、コンポーネント初期化グループと MetaSchema の登録に適用する(キャッチアップ中の初期化が `defer()` で予約した処理も、キャッチアップの中で実行する。§3.3)。`#[Action]`/`#[Filter]` はハンドラ登録であり「過去の発火に対するキャッチアップ」が定義できないためキャッチアップの対象外とする。ただし debug の遅延boot例外は `#[Action]`/`#[Filter]` の登録よりも前に投げるため、例外のときは `#[Action]`/`#[Filter]` も登録されない(§3.1)。
 - クロージャ登録のため、第三者コードからの `remove_action` / `remove_filter` による個別解除は事実上できない。登録クロージャを保持して解除APIを提供することは実需要が出るまで行わない(YAGNI。受託で第三者がHookを外す要件は稀)。
 
 **正確に1回の初期化(Kernel契約)**: Kernel は Discovery が収集した components リストを1巡だけ走査し、各コンポーネントの Initializer(エンティティ基底の `register()` を含む)を**正確に1回**呼ぶ。冪等性の保証はこの1巡走査のみであり、エンティティ基底の `register()` 側は再入ガード・重複防止を持たない(エンティティ文書)。
@@ -1489,6 +1506,7 @@ class CircularDependencyException extends ContainerException
 │   │   ├── NotFoundException                         (本文書)
 │   │   └── CircularDependencyException               (本文書)
 │   ├── EntityPersistenceException                    (03 §1.7)
+│   ├── EntityDataException                           (03 §1.7)
 │   ├── QueryException                                (03 §1.7、06 R4)
 │   ├── MigrationException                            (06 R4)
 │   ├── HydrationException                            (06 R4)
@@ -1749,6 +1767,7 @@ final class ContainerTest extends TestCase
 - [ ] 拡張の `register()` が Container に入れたサービスを、init 10 の初期化が、init 未発火の通常の boot と、init 発火済みの本番の遅延boot(キャッチアップ)の両方で使える
 - [ ] `Kernel::forFile()` が、シンボリックリンクを経由したパスを実体の Kernel に解決し、`..` でルートの外へ出るパスと存在しないパスで `KernelException` を投げる
 - [ ] 本番の遅延bootのキャッチアップが、`$wp_actions` で最初に発火した順、同じフックの中では priority の昇順で実行される(`plugins_loaded` のグループが `init` より先。MetaSchema の登録(`init` 20)も同じ規則)。未発火のフックのグループは `add_action` される。debug の遅延bootは、最初に発火したフックのグループで `KernelException` になり、`#[Action]`/`#[Filter]` を含めどのフックも登録せず、どのグループも実行しない
+- [ ] キャッチアップ中の初期化が `defer()` で発火済みのフックへ予約した処理が、キャッチアップの中の (最初に発火した順, priority) の位置で、遅延bootのログを記録せずに実行される(例: `init` 9 のタクソノミーの初期化が予約した `init` 11 の再試行が、`init` 10 の投稿タイプの登録の後、`init` 20 の前に動く。統合テスト)。キャッチアップ中でなければ `add_action` で登録される
 - [ ] コンポーネントの初期化の失敗(Initializer の例外、`ComponentInitializerInterface` を実装しない Initializer、探索結果ファイルの属性を復元できない)が、本番(debug=false)でも例外になる(例: `PostType` を継承しない `#[AsPostType]` のコンポーネントの初期化)。属性を復元できない場合(属性クラスが無い・`ComponentAttributeInterface` を実装しない・属性の生成で例外が起きる)は、メッセージに探索結果ファイルの作り直しの案内(`wp tmswp discover`)を含む `DiscoveryException` になり、属性の生成で起きた例外(引数の不一致による `ArgumentCountError`・`TypeError` 等の Error を含む)を previous に持つ。本番のキャッチアップ中の失敗では boot が例外になる
 - [ ] `#[Action]`/`#[Filter]` メソッドの失敗(Container での解決の失敗を含む)が、debug では例外のまま伝わり、本番ではその Kernel のロガー(`$kernel->logger()`)に `error` で記録されてそのメソッドだけスキップされ、第1引数が返る。引数を宣言しない `#[Filter]` も第1引数を受け取って登録され、失敗時は元の値を、成功時はメソッドの戻り値を返し、メソッドには引数を渡さない(宣言引数数に切り詰める)
 - [ ] 有効化・無効化のコールバックが `delete_option('rewrite_rules')` と `tmswp/activated`・`tmswp/deactivated` の発火だけを行い(`flush_rewrite_rules()`・`add_option()` を呼ばない)、boot が毎リクエストの確認(`init` での `get_option()` 等)を登録しない

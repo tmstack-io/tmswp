@@ -21,9 +21,9 @@ WordPressの3種のエンティティ(投稿タイプ・タクソノミー・ユ
 | `User\` | `UserRole`(基底), `UserRoleDefinition`, `UserQuery` |
 | `Label\` | `LabelLanguage`(enum), `LabelGenerator` |
 | `Query\` | `PageResult` |
-| `Exception\` | `EntityDefinitionException`, `EntityPersistenceException`, `QueryException` |
+| `Exception\` | `EntityDefinitionException`, `EntityPersistenceException`, `EntityDataException`, `QueryException` |
 
-`Label\`・`Query\`・`Thumbnail`・例外3種は本文書が完全定義する(他文書は本文書の定義に従う)。
+`Label\`・`Query\`・`Thumbnail`・例外4種は本文書が完全定義する(他文書は本文書の定義に従う)。
 
 ## 依存文書
 
@@ -125,7 +125,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Exception;
 
-/** エンティティ定義の不正(スラッグ形式違反・builtin制約違反・登録失敗・FQCN解決失敗)。 */
+/** エンティティ定義の不正(スラッグ形式違反・builtin制約違反・存在しないbuiltinのアダプタ先・登録失敗・FQCN解決失敗)。 */
 class EntityDefinitionException extends LogicException
 {
 }
@@ -148,6 +148,11 @@ class EntityPersistenceException extends RuntimeException
     }
 }
 
+/** 実行時のデータの不整合(親の循環による深さの超過等)。debug のときだけ投げる(下記)。 */
+final class EntityDataException extends RuntimeException
+{
+}
+
 /** クエリビルダの使用方法不正(不正なdirection・compare・limit等)とクエリの実行失敗。 */
 class QueryException extends RuntimeException
 {
@@ -155,6 +160,13 @@ class QueryException extends RuntimeException
 ```
 
 継承元の `LogicException` / `RuntimeException` は `TMSWP\Core\Exception\` のFWの基底で、TMSWP共通のマーカーinterface `TmswpExceptionInterface` を実装する(`02-kernel.md` §9)。クラス名・名前空間・プロパティは本文書が正準。
+
+エラー方針(`00-overview.md` §5.6)との対応:
+
+- `EntityDefinitionException` は設定の誤り(定義の宣言の誤り・存在しないbuiltinのアダプタ先・登録の失敗・FQCN解決失敗)に限って使い、debugに関係なく投げる。実行時のデータには使わない。
+- 実行時のデータの不整合(`parents()` の深さの超過。5.3節・9.2節)は実行時のデータ取得の失敗として扱う。debugでは `EntityDataException` を投げ、本番ではそのエンティティクラスのKernel(`Kernel::forClass(static::class)`)のロガーに `error` で記録して既定値(空配列)を返す。
+- データが無いこと(投稿・ターム・ユーザーが無い、アイキャッチ未設定等)はエラーにせず、1.3節の正常な結果(null・空配列・false)で返す。
+- `meta()` だけは対象のエンティティを前提とするため、無い対象・スコープ外の対象は呼び出しの誤りとして、debugに関係なく `InvalidArgumentException`(`TMSWP\Core\Exception\`。`07-support.md` §6)を投げる(5.3節)。存在しない対象へのメタの書き込みを防ぐためで、04文書の `ObjectType::resolveId()` が不正なIDと種別の違うオブジェクトを `InvalidArgumentException` にするのと同じ扱いである。
 
 ---
 
@@ -472,6 +484,7 @@ final class PostTypeDefinition
 
 - スラッグ検証は `create()` と同一(ただし長さ上限は適用しない。既存タイプ名をそのまま受ける)。
 - builtinモードで呼び出し可能なメソッドは `supports()` と `blockEditor()` のみ。それ以外のセッターを呼んだ時点で `EntityDefinitionException` をthrow(設定が無視される事故を防ぐ。旧iwf2bはbuiltin時にargsが黙って捨てられていた)。
+- アダプタ先の投稿タイプは、登録(`init` 優先度10)の時点で登録済みでなければならない。無ければ `register()` が `EntityDefinitionException` を投げる(5.3節)。
 
 **各セッター**: snake_caseのWP引数キーへ1:1で書き込む(`excludeFromSearch` → `exclude_from_search` 等)。同一セッターの再呼び出しは上書き。`capabilityType()` は `capability_type` と `map_meta_cap` の2キーを設定する。
 
@@ -570,14 +583,14 @@ abstract class PostType
 **`register()`** の手順:
 
 1. `$def = static::definition()`(メモ化)。
-2. **builtinの場合**: `supportsList()` が非空なら各featureを `add_post_type_support($def->slug(), $feature)`。手順4へ。`register_post_type` は呼ばない。
+2. **builtinの場合**: `post_type_exists($def->slug())` がfalseなら `EntityDefinitionException`(`builtin post type does not exist: {slug}`)。存在しないアダプタ先(スラッグの誤り、`init` 優先度10より後に登録される投稿タイプ等)は設定の誤りであり、debugに関係なく投げる(00-overview §5.6。UserRoleの存在しないbuiltinロール(12.2節)・Taxonomyの存在しないbuiltinタクソノミー(9.2節)と同じ扱い)。存在すれば、`supportsList()` が非空なら各featureを `add_post_type_support($def->slug(), $feature)`。手順4へ。`register_post_type` は呼ばない。
 3. **非builtinの場合**:
    - `supportsList()` に `'thumbnail'` を含む場合、テーマサポートをマージ登録する:
      - `get_theme_support('post-thumbnails')` が `true`(全タイプ有効) → 何もしない
      - 配列(対象タイプ限定) → 既存配列とこのスラッグの和集合で `add_theme_support('post-thumbnails', $merged)`
      - 未登録 → `add_theme_support('post-thumbnails', [$def->slug()])`
    - `register_post_type($def->slug(), $def->toArgs($kernel->config()->labelLanguage))` を実行。戻り値が `WP_Error` なら `EntityDefinitionException`(エラーメッセージを含める)。
-4. `blockEditorPreference()` が非null → `add_filter('use_block_editor_for_post_type', $callback, 10, 2)`。callbackは「`$postType === $def->slug()` なら希望値を返し、それ以外は受け取った値を素通しする」クロージャ。
+4. `blockEditorPreference()` が非null → `add_filter('use_block_editor_for_post_type', $callback, 10, 2)`。callbackは「`$postType === $def->slug()` なら希望値を返し、それ以外は受け取った値を素通しする」クロージャ。他のプラグインのフィルタがbool以外(null等)を返すことがあるため、callbackの引数は型で縛らない(`mixed`)。対象外の投稿タイプの値は受け取ったまま返し、その扱いはWordPress(戻り値の真偽で判定する)に任せる。
 
 **`get()`**:
 
@@ -598,7 +611,7 @@ public static function query(): PostQuery
 }
 ```
 
-**`meta()`**: `static::get($post)` でID正規化し(null時は対象ID=0のMetaBagを返すのではなく `EntityDefinitionException` をthrowする。存在しない投稿へのメタ書き込み事故防止)、04文書のMetaBagファクトリへ `ObjectType::Post`・投稿ID・`static::class` を渡して生成する。生成APIの正確な形は04文書の定義に従う。
+**`meta()`**: `static::get($post)` でID正規化し(null時は対象ID=0のMetaBagを返すのではなく、呼び出しの誤りとして `InvalidArgumentException` をthrowする。存在しない投稿へのメタ書き込み事故防止。1.7節)、04文書のMetaBagファクトリへ `ObjectType::Post`・投稿ID・`static::class` を渡して生成する。生成APIの正確な形は04文書の定義に従う。
 
 PHPDocの `@return MetaBag<static>` は必須である。`MetaBag` は04文書で `@template TEntity of object` を宣言するジェネリッククラスであり、この注釈によって呼び出し元へエンティティクラスが型伝播する。04文書のPHPStan拡張(`MetaBagGetterReturnTypeExtension` の戻り値ナローイング、`MetaKeyOwnershipRule` のメタキー所属検査)はこの注釈を前提とするため、省略するとエンティティ単位の静的検査が機能しない。Taxonomy/UserRole基底の `meta()` も同一注釈を持つ(9.1/12.1のシグネチャ参照)。
 
@@ -629,7 +642,8 @@ PHPDocの `@return MetaBag<static>` は必須である。`MetaBag` は04文書�
 **`parents()`**:
 
 - `get($post)` → null時 `[]`。
-- `post_parent` を `static::get()` でたどる(タイプ不一致・不存在で打ち切り)。無限ループ防止に深さ上限100を設け、超過時は `EntityDefinitionException`。
+- `post_parent` を `static::get()` でたどる(タイプ不一致・不存在で打ち切り)。無限ループ防止に深さ上限100を設ける。
+- 深さ100の超過(`post_parent` の循環等)は実行時のデータの不整合であり、実行時のデータ取得の失敗(00-overview §5.6)として扱う。debugでは `EntityDataException` を投げ、本番ではこのクラスのKernel(`Kernel::forClass(static::class)`)のロガーに `error` で記録して空配列を返す(1.7節)。
 - `$includeSelf` がtrueなら自身を末尾に含む。戻り順は **ルート祖先が先頭、直近親(→自身)が末尾**(パンくず用)。
 
 **`create()`**:
@@ -660,13 +674,20 @@ final readonly class Thumbnail
     ) {
     }
 
-    /** width/height属性付きimgタグ用の補助。width/heightがnullの場合は属性を出力しない。 */
+    /**
+     * width/height属性付きimgタグ用の補助。width/heightがnullの場合は属性を出力しない。
+     *
+     * @param array<string, mixed> $attributes 追加の属性(Support\Html::attributes() の値の規則に従う)
+     *
+     * @throws \TMSWP\Core\Exception\InvalidArgumentException 属性名が不正、またはURLのプロトコルが許可されない場合
+     */
     public function img(array $attributes = []): string;
 }
 ```
 
 - `url` は常に非空(空URLのThumbnailは生成禁止。コンストラクタで空文字なら `\InvalidArgumentException`)。
-- `img()` は `Support\Html` の属性レンダラ(Support文書定義)で `<img src="..." width="..." height="..." alt="..." ...>` を生成し、エスケープ済み文字列を返す。`$attributes` で `class` 等を追加できる。`src` / `alt` / `width` / `height` を `$attributes` で上書きすることは不可(無視する)。
+- `img()` は `Support\Html::attributes()`(07-support §4)で `<img src="..." alt="..." ... width="..." height="...">` を生成し、エスケープ済み文字列を返す。独自のエスケープは持たない。`$attributes` で `class` 等を追加でき、値の扱いは `Html::attributes()` の規則に従う(boolのtrueは値なしの属性、falseとnullは出力しない。`class` は配列・条件マップも受ける)。`src` / `alt` / `width` / `height` を `$attributes` で上書きすることは不可(属性名の大文字小文字に関係なく無視する)。
+- `src` はURL属性として `esc_url()` を通る。許可されないプロトコル(`javascript:` 等)のURLは `Html::attributes()` が `InvalidArgumentException` にする。フォールバックのフィルタ(5.3節)が返した `Thumbnail` も同じく `img()` で検査される。
 - `srcset` / `sizes` / `loading` 等のレスポンシブ画像属性は生成しない。これらが必要な場面では、Thumbnailを介さずテンプレート側で `get_the_post_thumbnail()` / `wp_get_attachment_image()` 等のWP標準手法を直接使う(ThumbnailはURLベースの軽量正規化DTOであり、コア画像レンダリングのラッパではない。フォールバック経路は添付IDを持たないため、この境界はDR-15の分割と一致する)。
 
 ---
@@ -930,7 +951,7 @@ final class TaxonomyDefinition
 ### 8.3 振る舞い仕様
 
 - **`create()`**: スラッグ検証 `/^[a-z0-9_\-]{1,32}$/`(WPの32文字制限)。違反は `EntityDefinitionException`。既定値の変更はしない(投稿タイプと異なり `public` のWP既定はtrueのため)。
-- **`builtin()`**: 呼び出し可能なのは `objectType()` のみ。それ以外のセッターは即 `EntityDefinitionException`。組込タクソノミーをCPTに紐付ける用途(`register_taxonomy_for_object_type`)に限定する。
+- **`builtin()`**: 呼び出し可能なのは `objectType()` のみ。それ以外のセッターは即 `EntityDefinitionException`。組込タクソノミーをCPTに紐付ける用途(`register_taxonomy_for_object_type`)に限定する。アダプタ先のタクソノミーは登録(`init` 優先度9)の時点で登録済みでなければならず、無ければ `objectType()` の有無に関係なく `register()` が `EntityDefinitionException` を投げる(9.2節)。
 - **`objectType()`**: 複数回呼ぶと追記(重複は解決後に除去)。未指定のまま登録すると「どの投稿タイプにも紐付かないタクソノミー」として `register_taxonomy($slug, [], $args)` で登録される(後から紐付ける運用を許容)。
 - **`resolvedObjectTypes()`**: 各要素を1.5節規約(期待基底=`Post\PostType`)で解決し、`array_values(array_unique(...))` で返す。
 - **`toArgs()`**: labels決定はPostTypeDefinitionと同一手順(生成元は `LabelGenerator::forTaxonomy`。複数形の扱いも同じ)。`label()` も `labels['name']` も無い場合は `EntityDefinitionException`。
@@ -1001,9 +1022,9 @@ abstract class Taxonomy
 **`register()`** の手順:
 
 1. `$def = static::definition()`(メモ化)。
-2. **builtinの場合**: `resolvedObjectTypes()` の各スラッグに対し `register_taxonomy_for_object_type($def->slug(), $objectType)` を実行する。
+2. **builtinの場合**: `taxonomy_exists($def->slug())` がfalseなら、`objectType()` の有無に関係なく `EntityDefinitionException`(`builtin taxonomy does not exist: {slug}`)。存在しないアダプタ先は設定の誤りであり、debugに関係なく投げる(00-overview §5.6。PostType(5.3節)・UserRole(12.2節)と同じ扱い)。存在すれば、`resolvedObjectTypes()` の各スラッグに対し `register_taxonomy_for_object_type($def->slug(), $objectType)` を実行する。
    - 対象がbuiltin投稿タイプ(post/page等。コアが `init` 優先度0で登録済み)なら初回試行で成功する(fast-path)。
-   - 対象が同一 `init` 内の後続(02文書の属性スケジュール表: PostType群=優先度10)で登録されるCPTの場合、初回試行はfalseを返す(ロード順による未登録であり異常ではない)。**falseになったスラッグのみ**を `init` 優先度11で1回だけ再試行する。
+   - 対象が同一 `init` 内の後続(02文書の属性スケジュール表: PostType群=優先度10)で登録されるCPTの場合、初回試行はfalseを返す(ロード順による未登録であり異常ではない)。**falseになったスラッグのみ**を `init` 優先度11で1回だけ再試行する。再試行は `$kernel->defer('init', 11, ...)`(02文書 §3.3)で予約する。通常は `add_action('init', ..., 11)` と同じであり、本番の遅延bootのキャッチアップ(`init` 発火済み)でも、同じKernelのPostType群(優先度10)の登録の後、MetaSchemaの登録(優先度20)の前に実行される(`add_action` で予約すると、発火済みの `init` 11 は二度と来ないため、再試行も警告も実行されない)。
    - 再試行後もfalseの場合は真の失敗(スラッグtypo・未登録投稿タイプ等)であり、渡された Kernel のログ(`$kernel->logger()->warning()`。Log文書 §5.1。TMSWP の内部のログは扱う Kernel を明示して記録する)で警告する。これによりfalseの意味は「再試行前=ロード順起因(正常)」「再試行後=真の失敗」に純化され、warningは常に対処すべき信号になる。
 3. **非builtinの場合**: `register_taxonomy($def->slug(), $def->resolvedObjectTypes(), $def->toArgs($kernel->config()->labelLanguage))`。戻り値が `WP_Error` なら `EntityDefinitionException`。
 
@@ -1023,7 +1044,7 @@ abstract class Taxonomy
 - string渡しは `findBySlug()` で解決。`get()`/解決失敗はnull。
 - `get_term_link($term)` が `WP_Error` ならnull。
 
-**`parents()`**: `parent` プロパティを `get_term((int) $parent, static::slug())` でたどる(`WP_Error`/null/深さ100超で打ち切り。深さ超過は `EntityDefinitionException`)。戻り順・`$includeSelf` の意味はPostTypeと同一。
+**`parents()`**: `parent` プロパティを `get_term((int) $parent, static::slug())` でたどる(`WP_Error`/nullで打ち切り)。深さ100の超過(`parent` の循環等)の扱い(debugは `EntityDataException`、本番はKernelのロガーに `error` で記録して空配列)・戻り順・`$includeSelf` の意味はPostTypeと同一(5.3節)。
 
 **`create()`**: `wp_insert_term($name, static::slug(), $args)`。`WP_Error` は `EntityPersistenceException::fromWpError()`。成功時は戻り配列の `term_id`(int)を返す。
 
@@ -1204,7 +1225,7 @@ final class UserRoleDefinition
 
 - **`create()`**: ロール名検証 `/^[a-z0-9_\-]+$/`。違反は `EntityDefinitionException`。
 - **`builtin()`**: `label()` の呼び出しは `EntityDefinitionException`(既存ロールの表示名は変更しない)。`capabilities()` は許可(管理者へのカスタムcap付与等)。
-- capの自動削除は行わない(宣言から外したcapはDBに残る。削除はWP-CLIまたはapp側で明示的に行う規約。rules/に明記)。
+- capの自動削除は行わない(宣言から外したcapはDBに残る。削除はWP-CLIまたはapp側で明示的に行う規約。rules/に明記)。表示名の変更も、初回の `add_role` の後はDBに反映しない。どちらも宣言とDBの差分として、`register()` が渡されたKernelのロガーに `warning` で記録して知らせる(12.2節)。WP-CLIの同期コマンドは持たない。
 
 ---
 
@@ -1230,8 +1251,8 @@ abstract class UserRole
 
     final public static function role(): string;
 
-    /** @internal Kernelがinit(優先度10)・PostType群の後に呼ぶ。冪等。 */
-    final public static function register(): void;
+    /** @internal Kernelがinit(優先度10)・PostType群の後に、このクラスを探索した Kernel を渡して呼ぶ。冪等。 */
+    final public static function register(\TMSWP\Core\Kernel\Kernel $kernel): void;
 
     // ---- 取得(?T統一) ----
     final public static function get(\WP_User|int $user): ?\WP_User;
@@ -1268,8 +1289,12 @@ abstract class UserRole
 1. `$def = static::definition()`(メモ化)。
 2. `$role = get_role($def->role())`。
 3. builtinで `$role` がnull → `EntityDefinitionException`(存在しないロールへのアダプタ)。
-4. 非builtinで `$role` がnull → `$role = add_role($def->role(), $def->roleLabel())`(`add_role` はDB(`wp_user_roles` オプション)へ書き込むが、手順2のチェックにより2回目以降のリクエストでは実行されない=冪等)。`add_role` がnullを返した場合は `EntityDefinitionException`。
-5. `$def->capabilityList()` の各capについて `$role->has_cap($cap)` がfalseのときのみ `$role->add_cap($cap)`(DB書き込みは欠如時のみ=冪等)。
+4. 非builtinで `$role` が既存 → 宣言とDBの差分を、渡されたKernelのロガー(`$kernel->logger()->warning()`。07-support §5.1)に記録する。DBは書き換えない。
+   - 表示名: `wp_roles()->role_names[$def->role()]` が `$def->roleLabel()` と違う(`add_role` は初回だけのため、宣言の表示名の変更はDBに反映されない)。
+   - cap: DBのロールの `capabilities` のキーのうち、`$def->capabilityList()` に無いもの(宣言から外したcap。値がfalseの拒否も含む)。
+   - builtinのロールは表示名を宣言できず、宣言に無いcapを持つのが普通のため、差分を記録しない。
+5. 非builtinで `$role` がnull → `$role = add_role($def->role(), $def->roleLabel())`(`add_role` はDB(`wp_user_roles` オプション)へ書き込むが、手順2のチェックにより2回目以降のリクエストでは実行されない=冪等)。`add_role` がnullを返した場合は `EntityDefinitionException`。
+6. `$def->capabilityList()` の各capについて `$role->has_cap($cap)` がfalseのときのみ `$role->add_cap($cap)`(DB書き込みは欠如時のみ=冪等)。
 
 **ロール所属判定(共通内部規則)**: `in_array(static::role(), (array) $user->roles, true)`。旧FWの `user_can($user, $role)`(ロール名をcap扱いするWP慣用)は暗黙的すぎるため `roles` 配列の直接検査に変更する。
 
@@ -1292,7 +1317,7 @@ abstract class UserRole
 
 **`authorUrl()`**: `get($user)` → null時null。`get_author_posts_url($user->ID)`。空文字はnullへ正規化。
 
-**`meta()`**: PostType::meta() と同一規約(`ObjectType::User`)。
+**`meta()`**: PostType::meta() と同一規約(`ObjectType::User`。無い対象・ロール外の対象は `InvalidArgumentException`)。
 
 ---
 
@@ -1661,8 +1686,11 @@ $id = ProductPost::create([
 - [ ] Kernelが収集リストの1巡走査で各エンティティクラスの `register()` を正確に1回だけ呼ぶ(統合テストで呼び出し回数を検証。`register()` 自身は重複防止を持たない)
 - [ ] `supports('thumbnail')` を持つ複数のPostTypeを登録しても `post-thumbnails` テーマサポートが和集合でマージされる
 - [ ] `TaxonomyDefinition::objectType(BlogPost::class)` が登録時に `'blog'` へ解決される。Taxonomy/PostType以外のクラスFQCNは `EntityDefinitionException`
-- [ ] builtinタクソノミーのCPT紐付けで、初回falseになったスラッグのみが `init` 優先度11で再試行されて成功し(警告なし)、未登録投稿タイプ相手は再試行後に渡された Kernel のロガー(`$kernel->logger()`)に `warning` が1回記録される
+- [ ] builtinタクソノミーのCPT紐付けで、初回falseになったスラッグのみが `init` 優先度11で再試行されて成功し(警告なし)、未登録投稿タイプ相手は再試行後に渡された Kernel のロガー(`$kernel->logger()`)に `warning` が1回記録される。本番の遅延bootのキャッチアップでも、再試行がPostType群の登録の後、MetaSchemaの登録の前に実行される(統合テスト)
+- [ ] 存在しないbuiltinのアダプタ先(`PostTypeDefinition::builtin()` の投稿タイプ、`TaxonomyDefinition::builtin()` のタクソノミー(`objectType()` の有無に関係なく)、`UserRoleDefinition::builtin()` のロール)が、`register()` で `EntityDefinitionException` になる。PostTypeは例外の前に `add_post_type_support` しない
 - [ ] `UserRole::register()` が2リクエスト目以降にDB書き込み(`add_role`/`add_cap`)を行わない(`get_role()`/`has_cap()` チェックによる冪等性。統合テストで `update_option` 呼び出し回数を検証)
+- [ ] 既存の非builtinロールの表示名の違いと宣言に無いcapが、渡された Kernel のロガーに `warning` で記録され、DBは書き換えない。初回の `add_role`・宣言どおりのロール・builtinのロールでは記録しない
+- [ ] `blockEditor()` の `use_block_editor_for_post_type` のフィルタが、bool以外(null等)の値を受けても落ちず、対象外の投稿タイプの値を受け取ったまま返す
 
 **取得系(`?T` 統一)**
 
@@ -1671,7 +1699,9 @@ $id = ProductPost::create([
 - [ ] `permalink()`/`archiveUrl()`/`url()`/`authorUrl()`/`thumbnailUrl()` がWP関数のfalse/WP_Errorをnullへ正規化する
 - [ ] `thumbnail()` がアイキャッチなし+フォールバック未登録でnull、`tmswp/post/thumbnail_fallback` にThumbnailを返すフィルタを登録するとそれを返す。Thumbnail以外の返却値は無視される
 - [ ] `thumbnail()` のaltが `_wp_attachment_image_alt` メタのみから解決される(メタが空なら `''`。添付の `post_excerpt`/`post_title` へはフォールバックしない)
-- [ ] `parents()` が「ルート祖先→直近親」順で返り、深さ100超で `EntityDefinitionException`
+- [ ] `parents()` が「ルート祖先→直近親」順で返り、深さ100超(親の循環)はdebugで `EntityDataException`、本番でKernelのロガーへの `error` の記録と空配列になる(PostType・Taxonomy)
+- [ ] `meta()` が、無い対象・スコープ外の対象で `InvalidArgumentException` を投げる
+- [ ] `Thumbnail::img()` が `Support\Html::attributes()` で属性を出力し(boolのtrueは値なし、false・nullは出力しない。`src` は `esc_url()`)、`src`/`alt`/`width`/`height` の上書きを大文字小文字に関係なく無視する。フォールバックのフィルタが返した許可されないプロトコルのURLは `InvalidArgumentException` になる
 
 **クエリ**
 
