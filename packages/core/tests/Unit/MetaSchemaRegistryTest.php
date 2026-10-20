@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Unit;
 
+use Brain\Monkey\Functions;
+use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Attribute\MetaSchema;
 use TMSWP\Core\Attribute\UseMetaStorage;
@@ -38,23 +41,115 @@ final class MetaSchemaRegistryTest extends UnitTestCase
     public function testExternallyManagedKeysCannotBeDeclaredByPhpSchema(): void
     {
         $registry = new MetaSchemaRegistry(new Container());
-        $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key', 'test');
+        $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key');
 
         $this->expectException(DuplicateMetaKeyException::class);
 
         $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
     }
 
-    public function testExternallyManagedAllSubtypeCoversConcreteSubtypes(): void
+    public function testMarkingAnAlreadyDeclaredKeyAsExternallyManagedIsRejected(): void
     {
         $registry = new MetaSchemaRegistry(new Container());
-        $registry->markExternallyManaged(ObjectType::Post, 'all', 'shared_key', 'test');
+        $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
+
+        $this->expectException(DuplicateMetaKeyException::class);
+        $this->expectExceptionMessage("externally managed meta key 'shared_key' for post:registry_product is already declared by " . RegistryProductPost::class);
+
+        $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key');
+    }
+
+    public function testExternallyManagedInAllSubtypesCoversConcreteSubtypes(): void
+    {
+        $registry = new MetaSchemaRegistry(new Container());
+        $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'shared_key');
 
         self::assertTrue($registry->isExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key'));
+        self::assertTrue($registry->isExternallyManaged(ObjectType::Post, 'registry_other', 'shared_key'));
+        self::assertFalse($registry->isExternallyManaged(ObjectType::Term, 'registry_product', 'shared_key'));
 
         $this->expectException(DuplicateMetaKeyException::class);
 
         $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
+    }
+
+    public function testExternallyManagedInAllSubtypesRejectsKeysDeclaredInAnySubtype(): void
+    {
+        $registry = new MetaSchemaRegistry(new Container());
+        $registry->registerEntity(RegistryOtherProductPost::class, ObjectType::Post, 'registry_other');
+
+        $this->expectException(DuplicateMetaKeyException::class);
+        $this->expectExceptionMessage("externally managed meta key 'shared_key' for all post subtypes is already declared by " . RegistryOtherProductPost::class . ' (post:registry_other)');
+
+        $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'shared_key');
+    }
+
+    public function testSubtypeNamedAllIsAnOrdinarySubtype(): void
+    {
+        $registry = new MetaSchemaRegistry(new Container());
+        // 'all' という名前の投稿タイプへの申告は、その投稿タイプだけを対象にする(全サブタイプの意味を持たない)
+        $registry->markExternallyManaged(ObjectType::Post, 'all', 'shared_key');
+
+        self::assertTrue($registry->isExternallyManaged(ObjectType::Post, 'all', 'shared_key'));
+        self::assertFalse($registry->isExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key'));
+
+        $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
+        self::assertSame(ObjectType::Post, $registry->objectTypeOf(RegistryProductPost::class));
+    }
+
+    #[DataProvider('nonPublicMetaSchemaConstantProvider')]
+    public function testMetaSchemaOnNonPublicConstantIsRejected(string $entityClass, string $constantName): void
+    {
+        $registry = new MetaSchemaRegistry(new Container());
+        require_once __DIR__ . '/../fixtures/meta/non-public-meta-schema-entities.php';
+
+        if (!is_subclass_of($entityClass, PostType::class)) {
+            self::fail("fixture entity class が見つかりません: {$entityClass}");
+        }
+
+        $this->expectException(InvalidSchemaException::class);
+        $this->expectExceptionMessage("#[MetaSchema] requires a public constant: {$entityClass}::{$constantName}");
+
+        $registry->registerEntity($entityClass, ObjectType::Post, 'registry_hidden');
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function nonPublicMetaSchemaConstantProvider(): iterable
+    {
+        yield 'protected' => ['TMSWP\\Core\\Tests\\Fixtures\\Meta\\ProtectedMetaSchemaPost', 'META_HIDDEN'];
+        yield 'private' => ['TMSWP\\Core\\Tests\\Fixtures\\Meta\\PrivateMetaSchemaPost', 'META_HIDDEN'];
+    }
+
+    public function testRegisterAllRejectsMetaThatWordPressRefusesToRegister(): void
+    {
+        $registry = new MetaSchemaRegistry(new Container());
+        $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
+        Functions\expect('register_post_meta')
+            ->once()
+            ->with('registry_product', 'shared_key', Mockery::type('array'))
+            ->andReturn(false);
+
+        $this->expectException(InvalidSchemaException::class);
+        $this->expectExceptionMessage("WordPress rejected the meta registration of 'shared_key' for post:registry_product: " . RegistryProductPost::class . '::META_SHARED');
+
+        $registry->registerAll();
+    }
+
+    public function testRegisterAllRegistersEachDeclaredMetaWithWordPress(): void
+    {
+        $registry = new MetaSchemaRegistry(new Container());
+        $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
+        Functions\expect('register_post_meta')
+            ->once()
+            ->with('registry_product', 'shared_key', [
+                'type' => 'string',
+                'description' => '',
+                'single' => true,
+                'show_in_rest' => false,
+            ])
+            ->andReturn(true);
+
+        $registry->registerAll();
     }
 
     public function testUseMetaStorageControlsBagStorage(): void
@@ -232,9 +327,10 @@ final class RegistryArrayMetaStorage implements MetaStorageInterface
 
     public function set(ObjectType $type, int $objectId, string $key, mixed $value): bool
     {
+        $changed = !$this->has($type, $objectId, $key) || $this->get($type, $objectId, $key) !== $value;
         $this->values[$this->storageKey($type, $objectId, $key)] = $value;
 
-        return true;
+        return $changed;
     }
 
     public function setAll(ObjectType $type, int $objectId, string $key, array $values): bool
@@ -244,9 +340,10 @@ final class RegistryArrayMetaStorage implements MetaStorageInterface
 
     public function delete(ObjectType $type, int $objectId, string $key): bool
     {
+        $existed = $this->has($type, $objectId, $key);
         unset($this->values[$this->storageKey($type, $objectId, $key)]);
 
-        return true;
+        return $existed;
     }
 
     private function storageKey(ObjectType $type, int $objectId, string $key): string

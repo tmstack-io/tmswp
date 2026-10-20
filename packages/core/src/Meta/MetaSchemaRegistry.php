@@ -6,7 +6,6 @@ namespace TMSWP\Core\Meta;
 
 use Psr\Container\ContainerInterface;
 use ReflectionClass;
-use ReflectionClassConstant;
 use TMSWP\Core\Attribute\MetaSchema;
 use TMSWP\Core\Attribute\UseMetaStorage;
 use TMSWP\Core\Attribute\WithMetaRevisions;
@@ -36,8 +35,11 @@ final class MetaSchemaRegistry
     /** @var array<string, class-string> */
     private array $declaredScopes = [];
 
-    /** @var array<string, string> */
+    /** @var array<string, true> (ObjectType, subtype, key) の組 */
     private array $externalScopes = [];
+
+    /** @var array<string, true> 全サブタイプで外部管理する (ObjectType, key) の組 */
+    private array $externalAllSubtypeScopes = [];
 
     private bool $registered = false;
 
@@ -106,22 +108,42 @@ final class MetaSchemaRegistry
         );
     }
 
-    public function markExternallyManaged(ObjectType $objectType, string $subtype, string $key, string $managedBy): void
+    /**
+     * 外部(acf-bridge 等)が管理するキーを申告する。申告したキーは registerAll() で register_*_meta しない。
+     *
+     * @throws DuplicateMetaKeyException 同じ (ObjectType, subtype, key) を #[MetaSchema] が宣言済み
+     */
+    public function markExternallyManaged(ObjectType $objectType, string $subtype, string $key): void
     {
-        $scope = $this->scopeKey($objectType, $subtype, $key);
-        $declaredClass = $this->declaredClassFor($objectType, $subtype, $key);
+        $declaredClass = $this->declaredScopes[$this->scopeKey($objectType, $subtype, $key)] ?? null;
 
         if ($declaredClass !== null) {
-            throw new DuplicateMetaKeyException("externally managed meta key '{$key}' by {$managedBy} is already declared by {$declaredClass}");
+            throw new DuplicateMetaKeyException("externally managed meta key '{$key}' for {$objectType->value}:{$subtype} is already declared by {$declaredClass}");
         }
 
-        $this->externalScopes[$scope] = $managedBy;
+        $this->externalScopes[$this->scopeKey($objectType, $subtype, $key)] = true;
+    }
+
+    /**
+     * ObjectType のすべてのサブタイプについて、外部が管理するキーを申告する。
+     *
+     * @throws DuplicateMetaKeyException 同じ (ObjectType, key) を、いずれかのサブタイプの #[MetaSchema] が宣言済み
+     */
+    public function markExternallyManagedInAllSubtypes(ObjectType $objectType, string $key): void
+    {
+        foreach ($this->entities as $entityClass => $entry) {
+            if ($entry['objectType'] === $objectType && $entry['schemas']->has($key)) {
+                throw new DuplicateMetaKeyException("externally managed meta key '{$key}' for all {$objectType->value} subtypes is already declared by {$entityClass} ({$objectType->value}:{$entry['subtype']})");
+            }
+        }
+
+        $this->externalAllSubtypeScopes[$objectType->value . "\0" . $key] = true;
     }
 
     public function isExternallyManaged(ObjectType $objectType, string $subtype, string $key): bool
     {
         return \array_key_exists($this->scopeKey($objectType, $subtype, $key), $this->externalScopes)
-            || \array_key_exists($this->scopeKey($objectType, 'all', $key), $this->externalScopes);
+            || \array_key_exists($objectType->value . "\0" . $key, $this->externalAllSubtypeScopes);
     }
 
     /**
@@ -180,11 +202,15 @@ final class MetaSchemaRegistry
                     $args['revisions_enabled'] = true;
                 }
 
-                match ($entry['objectType']) {
+                $registered = match ($entry['objectType']) {
                     ObjectType::Post => WpBridge::call('register_post_meta', $entry['subtype'], $definition->key, $args),
                     ObjectType::Term => WpBridge::call('register_term_meta', $entry['subtype'], $definition->key, $args),
                     ObjectType::User => WpBridge::call('register_meta', 'user', $definition->key, $args),
                 };
+
+                if ($registered !== true) {
+                    throw new InvalidSchemaException("WordPress rejected the meta registration of '{$definition->key}' for {$entry['objectType']->value}:{$entry['subtype']}: {$definition->ownerClass}::{$definition->constantName}");
+                }
             }
         }
 
@@ -200,7 +226,7 @@ final class MetaSchemaRegistry
     {
         $definitions = [];
 
-        foreach ($reflection->getReflectionConstants(ReflectionClassConstant::IS_PUBLIC) as $constant) {
+        foreach ($reflection->getReflectionConstants() as $constant) {
             if ($constant->getDeclaringClass()->getName() !== $reflection->getName()) {
                 continue;
             }
@@ -209,6 +235,10 @@ final class MetaSchemaRegistry
 
             if ($attributes === []) {
                 continue;
+            }
+
+            if (!$constant->isPublic()) {
+                throw new InvalidSchemaException("#[MetaSchema] requires a public constant: {$reflection->getName()}::{$constant->getName()}");
             }
 
             $value = $constant->getValue();
@@ -318,23 +348,5 @@ final class MetaSchemaRegistry
     private function scopeKey(ObjectType $objectType, string $subtype, string $key): string
     {
         return $objectType->value . "\0" . $subtype . "\0" . $key;
-    }
-
-    private function declaredClassFor(ObjectType $objectType, string $subtype, string $key): ?string
-    {
-        if ($subtype !== 'all') {
-            return $this->declaredScopes[$this->scopeKey($objectType, $subtype, $key)] ?? null;
-        }
-
-        $prefix = $objectType->value . "\0";
-        $suffix = "\0" . $key;
-
-        foreach ($this->declaredScopes as $scope => $class) {
-            if (str_starts_with($scope, $prefix) && str_ends_with($scope, $suffix)) {
-                return $class;
-            }
-        }
-
-        return null;
     }
 }

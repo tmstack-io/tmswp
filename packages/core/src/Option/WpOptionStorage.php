@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace TMSWP\Core\Option;
 
 use stdClass;
+use TMSWP\Core\Exception\InvalidArgumentException;
+use TMSWP\Core\Meta\WpDatabaseGuard;
 
 final class WpOptionStorage implements OptionStorageInterface
 {
@@ -20,45 +22,48 @@ final class WpOptionStorage implements OptionStorageInterface
         $sentinel = new stdClass();
         $value = get_option($name, $sentinel);
 
-        return $value === $sentinel ? null : $this->decode($value);
+        return $value === $sentinel ? null : $value;
     }
 
     public function set(string $name, mixed $value, ?bool $autoload = null): bool
     {
-        $value = $this->encode($value);
-
-        if (!$this->has($name)) {
-            if ($autoload === null) {
-                return add_option($name, $value);
-            }
-
-            return add_option($name, $value, '', $autoload);
+        if ($value === null) {
+            throw new InvalidArgumentException("option '{$name}' cannot store null; use delete() to remove it");
         }
 
-        return update_option($name, $value, $autoload);
+        // false(同じ値・フィルタによる中止)とデータベースのエラーの区別は WpDatabaseGuard に従う
+        $exists = WpDatabaseGuard::read(
+            fn(): bool => $this->has($name),
+            "failed to read option '{$name}' before writing it",
+        );
+
+        if (!$exists) {
+            return WpDatabaseGuard::write(
+                static fn(): mixed => add_option($name, $value, '', $autoload),
+                "failed to add option '{$name}'",
+            );
+        }
+
+        return WpDatabaseGuard::write(
+            static fn(): mixed => update_option($name, $value, $autoload),
+            "failed to update option '{$name}'",
+        );
     }
 
     public function delete(string $name): bool
     {
-        if (!$this->has($name)) {
-            return true;
+        $exists = WpDatabaseGuard::read(
+            fn(): bool => $this->has($name),
+            "failed to read option '{$name}' before deleting it",
+        );
+
+        if (!$exists) {
+            return false;
         }
 
-        return delete_option($name);
-    }
-
-    private function encode(mixed $value): mixed
-    {
-        return $value === null ? new WpOptionNullValue() : $value;
-    }
-
-    private function decode(mixed $value): mixed
-    {
-        return $value instanceof WpOptionNullValue ? null : $value;
+        return WpDatabaseGuard::write(
+            static fn(): mixed => delete_option($name),
+            "failed to delete option '{$name}'",
+        );
     }
 }
-
-/**
- * @internal
- */
-final class WpOptionNullValue {}

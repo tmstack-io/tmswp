@@ -66,7 +66,7 @@ final class AcfProductPost extends PostType
 
 - `get_field('price')` / `the_field()` をアプリコードに散らさない。
 - `app/Acf/` の生成ファイルを手で編集しない。
-- ACF管理下キーを `#[MetaSchema]` と二重宣言しない。
+- v0.6.0まで、ACFのフィールドグループで管理するキーを `#[MetaSchema]` で宣言しない。起動時に `DuplicateMetaKeyException` になる。それまでは生成アクセサで読み書きし、`#[UseMetaStorage(AcfMetaStorage::class)]` はフィールドグループで管理しないキーにだけ使う。v0.6.0以降は、フィールドグループで管理するキーも `#[MetaSchema]` と `#[UseMetaStorage(AcfMetaStorage::class)]` で宣言できる(rules/meta.md の「使い分け」)。
 
 ## 確認方法
 

@@ -60,6 +60,47 @@ final class MetaBagTest extends UnitTestCase
         ], $bag->all());
     }
 
+    public function testAllReturnsTheSameListAsGetForSingleFalseKeys(): void
+    {
+        $storage = new ArrayMetaStorage();
+        $bag = $this->bag($storage);
+        $bag->set('related_id', [12, 34, 56]);
+
+        self::assertSame([12, 34, 56], $bag->get('related_id'));
+        self::assertSame($bag->get('related_id'), $bag->all()['related_id']);
+    }
+
+    public function testSetRejectsNullForDeclaredAndUndeclaredKeys(): void
+    {
+        $storage = new ArrayMetaStorage();
+        $bag = $this->bag($storage);
+
+        foreach (['code', 'undeclared'] as $key) {
+            try {
+                $bag->set($key, null);
+                self::fail("null を set できてしまいました: {$key}");
+            } catch (InvalidArgumentException $exception) {
+                self::assertStringContainsString("meta '{$key}' cannot be set to null; use delete()", $exception->getMessage());
+            }
+
+            self::assertFalse($bag->has($key));
+        }
+    }
+
+    public function testSetRejectsValuesThatDoNotMatchTheSchemaType(): void
+    {
+        $storage = new ArrayMetaStorage();
+        $bag = $this->bag($storage);
+
+        $this->assertRejectedWrite($bag, 'price', '1200', "meta 'price' expects integer, got string");
+        $this->assertRejectedWrite($bag, 'code', ['A-001'], "meta 'code' expects string, got array");
+        $this->assertRejectedWrite($bag, 'related_id', [12, '34'], "meta 'related_id' expects integer, got string");
+
+        // 未宣言のキーは型を問わない(WP 組み込みのメタや他プラグインのキーを書く経路)
+        self::assertTrue($bag->set('undeclared', ['any' => 'shape']));
+        self::assertSame(['any' => 'shape'], $bag->get('undeclared'));
+    }
+
     public function testSchemaDefinitionRejectsInvalidDeclaration(): void
     {
         $this->expectException(InvalidSchemaException::class);
@@ -70,6 +111,19 @@ final class MetaBagTest extends UnitTestCase
             'price',
             new MetaSchema(type: MetaValueType::Integer, default: 'invalid'),
         );
+    }
+
+    /** @param MetaBag<MetaBagFixtureEntity> $bag */
+    private function assertRejectedWrite(MetaBag $bag, string $key, mixed $value, string $message): void
+    {
+        try {
+            $bag->set($key, $value);
+            self::fail("スキーマの型に合わない値を set できてしまいました: {$key}");
+        } catch (InvalidArgumentException $exception) {
+            self::assertSame($message, $exception->getMessage());
+        }
+
+        self::assertFalse($bag->has($key));
     }
 
     /** @return MetaBag<MetaBagFixtureEntity> */
@@ -83,7 +137,7 @@ final class MetaBagTest extends UnitTestCase
             MetaSchemaSet::fromList([
                 new MetaSchemaDefinition(MetaBagFixtureEntity::class, 'META_PRICE', 'price', MetaValueType::Integer, 100, true, true, '', null),
                 new MetaSchemaDefinition(MetaBagFixtureEntity::class, 'META_CODE', 'code', MetaValueType::String, null, true, false, '', null),
-                new MetaSchemaDefinition(MetaBagFixtureEntity::class, 'META_RELATED_IDS', 'related_id', MetaValueType::Array, null, false, false, '', null),
+                new MetaSchemaDefinition(MetaBagFixtureEntity::class, 'META_RELATED_IDS', 'related_id', MetaValueType::Integer, null, false, false, '', null),
             ]),
         );
     }
@@ -91,6 +145,9 @@ final class MetaBagTest extends UnitTestCase
 
 final class MetaBagFixtureEntity {}
 
+/**
+ * MetaStorageInterface の契約(書き込みは変えたかどうかを返す)に従う、プロセス内配列への保存実装。
+ */
 final class ArrayMetaStorage implements MetaStorageInterface
 {
     /** @var array<string, mixed> */
@@ -144,23 +201,28 @@ final class ArrayMetaStorage implements MetaStorageInterface
 
     public function set(ObjectType $type, int $objectId, string $key, mixed $value): bool
     {
-        $this->values[$this->storageKey($type, $objectId, $key)] = $value;
+        $storageKey = $this->storageKey($type, $objectId, $key);
+        $changed = !\array_key_exists($storageKey, $this->values) || $this->values[$storageKey] !== $value;
+        $this->values[$storageKey] = $value;
 
-        return true;
+        return $changed;
     }
 
     public function setAll(ObjectType $type, int $objectId, string $key, array $values): bool
     {
-        $this->rows[$this->storageKey($type, $objectId, $key)] = $values;
+        $storageKey = $this->storageKey($type, $objectId, $key);
+        $changed = ($this->rows[$storageKey] ?? []) !== $values;
+        $this->rows[$storageKey] = $values;
 
-        return true;
+        return $changed;
     }
 
     public function delete(ObjectType $type, int $objectId, string $key): bool
     {
+        $existed = $this->has($type, $objectId, $key);
         unset($this->values[$this->storageKey($type, $objectId, $key)], $this->rows[$this->storageKey($type, $objectId, $key)]);
 
-        return true;
+        return $existed;
     }
 
     private function storageKey(ObjectType $type, int $objectId, string $key): string

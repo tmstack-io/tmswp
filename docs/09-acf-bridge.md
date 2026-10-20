@@ -776,9 +776,11 @@ $keys = class_exists($manifestClass) ? $manifestClass::managedKeys() : [];
 
 foreach ($keys as $key) {
     if ($key->objectType === null) continue;  // options はコアregistry対象外
-    $registry->markExternallyManaged(
-        $key->objectType, $key->objectSubtype, $key->metaKey, 'tmswp/acf-bridge'
-    );
+    if ($key->objectSubtype === 'all') {      // ACF の location の 'all'(taxonomy==all 等)は全サブタイプ
+        $registry->markExternallyManagedInAllSubtypes($key->objectType, $key->metaKey);
+        continue;
+    }
+    $registry->markExternallyManaged($key->objectType, $key->objectSubtype, $key->metaKey);
 }
 ```
 
@@ -787,12 +789,13 @@ foreach ($keys as $key) {
 本文書がコア `MetaSchemaRegistry` に要求する API(正準シグネチャは Meta/Option 定義層文書が確定する。差異があればそちらが優先):
 
 ```php
-public function markExternallyManaged(ObjectType $objectType, string $objectSubtype, string $metaKey, string $managedBy): void;
+public function markExternallyManaged(ObjectType $objectType, string $objectSubtype, string $metaKey): void;
+public function markExternallyManagedInAllSubtypes(ObjectType $objectType, string $metaKey): void;
 public function isExternallyManaged(ObjectType $objectType, string $objectSubtype, string $metaKey): bool;
 ```
 
 - `markExternallyManaged` 済みのキーについて registry は `register_*_meta` を**発行しない**(DR-06「ACF 管理下フィールドは register_*_meta を発行しない」)。
-- `objectSubtype` が `'all'`(taxonomy==all)の場合は当該 ObjectType の全サブタイプに対するマークとして扱う。
+- `ManagedKey::$objectSubtype` が ACF の location の値 `'all'`(taxonomy==all 等)の場合は、本拡張が `markExternallyManagedInAllSubtypes()` で当該 ObjectType の全サブタイプに対するマークとして申告する。コアの `markExternallyManaged()` の `objectSubtype` は文字列どおりの1サブタイプだけを表し、`'all'` を特別扱いしない。
 - ACF 不在(`function_exists('acf') === false`)時はマーク処理全体をスキップする(acf-json があっても ACF が読み込まないため値は素の postmeta としては存在しない。生成クラス経由のアクセスは §10 の例外で防護される)。
 
 ## 7.3 `#[MetaSchema]` との同一キー重複検出(エラー)
@@ -826,7 +829,7 @@ final class AcfMetaStorage implements \TMSWP\Core\Meta\MetaStorageInterface
 - ACF id 変換: `Post` → `(int) $objectId`、`Term` → `"term_{$objectId}"`、`User` → `"user_{$objectId}"`。
 - `get()` は **raw 値**(`get_field($key, $acfId, false)`)を返す。理由: `MetaBag` の型付きアクセサ(`int()`/`string()` 等)は DB 保存型を前提としており、フォーマット済み値(image の array 等)は `MetaBag` の型コントラクトを壊す。フォーマット済み値が必要な場面では生成アクセサクラス(`XxxFields`)を使う。この役割分担を rules/ に明記する。
 - `has()` は `get_field($key, $acfId, false) !== null` で判定する(WP メタは `null` を保存できないため raw `null` = 未保存と同値)。**`get()` と `has()` は分離されており、`null` をセンチネルに使うフォールスルーは存在しない**(DR-18)。
-- `set()` は `update_field($key, $value, $acfId)` へ委譲し bool を返す。`delete()` は `delete_field($key, $acfId)` へ委譲する。
+- `set()` は `update_field($key, $value, $acfId)` へ委譲する。`delete()` は `delete_field($key, $acfId)` へ委譲する。戻り値と例外はコアの `MetaStorageInterface` の契約(Meta/Option 文書 §4.5: 書き込みは「書き込んだか」を bool で返し、書き込まなかった場合(同じ値・フィルタによる中止)は false、データベースのエラー等の書き込みの失敗は例外、`null` は保存しない)に従う。
 - 全メソッドは冒頭で `function_exists('get_field')` を検査し、偽なら `AcfNotActiveException` を投げる(§10)。
 - 旧 FW の `iwf2b/meta/get` グローバルフィルタ委譲(全エンティティ一括・null センチネル・実際には配線バグで不動作)は採用しない。適用は次項のエンティティ単位オプトインのみ。
 

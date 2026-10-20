@@ -87,7 +87,13 @@ final class AcfBridge
                 continue;
             }
 
-            $registry->markExternallyManaged($key->objectType, $key->objectSubtype, $key->metaKey, 'tmswp/acf-bridge');
+            // ACF の location の値 'all' は、その ObjectType のすべてのサブタイプを表す
+            if ($key->objectSubtype === 'all') {
+                $registry->markExternallyManagedInAllSubtypes($key->objectType, $key->metaKey);
+                continue;
+            }
+
+            $registry->markExternallyManaged($key->objectType, $key->objectSubtype, $key->metaKey);
         }
     }
 

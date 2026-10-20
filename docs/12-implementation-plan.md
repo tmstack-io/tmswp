@@ -75,12 +75,12 @@ v0.3.0・v0.4.0・v0.5.0 は v0.2.0 の後に並列に進められる。v0.6.0(v
 |---|---|
 | packages/core/src/Kernel/Kernel.php | v0.3.0-T3 → v0.5.0-T1 → v0.5.0-T4 |
 | docs/02-kernel.md | v0.3.0-T3 → v0.5.0-T1 → v0.5.0-T4 |
-| docs/00-overview.md | v0.4.0-T1(DR-07)→ v0.5.0-T1(DR-19) |
+| docs/00-overview.md | v0.4.0-T1(DR-07)→ v0.5.0-T1(DR-19)→ v0.6.0-T1(DR-06) |
 | packages/core/tests/Support/(WpdbTestDouble 等) | v0.4.0-T6 → v0.5.0-T6 |
 | packages/core/phpstan/(extension.neon を含む) | v0.5.0-T1 → v0.5.0-T3 |
 | phpstan.neon.dist | v0.5.0-T1 → v0.6.0-T3(どちらが先でもよいが同時に触らない) |
 | packages/core/rules/extensions.md | v0.6.0-T1 → v0.7.0-T5(版の依存で逐次) |
-| packages/core/rules/acf.md | v0.2.0-T3 → v0.2.0-T6 → v0.6.0-T7 |
+| packages/core/rules/acf.md | v0.2.0-T3 → v0.2.0-T6 → v0.6.0-T1 → v0.6.0-T7 |
 | tests/fixtures/(fixture のテーマ・プラグインと探索結果ファイル) | v0.3.0〜v0.5.0 で fixture を変えるタスク(同時に触らない。fixture を変えたタスクが探索結果ファイルを再生成する) |
 
 ## 0.6 版の依存関係
@@ -721,13 +721,15 @@ v0.3.0(v0.2.0 を含む)
 
 #### v0.6.0-T1: Kernel ごとの登録と CLI
 
-- 対象ファイル領域: packages/acf-bridge/src/{AcfBridge,BridgeConfig}.php、packages/acf-bridge/src/Cli/、packages/acf-bridge/src/Manifest/、packages/core/rules/extensions.md(acf-bridge の登録例)、docs/09 §1.4(パッケージ構成の例外)・§2・§5.4・§9
+- 対象ファイル領域: packages/acf-bridge/src/{AcfBridge,BridgeConfig}.php、packages/acf-bridge/src/Cli/、packages/acf-bridge/src/Manifest/、packages/core/rules/extensions.md(acf-bridge の登録例)、docs/09 §1.4(パッケージ構成の例外)・§2・§5.4・§7・§8.2・§9、docs/00 DR-06、docs/04 と packages/core/rules/{meta,acf}.md(ACF で編集する単純な値の「v0.6.0 までの境目」の説明)
 - 完了条件:
   - acf-bridge が `KernelConfig` 経由で Kernel ごとに登録され、テーマとプラグインの両方で使える(統合テスト)。CLI に `--app=` がある。save_json が登録元の acf-json に向く。
   - acf-bridge の debug による分岐が、登録した Kernel の debug に従う(§1.7)。
   - E101 の静的検査が Generator の managedKeys と共通で、options の post_id を実行時に決めず、黙殺の経路がエラー方針どおりになっている。BridgeConfig の入力を検証する。
   - ACF が無効なときの扱い(管理キーのマーク、CLI のオプションページの解決)がエラー方針(`00-overview.md` §5.6)に沿って docs/09 に定められ、`function_exists` で黙って処理を飛ばす経路が残っていない。
   - docs/09 §1.4 のパッケージ構成の図の `Exception/` が、packages/acf-bridge/src/Exception/ の例外クラスと一致している(v0.2.0 の時点では、AcfBridge・BridgeConfig・AcfCommand が投げる `AcfBridgeRuntimeException` が図に無い)。
+  - ACF のフィールドグループで管理するキーを、`#[MetaSchema]` と `#[UseMetaStorage(AcfMetaStorage::class)]` で宣言できる(§1.9)。外部管理の登録(`markExternallyManaged` 系)と衝突せず、`DuplicateMetaKeyException` にならない(統合テスト)。
+  - docs/04 の「メタ・設定の使い分け」と rules(meta.md・acf.md・extensions.md)の「v0.6.0 までの境目」の説明を、v0.6.0 の完了後の形に改め、docs/09 §7.3・§8.2 の重複検出と推奨の記述、`00-overview.md` DR-06 の「PHP 手書き宣言との同一キー重複はエラー」をこの契約に揃えている。
 - 検証コマンド: `composer test:unit`、`composer test:integration`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`
 
 #### v0.6.0-T2: 実行時アクセス(AcfFieldAccess と AcfMetaStorage)

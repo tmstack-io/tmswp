@@ -48,6 +48,7 @@ final readonly class MetaSchemaDefinition
         }
 
         self::assertSanitizeShape($attribute->sanitize, $ownerClass, $constantName);
+        self::assertRestSchema($attribute, $ownerClass, $constantName);
 
         return new self(
             $ownerClass,
@@ -65,6 +66,36 @@ final readonly class MetaSchemaDefinition
     public function hasDefault(): bool
     {
         return $this->default !== null;
+    }
+
+    /**
+     * REST に出す array・object 型には、要素・プロパティのスキーマを求める。
+     * WP の register_meta() は array 型で show_in_rest.schema.items が無いと登録を拒否し、
+     * object 型でプロパティのスキーマが無いと REST の値が常に空のオブジェクトになるため、宣言の誤りとして扱う。
+     */
+    private static function assertRestSchema(MetaSchema $attribute, string $ownerClass, string $constantName): void
+    {
+        $requiredKeys = match ($attribute->type) {
+            MetaValueType::Array => ['items'],
+            MetaValueType::Object => ['properties', 'patternProperties', 'additionalProperties'],
+            default => [],
+        };
+
+        if ($requiredKeys === [] || $attribute->showInRest === false) {
+            return;
+        }
+
+        $schema = \is_array($attribute->showInRest) ? ($attribute->showInRest['schema'] ?? null) : null;
+
+        foreach ($requiredKeys as $requiredKey) {
+            if (\is_array($schema) && isset($schema[$requiredKey])) {
+                return;
+            }
+        }
+
+        $expected = implode(' or ', $requiredKeys);
+
+        throw new InvalidSchemaException("{$attribute->type->value} meta shown in REST requires showInRest['schema'] with {$expected}: {$ownerClass}::{$constantName}");
     }
 
     private static function assertSanitizeShape(mixed $sanitize, string $ownerClass, string $constantName): void

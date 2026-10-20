@@ -112,24 +112,37 @@ final class MetaBag
         return $this->storage->has($this->objectType, $this->objectId, $key);
     }
 
-    /** @return array<string, mixed> */
+    /**
+     * 宣言済みの全キーの値を返す。各キーの値は get() と同じ(single=false のキーは全行の list)。
+     *
+     * @return array<string, mixed>
+     */
     public function all(): array
     {
-        $values = $this->storage->getMultiple($this->objectType, $this->objectId, $this->schemas->keys());
+        $singleKeys = array_keys(array_filter($this->schemas->all(), static fn(MetaSchemaDefinition $schema): bool => $schema->single));
+        $values = $this->storage->getMultiple($this->objectType, $this->objectId, $singleKeys);
         $all = [];
 
         foreach ($this->schemas->all() as $key => $schema) {
-            if (\array_key_exists($key, $values)) {
-                $all[$key] = $values[$key];
+            if (!$schema->single) {
+                $all[$key] = $this->get($key);
                 continue;
             }
 
-            $all[$key] = $schema->hasDefault() ? $schema->default : null;
+            $all[$key] = \array_key_exists($key, $values) ? $values[$key] : $this->defaultValue($schema, null);
         }
 
         return $all;
     }
 
+    /**
+     * 値を保存する。宣言済みのキーはスキーマの型に合う値だけを受け付ける。
+     *
+     * @throws InvalidArgumentException null、スキーマの型に合わない値、single=false のキーへの list 以外
+     * @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー
+     *
+     * @return bool 書き込んだら true、書き込まなかったら false(保存値は変わっていない)
+     */
     public function set(string $key, mixed $value): bool
     {
         $schema = $this->schemas->get($key);
@@ -139,15 +152,35 @@ final class MetaBag
                 throw new InvalidArgumentException("single=false meta '{$key}' must be set with a list");
             }
 
+            foreach ($value as $item) {
+                $this->assertWritable($key, $schema, $item);
+            }
+
             return $this->storage->setAll($this->objectType, $this->objectId, $key, $value);
         }
+
+        $this->assertWritable($key, $schema, $value);
 
         return $this->storage->set($this->objectType, $this->objectId, $key, $value);
     }
 
+    /**
+     * @return bool 行を削除したら true、元々行が無かった・削除しなかったら false
+     */
     public function delete(string $key): bool
     {
         return $this->storage->delete($this->objectType, $this->objectId, $key);
+    }
+
+    private function assertWritable(string $key, ?MetaSchemaDefinition $schema, mixed $value): void
+    {
+        if ($value === null) {
+            throw new InvalidArgumentException("meta '{$key}' cannot be set to null; use delete() to remove it");
+        }
+
+        if ($schema instanceof MetaSchemaDefinition && !ValueCaster::accepts($schema->type, $value)) {
+            throw new InvalidArgumentException("meta '{$key}' expects {$schema->type->value}, got " . get_debug_type($value));
+        }
     }
 
     private function singleValue(string $key, ?MetaSchemaDefinition $schema, mixed $default = null): mixed

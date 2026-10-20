@@ -54,6 +54,25 @@ app/Post/ProductPost.php
 
 オプション側も値解決・キャスト規則は同型だが、宣言の器が異なる: `#[AsOptionGroup]` を付与した backed enum の `#[OptionSchema]` 付きケース(`OptionAccess` trait)→ `OptionRepository` → `OptionStorageInterface`。meta=属性付きクラス定数 / option=属性付き enum ケースという宣言形の非対称は意図的トレードオフである(4.12)。
 
+## メタ・設定の使い分け
+
+投稿・ターム・ユーザーの値とサイトの設定を読み書きする経路は、値の種類ごとに次の 1 つに決める。同じ値を複数の経路で宣言しない。
+
+| 値の種類 | 宣言と読み書きの経路 |
+| --- | --- |
+| 単純な値(文字列・数値・真偽・日付・単一画像 ID 等) | エンティティの定数に `#[MetaSchema]` で宣言し、アプリは `MetaBag`(`ProductPost::meta($post)`)だけで読み書きする。 |
+| 上の単純な値を ACF の画面で編集する場合 | 宣言と `MetaBag` はそのままにし、エンティティに `#[UseMetaStorage(AcfMetaStorage::class)]` を付けて保存先だけを ACF に切り替える(4.10)。ACF に完全には依存させないため、`UseMetaStorage` と `AcfMetaStorage` を維持する。v0.6.0 で acf-bridge 側を直すまでは使えない(下の「v0.6.0 までの境目」)。 |
+| ACF 固有の複合型(repeater・flexible_content・group・gallery・relationship) | acf-bridge の生成アクセサ(`XxxFields`)で扱う(文書09)。その案件は ACF に依存するものと割り切る。 |
+| 入力検証が重要なシステム設定(メールの宛先、API キー等) | オプショングループ enum(4.12〜4.16)に宣言し、設定画面は settings-page で作る(文書08)。API キー等の秘密情報もここに保存してよいが、テンプレートへの出力・ログへの記録・フロントへの公開(REST 等)をしない。 |
+| フロントに出すコンテンツ設定(画像、繰り返し項目等) | ACF のオプションページで作り、生成アクセサ(`XxxOptions`)で読む(文書09)。同じ値をオプショングループ enum に重複して宣言しない。 |
+
+**v0.6.0 までの境目**: 「ACF の画面で編集する場合」の行(`#[MetaSchema]` と `#[UseMetaStorage(AcfMetaStorage::class)]` の併用)は目標の契約であり、acf-bridge 側の対応(v0.6.0-T1)が済むまで使えない。現在の acf-bridge は、ACF のフィールドグループで管理するキーを `markExternallyManaged()` で外部管理として登録する(文書09 §7)。そのため、同じキーを `#[MetaSchema]` で宣言すると、起動時に `DuplicateMetaKeyException` になる(4.9)。v0.6.0 までは次のとおりにする。
+
+- ACF のフィールドグループで管理するキーは `#[MetaSchema]` で宣言せず、生成アクセサ(`XxxFields`)で読み書きする。
+- `#[UseMetaStorage(AcfMetaStorage::class)]` は、ACF のフィールドグループで管理しないキーを、ACF の保存規約(`update_field`)で読み書きする場合にだけ使う。
+
+v0.6.0 の完了後は、ACF のフィールドグループで管理するキーも `#[MetaSchema]` と `#[UseMetaStorage(AcfMetaStorage::class)]` で宣言でき、外部管理の登録と衝突しない。この節はそのときに改める。
+
 ---
 
 ## 設計本体
@@ -111,7 +130,8 @@ final class MetaSchema
 - `default` は `type` とキャスト互換でなければならない(例: `type: MetaValueType::Integer` に `default: 'abc'` は `InvalidSchemaException`)。互換判定は `ValueCaster::accepts()`(4.7)で行う。
 - `single: false` と `default` 非null の併用は `InvalidSchemaException`(WPの register_meta はsingle=falseのdefaultを単一値として扱い混乱の元のため、FWでは禁止する)。
 - `sanitize` にクロージャや存在しない callable を指定した場合: 配列/文字列形式チェックはブート時、callable 実在チェックは `registerAll()` 時に `is_callable()` で行い、不成立なら `InvalidSchemaException`。
-- 付与対象の定数は `public const`(型付き定数 `public const string` 推奨)かつ値が空でない `string` であること。それ以外はブート時 `InvalidSchemaException`。
+- 付与対象の定数は `public const`(型付き定数 `public const string` 推奨)かつ値が空でない `string` であること。それ以外はブート時 `InvalidSchemaException`。`protected`・`private` の定数に付けた場合も、黙って飛ばさずに `InvalidSchemaException` とする(`00-overview.md` §5.6 の「設定の誤り」)。
+- `type` が `Array` または `Object` で REST に出す(`showInRest` が `false` でない)場合は、`showInRest` を配列にして要素・プロパティのスキーマを書くこと。`Array` は `showInRest['schema']['items']`、`Object` は `showInRest['schema']` の `properties`・`patternProperties`・`additionalProperties` のいずれかが必要で、無ければブート時 `InvalidSchemaException`。WP の `register_meta()` は `array` 型で `show_in_rest.schema.items` が無いと登録を拒否し、`object` 型でプロパティのスキーマが無いと REST の値が常に空のオブジェクトになるためである。
 
 ### 4.2 `TMSWP\Core\Meta\MetaValueType`(新設・公開API enum)
 
@@ -269,7 +289,7 @@ final class MetaSchemaSet
 
 #### 振る舞い仕様
 
-- `fromAttribute()` は 4.1 の検証規則(default互換・single×default禁止・sanitize形式・キー文字列非空)をすべて適用し、違反時は `InvalidSchemaException` にエンティティクラス名・定数名を含めて送出する(type は `MetaValueType` 受けのため検証対象外。4.1)。
+- `fromAttribute()` は 4.1 の検証規則(default互換・single×default禁止・sanitize形式・キー文字列非空・REST に出す Array/Object 型のスキーマ)をすべて適用し、違反時は `InvalidSchemaException` にエンティティクラス名・定数名を含めて送出する(type は `MetaValueType` 受けのため検証対象外。4.1)。
 - 同一エンティティ内でのキー重複(異なる定数が同じメタキー文字列を持つ)は `MetaSchemaSet` 構築時ではなく `MetaSchemaRegistry::registerEntity()`(4.9)が検出して `DuplicateMetaKeyException` を送出する。
 
 ### 4.5 `TMSWP\Core\Meta\MetaStorageInterface`
@@ -287,6 +307,12 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Meta;
 
+/**
+ * 書き込み(set・setAll・delete)は、書き込んだかどうかを bool で返し、データベースのエラーは例外で知らせる。
+ * false は失敗ではなく「書き込まなかった」(同じ値、ほかのプラグインのフィルタによる中止、delete では行が無かった)
+ * を意味し、保存されている値は変わっていない。
+ * null は保存しない。削除は delete() で行う。
+ */
 interface MetaStorageInterface
 {
     /** 指定キーのメタ行が存在するか(値の真偽ではなく行の有無) */
@@ -313,17 +339,31 @@ interface MetaStorageInterface
      */
     public function getMultiple(ObjectType $type, int $objectId, array $keys): array;
 
-    /** 単一値を保存する(既存行は置換)。成功で true */
+    /**
+     * 単一値を保存する(既存行は置換)。
+     *
+     * @return bool 書き込んだら true、書き込まなかったら false(保存値は変わっていない)
+     * @throws \TMSWP\Core\Exception\InvalidArgumentException 保存できない値(null 等)
+     * @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー
+     */
     public function set(ObjectType $type, int $objectId, string $key, mixed $value): bool;
 
     /**
      * 同一キーの全行を置換する(single=false スキーマ用)。
      *
      * @param list<mixed> $values
+     * @return bool 保存された行を変えたら true、置換前と同じ行なら false
+     * @throws \TMSWP\Core\Exception\InvalidArgumentException 保存できない値(null 等)
+     * @throws \TMSWP\Core\Exception\RuntimeException 削除・追加でのデータベースのエラー
      */
     public function setAll(ObjectType $type, int $objectId, string $key, array $values): bool;
 
-    /** 指定キーの全行を削除する。行が元々無い場合も true を返す(冪等) */
+    /**
+     * 指定キーの全行を削除する。行が元々無い場合は何もせず false を返す(冪等)。
+     *
+     * @return bool 行を削除したら true、元々行が無かった・削除しなかったら false
+     * @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー
+     */
     public function delete(ObjectType $type, int $objectId, string $key): bool;
 }
 ```
@@ -332,6 +372,8 @@ interface MetaStorageInterface
 
 - 実装は **null を「特別な意味」に使ってはならない**。`get()` の null は「行なし」または「null相当値」のどちらでもあり得る曖昧な値であり、意味判定は常に `has()` が担う。
 - `getMultiple()` は「キーが結果配列に存在するか」で has 相当の情報を持ち帰る。値がnullでもキーは含める。
+- 書き込みの戻り値は「書き込んだか」であり、成否ではない。false は「書き込まなかった(保存値は変わっていない)」を意味する。データベースのエラー等で書き込みに失敗したら、`false` を返さずに例外(FW の基底 `RuntimeException`。4.17)を投げる。「書き込まなかった」と「失敗した」を戻り値で区別できないストレージ API(WP の `update_metadata()` 等)を使う実装は、実装の中で両者を判別する(4.6)。
+- `null` は保存しない(`MetaBag::set()` が拒否する。4.8)。削除は `delete()` に一本化する。
 
 ### 4.6 `TMSWP\Core\Meta\WpMetaStorage`
 
@@ -368,13 +410,24 @@ final class WpMetaStorage implements MetaStorageInterface
 | `get()` | `get_metadata_raw($type->metaType(), $objectId, $key, true)`。行が無ければ null(WPメタは null を物理保存できないため、raw の null ⇔ 行なし が成立する) |
 | `getAll()` | `array_values(get_metadata_raw($type->metaType(), $objectId, $key, false) ?? [])`(single=false かつ行なし時の null を `?? []` で吸収) |
 | `getMultiple()` | `get_metadata($type->metaType(), $objectId)` で全メタを1回で取得(WPのメタキャッシュに載る)→ 要求キーのうち存在するものだけ `maybe_unserialize` 済み単一値(`$all[$key][0]`)で返す。single=false のキーがここで要求された場合も先頭行のみ返す(バルクは単一値スキーマ用途) |
-| `set()` | `update_metadata($type->metaType(), $objectId, $key, $value)`。WPの戻り値 int(新規meta_id)/true は true に正規化、false は false |
-| `setAll()` | `delete_metadata(...)` 後に `$values` を順に `add_metadata(...)`。途中失敗時は false を返す(ロールバックはしない。wpdbにトランザクション保証がないため) |
-| `delete()` | `delete_metadata($type->metaType(), $objectId, $key)`。WPは行が無いと false を返すが、本実装は冪等性のため「行が無い場合」は true に正規化する(`has()` を先行確認) |
+| `set()` | `update_metadata($type->metaType(), $objectId, wp_slash($key), wp_slash($value))`。WPの戻り値 int(新規meta_id)/true は true。false の場合は表の下の「書き込みの false とデータベースのエラーの判定」に従う |
+| `setAll()` | 置換の前に行を読み(`getAll()`)、行があれば `delete_metadata(...)`、その後 `$values` を順に `add_metadata(...)`(キーと値は `wp_slash()` して渡す)。どれもデータベースのエラーなら `RuntimeException`(ロールバックはしない。wpdbにトランザクション保証がないため、途中で失敗した場合は一部の行だけが置き換わった状態で残る)。フィルタが削除を止めた場合は、行を足すと置換にならないため何も追加せず false。置換の前後で保存された行(DB に書かれる文字列の形の list)が変わったら true、変わらなければ false。置換の前後の読み取りのデータベースのエラーも `RuntimeException`(読み取りの失敗を「行が無い」として扱わない) |
+| `delete()` | 行が無ければ false(`has()` を先行確認。この読み取りのデータベースのエラーは `RuntimeException`)。あれば `delete_metadata($type->metaType(), $objectId, wp_slash($key))` を呼び、削除できたら true、WP が false を返したら下の判定に従う(データベースのエラーなら `RuntimeException`、そうでなければ false) |
 
 - `get_metadata_raw()`(WP 5.5+)はコアの default 注入層(`get_metadata_default()` / `filter_default_metadata`)を経由しないため、`register_meta` の default 介在が原理的に起きない。default 介在の回避は実装内の順序契約(`has()` の先行呼び出し)ではなく、コアAPI 1呼び出しの保証による。同関数は `_` 接頭辞なし・`@access private` 注記なしの正規の公開関数(`@since 5.5.0`)で、コア自身が default 機構の土台として安定使用している。なおこの最適化はWP実装(`WpMetaStorage`)固有であり、`AcfMetaStorage` 等の外部ストレージ実装には適用されない。
-- `update_metadata` を経由するため、`register_meta` で登録した `sanitize_callback` は `sanitize_meta()` フィルタとしてWPコアが自動適用する。FW側で二重適用しない。
-- slash 処理: `update_metadata` は `wp_unslash` 前提の生値を期待する。本クラスは受け取った値をそのまま渡す(呼び出し側=Form層等がunslash済みの値を渡す規約。rules/ に明記)。
+- `update_metadata` を経由するため、`register_meta` で登録した `sanitize_callback` は `sanitize_meta()` フィルタとしてWPコアが自動適用する。FW側で二重適用しない(書き込みの false の判定のためにも再実行しない)。
+- **書き込みの false とデータベースのエラーの判定**(`set()`・`setAll()`・`delete()`、4.14 の `WpOptionStorage` も同じ。実装は内部クラス `WpDatabaseGuard`): WP の書き込み関数は「同じ値」「ほかのプラグインのフィルタ(短絡フィルタ `update_{$meta_type}_metadata` 等)による中止」「データベースのエラー」のどれでも false を返す。値を比べて区別するのではなく、データベースのエラーで判定する。
+  - 書き込み関数を呼ぶ前に `$wpdb->num_queries` を控える。戻り値が false で、呼び出しの間に `num_queries` が増えており、かつ `$wpdb->last_error !== ''` なら `RuntimeException`(メッセージに `last_error` を含める)。それ以外の false は「書き込まなかった」として false を返す(保存値は変わっていない)。
+  - 書き込み操作の中で行う読み取り(`setAll()` の置換の前後の `getAll()`、`delete()` の前の `has()`、`WpOptionStorage` の `set()`・`delete()` の前の `has()`)も同じ方法で判定し、呼び出しの間のクエリでデータベースのエラーが起きていれば、debug に関係なく `RuntimeException` にする。WP の読み取り関数はクエリの失敗を「行が無い」と同じ結果で返すため、そのまま使うと置換や削除を誤る。公開の読み取りメソッド(`get()`・`has()`・`getAll()`・`getMultiple()`)を単独で呼んだ場合は、この判定をしない。
+  - 根拠(WP 7.0): `wpdb::query()` は実行の前に `flush()` で `last_error` を空にし、実行後に `mysqli_error()` を入れる。クエリを実際に発行すると `wpdb::_do_query()` が `num_queries` を増やす(wp-includes/class-wpdb.php)。`update_metadata()`・`add_metadata()`・`delete_metadata()`(wp-includes/meta.php)は、書き込みのクエリが失敗するとほかのクエリを発行せずにすぐ false を返すため、失敗したときの最後のクエリは書き込みのクエリになる。呼び出しの前の無関係なクエリのエラーを拾わないために、呼び出しの間に `num_queries` が増えた場合だけ `last_error` を見る。
+  - 受け入れる限界(書き込みにも、書き込み操作の中の読み取りにも同じく当てはまる):
+    1. 呼び出しの間にほかのフックが発行したクエリが失敗して最後のクエリとして残った場合は、書き込み関数・読み取り関数そのものが成功していても `RuntimeException` にする(fail-fast)。
+    2. `delete_option()` は削除のクエリが失敗した後もキャッシュを更新し、autoload のオプションで `alloptions` のキャッシュが無いときは読み直しのクエリを発行する。その場合は削除のエラーが `last_error` から消え、false(書き込まなかった)になる(4.14)。
+    3. `wpdb::query()` が `num_queries` を増やさずに `last_error` だけを入れる経路(不正なデータを含むクエリの拒否)では、`num_queries` が増えないため、書き込みは false(書き込まなかった)、読み取りは成功として扱う。
+    4. 接続が切れて再接続にも失敗した場合、`wpdb::query()` は `last_error` を入れる前に false を返すため、書き込みは false(書き込まなかった)、読み取りは成功として扱う。データベースのサーバーの障害の経路であり、そのときはほかの処理も目に見えて失敗する。`wpdb` の内部(接続ハンドル等)に依存して検出すると WP の版の変更で壊れやすいため、検出しない。
+  - サニタイズやフィルタは再実行しない。WP が1回だけ適用する。
+- slash 処理: `update_metadata()`・`add_metadata()`・`delete_metadata()` は、キーと値が slash 済み(magic quotes を付けた `$_POST` 等と同じ形)である前提で内部で `wp_unslash()` する。本クラスは受け取った値を元の値として保存するため、キーと値を `wp_slash()` してから渡す。呼び出し側(`MetaBag` の利用者・Form 層)は unslash 済みの元の値を渡し、自分で `wp_slash()` しない(二重に slash すると backslash が残る)。これによりバックスラッシュを含む文字列(`json_encode()` の出力、Windows のパス、正規表現)がそのまま往復する。
+- 保存できない値: `null`(WP のメタは null を保存できず空文字になる)と、object を含む値(`wp_slash()` は object を扱わず、`update_metadata()` の `wp_unslash()` が object のプロパティの文字列をその場で書き換えるため、元の値として往復しない)は `InvalidArgumentException` で拒否する。
 
 ### 4.7 `TMSWP\Core\Meta\ValueCaster`(新設・内部クラス)
 
@@ -420,7 +473,7 @@ final class ValueCaster
 | `toList()` | array→`array_values()` / null→`[]` / それ以外のスカラー→`[$value]`(1要素list) |
 | `toJsonArray()` | array→そのまま(WPの `maybe_unserialize` 済み配列をそのまま返す) / string→`json_decode($value, true)`。decode失敗(`json_last_error() !== JSON_ERROR_NONE`)または結果が非array→`[]` / それ以外→`[]` |
 
-- `accepts(type, value)` の判定: String→`is_scalar() || $value instanceof Stringable`、Boolean→`is_bool()`、Integer→`is_int()`、Number→`is_int() || is_float()`、Array→`is_array()`、Object→`is_array()`(連想配列で表現)。スキーマの `default` はキャストに頼らず宣言時点で正しい型を書かせる(緩い受け入れはしない)。
+- `accepts(type, value)` の判定: String→`is_scalar() || $value instanceof Stringable`、Boolean→`is_bool()`、Integer→`is_int()`、Number→`is_int() || is_float()`、Array→`is_array()`、Object→`is_array()`(連想配列で表現)。スキーマの `default` はキャストに頼らず宣言時点で正しい型を書かせる(緩い受け入れはしない)。同じ判定を、宣言済みキーへの書き込み(`MetaBag::set()`・`OptionRepository::set()`)の型検査にも使う。
 
 ### 4.8 `TMSWP\Core\Meta\MetaBag`
 
@@ -479,12 +532,19 @@ final class MetaBag
 
     public function has(string $key): bool;
 
-    /** @return array<string, mixed> 宣言済み全キーの生値マップ(バルク取得) */
+    /** @return array<string, mixed> 宣言済み全キーの値マップ(バルク取得)。各キーの値は get() と同じ */
     public function all(): array;
 
     // ---- 書き込み ----
 
+    /**
+     * @return bool 書き込んだら true、書き込まなかったら false(保存値は変わっていない)
+     * @throws \TMSWP\Core\Exception\InvalidArgumentException null・スキーマの型に合わない値・single=false への非list
+     * @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー
+     */
     public function set(string $key, mixed $value): bool;
+
+    /** @return bool 行を削除したら true、元々行が無かった・削除しなかったら false */
     public function delete(string $key): bool;
 }
 ```
@@ -505,8 +565,8 @@ final class MetaBag
 - `list($key)`: スキーマが `single: false` → `storage->getAll()`(空配列なら解決順2以降へ)。`single: true` または未宣言キー → `storage->get()` の値を `ValueCaster::toList()`。
 - `json($key)`: `storage->get()` の値を `ValueCaster::toJsonArray()`。
 - `has($key)`: `storage->has()` への委譲。スキーマdefaultの有無は影響しない(「行が存在するか」のみ)。
-- `all()`: `storage->getMultiple($type, $id, $schemas->keys())` を1回呼び、欠けたキーはスキーマdefault(無ければ null)で補完した `array<string, mixed>` を返す。**宣言済みキーのみ**が対象。
-- `set($key, $value)`: スキーマが `single: false` の場合、`$value` が list でなければ `InvalidArgumentException`、listなら `storage->setAll()`。それ以外は `storage->set()`。サニタイズは行わない(WpMetaStorage 経由なら `register_meta` の sanitize_callback がWPコアで適用される。4.6参照)。
+- `all()`: **宣言済みキーのみ**が対象で、各キーの値は `get($key)` と同じになる。single=true のキーは `storage->getMultiple($type, $id, single=true のキー)` を1回呼び、欠けたキーはスキーマdefault(無ければ null)で補完する。single=false のキーは `get()` と同じく全行の list(行が無ければ null)を返す(`getMultiple()` は単一値用で先頭行しか返さないため使わない)。
+- `set($key, $value)`: `$value` が `null` なら `InvalidArgumentException`(宣言の有無に関係なく。削除は `delete()` を使う)。スキーマが `single: false` の場合、`$value` が list でなければ `InvalidArgumentException`、listなら各要素を検査して `storage->setAll()`。それ以外は値を検査して `storage->set()`。宣言済みキーの値(single=false では各要素)は `ValueCaster::accepts()`(4.7)でスキーマの型に合うことを確かめ、合わなければ `InvalidArgumentException`。未宣言キーは型を検査しない。キャストやサニタイズは行わない(WpMetaStorage 経由なら `register_meta` の sanitize_callback がWPコアで適用される。4.6参照)。戻り値はストレージの戻り値(書き込んだか)で、データベースのエラーはストレージが例外にする(4.5)。
 - `delete($key)`: `storage->delete()` への委譲。
 
 **未宣言キーの扱い(確定)**: `#[MetaSchema]` で宣言されていないキー文字列を渡してもエラーにしない。`_thumbnail_id` 等のWP組込みメタや他プラグインのキーを読む正当なユースケースがあるためである。ただし未宣言キーにはスキーマdefault・single=false分岐・REST登録・PHPStanナローイングのいずれも適用されない。タイポ検出は実行時例外ではなく、PHPStan拡張の定数所属検査(4.18)が担う。
@@ -583,14 +643,24 @@ final class MetaSchemaRegistry
      * 外部管理キーの宣言(acf-bridge が呼ぶ)。該当キーは registerAll() で register_*_meta をスキップする。
      * PHP側 #[MetaSchema] と同一 (objectType, subtype, key) が両方に存在する場合は
      * DuplicateMetaKeyException(DR-06: acf-json が真実源、二重宣言はエラー)。
+     * subtype は文字列どおりの1サブタイプだけを表す('all' という名前の投稿タイプも1つのサブタイプとして扱う)。
      */
     public function markExternallyManaged(ObjectType $objectType, string $subtype, string $key): void;
 
+    /**
+     * ObjectType のすべてのサブタイプについての外部管理キーの宣言(ACF の location が taxonomy==all 等の場合)。
+     * いずれかのサブタイプの #[MetaSchema] が同じ key を宣言していれば DuplicateMetaKeyException。
+     */
+    public function markExternallyManagedInAllSubtypes(ObjectType $objectType, string $key): void;
+
+    /** markExternallyManaged() の (objectType, subtype, key) か、markExternallyManagedInAllSubtypes() の (objectType, key) に当たれば true */
     public function isExternallyManaged(ObjectType $objectType, string $subtype, string $key): bool;
 
     /**
      * init フック(priority 20)から1回だけ呼ばれ、全スキーマを register_*_meta へ登録する。
      * 2回目以降の呼び出しは LogicException。
+     *
+     * @throws \TMSWP\Core\Exception\InvalidSchemaException WP が登録を拒否した(register_*_meta が false を返した)
      */
     public function registerAll(): void;
 }
@@ -601,9 +671,9 @@ final class MetaSchemaRegistry
 **registerEntity() の処理手順(擬似コード)**:
 
 ```
-1. ReflectionClass($entityClass) の getConstants(ReflectionClassConstant::IS_PUBLIC)
-   を列挙し、#[MetaSchema] 属性を持つ定数のみ対象にする
-   (定数名プレフィックス規約は課さない。属性の有無だけが宣言の根拠。META_ 接頭辞は推奨規約として rules/ に記載)
+1. ReflectionClass($entityClass) の getReflectionConstants() で全定数を列挙し、#[MetaSchema] 属性を持つ定数のみ対象にする
+   (定数名プレフィックス規約は課さない。属性の有無だけが宣言の根拠。META_ 接頭辞は推奨規約として rules/ に記載)。
+   属性を持つ定数が public でなければ InvalidSchemaException(黙って飛ばさない)
 2. 各定数 → MetaSchemaDefinition::fromAttribute() で検証付き生成
 3. エンティティ内でメタキー文字列が重複 → DuplicateMetaKeyException
 4. レジストリ全体で (objectType, subtype, key) が既登録 → DuplicateMetaKeyException
@@ -616,7 +686,7 @@ final class MetaSchemaRegistry
 7. entityClass => {objectType, subtype, MetaSchemaSet, storageClass, revisions} を内部マップへ格納
 ```
 
-- 親クラスから継承した定数も `getConstants()` に含まれるが、**宣言クラス(`ReflectionClassConstant::getDeclaringClass()`)が `$entityClass` 自身であるものだけ**を対象とする。エンティティ継承によるスキーマの暗黙共有は行わない(明示性優先)。
+- 親クラスから継承した定数も `getReflectionConstants()` に含まれるが、**宣言クラス(`ReflectionClassConstant::getDeclaringClass()`)が `$entityClass` 自身であるものだけ**を対象とする。エンティティ継承によるスキーマの暗黙共有は行わない(明示性優先)。
 - メタスキーマは探索結果ファイル(Kernel設計書 §6)に載せない。探索結果ファイルが持つのはコンポーネントの属性と引数だけで、メタスキーマは `registerEntity()` が初期化時に定数のリフレクションで毎回構築する。
 
 **bagFor() の処理手順**:
@@ -647,10 +717,11 @@ foreach 登録済みエンティティ:
         args['sanitize_callback'] = definition->sanitize
     if objectType === Post かつ エンティティに #[WithMetaRevisions] 付与済み:
         args['revisions_enabled'] = true                          # WP 6.4+(4.11)
-    match objectType:
+    registered = match objectType:
       Post: register_post_meta(subtype, key, args)
       Term: register_term_meta(subtype, key, args)
       User: register_meta('user', key, args)                      # userにsubtypeは無い
+    if registered !== true: InvalidSchemaException                # WP が登録を拒否した(黙殺しない)
 ```
 
 - フック登録はKernelが行う: `add_action('init', $registry->registerAll(...), 20)`(第一級callable構文)。priority 20 は、エンティティの `register_post_type`/`register_taxonomy`(init 10、エンティティ設計書)を確実に先行させるため。リビジョン保存宣言は属性(4.11)であり registerEntity() 時点で確定しているため、init より前に呼ぶべき有効化処理は存在しない。
@@ -700,7 +771,7 @@ final class UseMetaStorage
 final class ProductPost extends PostType { /* ... */ }
 ```
 
-- ストレージ差し替えは**読み書き経路のみ**に影響する。`register_*_meta` の発行可否は `markExternallyManaged()`(キー単位)が決める。acf-bridge は「ACF管理キーを markExternallyManaged で申告」+「エンティティに UseMetaStorage を付けさせる」の両輪で統合する(acf-bridge設計書)。
+- ストレージ差し替えは**読み書き経路のみ**に影響する。`register_*_meta` の発行可否は `markExternallyManaged()`・`markExternallyManagedInAllSubtypes()`(キー単位)が決める。acf-bridge は「ACF管理キーを markExternallyManaged 系で申告」+「エンティティに UseMetaStorage を付けさせる」の両輪で統合する(acf-bridge設計書)。
 
 ### 4.11 `TMSWP\Core\Attribute\WithMetaRevisions`
 
@@ -777,12 +848,13 @@ final class AsOptionGroup
 
 /**
  * オプショングループ enum の各ケースに付与する。
- * PHP には enum case 専用の属性ターゲットフラグ(TARGET_ENUM_CASE 相当)が無いため、
- * ターゲットは無限定(#[Attribute])とし、enum case 以外への付与はブート時検証(4.13)で
- * InvalidSchemaException とする。meta 用 #[MetaSchema](TARGET_CLASS_CONSTANT 単独)とは
- * ターゲット宣言・反射経路を別管理とする点に注意。
+ * PHP には enum case 専用の属性ターゲットフラグ(TARGET_ENUM_CASE 相当)が無く、enum case は
+ * 属性のターゲットとしてクラス定数に当たるため、ターゲットは TARGET_CLASS_CONSTANT とする。
+ * クラス・メソッド・プロパティ・引数への付与は PHP(属性のインスタンス化時)と PHPStan が拒否し、
+ * グループ enum のケースでない定数・enum 自身・メソッド・引数への付与は OptionRepositoryFactory::for()
+ * がブート時に InvalidSchemaException とする(4.15)。meta 用 #[MetaSchema] とは反射経路を別管理とする点に注意。
  */
-#[Attribute]
+#[Attribute(Attribute::TARGET_CLASS_CONSTANT)]
 final class OptionSchema
 {
     /**
@@ -805,7 +877,7 @@ final class OptionSchema
 - 反射経路: enum ケースの属性はクラス定数用の `ReflectionClass::getReflectionConstants()` ではなく、`ReflectionEnum::getCases()` + `ReflectionEnumUnitCase::getAttributes()` で取得する。Discovery・`OptionSchemaDefinition::fromAttribute()`・`OptionRepositoryFactory::for()`(4.15 手順3)はすべてこの経路を使う(meta 側のクラス定数反射経路とは別管理)。
 - `AsOptionGroup` の `storage` がコンテナで解決不能・インターフェース非実装の場合は `InvalidSchemaException`。
 - `#[AsOptionGroup]` は Discovery の走査対象属性である(Kernel設計書)。走査対象には class だけでなく enum を含む(enum もクラスの一種として Discovery が収集する)。Discoveryは検出したグループ enum を `OptionRepositoryFactory`(4.15)へ事前登録し、スキーマ検証をブート時に前倒しする。Discovery未検出の enum(テスト等で直接利用)でも `OptionRepositoryFactory::for()` が遅延構築するため動作はする。
-- `#[OptionSchema]` のターゲットは無限定宣言のため enum ケース以外への付与がコンパイルエラーにならないが、収集経路が `getCases()` のみであるため宣言としては無効である。Discovery が走査時に enum ケース以外への付与を検出した場合は `InvalidSchemaException` とする(黙殺しない)。
+- `#[OptionSchema]` のターゲットは `TARGET_CLASS_CONSTANT` であり、enum ケースでない定数への付与は属性のターゲットとしては許されてしまうが、収集経路が `getCases()` のみであるため宣言としては無効である。`OptionRepositoryFactory::for()`(4.15 手順3)は、グループ enum のケースでない定数・enum 自身・メソッド・メソッドの引数に付いた `#[OptionSchema]` を検出して `InvalidSchemaException` とする(黙殺しない)。
 
 ### 4.13 `TMSWP\Core\Option\OptionSchemaDefinition` / `TMSWP\Core\Option\OptionSchemaSet`(新設)
 
@@ -890,6 +962,12 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Option;
 
+/**
+ * 書き込み(set・delete)は、書き込んだかどうかを bool で返し、データベースのエラーは例外で知らせる。
+ * false は失敗ではなく「書き込まなかった」(同じ値、ほかのプラグインのフィルタによる中止、delete ではオプションが
+ * 無かった)を意味し、保存されている値は変わっていない。
+ * null は保存しない。削除は delete() で行う。
+ */
 interface OptionStorageInterface
 {
     /** $name は プレフィックス適用済みの実オプション名 */
@@ -898,10 +976,20 @@ interface OptionStorageInterface
     /** 未保存時は null。存在判定には has() を使うこと */
     public function get(string $name): mixed;
 
-    /** @param bool|null $autoload null はWPに委ねる(既存値を変更しない) */
+    /**
+     * @param bool|null $autoload null はWPに委ねる(既存値を変更しない)
+     * @return bool 書き込んだら true、書き込まなかったら false(保存値は変わっていない)
+     * @throws \TMSWP\Core\Exception\InvalidArgumentException null
+     * @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー
+     */
     public function set(string $name, mixed $value, ?bool $autoload = null): bool;
 
-    /** 冪等。元々存在しない場合も true */
+    /**
+     * 冪等。元々存在しない場合は何もせず false。
+     *
+     * @return bool 削除したら true、元々オプションが無かった・削除しなかったら false
+     * @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー
+     */
     public function delete(string $name): bool;
 }
 
@@ -927,16 +1015,24 @@ get($name):
   return $value === $sentinel ? null : $value;
 
 set($name, $value, $autoload):
-  return update_option($name, $value, $autoload);
-  # update_option は新規時に add_option へ委譲し $autoload を引き継ぐ。
-  # 同値更新で false が返るWP仕様はそのまま返す(エラーと区別しない。rules/ に注意書き)
+  if ($value === null) throw InvalidArgumentException   # null は保存しない。削除は delete()
+  # write(...) は 4.6 の「書き込みの false とデータベースのエラーの判定」:
+  #   書き込み関数が false を返し、呼び出しの間のクエリでデータベースのエラーが起きていれば RuntimeException、
+  #   そうでなければ false(書き込まなかった)。書き込んだと返したら true
+  # read(...) は同じ判定の読み取り版: 呼び出しの間のクエリでデータベースのエラーが起きていれば RuntimeException
+  if (!read(has($name))) return write(add_option($name, $value, '', $autoload))
+  return write(update_option($name, $value, $autoload))
 
 delete($name):
-  if (!has($name)) return true;             # 冪等正規化
-  return delete_option($name);
+  if (!read(has($name))) return false;      # 冪等(何もしない)
+  return write(delete_option($name))
 ```
 
-- センチネルオブジェクトは `WpOptionStorage` の実装詳細としてのみ存在し、インターフェース契約・戻り値には一切現れない。「APIとしてのnullセンチネル全廃」と矛盾しない。
+- センチネルオブジェクトは `has()`/`get()` の実装詳細としてのみ存在し、インターフェース契約・戻り値・wp_options の保存値には一切現れない。「APIとしてのnullセンチネル全廃」と矛盾しない。オプションの値として `null` を保存する手段は持たない(null を表すセンチネルを wp_options に書くと、他の読み手には `__PHP_Incomplete_Class` になるため)。
+- 「同じ値」の判断は WP の `update_option()` に任せる。サニタイズ(`sanitize_option_{$name}`)や `pre_update_option*` フィルタが値を保存済みの値と同じにした場合、オプション名の前後の空白を WP が取り除いて同じオプションになった場合は、WP が書き込まずに false を返すので false になる(例外にしない)。本クラスはサニタイズもフィルタも再実行せず、呼び出し元が渡した値も変えない(`update_option()` は object を clone してからサニタイズする)。
+- 根拠(WP 7.0 の wp-includes/option.php): `update_option()`・`add_option()`・`delete_option()` は、書き込みのクエリ(`$wpdb->update()`・`INSERT ... ON DUPLICATE KEY UPDATE`・`$wpdb->delete()`)が失敗すると false を返す。`update_option()` と `add_option()` はその直後に false を返す。`delete_option()` は失敗の後もキャッシュを更新するため、autoload のオプションで `alloptions` のキャッシュが無いときは読み直しのクエリが走り、削除のエラーが `last_error` から消えて false(書き込まなかった)になりうる(4.6 の受け入れる限界2)。ほかの受け入れる限界(4.6 の1・3・4)も同じく当てはまる。
+- `set()`・`delete()` の前の存在の確認(`has()`)の読み取りも、4.6 と同じ方法で判定し、データベースのエラーなら `RuntimeException` にする。
+- オプションが無い場合は `update_option()` を通さず `add_option()` を呼ぶ。
 
 ### 4.15 `TMSWP\Core\Option\OptionRepository` / `TMSWP\Core\Option\OptionRepositoryFactory`(Factoryは新設)
 
@@ -996,10 +1092,22 @@ final class OptionRepository
     public function all(): array;
 
     // ---- 書き込み ----
+
+    /**
+     * @return bool 書き込んだら true、書き込まなかったら false(保存値は変わっていない)
+     * @throws \TMSWP\Core\Exception\InvalidArgumentException null・スキーマの型に合わない値
+     * @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー
+     */
     public function set(string $key, mixed $value): bool;
+
+    /** @return bool 削除したら true、元々オプションが無かった・削除しなかったら false */
     public function delete(string $key): bool;
 
-    /** 宣言済み全キーを削除する(アンインストール用)。削除した実オプション名の list を返す */
+    /**
+     * 宣言済み全キーを削除する(アンインストール用)。
+     *
+     * @return list<string> 実際に削除した実オプション名(元々無かったものは含まない)
+     */
     public function deleteAll(): array;
 }
 
@@ -1029,6 +1137,8 @@ final class OptionRepositoryFactory
 - `OptionRepository` の値解決順は MetaBag と完全に同一: storage(has→get) → 引数default → スキーマdefault → 型ゼロ値(get()はnull)。キャストは `ValueCaster` を共用。同一なのは**値解決・キャスト規則**であり、スキーマの宣言形は meta(クラス定数+属性)と option(enum ケース+属性)で異なる(4.12)。
 - メタと違い `single=false` 相当の概念はない。`list()`/`json()` は保存値(配列/JSON文字列)のキャストのみ。
 - `set()` はスキーマの `autoload` を `storage->set()` の第3引数へ渡す。未宣言キーは `null`(WP既定)を渡す。
+- `set()` は `null` を `InvalidArgumentException` で拒否し、永続化しない(宣言の有無に関係なく。削除は `delete()` に一本化する)。宣言済みキーの値は `ValueCaster::accepts()`(4.7)でスキーマの型に合うことを確かめ、合わなければ `InvalidArgumentException`(キャストはしない)。未宣言キーは型を検査しない。戻り値はストレージの戻り値(書き込んだか)で、データベースのエラーはストレージが例外にする(4.14)。
+- `deleteAll()` は宣言済みの全キーについて `storage->delete()` を呼び、true を返した(実際に削除した)実オプション名だけを返す。
 - **未宣言キーの扱い**: enum ファサード(4.16)はケースに存在しないキーを表現できないため、「グループ経由の未宣言キー読み取り」はファサードの対象外である。グループ名前空間内の未宣言キー(プレフィックス付きで他オプションを読む用途)は、本クラス `OptionRepository::get()` 等の**直接利用が正式経路**である(`SiteOption::repository()->get('legacy_key')` の形。4.16)。未宣言キーは「許可するがスキーマ恩恵なし」で、プレフィックスは**適用される**(グループ経由のアクセスは常にグループの名前空間内)。素のオプション名(他プラグインのオプション等)は `OptionStorageInterface`(`WpOptionStorage`)の直接利用を正とし、`get_option()` 直書きは非推奨とする(この経路規約は rules/ に明記)。
 - `OptionRepositoryFactory::for()` の構築手順:
 
@@ -1037,6 +1147,7 @@ final class OptionRepositoryFactory
 2. enum_exists($groupClass) かつ string backed(ReflectionEnum::getBackingType() が string)
    でなければ InvalidSchemaException
 3. ReflectionEnum: #[AsOptionGroup] を読む。なければ InvalidSchemaException。
+   enum 自身・ケースでない定数・メソッド・メソッドの引数に #[OptionSchema] があれば InvalidSchemaException(4.12)。
    ReflectionEnum::getCases() で全ケースを列挙し、#[OptionSchema] 付きケースを
    ReflectionEnumUnitCase::getAttributes() 経由で OptionSchemaDefinition::fromAttribute()
    により検証付き収集(属性なしケースは宣言キーとして扱わずスキーマ恩恵なし。
@@ -1104,7 +1215,7 @@ trait OptionAccess
     /** プレフィックス適用済みの実オプション名(デバッグ・アンインストール処理用) */
     final public function name(): string;
 
-    // ---- ケース単位の書き込み ----
+    // ---- ケース単位の書き込み(戻り値・例外は OptionRepository::set()/delete() と同じ。4.15) ----
 
     final public function set(mixed $value): bool;
     final public function delete(): bool;
@@ -1114,7 +1225,7 @@ trait OptionAccess
     /** @return array<string, mixed> 宣言済み全キーの値マップ(プレフィックスなしキーで返す) */
     final public static function all(): array;
 
-    /** 宣言済み全キーを削除する(アンインストール用)。削除した実オプション名の list を返す */
+    /** 宣言済み全キーを削除する(アンインストール用)。実際に削除した実オプション名の list を返す */
     final public static function deleteAll(): array;
 }
 ```
@@ -1123,6 +1234,7 @@ trait OptionAccess
 
 - すべてのメソッドは `static::repository()` 経由で `OptionRepository` の同名メソッドへ1:1委譲する薄いラッパ。ケース単位メソッドはキーとして `$this->value` を渡す。ロジックの二重実装を禁止する。
 - `repository()` の実装: `Kernel::container()->get(OptionRepositoryFactory::class)->for(static::class)`。Kernel未ブート時は `KernelNotBootedException`(Kernel設計書の例外。コンテナアクセサの正準名はKernel設計書に従う)。
+- trait を string backed でない enum に use した場合は、宣言の誤りとして `InvalidSchemaException` とする(`repository()` の `OptionRepositoryFactory::for()` が先に拒否し、キーの解決 `$this->value` も同じ例外で拒否する)。
 - キー一覧の列挙は trait のメソッドではなく enum 標準の `cases()` を使う(旧 `keys()` 相当。宣言済みキー文字列の一覧が必要な場合は `OptionSchemaSet::keys()` をリポジトリ経由で参照する)。
 - 未宣言キーは enum ケースとして表現できないため、本ファサードからの未宣言キー読み取りはできない。グループ名前空間内の未宣言キーは `static::repository()->get('legacy_key')` の直接利用が正式経路(4.15)。
 - 旧 `AbstractOption` の `__callStatic` 内 `self::set`(静的遅延束縛の誤り。サブクラスでのオーバーライドが効かない)と「setterが常にnullを返す」バグは、マジックメソッド全廃+実シグネチャ定義により構造的に再発不能となる。
@@ -1154,7 +1266,9 @@ final class EntityNotRegisteredException extends LogicException {}
 
 - オプショングループ内キーの二重宣言を表す例外は持たない: グループは backed enum であり(4.16)、backing value の重複は PHP がコンパイル時に Fatal とするため、実行時例外は不要。
 - ここでの `LogicException` は `TMSWP\Core\Exception\` 配下のFWの基底例外を指す。FWの基底は `\LogicException` を継承して `TmswpExceptionInterface` を実装するため、上記の例外は `catch (\LogicException $e)` でも `catch (TmswpExceptionInterface $e)` でも捕まえられる。
-- 引数不正(ObjectType とWPオブジェクトの不一致、ID<1、single=false への非list set 等)は、FWの基底 `InvalidArgumentException`(`07-support.md` §6。`\InvalidArgumentException` 系)を送出する。
+- 引数不正(ObjectType とWPオブジェクトの不一致、ID<1、single=false への非list set、`null` の set、宣言済みキーへのスキーマの型に合わない値の set、メタへの object の set 等)は、FWの基底 `InvalidArgumentException`(`07-support.md` §6。`\InvalidArgumentException` 系)を送出する。
+- 書き込み(`set`・`setAll`・`delete`)でのデータベースのエラーは、FWの基底 `RuntimeException`(`\RuntimeException` 系)を送出する。書き込みの戻り値は「書き込んだか」であり、データベースのエラーを `false` で返すことはしない。ほかのプラグインのフィルタが書き込みを止めた場合は、保存値が変わっていないので false である(4.5・4.6・4.14)。
+- `InvalidSchemaException` には、4.1 の宣言の誤り(public でない定数、REST に出す Array/Object 型のスキーマ欠落を含む)、WP が `register_*_meta` を拒否したこと(4.9)、`#[OptionSchema]` の enum ケース以外への付与(4.12)も含む。
 - 方針: スキーマ・宣言系の誤りはすべて「ブート時に LogicException 系で即死」させ、本番実行時の黙殺・フォールスルー(旧FWのフィルタ名不一致が3年以上発覚しなかった原因)を構造的に防ぐ。
 
 ### 4.18 FW同梱PHPStan拡張
@@ -1322,7 +1436,7 @@ final class ProductPost extends PostType
     #[MetaSchema(type: MetaValueType::String, description: '製品コード', sanitize: 'sanitize_text_field')]
     public const META_CODE = 'product_code';
 
-    #[MetaSchema(type: MetaValueType::Array, single: false)]
+    #[MetaSchema(type: MetaValueType::Integer, single: false)]   // single=false の type は1行ごとの型
     public const META_RELATED_IDS = 'related_id';
 
     public static function definition(): PostTypeDefinition
@@ -1346,6 +1460,7 @@ $code  = \App\Post\ProductPost::meta($post)->string(\App\Post\ProductPost::META_
 // 保存(フォーム処理・保存フック内)
 \App\Post\ProductPost::meta($post_id)->set(\App\Post\ProductPost::META_PRICE, 1280);
 \App\Post\ProductPost::meta($post_id)->set(\App\Post\ProductPost::META_RELATED_IDS, [12, 34]); // single=false は list を渡す
+\App\Post\ProductPost::meta($post_id)->delete(\App\Post\ProductPost::META_CODE);              // 値を消すときは null を set せず delete()
 ```
 
 ### ACFストレージへのオプトイン(acf-bridge 導入時)
@@ -1355,7 +1470,8 @@ $code  = \App\Post\ProductPost::meta($post)->string(\App\Post\ProductPost::META_
 #[UseMetaStorage(\TMSWP\AcfBridge\AcfMetaStorage::class)]
 final class CampaignPost extends PostType
 {
-    // ACF管理下のキーは acf-json が真実源。PHP側で同一キーを #[MetaSchema] 宣言するとブート時エラー(DR-06)
+    // v0.6.0 までは、ACF のフィールドグループで管理するキーを #[MetaSchema] で宣言すると
+    // ブート時に DuplicateMetaKeyException になる(「メタ・設定の使い分け」の v0.6.0 までの境目)
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('campaign')->label('キャンペーン')->labelLanguage(LabelLanguage::Ja);
@@ -1448,19 +1564,23 @@ final class ProductPost extends PostType
 ### チェックリスト
 
 - [ ] `#[MetaSchema]` の6パラメータ(type/default/single/showInRest/description/sanitize)がすべて `register_*_meta` 引数へ正しくマップされる(統合テストで `get_registered_meta_keys()` を検証)。
-- [ ] default型不一致・single=false+default併用・sanitize形式不正・空キーが、いずれもブート時に `InvalidSchemaException` となる(ユニットテスト)。type の不正値は `MetaValueType` enum 受けにより実行前(IDE/PHPStan/PHPの属性インスタンス化)に拒否されるため、ブート時検証・例外テストは存在しない。
+- [ ] default型不一致・single=false+default併用・sanitize形式不正・空キー・public でない定数への付与・REST に出す Array/Object 型のスキーマ欠落が、いずれもブート時に `InvalidSchemaException` となる(ユニットテスト)。WP が `register_*_meta` を拒否した場合(false を返した場合)も `registerAll()` が `InvalidSchemaException` となる(ユニットテスト)。type の不正値は `MetaValueType` enum 受けにより実行前(IDE/PHPStan/PHPの属性インスタンス化)に拒否されるため、ブート時検証・例外テストは存在しない。
 - [ ] 同一エンティティ内・同一 (ObjectType, subtype) スコープのキー重複が `DuplicateMetaKeyException` となる。subtypeが異なる同名キーは共存できる。
-- [ ] `markExternallyManaged()` 済みキーは `register_*_meta` が発行されず、同キーのPHP側 `#[MetaSchema]` 宣言が存在する場合は `DuplicateMetaKeyException` となる(acf-bridge連携点のコア側単体で検証)。
+- [ ] `markExternallyManaged()`・`markExternallyManagedInAllSubtypes()` 済みキーは `register_*_meta` が発行されず、同キーのPHP側 `#[MetaSchema]` 宣言が存在する場合は `DuplicateMetaKeyException` となる(acf-bridge連携点のコア側単体で検証)。サブタイプの文字列 `'all'` は特別な意味を持たない。ACF のフィールドグループで管理するキーを `#[MetaSchema]` と `#[UseMetaStorage(AcfMetaStorage::class)]` で宣言できるようにするのは v0.6.0 の acf-bridge 側の対応である(「メタ・設定の使い分け」の v0.6.0 までの境目)。
 - [ ] `MetaBag` の全getterについて「ストレージ値 → 引数default → スキーマdefault → ゼロ値/null」の解決順がユニットテスト(モックストレージ、Brain Monkey不要)で網羅されている。
 - [ ] `ValueCaster` のキャスト表(4.7)の全セルがユニットテストで固定されている。
 - [ ] `MetaStorageInterface` 契約テスト(has/get分離、getMultipleのキー有無セマンティクス、deleteの冪等性)が抽象テストケースとして存在し、`WpMetaStorage` が統合テスト(wp-env)でそれを満たす。
 - [ ] `register_meta` の `default` が設定されたキーでも、`WpMetaStorage::get()`/`getAll()` は default を介在させず「行なし」を null / `[]` として返す(統合テスト。`get_metadata_raw()` 経路の実証)。
-- [ ] null/false/空文字を保存した場合に `has()` が true、`get()` がその値を返す(nullセンチネル不在の実証。メタ・オプション両方)。
+- [ ] false/空文字を保存した場合に `has()` が true、`get()` がその値を返す(nullセンチネル不在の実証。メタ・オプション両方)。`null` の `set` は `InvalidArgumentException` となり、何も保存しない(メタ・オプション両方。統合テスト)。
+- [ ] バックスラッシュを含む文字列(`json_encode()` の出力・Windows のパス・正規表現)と、それを含む配列・single=false の行が、`MetaBag` の書き込みと読み出しで往復する(統合テスト)。
+- [ ] 書き込みが「書き込んだ」で true、「書き込まなかった」で false を返す。false には、同じ値(保存済みの `'2500'` と int 2500、サニタイズや `pre_update_option*` の後に一致する値、前後に空白のあるオプション名を含む)と、ほかのプラグインのフィルタ(短絡を含む)による中止が当たり、保存値は変わらない。呼び出しの間のデータベースのエラーは、`last_error` をメッセージに含む `RuntimeException` となる(同じ対象への入れ子の書き込みがあっても同じ)。呼び出しの前の無関係なデータベースのエラーは拾わない。書き込み操作の中の読み取り(`setAll()` の置換の前後、`delete()`・オプションの `set()` の前の存在の確認)のデータベースのエラーも `RuntimeException` となる(メタ・オプション両方。統合テスト)。サニタイズは再実行せず、呼び出し元の値を変えない。`setAll()` は削除・追加のデータベースのエラーも例外にする。
+- [ ] 宣言済みキーへのスキーマの型に合わない値の `set` が `InvalidArgumentException` となる(メタ・オプション両方。ユニットテスト)。
+- [ ] `MetaBag::all()` の single=false のキーの値が `get()` と同じ全行の list である(ユニットテスト・統合テスト)。
 - [ ] `#[UseMetaStorage]` 付きエンティティの `meta()` が指定ストレージ実装で読み書きし、属性なしエンティティは `WpMetaStorage` を使う。不正なstorageClassはブート時例外。
 - [ ] `ObjectType::resolveId()` が種別不一致のWPオブジェクト・ID<1 で `InvalidArgumentException` を送出する。
 - [ ] `#[WithMetaRevisions]` 付きエンティティのメタが `revisions_enabled => true` で登録され(統合テスト)、Post以外のエンティティ・revisions非サポート投稿タイプへの付与がブート時(`registerEntity()`)に `InvalidSchemaException` となる。
-- [ ] `OptionAccess` を use したオプショングループ enum でプレフィックス適用(`name()`)・autoload指定・`deleteAll()` が仕様どおり動作する(統合テスト)。
-- [ ] オプショングループ enum のスキーマ収集が `ReflectionEnum::getCases()` + `ReflectionEnumUnitCase::getAttributes()` 経由で行われ、string backed でない enum・`#[AsOptionGroup]` 欠落がブート時 `InvalidSchemaException` となる(ユニットテスト)。
+- [ ] `OptionAccess` を use したオプショングループ enum でプレフィックス適用(`name()`)・autoload指定・`deleteAll()` が仕様どおり動作し、`deleteAll()` が実際に削除した実オプション名だけを返す(統合テスト)。
+- [ ] オプショングループ enum のスキーマ収集が `ReflectionEnum::getCases()` + `ReflectionEnumUnitCase::getAttributes()` 経由で行われ、string backed でない enum・`#[AsOptionGroup]` 欠落・enum ケース以外(ケースでない定数・enum 自身・メソッド・引数)への `#[OptionSchema]` がブート時 `InvalidSchemaException` となる(ユニットテスト)。
 - [ ] PHPStan拡張: `MetaBag::get(ProductPost::META_PRICE)` が `int`(default宣言あり時)/`int|null`(なし時)へ絞り込まれること、他エンティティ定数の混入(`tmswp.metaKeyOwnership`)と宣言済みキーの文字列リテラル直書き(`tmswp.metaKeyLiteral`)が報告されることを、PHPStanのルールテスト(`RuleTestCase`/`TypeInferenceTestCase`)で検証。オプション側は `SiteOption::ContactEmail->get()`(enum ケースレシーバ)の絞り込みを `TypeInferenceTestCase` で検証(キー所属の誤りは enum の型システム上表現不能のためルールテストは持たない)。
 - [ ] 本層の全クラスが `declare(strict_types=1)`・final(基底・interface・enumを除く)・完全型宣言で、`composer analyse`(PHPStan level max, baselineなし)を通過する。
 - [ ] マジックメソッド(`__callStatic`/`__get`/`__set`)・`extract()`・グローバルフィルタによるストレージ差し替えがコード上に存在しない(PHPCS/レビューで確認)。

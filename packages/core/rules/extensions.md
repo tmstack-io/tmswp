@@ -96,7 +96,7 @@ $url = tms_thumb(get_post_thumbnail_id(), 480, 320, ['fit' => 'crop']);
 ## ACF連携例
 
 `acf-json/` を置いたうえで `wp tmswp acf sync` を実行し、生成された `App\Acf\*` クラスを使う。
-ACF管理キーは `#[MetaSchema]` と重複宣言しない。
+v0.6.0まで、ACFのフィールドグループで管理するキーは `#[MetaSchema]` で宣言しない(rules/meta.md の「v0.6.0までの境目」)。
 
 ## してはいけないこと
 
