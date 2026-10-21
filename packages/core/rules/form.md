@@ -216,6 +216,138 @@ final class BirthDateField extends CompositeField
 }
 ```
 
+## スパム対策(honeypot・Turnstile)を差し込む
+
+スパム対策は `SpamGuardInterface` を実装したクラスを app 側に置き、`FormDefinition::spamGuard()` で登録する。複数を登録でき、登録の順に検査する。
+
+- `render()` が返す HTML は、入力画面の `$form->open()` が hidden の後に出力する。確認画面には出力しない。
+- `passes()` は、利用者の入力を受け取る POST(確認画面ありは確認ボタン、なしは送信ボタン)で、CSRF と送信トークンの検証の後、値の検証の前に呼ばれる。false を返すと、フォームは入力画面に戻り、汎用のエラー(`Your submission could not be verified. Please try again.`)を出し、Kernel のロガーに notice を記録する。
+- 確認画面からの送信では検査しない。確認の時点で通っているため。
+
+honeypot(人には見えない入力欄に値が入っていたらボットとして拒否する) `app/Form/SpamGuard/HoneypotGuard.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Form\SpamGuard;
+
+use TMSWP\Core\Form\FormRequest;
+use TMSWP\Core\Form\SpamGuardInterface;
+
+final class HoneypotGuard implements SpamGuardInterface
+{
+    /** @param string $fieldName フォームの項目と重ならない名前にする */
+    public function __construct(private readonly string $fieldName = 'website_url') {}
+
+    public function render(string $formId): string
+    {
+        // display:none の欄は埋めないボットがあるため、画面の外に出す。支援技術とキーボード操作の対象からも外す
+        return '<div aria-hidden="true" style="position:absolute;left:-10000px;">'
+            . '<input type="text" name="' . esc_attr($this->fieldName) . '" id="' . esc_attr($formId . '-' . $this->fieldName) . '" value="" tabindex="-1" autocomplete="off">'
+            . '</div>';
+    }
+
+    public function passes(FormRequest $request): bool
+    {
+        return $request->post($this->fieldName) === '';
+    }
+}
+```
+
+Cloudflare Turnstile(ウィジェットのトークンを siteverify で検証する) `app/Form/SpamGuard/TurnstileGuard.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Form\SpamGuard;
+
+use TMSWP\Core\Form\FormRequest;
+use TMSWP\Core\Form\SpamGuardInterface;
+use TMSWP\Core\Log\Log;
+
+final class TurnstileGuard implements SpamGuardInterface
+{
+    private const SCRIPT_URL = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+
+    private const VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+
+    public function __construct(
+        private readonly string $siteKey,
+        private readonly string $secretKey,
+    ) {}
+
+    public function render(string $formId): string
+    {
+        // open() は本文の中で呼ばれるため、スクリプトはフッターに出る
+        wp_enqueue_script('cf-turnstile', self::SCRIPT_URL, [], null, ['strategy' => 'defer', 'in_footer' => true]);
+
+        return '<div class="cf-turnstile" data-sitekey="' . esc_attr($this->siteKey) . '"></div>';
+    }
+
+    public function passes(FormRequest $request): bool
+    {
+        $token = $request->post('cf-turnstile-response');
+
+        if (!\is_string($token) || $token === '') {
+            return false;
+        }
+
+        $response = wp_remote_post(self::VERIFY_URL, [
+            'timeout' => 10,
+            'body' => ['secret' => $this->secretKey, 'response' => $token],
+        ]);
+
+        if (is_wp_error($response)) {
+            // Turnstile に問い合わせられないときは送信を受け付けず、運用で気付けるように記録する
+            Log::error('Turnstile siteverify request failed: {message}', ['message' => $response->get_error_message()]);
+
+            return false;
+        }
+
+        $result = json_decode(wp_remote_retrieve_body($response), true);
+
+        return \is_array($result) && ($result['success'] ?? null) === true;
+    }
+}
+```
+
+Turnstile のトークンは1回だけ使え、有効期限は300秒である。確認画面ありのフォームでは確認ボタンの時点で検証するため、確認画面からの送信でトークンは要らない。
+
+登録 `app/Form/InquiryForm.php`(Turnstile のキーは呼び出し側が wp-config.php の定数等から渡す):
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Form;
+
+use App\Form\SpamGuard\HoneypotGuard;
+use App\Form\SpamGuard\TurnstileGuard;
+use TMSWP\Core\Form\Form;
+use TMSWP\Core\Form\FormDefinition;
+use TMSWP\Core\Form\Rule\Email;
+use TMSWP\Core\Form\Rule\Required;
+
+final class InquiryForm
+{
+    public static function create(string $turnstileSiteKey, string $turnstileSecretKey): Form
+    {
+        return new Form(
+            FormDefinition::create('inquiry')
+                ->text('email', 'メールアドレス', [new Required(), new Email()])
+                ->textarea('message', 'お問い合わせ内容', [new Required()])
+                ->spamGuard(new HoneypotGuard())
+                ->spamGuard(new TurnstileGuard($turnstileSiteKey, $turnstileSecretKey))
+        );
+    }
+}
+```
+
 ## 確認方法
 
 1. `composer qa` が通ること。

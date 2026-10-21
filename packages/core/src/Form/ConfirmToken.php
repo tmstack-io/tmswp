@@ -4,98 +4,60 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Form;
 
-use JsonException;
-use TMSWP\Core\Exception\Form\FormConfigException;
-
+/**
+ * 確認画面の状態を運ぶ署名付きトークン。検証済みの正準値・formId・発行時刻・使い捨ての ID(jti)を署名する。
+ *
+ * 確認画面ありのフォームでは、この jti が送信トークンを兼ねる(Submit の時に JtiStore で claim する)。
+ */
 final class ConfirmToken
 {
     public const VERSION = 1;
 
+    /** 鍵の派生に使う用途の名前(TokenSigner) */
+    private const PURPOSE = 'confirm-token';
+
     private function __construct() {}
 
-    /** @param array<string, string|list<string>|array{__tmsfile: string}> $values */
+    /**
+     * @param array<string, string|list<string>|array{__tmsfile: string}> $values 正準値
+     * @param ?string $secret マスターの秘密。null なら wp_salt('auth')
+     * @param ?int $now null なら time()
+     */
     public static function issue(string $formId, array $values, ?string $secret = null, ?int $now = null): string
     {
-        $payload = [
+        return TokenSigner::sign(self::PURPOSE, [
             'ver' => self::VERSION,
             'f' => $formId,
             'j' => bin2hex(random_bytes(16)),
             't' => $now ?? time(),
             'v' => $values,
-        ];
-        $body = self::base64UrlEncode(self::canonicalJson($payload));
-        $sig = hash_hmac('sha256', $body, self::secret($secret));
-
-        return $body . '.' . $sig;
+        ], $secret);
     }
 
     public static function verify(string $formId, string $token, int $ttl = 1800, ?string $secret = null, ?int $now = null): ConfirmTokenResult
     {
-        $parts = explode('.', $token, 2);
+        $payload = TokenSigner::verify(self::PURPOSE, $token, $secret);
 
-        if (\count($parts) !== 2 || preg_match('/\A[A-Za-z0-9_-]+\z/', $parts[0]) !== 1 || preg_match('/\A[a-f0-9]{64}\z/', $parts[1]) !== 1) {
-            return new ConfirmTokenResult(ConfirmTokenStatus::Invalid);
+        if ($payload === null || ($payload['ver'] ?? null) !== self::VERSION || ($payload['f'] ?? null) !== $formId) {
+            return new ConfirmTokenResult(TokenStatus::Invalid);
         }
 
-        [$body, $sig] = $parts;
-        $expected = hash_hmac('sha256', $body, self::secret($secret));
+        $jti = $payload['j'] ?? null;
+        $issuedAt = $payload['t'] ?? null;
 
-        if (!hash_equals($expected, $sig)) {
-            return new ConfirmTokenResult(ConfirmTokenStatus::Invalid);
-        }
-
-        try {
-            $json = self::base64UrlDecode($body);
-            $payload = json_decode($json, true, flags: JSON_THROW_ON_ERROR);
-        } catch (JsonException) {
-            return new ConfirmTokenResult(ConfirmTokenStatus::Invalid);
-        }
-
-        if (!\is_array($payload) || ($payload['ver'] ?? null) !== self::VERSION || ($payload['f'] ?? null) !== $formId) {
-            return new ConfirmTokenResult(ConfirmTokenStatus::Invalid);
-        }
-
-        if (!\is_string($payload['j'] ?? null) || !\is_int($payload['t'] ?? null) || !\is_array($payload['v'] ?? null)) {
-            return new ConfirmTokenResult(ConfirmTokenStatus::Invalid);
+        if (!\is_string($jti) || preg_match('/\A[a-f0-9]{32}\z/', $jti) !== 1 || !\is_int($issuedAt) || !\is_array($payload['v'] ?? null)) {
+            return new ConfirmTokenResult(TokenStatus::Invalid);
         }
 
         $values = self::values($payload['v']);
 
         if ($values === null) {
-            return new ConfirmTokenResult(ConfirmTokenStatus::Invalid);
+            return new ConfirmTokenResult(TokenStatus::Invalid);
         }
 
-        $status = ($payload['t'] + $ttl) < ($now ?? time()) ? ConfirmTokenStatus::Expired : ConfirmTokenStatus::Valid;
+        $status = ($issuedAt + $ttl) < ($now ?? time()) ? TokenStatus::Expired : TokenStatus::Valid;
 
-        return new ConfirmTokenResult($status, $values, $payload['j'], $payload['t']);
-    }
-
-    /** @param array<array-key, mixed> $payload */
-    public static function canonicalJson(array $payload): string
-    {
-        return json_encode(self::sortRecursive($payload), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-    }
-
-    /**
-     * @param array<array-key, mixed> $value
-     *
-     * @return array<array-key, mixed>
-     */
-    private static function sortRecursive(array $value): array
-    {
-        if (array_is_list($value)) {
-            return array_map(static fn(mixed $item): mixed => \is_array($item) ? self::sortRecursive($item) : $item, $value);
-        }
-
-        ksort($value, SORT_STRING);
-
-        foreach ($value as $key => $item) {
-            if (\is_array($item)) {
-                $value[$key] = self::sortRecursive($item);
-            }
-        }
-
-        return $value;
+        return new ConfirmTokenResult($status, $values, $jti, $issuedAt);
     }
 
     /**
@@ -141,41 +103,5 @@ final class ConfirmToken
         }
 
         return $normalized;
-    }
-
-    private static function secret(?string $secret): string
-    {
-        if ($secret !== null) {
-            return $secret;
-        }
-
-        if (\function_exists('wp_salt')) {
-            return wp_salt('auth');
-        }
-
-        throw new FormConfigException('ConfirmToken requires a secret outside WordPress');
-    }
-
-    private static function base64UrlEncode(string $value): string
-    {
-        return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
-    }
-
-    private static function base64UrlDecode(string $value): string
-    {
-        $base64 = strtr($value, '-_', '+/');
-        $padding = \strlen($base64) % 4;
-
-        if ($padding !== 0) {
-            $base64 .= str_repeat('=', 4 - $padding);
-        }
-
-        $decoded = base64_decode($base64, true);
-
-        if (!\is_string($decoded)) {
-            throw new JsonException('invalid base64url');
-        }
-
-        return $decoded;
     }
 }

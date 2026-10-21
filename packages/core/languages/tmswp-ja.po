@@ -26,20 +26,23 @@ msgstr "{label}をすべて入力してください。"
 msgid "{label} is invalid."
 msgstr "{label}の入力値が不正です。"
 
-#: Form/Form.php:56
+#: Form/Form.php:79
+#: Form/Form.php:308
 msgid "Your session has expired. Please submit the form again."
 msgstr "セッションの有効期限が切れました。お手数ですが再度送信してください。"
 
-#: Form/Form.php:193
+#: Form/Form.php:261
+#: Form/Form.php:445
 msgid "The form could not be resubmitted. Please start again."
 msgstr "フォームの再送信に失敗しました。お手数ですが最初から入力してください。"
 
-#: Form/Form.php:200
-#: Form/Form.php:213
+#: Form/Form.php:270
+#: Form/Form.php:276
+#: Form/Form.php:282
 msgid "The confirmation screen has expired. Please review your entries and continue again."
 msgstr "確認画面の有効期限が切れました。内容を確認のうえ再度お進みください。"
 
-#: Form/Form.php:207
+#: Form/Form.php:346
 msgid "This form has already been submitted."
 msgstr "このフォームは既に送信されています。"
 
@@ -118,3 +121,11 @@ msgstr "{label}のファイルサイズは{size}以下にしてください。"
 #: Form/Rule/Url.php:38
 msgid "Please enter a valid URL for {label}."
 msgstr "{label}はURLの形式で入力してください。"
+
+#: Form/Form.php:400
+msgid "The form could not be sent. Please try again."
+msgstr "送信に失敗しました。お手数ですが再度送信してください。"
+
+#: Form/Form.php:462
+msgid "Your submission could not be verified. Please try again."
+msgstr "送信内容を確認できませんでした。お手数ですが再度送信してください。"

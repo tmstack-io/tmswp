@@ -28,8 +28,10 @@ use TMSWP\Core\Form\Rule\Retype;
 use TMSWP\Core\Form\Rule\UploadFile;
 use TMSWP\Core\Form\Rule\Url;
 use TMSWP\Core\Form\StoredFile;
+use TMSWP\Core\Form\SubmitToken;
 use TMSWP\Core\Form\Validator;
 use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Core\Tests\Support\WpdbTestDouble;
 
 final class FormValidationTest extends UnitTestCase
 {
@@ -160,13 +162,21 @@ final class FormValidationTest extends UnitTestCase
             $validator->validate($definition, ['birth' => ['year' => '2026', 'month' => '2', 'day' => '31']])['birth'][0],
         );
 
-        $form = new Form($definition);
-        $result = $form->handle(new FormRequest('POST', [
-            Form::FIELD_FORM_ID => 'profile',
-            Form::FIELD_NONCE => 'nonce',
-            Form::FIELD_STEP => 'submit',
-            'birth' => ['year' => '2026', 'month' => '2', 'day' => '3'],
-        ]));
+        Functions\when('nocache_headers')->justReturn();
+        $GLOBALS['wpdb'] = WpdbTestDouble::create();
+
+        try {
+            $form = new Form($definition);
+            $result = $form->handle(new FormRequest('POST', [
+                Form::FIELD_FORM_ID => 'profile',
+                Form::FIELD_NONCE => 'nonce',
+                Form::FIELD_STEP => 'submit',
+                Form::FIELD_SUBMIT_TOKEN => SubmitToken::issue('profile'),
+                'birth' => ['year' => '2026', 'month' => '2', 'day' => '3'],
+            ]));
+        } finally {
+            unset($GLOBALS['wpdb']);
+        }
 
         self::assertSame(FormStep::Complete, $result->step);
         self::assertSame('2026-02-03', $result->values['birth']);

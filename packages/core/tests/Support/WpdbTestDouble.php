@@ -318,6 +318,20 @@ final class WpdbTestDouble extends wpdb
             return 0;
         }
 
+        // JtiStore::release(): 獲得済みの jti を手放す
+        if (str_starts_with($this->tmswpLastQuery, 'DELETE FROM') && str_contains($this->tmswpLastQuery, 'option_name = %s')) {
+            $jti = $this->tmswpLastArgs[1] ?? null;
+
+            if (!\is_string($jti)) {
+                throw new InvalidArgumentException('invalid JTI release arguments');
+            }
+
+            $this->rows_affected = \array_key_exists($jti, $this->tmswpClaimedJtis) ? 1 : 0;
+            unset($this->tmswpClaimedJtis[$jti]);
+
+            return $this->rows_affected;
+        }
+
         $this->rows_affected = 1;
 
         if (str_starts_with($query, 'INSERT INTO')) {

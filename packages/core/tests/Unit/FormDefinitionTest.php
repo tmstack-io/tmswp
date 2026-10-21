@@ -9,6 +9,8 @@ use TMSWP\Core\Exception\Form\UnknownFieldException;
 use TMSWP\Core\Form\Field;
 use TMSWP\Core\Form\Form;
 use TMSWP\Core\Form\FormDefinition;
+use TMSWP\Core\Form\FormRequest;
+use TMSWP\Core\Form\SpamGuardInterface;
 use TMSWP\Core\Tests\Support\UnitTestCase;
 
 final class FormDefinitionTest extends UnitTestCase
@@ -64,6 +66,12 @@ final class FormDefinitionTest extends UnitTestCase
             ->confirmTtl(90)
             ->errorHtml('<span class="error">%s</span>')
             ->tempFileStore($store);
+        $first = new DefinitionTestSpamGuard();
+        $second = new DefinitionTestSpamGuard();
+
+        self::assertSame([], $definition->spamGuards());
+        self::assertSame($definition, $definition->spamGuard($first)->spamGuard($second));
+        self::assertSame([$first, $second], $definition->spamGuards());
 
         self::assertTrue($definition->has('name'));
         self::assertTrue($definition->isConfirmEnabled());
@@ -74,5 +82,18 @@ final class FormDefinitionTest extends UnitTestCase
         $topics = $definition->field('topics');
         self::assertInstanceOf(Field::class, $topics);
         self::assertSame(['2'], $topics->default);
+    }
+}
+
+final class DefinitionTestSpamGuard implements SpamGuardInterface
+{
+    public function render(string $formId): string
+    {
+        return '';
+    }
+
+    public function passes(FormRequest $request): bool
+    {
+        return true;
     }
 }

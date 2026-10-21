@@ -559,7 +559,7 @@ v0.2.0
 
 #### v0.4.0-T1: 状態機械・送信トークン・キャッシュ・スパム対策
 
-- 対象ファイル領域: packages/core/src/Form/{Form,ConfirmToken,ConfirmTokenResult,ConfirmTokenStatus,JtiStore,FormDefinition,FormResult,FormAction,FormStep}.php、packages/core/tests/Unit/{FormRuntimeTest,ConfirmTokenTest,FormDefinitionTest}.php、docs/05(§handle・§二重送信・§ConfirmToken・§JtiStore・テンプレート前処理の節)、docs/00 DR-07
+- 対象ファイル領域: packages/core/src/Form/{Form,ConfirmToken,ConfirmTokenResult,TokenStatus,TokenSigner,SubmitToken,SubmitTokenResult,JtiStore,JtiClaim,SpamGuardInterface,FormDefinition,FormResult,FormAction,FormStep}.php、packages/core/tests/Unit/{FormRuntimeTest,ConfirmTokenTest,FormDefinitionTest}.php、docs/05(§handle・§二重送信・§ConfirmToken・§JtiStore・テンプレート前処理の節)、docs/00 DR-07
 - 完了条件:
   - 確認画面の有無に関係なく使い捨ての送信トークンで二重送信を防ぎ、確認画面ありの場合は ConfirmToken の jti に一本化されている(§1.12 の 1)。
   - フォームのあるページで `nocache_headers()` と `DONOTCACHEPAGE` が自動で付く(§1.12 の 2)。スパム対策を差し込む仕組みがあり、Turnstile と honeypot の手本コードがある(§1.12 の 3)。

@@ -13,7 +13,7 @@
 - スコープ外:
   - 設定画面でのフォーム利用(tmswp/settings-page 拡張の文書が本層を基盤として定義する)
   - メール送信・DB保存などの完了処理の実装(app側責務。`rules/` のレシピで指針提供。DR-13)
-  - 入力/確認/完了の3画面を超えるウィザード(セッション保持型マルチステップ)。app側でフォームを分割して実装する。コアは状態を持たない設計を優先する
+  - ウィザード形式(入力/確認/完了の3画面を超える、4画面以上のセッション保持型マルチステップ)は対象外とする。必要ならapp側でフォームを分割して実装する。コアは状態を持たない設計を優先する
   - ACFフィールドとの連携(tmswp/acf-bridge)
 
 ## 依存文書
@@ -54,11 +54,14 @@ Form (final具象・ライフサイクルの持ち主。FormDefinitionを合成)
  ├─ FormDefinition ──┬─ Field (単一入力の定義: name/label/type/rules/default/choices/filters)
  │                   ├─ CompositeField (複合入力の定義: parts/compose/decompose/validateParts)
  │                   │    └─ (app側独自定義)
- │                   └─ onComplete / confirm / errorHtml 等のフロー設定
+ │                   └─ onComplete / confirm / spamGuard / errorHtml 等のフロー設定
  ├─ FormRequest (メソッド・POST・FILESの不変スナップショット。WPのmagic quotesをunslash)
  ├─ Validator ── ValidationContext ── Rule\RuleInterface 実装群 (+ Messages)
- ├─ ConfirmToken (HMAC署名付き確認トークン) ── ConfirmTokenResult / ConfirmTokenStatus
- ├─ JtiStore (jti再送防止のアトミック獲得。wp_optionsへのINSERT IGNORE)
+ ├─ ConfirmToken (HMAC署名付き確認トークン) ── ConfirmTokenResult / TokenStatus
+ ├─ SubmitToken (確認画面の無いフォームの使い捨て送信トークン) ── SubmitTokenResult / TokenStatus
+ ├─ TokenSigner (両トークンの署名と検証。用途別の鍵の派生。@internal)
+ ├─ JtiStore (jti再送防止のアトミック獲得。wp_optionsへのINSERT IGNORE) ── JtiClaim
+ ├─ SpamGuardInterface (スパム対策を差し込む口。実装はapp側。手本は rules/form.md)
  ├─ UploadedFile / StoredFile / TempFileStore (ファイルの一時保管と確定)
  ├─ FormResult (handle()の戻り値: step/values/errors)
  └─ FieldView / OptionView ── FormHtml (純関数レンダラ) ── Support\Html
@@ -71,17 +74,19 @@ Form (final具象・ライフサイクルの持ち主。FormDefinitionを合成)
 
 ```
 GET  /contact/                          → step = Input  (デフォルト値で表示)
-POST _step=confirm                      → CSRF検証 → バインド → 検証
-                                           NG → step = Input (値保持+エラー表示)
+POST _step=confirm                      → CSRF検証 → バインド → スパム対策 → 検証
+                                           NG → step = Input (値保持+エラー表示。検証を通ったファイルは保管して引き回す)
                                            OK → ファイルをTempFileStoreへ退避
                                                 → ConfirmToken発行 → step = Confirm
-POST _step=submit  (+ _confirm_token)   → CSRF検証 → トークン検証(署名/期限/再送)
-                                           OK → onComplete(values, form) → step = Complete
+POST _step=submit  (+ _confirm_token)   → CSRF検証 → トークン検証(署名/期限) → 全項目の復元とファイルの存在確認
+                                           → 今の規則での再検証 → jtiのclaim(再送の拒否) → onComplete(values, form) → step = Complete
                                            NG → step = Input (理由に応じ値復元+フォームエラー)
 POST _step=back    (+ _confirm_token)   → 署名検証 → 値復元 → step = Input
 ```
 
-確認画面なし(`confirm()` 未指定)の場合は `_step=submit` が「検証→onComplete」を直接実行する2状態フローになる。
+確認画面なし(`confirm()` 未指定)の場合は、`_step=submit`(+ `_submit_token`)が「CSRF検証 → 送信トークン検証 → バインド → スパム対策 → 検証 → jtiのclaim → onComplete」を直接実行する2状態フローになる。
+
+確認画面の有無に関係なく、送信は使い捨てのjtiで1回に限られる。確認画面なしのフォームは `open()` が埋め込む送信トークン(§SubmitToken)のjti、確認画面ありのフォームはConfirmTokenのjtiを使う(送信トークンは埋め込まない)。`handle()` と `open()` は、フォームのあるページをページキャッシュから外す(§ページキャッシュからの除外)。
 
 ### 予約POSTキー
 
@@ -93,6 +98,7 @@ POST _step=back    (+ _confirm_token)   → 署名検証 → 値復元 → step 
 | `Form::FIELD_STEP` | `_step` | アクション(`confirm` / `submit` / `back`) |
 | `Form::FIELD_NONCE` | `_nonce` | wp_nonce(CSRF) |
 | `Form::FIELD_CONFIRM_TOKEN` | `_confirm_token` | ConfirmToken |
+| `Form::FIELD_SUBMIT_TOKEN` | `_submit_token` | SubmitToken(確認画面の無いフォームの送信トークン) |
 
 加えて、ファイルフィールド `{name}` に対し `{name}__token`(一時保管トークンの引き回し用hidden)を予約する。
 
@@ -348,8 +354,11 @@ final class FormDefinition
     /** ConfirmTokenの有効期限秒。既定: 1800 */
     public function confirmTtl(int $seconds): self;
 
-    /** 完了処理。シグネチャ: function (array<string, mixed> $values, Form $form): void */
+    /** 完了処理。シグネチャ: function (array<string, mixed> $values, Form $form): void。例外の扱いは §handle() */
     public function onComplete(\Closure $handler): self;
+
+    /** スパム対策の登録(§SpamGuardInterface)。複数を登録でき、登録の順に検査する */
+    public function spamGuard(SpamGuardInterface $guard): self;
 
     /** FieldView::errors() の既定テンプレート。%s はエスケープ済みメッセージ。既定: '<p class="form-error">%s</p>' */
     public function errorHtml(string $sprintfTemplate): self;
@@ -371,6 +380,8 @@ final class FormDefinition
     public function completeHandler(): ?\Closure;
     public function errorTemplate(): string;
     public function store(): TempFileStore;
+    /** @return list<SpamGuardInterface> */
+    public function spamGuards(): array;
     public function hasFileField(): bool;
 }
 ```
@@ -605,23 +616,26 @@ final class Messages
 
 ### ConfirmToken(署名付き確認トークン)
 
-確認画面の状態保持を担う。**検証済みの正準値+formId+発行時刻+一意ID(jti)をHMAC-SHA256で署名し、単一のhiddenとして往復させる**。サーバ側セッションは使わない(ステートレス。ページキャッシュ・複数台構成と相性が良い)。
+確認画面の状態保持を担う。**検証済みの正準値+formId+発行時刻+一意ID(jti)をHMAC-SHA256で署名し、単一のhiddenとして往復させる**。サーバ側セッションは使わない(ステートレス。複数台構成でもそのまま動く)。確認画面ありのフォームでは、このjtiが送信トークンを兼ねる(§SubmitToken は使わない)。
+
+ステートレスであってもページキャッシュとは両立しない。トークンとnonceを埋め込むページがキャッシュに載ると、未ログインの利用者のnonce(全訪問者で共通かつ12〜24時間有効)が期限切れのまま配られ、全員の送信が失敗する。そのためフォームのあるページはページキャッシュから外す(§ページキャッシュからの除外)。
 
 ```php
 namespace TMSWP\Core\Form;
 
-enum ConfirmTokenStatus
+/** ConfirmToken・SubmitToken の検証の結果 */
+enum TokenStatus
 {
     case Valid;
-    case Expired;   // 署名は正当だが期限切れ(値は信頼できるので再表示に使う)
-    case Invalid;   // 形式不正・署名不一致・formId不一致(値は一切信頼しない)
+    case Expired;   // 署名は正当だが期限切れ(ConfirmTokenの値は信頼できるので再表示に使う)
+    case Invalid;   // 形式不正・署名不一致・formId不一致・jtiの形式不正(値は一切信頼しない)
 }
 
 final readonly class ConfirmTokenResult
 {
     public function __construct(
-        public ConfirmTokenStatus $status,
-        /** @var array<string, string|list<string>> Valid/Expired時のみ復元値、Invalid時 [] */
+        public TokenStatus $status,
+        /** @var array<string, string|list<string>|array{__tmsfile: string}> Valid/Expired時のみ復元値、Invalid時 [] */
         public array $values = [],
         public string $jti = '',
         public int $issuedAt = 0,
@@ -637,58 +651,106 @@ final class ConfirmToken
     /**
      * @param array<string, string|list<string>|array{__tmsfile: string}> $values 正準値
      *        (StoredFileは ['__tmsfile' => トークン] へ変換済みであること。UploadedFile混入はFormConfigException)
-     * @param ?string $secret null = wp_salt('auth')
+     * @param ?string $secret マスターの秘密。null = wp_salt('auth')(鍵はここから派生させる。§トークン形式と署名手順)
      * @param ?int $now null = time()(テスト時に注入)
      */
     public static function issue(string $formId, array $values, ?string $secret = null, ?int $now = null): string;
 
     public static function verify(string $formId, string $token, int $ttl = 1800, ?string $secret = null, ?int $now = null): ConfirmTokenResult;
-
-    /** 正準JSON化(決定的シリアライズ)。@internal テストから直接検証する */
-    public static function canonicalJson(array $payload): string;
 }
 ```
 
 #### トークン形式と署名手順(確定アルゴリズム)
 
+ConfirmToken と SubmitToken は、同じ形式と手順を `TokenSigner`(@internal)で共有する。違いは用途の名前(鍵の派生に使う)とペイロードの中身だけである。
+
 ```
+鍵の派生:
+  master = $secret ?? wp_salt('auth')
+  key    = hash_hkdf('sha256', master, 32, 'tmswp/form/' . purpose)
+    # purpose: ConfirmToken = 'confirm-token'、SubmitToken = 'submit-token'
+
 発行:
   payload = {
     'ver': 1,
     'f'  : formId,
-    'j'  : bin2hex(random_bytes(16)),   # jti(再送防止ID)
+    'j'  : bin2hex(random_bytes(16)),   # jti(使い捨ての送信ID)
     't'  : now,                         # 発行unixtime
-    'v'  : values,
+    'v'  : values,                      # ConfirmTokenのみ
   }
-  json = canonicalJson(payload)
+  json = TokenSigner::canonicalJson(payload)
     # canonicalJson: 連想配列は再帰的に ksort($a, SORT_STRING)、リスト(array_is_list)は順序維持。
     #   json_encode(..., JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)
   body = base64url(json)                # rtrim(strtr(base64_encode($json), '+/', '-_'), '=')
-  sig  = hash_hmac('sha256', body, secret)
+  sig  = hash_hmac('sha256', body, key)
   token = body . '.' . sig
 
 検証:
   1. 形式: '.' で2分割できない / bodyがbase64url文字集合外 / sigが64桁hex以外 → Invalid
-  2. hash_equals(hash_hmac('sha256', body, secret), sig) でなければ → Invalid(タイミングセーフ比較必須)
-  3. json_decode(base64url_decode(body), assoc, JSON_THROW_ON_ERROR)。例外/ver≠1/f≠formId/必須キー欠損 → Invalid
-  4. t + ttl < now → Expired(valuesは返す)
+  2. hash_equals(hash_hmac('sha256', body, key), sig) でなければ → Invalid(タイミングセーフ比較必須)
+  3. json_decode(base64url_decode(body), assoc, JSON_THROW_ON_ERROR)。失敗/ver≠1/f≠formId/必須キー欠損/jtiが32桁hex以外 → Invalid
+  4. t + ttl < now → Expired(ConfirmTokenはvaluesも返す)
   5. → Valid(values, jti, issuedAt=t)
 ```
 
 - 改ざんは手順2で検出される(P2の根絶)。値の正規化(`canonicalJson`)が決定的であるため、同一入力からは同一署名が得られ、テストで固定ベクタ検証ができる。
-- 鍵は `wp_salt('auth')`。`AUTH_KEY`/`AUTH_SALT` 未定義環境でもWPが自動生成するため追加設定は不要。
-- **jtiによる再送防止は `Form::handle()` の責務**(ConfirmToken自体はステートレスを維持): Submit成立時、トークン検証(Valid)の**直後**に `consumeJti()`(private。実体は §JtiStore へ委譲)でjtiをアトミックに獲得し、獲得に失敗した場合は再送として拒否する。獲得は `wp_options` テーブルへのアトミックINSERT 1経路(TTL = `$ttl + 60`)であり、並行2リクエストで獲得できるのは1リクエストのみであることが、運用環境(永続オブジェクトキャッシュの有無)に依存せず**無条件に**保証される(§JtiStore)。
-  - 獲得が `onComplete` 呼び出しより**前**である点が仕様(二重クリック・リロード再POSTによる二重送信防止を優先。onComplete内の失敗はログ+運用対応とし、自動リトライはさせない)。PRG構成(`template_redirect` で完了後リダイレクト)でも、jti消費は `wp_options` に永続するため `handle()` の冪等キャッシュに依存しない。
-  - なお、jti再送防止が保証するのは「同一確認トークンの再POST遮断」である。決済等でビジネスレベルの冪等化(同一内容の別トークン送信の排除等)が別途必要な完了処理は、app側 `onComplete` 内で担保する。
+- 鍵は `wp_salt('auth')` をそのまま使わず、用途ごとにHKDFで派生させる。auth Cookieの署名と同じ鍵を使わないためと、ある用途のトークン(送信トークン)を別の用途(確認トークン)として受け付けないためである(確認トークンの値は検証済みとして信頼するため、取り違えると検証を飛ばした完了処理になる)。`AUTH_KEY`/`AUTH_SALT` 未定義環境でもWPが自動生成するため追加設定は不要。
+- **jtiによる再送防止は `Form::handle()` の責務**(トークン自体はステートレスを維持)。Submit成立時、トークンの検証と全項目の復元(ファイルの存在の確認を含む)と今の規則での再検証の**後**、`onComplete` の**前**に、jtiを §JtiStore でアトミックに獲得(claim)する。獲得に失敗した場合は再送として拒否する。獲得は `wp_options` テーブルへのアトミックINSERT 1経路(TTL = トークンの有効期限 + 60秒)であり、並行2リクエストで獲得できるのは1リクエストのみであることが、運用環境(永続オブジェクトキャッシュの有無)に依存せず**無条件に**保証される。
+  - 獲得を `onComplete` より前にするのは、二重クリック・リロード・並行した二重POSTで `onComplete` を1回だけ実行するためである。`onComplete` が例外で終わった場合はjtiを手放し(`JtiStore::release()`)、同じトークンで再送できる状態に戻す(§handle())。
+  - 復元できない場合(ファイルの消失・トークンの項目とフォームの項目の食い違い)は、jtiを獲得せずに入力画面へ戻す。
+  - 復元した値は、claimの前に今の規則(`Validator`)で検証し直す。確認の後のデプロイで規則や選択肢が変わり(選択肢の削除・MaxLengthの縮小等)、署名済みの値が今の規則を通らなくなることがあるためである。通らなければjtiを獲得せず、項目のエラーを付けて入力画面へ戻す(ユーザー入力に起因する異常として扱い、noticeで記録する)。
+  - PRG構成(完了後リダイレクト)でも、jti消費は `wp_options` に永続するため `handle()` の冪等キャッシュに依存しない。
+  - なお、jti再送防止が保証するのは「同一トークンの再POST遮断」である。決済等でビジネスレベルの冪等化(同一内容の別トークン送信の排除等)が別途必要な完了処理は、app側 `onComplete` 内で担保する。
 - ペイロードサイズ: 上限は設けない(textarea 1000字+13フィールドで数KB程度であり、一般的なPOSTサイズ制限の範囲内)。
+
+### SubmitToken(確認画面の無いフォームの送信トークン)
+
+確認画面の無いフォームで二重送信を防ぐ使い捨てのトークン。formId・発行時刻・jtiを署名する(値は持たない)。`Form::open()` が `_submit_token` のhiddenとして埋め込み、Submit時に `Form::handle()` が検証してjtiを §JtiStore でclaimする。確認画面ありのフォームでは埋め込まない(ConfirmTokenのjtiに一本化する)。
+
+```php
+namespace TMSWP\Core\Form;
+
+final readonly class SubmitTokenResult
+{
+    public function __construct(
+        public TokenStatus $status,
+        public string $jti = '',
+        public int $issuedAt = 0,
+    ) {}
+}
+
+final class SubmitToken
+{
+    public const VERSION = 1;
+
+    /** 有効期限の秒数。WordPressのnonceの最長の有効期間(1日)に合わせる */
+    public const TTL = 86400;
+
+    private function __construct() {}
+
+    public static function issue(string $formId, ?string $secret = null, ?int $now = null): string;
+
+    public static function verify(string $formId, string $token, ?string $secret = null, ?int $now = null): SubmitTokenResult;
+}
+```
+
+- 形式と署名手順は §トークン形式と署名手順(用途 `submit-token`、ペイロードに `v` は無い)。
+- `open()` のたびに新しいjtiで発行する。入力エラーで再表示した画面には新しいトークンが入るため、利用者は修正してそのまま送信できる。
+- Invalid(欠落・改ざん・別フォーム・確認トークンの流用)とExpiredは、POST値を再表示用にバインドしたうえで「Your session has expired. Please submit the form again.」を出して入力画面に戻す。Invalidは記録する(§ログ)。
 
 #### JtiStore(jti再送防止のアトミック獲得)
 
 ```php
 namespace TMSWP\Core\Form;
 
+enum JtiClaim
+{
+    case Claimed;     // 初めての送信。jtiを獲得した
+    case Duplicate;   // 獲得済みのjti(再送)
+}
+
 /**
- * jti(再送防止ID)のアトミック獲得ストア。
+ * jti(使い捨ての送信ID)のアトミック獲得ストア。
  * wp_options の option_name UNIQUE制約に対する INSERT IGNORE で「既存なら失敗」をDBレベルで保証する。
  * WPコア自身が WP_Upgrader::create_lock()(WP4.5+)でロックに使うのと同一パターンであり、独自再発明ではない。
  * 注意: add_option() は内部が get→insert の非アトミック実装(TOCTOU)のため代替にならない
@@ -696,13 +758,13 @@ namespace TMSWP\Core\Form;
  */
 final class JtiStore
 {
-    /**
-     * jtiをアトミックに獲得する。獲得できたとき(= 初回送信)のみ true。
-     * INSERT IGNORE は重複以外のエラーも握り潰すため、獲得判定は $wpdb->rows_affected === 1 を必須とする。
-     */
-    public function claim(string $jti, int $ttl): bool;
+    /** @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー */
+    public function claim(string $jti, int $ttl): JtiClaim;
 
-    /** 期限切れjtiの掃除。@return int 削除行数 */
+    /** 獲得したjtiを手放す(onCompleteの例外の後、再送できるようにする)。@throws \TMSWP\Core\Exception\RuntimeException */
+    public function release(string $jti): void;
+
+    /** 期限切れjtiの掃除。@return int 削除行数。@throws \TMSWP\Core\Exception\RuntimeException */
     public function gc(): int;
 }
 ```
@@ -711,22 +773,57 @@ final class JtiStore
 
 ```
 claim(jti, ttl):
-  $wpdb->query($wpdb->prepare(
-      "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'off')",
+  if mt_rand(1, 100) === 1: gc()               # 確率的GC(cron不要の自己清掃)。挿入の前に行い、GCの失敗でjtiを獲得したまま終わらないようにする
+  result = $wpdb->query($wpdb->prepare(
+      "INSERT IGNORE INTO %i (option_name, option_value, autoload) VALUES (%s, %s, 'off')",
+      $wpdb->options,
       'tmswp_form_jti_' . jti,
       (string) (time() + ttl),                 # option_value = 期限unixtime(gc用)
   ))
-  acquired = ($wpdb->rows_affected === 1)      # 1行挿入できた=獲得成功。0=既存(再送)または失敗
-  if acquired and mt_rand(1, 100) === 1: gc()  # 確率的GC(cron不要の自己清掃。TempFileStore手順7と同じ流儀)
-  return acquired
+  result === false → RuntimeException(データベースのエラー。$wpdb->last_error を含める)
+  result === 1 → Claimed / result === 0 → Duplicate / それ以外 → RuntimeException
+
+release(jti):
+  DELETE FROM {$wpdb->options} WHERE option_name = 'tmswp_form_jti_' . jti   # false → RuntimeException
 
 gc():
-  DELETE FROM {$wpdb->options} WHERE option_name LIKE 'tmswp_form_jti_%' AND option_value < time()
+  DELETE FROM {$wpdb->options} WHERE option_name LIKE 'tmswp_form_jti_%' AND CAST(option_value AS UNSIGNED) < time()
+  # false → RuntimeException(0行に丸めない)
 ```
 
+- データベースのエラーを「既に送信済み」と区別せずに扱うと、正当な送信が誤解を招く文言とともに消え、ログも残らない。そのためDBエラーは例外にし、`Form::handle()` がエラー方針(00-overview.md §5.6)に従って扱う(debugでは例外、本番ではKernelのロガーにerrorで記録して汎用の送信失敗エラーを出す。jtiは獲得していないので再送できる)。
 - `autoload = 'off'` のため `alloptions` キャッシュを汚染しない。送信成立ごとの非キャッシュDB書込は1回で、フォーム送信頻度に対して無視できるコスト。
 - GCの掃除圧は、transient利用時に発生する `_transient_timeout_*` のクリーンアップと同等のテーブル負荷であり、optionsテーブルへの負荷純増ではない。
 - `wp_using_ext_object_cache()` による分岐(`wp_cache_add` / transient)は持たない。transient側が非アトミックでTOCTOUレースを許容し、二重送信防止が運用環境に依存する条件付き保証になるため、本1経路だけとする。
+
+### SpamGuardInterface(スパム対策の差し込み口)
+
+honeypot・Turnstile等のスパム対策をフォームに差し込む口。コアは差し込む仕組みだけを持ち、実装はapp側に置く(外部サービスに依存するコードをコアに置かない。原則2)。手本の実装(honeypot・Turnstile)は `rules/form.md` にある。
+
+```php
+namespace TMSWP\Core\Form;
+
+interface SpamGuardInterface
+{
+    /** 入力画面の open() が hidden の後に出力する HTML(エスケープ済み)。無ければ '' */
+    public function render(string $formId): string;
+
+    /** POST を検査する。受け付けてよければ true、スパムとして拒否するなら false */
+    public function passes(FormRequest $request): bool;
+}
+```
+
+- 登録は `FormDefinition::spamGuard()`。複数を登録でき、登録の順に検査し、どれか1つが拒否したら受け付けない。
+- `render()` は入力画面(`FormStep::Input`)の `open()` だけが出力する。確認画面には出力しない。
+- `passes()` は、利用者の入力を受け取るPOST(確認画面ありは `_step=confirm`、なしは `_step=submit`)で、CSRFと送信トークンの検証の後、値の検証の前に呼ぶ。確認画面からの送信では呼ばない(確認の時点で通っているため)。
+- 拒否したときは、POST値を再表示用にバインドしたうえで「Your submission could not be verified. Please try again.」を出して入力画面に戻し、Kernelのロガーにnoticeで記録する(§ログ)。
+
+### ページキャッシュからの除外
+
+フォームのあるページは、自動でページキャッシュから外す。`handle()` と `open()` が、`DONOTCACHEPAGE` 定数(未定義なら `true` で定義。WP Super Cache・W3 Total Cache 等のページキャッシュが参照する)を定義し、`nocache_headers()`(`Cache-Control: no-cache, must-revalidate, max-age=0, no-store, private` 等)を送る。
+
+- `nocache_headers()` は出力の開始後には何もしない(WordPressの仕様)。そのため、出力の前に呼ぶ `handle()` で付けることを前提とする。テンプレートの先頭・`template_redirect` 等、出力の前に `handle()` を呼ぶ(§利用例)。別のページへPOSTするフォーム(サイドバーの問い合わせ欄等)を置くページでも、出力の前にそのフォームの `handle()` を呼ぶ(自フォーム宛のPOSTでなければ入力画面を返すだけである)。
+- `open()` でも同じ処理をするのは、`handle()` を呼ばないページでも `DONOTCACHEPAGE` だけは確実に付けるためである。
 
 ### UploadedFile / StoredFile / TempFileStore
 
@@ -853,7 +950,7 @@ final class TempFileStore
 
 ### Form(ライフサイクルの持ち主)
 
-フォームライフサイクルの持ち主であるfinal具象クラス。app側は本クラスを**継承せず**、組み立てた `FormDefinition` をコンストラクタへ渡す合成で利用する。バインド・CSRF・検証・状態遷移・完了処理の起動を `handle()` に集約する。
+フォームライフサイクルの持ち主であるfinal具象クラス。app側は本クラスを**継承せず**、組み立てた `FormDefinition` をコンストラクタへ渡す合成で利用する。バインド・CSRF・送信トークン・スパム対策・検証・状態遷移・完了処理の起動を `handle()` に集約する。
 
 ```php
 namespace TMSWP\Core\Form;
@@ -864,23 +961,29 @@ final class Form
     public const FIELD_STEP = '_step';
     public const FIELD_NONCE = '_nonce';
     public const FIELD_CONFIRM_TOKEN = '_confirm_token';
+    public const FIELD_SUBMIT_TOKEN = '_submit_token';
 
     /** @var array<string, mixed> 現在の表示値(フィルタ適用済み) */
     private array $values = [];
+    /** @var array<string, string|list<string>> applyDefaults() で差し替えた既定値 */
+    private array $defaultOverrides = [];
     /** @var array<string, list<string>> */
     private array $fieldErrors = [];
-    /** @var list<string> フィールドに紐付かないエラー(CSRF失敗・トークン期限切れ等) */
+    /** @var list<string> フィールドに紐付かないエラー(CSRF失敗・トークン期限切れ・送信失敗等) */
     private array $formErrors = [];
     private FormStep $step = FormStep::Input;
     private ?FormResult $result = null;       // handle()の冪等化用キャッシュ
     private string $confirmToken = '';        // Confirm状態のときopen()が埋め込む
+    private readonly string $creatorFile;     // new Form() を書いたファイル(§FormのKernel)
 
     public function __construct(private readonly FormDefinition $definition) {}
 
     /**
-     * バインド+CSRF検証+検証+状態遷移+完了処理の実行。
+     * バインド+CSRF検証+送信トークン検証+スパム対策+検証+状態遷移+完了処理の実行。
      * 冪等: 2回目以降の呼び出しは初回の FormResult をそのまま返す(onCompleteの二重実行はない)。
+     * フォームのあるページをページキャッシュから外す(§ページキャッシュからの除外)ため、出力の前に呼ぶ。
      * @param ?FormRequest $request null = FormRequest::fromGlobals()
+     * @throws \Throwable debug時、onCompleteが投げた例外と JtiStore のデータベースのエラー
      */
     public function handle(?FormRequest $request = null): FormResult;
 
@@ -893,8 +996,9 @@ final class Form
     public function fields(): array;
 
     /**
-     * <form>開始タグ+必須hidden(_form_id / _nonce、Confirm状態では_confirm_token も)を返す。
-     * method="post" 固定。action未指定時は ''(自己POST)。
+     * <form>開始タグ+必須hiddenを返す。hiddenは _form_id / _nonce、確認画面の無いフォームでは _submit_token
+     * (呼び出しごとに新しいjtiで発行)、Confirm状態では _confirm_token。Input状態では、登録したスパム対策の
+     * render() の出力を続ける。method="post" 固定。action未指定時は ''(自己POST)。
      * ファイルフィールドを持つ定義では enctype="multipart/form-data" を自動付与。
      */
     public function open(array $attrs = []): string;
@@ -906,6 +1010,17 @@ final class Form
 
     /** @return array<string, mixed> */
     public function values(): array;
+
+    /**
+     * 項目の既定値を差し替える(設定画面で保存済みの値を初期表示する等)。handle() より前に呼ぶ。
+     * 値は項目が受け付ける形で渡す: 単一の値の項目と複合フィールド(正準値)は string、複数選択(checkboxes)は list<string>。
+     * @param array<string, mixed> $values
+     * @throws \TMSWP\Core\Exception\LogicException handle() の後に呼んだ場合(POST値が既定値に戻り FormResult と食い違うため)
+     * @throws UnknownFieldException フォームに無い項目
+     * @throws \TMSWP\Core\Exception\Form\FormConfigException 値の形が項目と違う場合と、ファイルの項目(既定値を持てない)
+     */
+    public function applyDefaults(array $values): void;
+
     /** @return array<string, list<string>> */
     public function errors(): array;
     /** @return list<string> */
@@ -916,24 +1031,57 @@ final class Form
 
 app側のフォーム定義クラスの規約: `Form` を継承せず、「構成済み `Form` を返す `create(): Form` staticファクトリを持つfinalクラス」として置く。呼び出し側は `ContactForm::create()` と書く。テストはサブクラススタブ不要で、任意の `FormDefinition` を `new Form($definition)` で直接渡せる。`Form` を abstract 基底にして `create(): static`(LSB)や null センチネルのコンストラクタで構成する形は採らない(DR-18)。
 
+#### FormのKernel(ログの記録先とdebugの判定)
+
+`Form` は、`new Form()` を書いたファイルを含むルートディレクトリを持つKernel(`Kernel::forFile()`。`Log` の静的な呼び出しと同じ規則。テーマなら子テーマのディレクトリも含む)に属する。ログはそのKernelのロガー(`$kernel->logger()`)に記録し、debugの判定はそのKernelの `KernelConfig::$debug` で行う。
+
+- フォームはテンプレート・ショートコード・app側のクラスのどこからでも作れるため、クラスの名前空間(`Kernel::forClass()`)ではなく、作ったファイルの場所で決める。
+- Kernelは、ログやdebugの判定が要るときに初めて解決する。どのKernelのルートにも含まれないファイルで作ったフォームがそれを要すると `KernelException` になる(黙って別の記録先へ回さない)。送信の失敗(onCompleteの例外等)の扱いでKernelを決められなかった場合は、jtiの手放しの失敗を記録する途中も含め、元の例外を `KernelException` の `previous` に入れて投げる。
+
+#### ログ
+
+`handle()` は次の事象を、FormのKernelのロガーに `tmswp.form: ` で始まるメッセージで記録する。文脈にはフォームのID(`form`)を入れ、利用者の入力値は入れない。
+
+| 事象 | レベル |
+|---|---|
+| CSRF(nonce)の検証の失敗 | warning |
+| ConfirmToken・SubmitTokenがInvalid(欠落・改ざん・別フォーム) | warning |
+| 一時ファイルの消失(確認画面からの送信時) | warning |
+| ConfirmTokenの項目とフォームの項目の食い違い(デプロイをまたいだ送信) | notice |
+| ConfirmTokenの値が今の規則を通らない(確認の後に規則・選択肢が変わった) | notice(文脈の `fields` に項目名) |
+| 再送の拒否(jtiがDuplicate) | notice |
+| スパム対策による拒否 | notice |
+| onCompleteの例外・JtiStoreのデータベースのエラー(本番) | error(文脈は下記の例外の情報) |
+| onCompleteの例外の後のjtiの手放しの失敗 | error(文脈は下記の例外の情報) |
+
+例外を記録するときは、例外のオブジェクトを文脈に入れず、次の3つだけを入れる。onCompleteが利用者の入力値をメッセージに含めた例外を投げることがあり、トレースの引数にはjti等が入りうるため、例外のメッセージ・previousのメッセージ・トレースは本番のログに残さない。開発者は、debugで投げ直される元の例外で詳細を見る。
+
+| キー | 値 |
+|---|---|
+| `exceptionClass` | 例外のクラス名 |
+| `exceptionAt` | 例外が投げられた場所(`ファイル:行`) |
+| `previousClasses` | previousの例外のクラス名のリスト(近い順。無ければ空) |
+
 #### handle() の状態機械(確定擬似コード)
 
 ```
 handle(request = null):
   if this.result != null: return this.result          # 冪等化
 
+  excludeFromPageCache()                               # DONOTCACHEPAGE + nocache_headers()(§ページキャッシュからの除外)
   request ??= FormRequest::fromGlobals()
   def = this.definition
 
   # --- 0. 自フォーム宛のPOSTでなければ初期表示 ---
   if !request.isPost() or request.post(FIELD_FORM_ID) !== def.id:
-      this.values = 全フィールドのdefault
+      this.values = 全フィールドのdefault(applyDefaults() の差し替えを含む)
       return finish(FormStep::Input)
 
   # --- 1. CSRF(全POSTで無条件・自動) ---
   if wp_verify_nonce(request.post(FIELD_NONCE), 'tmswp_form_' . def.id) == false:
       bind(request)                                    # 値は再表示用に保持(処理には使わない)
       formErrors[] = __('Your session has expired. Please submit the form again.', 'tmswp')
+      log warning                                      # §ログ
       return finish(FormStep::Input)
 
   action = FormAction::tryFrom((string) request.post(FIELD_STEP))
@@ -942,12 +1090,19 @@ handle(request = null):
       return finish(FormStep::Input)
   if action == FormAction::Confirm and !def.isConfirmEnabled():
       action = FormAction::Submit                      # confirm無効フォームではConfirmはSubmitと同義
+  if action == FormAction::Back and !def.isConfirmEnabled():
+      bind(request)                                    # confirm無効フォームに戻る操作は無い: 不明_stepと同じ
+      return finish(FormStep::Input)
 
   switch action:
 
   case Confirm:                                        # 入力 → 確認
-      bind(request); validate()
-      if fieldErrors != []: return finish(FormStep::Input)
+      bind(request)
+      if !passesSpamGuards(request): return finish(FormStep::Input)
+      validate()
+      if fieldErrors != []:
+          storeValidUploadedFiles()                    # 自身の項目にエラーが無いファイルは保管し、{name}__token で引き回す
+          return finish(FormStep::Input)
       storeUploadedFiles()                             # UploadedFile → StoredFile(トークン化)
       this.confirmToken = ConfirmToken::issue(def.id, tokenValues())
       return finish(FormStep::Confirm)
@@ -958,41 +1113,92 @@ handle(request = null):
           if r.status == Invalid:
               this.values = 全フィールドのdefault       # 改ざん: 値は一切信頼しない
               formErrors[] = __('The form could not be resubmitted. Please start again.', 'tmswp')
+              log warning
               return finish(FormStep::Input)
+          restored = restoreValues(r.values)           # 全項目を復元。['__tmsfile'=>token] → StoredFile(消えていたら '')
           if r.status == Expired:
-              restoreValues(r.values)                  # 署名は正当: 再表示には使える
-              formErrors[] = __('The confirmation screen has expired. Please review your entries and continue again.', 'tmswp')
-              return finish(FormStep::Input)
-          if !consumeJti(r.jti, def.ttl() + 60):       # アトミック獲得失敗 = 再送(リロード/二重クリック/並行二重POST)
-              formErrors[] = __('This form has already been submitted.', 'tmswp')
-              this.values = 全フィールドのdefault
-              return finish(FormStep::Input)
-          this.values = resolveFileTokens(r.values)    # ['__tmsfile'=>token] → StoredFile
+              return returnToInput(EXPIRED)            # 署名は正当: 再表示には使える
+          if restored.changed:                         # トークンの項目・値の形がフォームと食い違う(デプロイをまたいだ送信)
+              log notice; return returnToInput(EXPIRED)   # 例外(500)にせず、入力画面に戻す
+          if restored.missingFiles != []:              # 一時ファイルの消失(gc済み等)。jtiのclaimより前に確かめる
+              log warning; return returnToInput(EXPIRED)
+          errors = Validator.validate(def, 復元した値(複合フィールドは部品の値に分解))   # 今の規則で再検証(claimより前)
+          if errors != []:                             # 確認の後のデプロイで規則・選択肢が変わった
+              fieldErrors = errors
+              複合フィールドの正準値を部品の値に戻す(再表示用)
+              log notice                               # 項目名だけを記録する
+              return finish(FormStep::Input)           # jtiは獲得していない
+          return complete(r.jti, def.ttl() + 60)
       else:                                            # 入力 → 完了(確認なし)
-          bind(request); validate()
+          r = SubmitToken::verify(def.id, (string) request.post(FIELD_SUBMIT_TOKEN))
+          bind(request)
+          if r.status != Valid:                        # 欠落・改ざん・別フォーム・期限切れ
+              formErrors[] = __('Your session has expired. Please submit the form again.', 'tmswp')
+              if r.status == Invalid: log warning
+              return finish(FormStep::Input)
+          if !passesSpamGuards(request): return finish(FormStep::Input)
+          validate()
           if fieldErrors != []: return finish(FormStep::Input)
           # 確認なしの場合ファイルはUploadedFileのままonCompleteへ(同一リクエスト内でtmp_nameが有効)
-
-      handler = def.completeHandler()
-      if handler != null: handler(this.values, this)   # 例外は伝播させる(appの責務。FWは握り潰さない)
-      return finish(FormStep::Complete)
+          return complete(r.jti, SubmitToken::TTL + 60)
 
   case Back:                                           # 確認 → 入力(値を保持して戻る)
       r = ConfirmToken::verify(def.id, (string) request.post(FIELD_CONFIRM_TOKEN), def.ttl())
-      if r.status == Invalid: this.values = 全フィールドのdefault
-      else: restoreValues(r.values)                    # Expiredでも署名正当なら復元可
+      if r.status == Invalid:
+          this.values = 全フィールドのdefault
+          formErrors[] = __('The form could not be resubmitted. Please start again.', 'tmswp')
+          log warning
+          return finish(FormStep::Input)
+      restoreValues(r.values)                          # Expiredでも署名正当なら復元可。今の項目に無い値は捨てる
+      複合フィールドの正準値を部品の値に戻す(再表示用)
+      return finish(FormStep::Input)                   # 入力画面で確認からやり直すため、食い違い・消失はここでは扱わない
+
+complete(jti, ttl):                                    # jtiのclaim → onComplete
+  try: claim = new JtiStore().claim(jti, ttl)
+  catch RuntimeException e: return failSubmission(e)   # DBエラー(jtiは獲得していない)
+  if claim == Duplicate:                               # 再送(リロード/二重クリック/並行二重POST)
+      this.values = 全フィールドのdefault
+      formErrors[] = __('This form has already been submitted.', 'tmswp')
+      log notice
       return finish(FormStep::Input)
+  handler = def.completeHandler()
+  if handler != null:
+      try: handler(this.values, this)
+      catch Throwable e:
+          JtiStore.release(jti)                        # 同じトークンで再送できる状態に戻す(失敗したら log error)
+          return failSubmission(e)
+  return finish(FormStep::Complete)
+
+failSubmission(e):                                     # エラー方針(00-overview.md §5.6)
+  if FormのKernelの debug: throw e
+  log error(exceptionClass, exceptionAt, previousClasses)   # 例外のメッセージ・トレース・オブジェクトは入れない(§ログ)
+  return returnToInput(__('The form could not be sent. Please try again.', 'tmswp'))
+
+passesSpamGuards(request):
+  for guard in def.spamGuards():
+      if !guard.passes(request):
+          formErrors[] = __('Your submission could not be verified. Please try again.', 'tmswp')
+          log notice
+          return false
+  return true
+
+returnToInput(message):
+  複合フィールドの正準値を部品の値に戻す(再表示用)
+  formErrors[] = message
+  return finish(FormStep::Input)
+
+EXPIRED = __('The confirmation screen has expired. Please review your entries and continue again.', 'tmswp')
 
 finish(step):
   this.step = step
   this.result = new FormResult(step, this.values, this.fieldErrors, this.formErrors)
   return this.result
-
-consumeJti(jti, ttl):                                  # jtiのアトミック獲得(既存なら失敗)。詳細は§JtiStore
-  return new JtiStore().claim(jti, ttl)                # wp_optionsへのINSERT IGNORE 1経路。rows_affected === 1 のみ獲得成功
 ```
 
+- `onComplete` で起きた例外はエラー方針に従う。debug時は例外として投げる(jtiは手放してから投げる)。本番ではFormのKernelのロガーに `error` で記録し、利用者には汎用の送信失敗エラーをフォームに出す。いずれもjtiは消費されず(手放しがデータベースのエラーで失敗した場合を除く。その失敗は error で記録する)、同じトークンで再送できる。`onComplete` の中の処理(メール送信等)が一部だけ済んでから例外になった場合、再送でその処理が重複しうる。重複を避ける必要がある処理は、app側の `onComplete` で冪等にする。
+
 #### bind()(値バインドとスカラー正規化)の確定仕様
+
 
 定義済みフィールドだけを対象とする(マスアサインメント耐性。未定義POSTキーは無視)。
 
@@ -1007,12 +1213,14 @@ consumeJti(jti, ttl):                                  # jtiのアトミック�
 
 - `validate()`: `(new Validator())->validate(def, this.values)` の結果を `fieldErrors` に格納。CompositeFieldは検証成功時に表示値を正準値(string)へ確定する。
 - `storeUploadedFiles()`: 値が `UploadedFile` のフィールドを `def.store()->store()` で `StoredFile` に差し替える。`StoredFile`(再送信で維持されたもの)はそのまま。
+- `storeValidUploadedFiles()`: 確認ボタンの押下で他の項目がエラーになったときに使う。自身の項目にエラーが無く、アップロードに成功した(`isValid()`)`UploadedFile` だけを保管する。保管したファイルは入力画面の `$form->field(name)->hidden()`(`{name}__token`)で引き回し、利用者に選び直させない。保管したまま送信されなかったファイルは、TempFileStoreの `gc()` が期限で消す。
 - `tokenValues()`: ConfirmTokenに格納する正準値を生成。`StoredFile` は `['__tmsfile' => token]` へ変換。`UploadedFile` が残っていたら `FormConfigException`(storeUploadedFiles()後には存在し得ない不変条件)。
-- `resolveFileTokens()`: 逆変換。`store.exists()` が false のトークン(GC済み等)は値を `''` に落とし、当該フィールドが `Required` 相当で必要なら完了処理側の責務ではなくフォームエラーにする…ことはせず、**期限切れトークンと同じ扱いで `formErrors` に「確認画面の有効期限が切れました」を積んで `FormStep::Input` へ戻す**(ファイルだけ黙って欠落させない)。
+- `restoreValues()`: 逆変換。署名済みの値を**全項目**復元してから結果(項目の食い違いの有無・消失したファイルの項目)を返す。`store.exists()` が false のトークン(GC済み等)は値を `''` に落とし、Submitでは**期限切れトークンと同じ扱いで `formErrors` に「確認画面の有効期限が切れました」を積んで `FormStep::Input` へ戻す**(ファイルだけ黙って欠落させない)。この確認はjtiのclaimより前に行うため、ファイルが消えていた送信はjtiを消費しない。トークンの項目がフォームの項目と食い違う場合(デプロイをまたいだ送信)も、例外にせず同じく入力画面へ戻す(ユーザー入力に起因する異常はバリデーションエラーの側に倒す。§例外)。項目が揃っていても、復元した値はclaimの前に今の規則で検証し直し、通らなければ項目のエラーを付けて入力画面へ戻す(§handle())。
 
 #### 二重送信・リダイレクトの責務分担
 
-- `handle()` はリダイレクトしない(コアはHTTP応答を制御しない)。PRGはapp側で `$result->step === FormStep::Complete` を見て `wp_safe_redirect()` する(§利用例)。
+- 二重送信の防止はFWの責務。確認画面の有無に関係なく、送信は使い捨てのjti(確認画面なしはSubmitToken、ありはConfirmToken)の §JtiStore へのclaimで1回に限られる。リロード・二重クリック・並行した二重POSTの2本目以降は「This form has already been submitted.」で入力画面に戻る。
+- `handle()` はリダイレクトしない(コアはHTTP応答を制御しない。ヘッダはページキャッシュからの除外だけを送る)。PRGはapp側で `$result->step === FormStep::Complete` を見て `wp_safe_redirect()` し、直後に `exit` する(00-overview.md 原則1の例外。§利用例)。
 - リダイレクトせずその場で完了画面を出す構成でも、jti消費によりリロード再POSTは再実行されない。
 
 ### FormResult
@@ -1199,7 +1407,8 @@ final class UnknownFieldException extends FormConfigException {}
 final class TempFileException extends \RuntimeException {}
 ```
 
-- 設計方針: **ユーザ入力に起因する異常は例外にせずバリデーションエラーに倒す**(旧ChoiceRuleが入力不正でUnexpectedValueExceptionを投げた問題の修正)。例外は「開発者の定義ミス」(`FormConfigException`)と「環境・IO異常」(`TempFileException`)のみ。
+- 設計方針: **ユーザ入力に起因する異常は例外にせずバリデーションエラーに倒す**(旧ChoiceRuleが入力不正でUnexpectedValueExceptionを投げた問題の修正)。署名済みのトークンの項目がフォームの項目と食い違う場合(デプロイをまたいだ送信)もこれに当たり、入力画面へ戻す。例外は「開発者の定義ミス」(`FormConfigException`。`handle()` の後の `applyDefaults()` のような呼び出し順の誤りは `TMSWP\Core\Exception\LogicException`)と「環境・IO異常」(`TempFileException`、JtiStoreのデータベースのエラーの `TMSWP\Core\Exception\RuntimeException`)のみ。
+- 環境・IO異常のうち、送信の処理中に起きたもの(JtiStoreのデータベースのエラー)と `onComplete` が投げた例外は、`handle()` がエラー方針(00-overview.md §5.6)に従って扱う。debug時は投げ、本番はFormのKernelのロガーに `error` で記録して汎用の送信失敗エラーをフォームに出す(§handle())。
 
 ---
 
@@ -1359,38 +1568,51 @@ final class ContactFormHolder
 }
 ```
 
-### 2A. actions/ ファイルによる3画面遷移(正準形)
+### 2A. テンプレート前処理の明示呼び出しによる3画面遷移(正準形)
 
-`ContactFormHolder` の手動保持と `template_redirect` フックの二重配線は、`actions/` ファイル規約(View/Support/Log 文書 §1A `ActionRouter`)を使うと不要になる。テンプレートと同名の `actions/{相対パス}.php` が `template_include`(priority 100=出力開始前)で1回 include され、フォーム駆動と PRG リダイレクトを行い、`Form`/`FormResult` を `View` 変数バッグへ積んでテンプレートに渡す。これが旧 T04 の `actions/tmpl-contact.php` 相当の正準形である。
+フォームの駆動とPRGリダイレクトは、テンプレートの先頭で型付きクラスを明示的に呼ぶ方式で書く。前処理クラスは `handle(): self` のstaticメソッドを持つreadonlyのDTOで、フォームを駆動し、完了ならリダイレクトして `exit` し、それ以外ならテンプレートが使う値を自身のプロパティで返す。テンプレートは先頭で `$vm = ContactPage::handle();` と1回呼ぶだけで、`ContactFormHolder` の手動保持と `template_redirect` フックの二重配線が不要になる。
 
-`actions/page-contact.php`(固定ページテンプレート `page-contact.php` に対応。テーマルート直下 `actions/` に置く):
+対象は入力・確認・完了の3画面までである。ウィザード形式(4画面以上)は対象外とする(§スコープ)。
+
+`app/Page/ContactPage.php`:
 
 ```php
 <?php
-/**
- * page-contact.php の前処理: お問い合わせフォームを駆動する。
- *
- * @var \WP_Query $wp_query
- */
 
 declare(strict_types=1);
 
+namespace App\Page;
+
 use App\Form\ContactForm;
+use TMSWP\Core\Form\Form;
+use TMSWP\Core\Form\FormResult;
 use TMSWP\Core\Form\FormStep;
 
-$form   = ContactForm::create();
-$result = $form->handle();   // バインド+CSRF+検証+状態遷移(冪等)
+/** page-contact.php の前処理: お問い合わせフォームを駆動し、テンプレートが使う値を返す */
+final readonly class ContactPage
+{
+    private function __construct(
+        public Form $form,
+        public FormResult $result,
+    ) {}
 
-// PRG: 完了時はサンクスへリダイレクト。template_include は出力開始前のため exit は安全
-if ($result->step === FormStep::Complete) {
-    wp_safe_redirect(home_url('/contact/thanks/'));
-    exit;
+    public static function handle(): self
+    {
+        $form = ContactForm::create();
+        $result = $form->handle();   // バインド+CSRF+送信トークン+検証+状態遷移(冪等)。ページキャッシュからも外す
+
+        // PRG: 完了時はサンクスへリダイレクトする。テンプレートの先頭(get_header() の前)は出力開始前のため安全
+        if ($result->step === FormStep::Complete) {
+            wp_safe_redirect(home_url('/contact/thanks/'));
+            exit;   // 00-overview.md 原則1の例外(PRGのリダイレクト直後)
+        }
+
+        return new self($form, $result);
+    }
 }
-
-return ['form' => $form, 'result' => $result];   // array → View にマージ。テンプレートは tms_var() で読む
 ```
 
-テンプレート `page-contact.php`(素の WP 固定ページテンプレート。前処理は actions が駆動済み):
+テンプレート `page-contact.php`(素の WP 固定ページテンプレート):
 
 ```php
 <?php
@@ -1398,39 +1620,40 @@ return ['form' => $form, 'result' => $result];   // array → View にマージ�
 
 declare(strict_types=1);
 
+use App\Page\ContactPage;
 use TMSWP\Core\Form\FormStep;
 
-/** @var \TMSWP\Core\Form\Form $form */
-$form = tms_var('form');
-/** @var \TMSWP\Core\Form\FormResult $result */
-$result = tms_var('result');
+$vm = ContactPage::handle();   // 出力の前に1回だけ呼ぶ
 
 get_header();
 ?>
-<?php if ($result->step === FormStep::Confirm) : ?>
-    <?= $form->open() ?>
+<?php if ($vm->result->step === FormStep::Confirm) : ?>
+    <?= $vm->form->open() ?>
     <dl>
-        <?php foreach ($form->fields() as $view) : ?>
+        <?php foreach ($vm->form->fields() as $view) : ?>
             <dt><?= $view->label() ?></dt><dd><?= $view->display() ?></dd>
         <?php endforeach; ?>
     </dl>
     <button type="submit" name="_step" value="back">入力に戻る</button>
     <button type="submit" name="_step" value="submit">送信する</button>
-    <?= $form->close() ?>
+    <?= $vm->form->close() ?>
 <?php else : ?>
-    <?= $form->open(['class' => 'contact-form']) ?>
-    <?= $form->field('name')->input(['class' => 'w-full']) ?>
-    <?= $form->field('name')->errors() ?>
-    <?= $form->field('email')->input(['type' => 'email']) ?>
-    <?= $form->field('email')->errors() ?>
+    <?php foreach ($vm->result->formErrors as $error) : ?>
+        <p class="form-alert"><?= esc_html($error) ?></p>
+    <?php endforeach; ?>
+    <?= $vm->form->open(['class' => 'contact-form']) ?>
+    <?= $vm->form->field('name')->input(['class' => 'w-full']) ?>
+    <?= $vm->form->field('name')->errors() ?>
+    <?= $vm->form->field('email')->input(['type' => 'email']) ?>
+    <?= $vm->form->field('email')->errors() ?>
     <!-- ...他フィールド -->
     <button type="submit" name="_step" value="confirm">入力内容を確認する</button>
-    <?= $form->close() ?>
+    <?= $vm->form->close() ?>
 <?php endif; ?>
 <?php get_footer(); ?>
 ```
 
-この形では、テンプレートには `$form->handle()` の呼び出しも `ContactFormHolder` も `template_redirect` フックも存在せず、ロジックは `actions/page-contact.php` に完全分離される。`handle()` の冪等性(§handle)により、actions が1回駆動したあとテンプレートで再度 `handle()` を呼んでも二重実行されないが、正準形ではテンプレートは `tms_var()` で結果を読むだけにとどめる。`example 2` の `ContactFormHolder` + `template_redirect` 方式は、`actions/` を使わない場合(プラグインのショートコード文脈等。プラグイン形態では `ActionRouter` が生成されない)の代替として引き続き有効である。
+この形では、前処理(フォームの駆動とPRG)は `ContactPage::handle()` に分離され、テンプレートは返された型付きの値を読むだけになる。前処理の呼び出しはテンプレートに明示的に書かれるため、どのテンプレートで何が駆動されるかをテンプレートのファイルだけで追える。`example 2` の `ContactFormHolder` + `template_redirect` 方式は、テンプレートの外で駆動する必要がある場合(プラグインのショートコード文脈等。§5)に使う。
 
 ### 3. 生年月日つき会員フォーム(複合フィールド・カスタム複合型)
 
@@ -1517,7 +1740,7 @@ add_filter(
 ## 旧iwf2bからの設計根拠(簡潔)
 
 - **Formオブジェクト不在が複雑性の根本原因**だった。旧コアはFieldSet(バインド+検証)とレンダリング部品しか持たず、「POST判定→validate→nonce→確認→完了」を15案件すべてが手書きし、nonce漏れ(T06)・確認画面コピペバグ(T04)・二重送信無対策が実害として発生した。本設計は `Form::handle()` に状態機械を固定し、この制御フローのユーザコードを消滅させる(DR-07)。
-- **確認画面のhidden全値再POST+パス再構築は脆弱**(改ざん未検証、WP_CONTENT_DIR配下の任意ファイル参照が可能)だったため、HMAC署名トークン+サーバ側一時保管トークンに置換。セッション案は不採用(ページキャッシュ・マルチサーバ・「コアは状態を持たない」方針との整合、および旧T05のセッション運用が session_start の管轄問題を起こしていた実態)。
+- **確認画面のhidden全値再POST+パス再構築は脆弱**(改ざん未検証、WP_CONTENT_DIR配下の任意ファイル参照が可能)だったため、HMAC署名トークン+サーバ側一時保管トークンに置換。セッション案は不採用(マルチサーバ・「コアは状態を持たない」方針との整合、および旧T05のセッション運用が session_start の管轄問題を起こしていた実態)。
 - **レンダリングの3層コールバック合成**(FormRenderer/before_render/after_render、マジックインデックス)は、価値(エラー断片とinput断片のecho書き味)に対して複雑性が過大であり、FieldView+FormHtml純関数へ全面置換(DR-16)。echoの書き味とWP標準テンプレート構造はそのまま維持する。
 - **Rule群はラインナップを実利用実績で選別**(RequiredRule 104参照〜Regex 21参照の上位+ファイル系)。全プロジェクト未使用の比較系・ExactLength・RequiredUnless・Type・UniqueEmailは収載しない。config配列+リフレクション注入はPHP8のコンストラクタプロモーション+named argumentsへ置換し、`%param%` は `{param}` に改める(sprintf混線バグの根絶)。
 - **FieldSetシングルトン・FieldInterfaceの__construct宣言・RuleのFieldSet逆依存**は、テスト困難・静的解析不能の根源として全廃。クロスフィールド検証は `ValidationContext` 注入で解決(DR-09/DR-12)。
@@ -1534,16 +1757,24 @@ add_filter(
 - [ ] `FormRenderer` 系・コールバック合成・`__callStatic`・`extract()` が存在しない
 - [ ] `Form` がfinal具象クラスであり、`abstract` メソッド・`create(): static`・nullセンチネルコンストラクタが存在しない(コンストラクタは `FormDefinition` 必須引数のみ)
 - [ ] `Messages` が静的可変状態を持たない(`override()`/`reset()` が存在せず、サイト全体上書きは `tmswp/form/rule_message` フィルタのみ)
-- [ ] 全ファイル `declare(strict_types=1)`・全シグネチャ型宣言・例外は `TMSWP\Core\Exception\Form\` 配下
+- [ ] 全ファイル `declare(strict_types=1)`・全シグネチャ型宣言・例外は §例外 のとおり
 
 **ライフサイクル**
-- [ ] §handle()擬似コードの全分岐(GET初期表示/他フォームID無視/CSRF失敗/不明_step/confirm有効・無効/Submit時のValid・Expired・Invalid・jti再送/Back時のValid・Invalid)が網羅実装され、各分岐にユニットテストがある
+- [ ] §handle()擬似コードの全分岐(GET初期表示/他フォームID無視/CSRF失敗/不明_step/confirm有効・無効/確認ありSubmit時のValid・Expired・Invalid・項目の食い違い・ファイル消失・今の規則での再検証の失敗・jti再送/確認なしSubmit時の送信トークンのValid・Expired・Invalid・jti再送/スパム対策の拒否/Back時のValid・Invalid)が網羅実装され、各分岐にユニットテストがある
 - [ ] `handle()` が冪等である(2回呼んでもonCompleteは1回)
+- [ ] 確認画面の無いフォームでも、リロードと二重クリックでonCompleteが再実行されない(統合テスト)
+- [ ] onCompleteの例外が、debugでは投げられ、本番ではFormのKernelのロガーに `error` で記録されて汎用の送信失敗エラーが出て、同じトークンで再送できる(統合テスト)
+- [ ] JtiStoreのデータベースのエラーが例外になる(`claim`・`release`・`gc`)
+- [ ] CSRF失敗・トークンの改ざん・再送の拒否・ファイルの消失・onCompleteの例外が §ログ のとおり記録される
+- [ ] フォームのあるページのレスポンスにnocacheのヘッダが付き、`DONOTCACHEPAGE` が定義される(統合テスト)
+- [ ] 登録したスパム対策が、入力画面の `open()` に出力され、入力を受け取るPOSTで値の検証の前に検査される
+- [ ] `applyDefaults()` が、`handle()` の後・フォームに無い項目・値の形の違い・ファイルの項目で例外になる
 - [ ] checkbox/checkboxesのPOSTキー欠損が `''` / `[]` にバインドされる(hiddenハック不要の実証テスト)
 - [ ] 同一ページに2フォームを置いた場合、POSTが宛先フォームだけを処理する
 
 **セキュリティ**
 - [ ] ConfirmTokenの改ざん(値1文字変更・署名差し替え・formId差し替え)がすべてInvalidになるテスト
+- [ ] 署名の鍵が用途ごとに派生され、`wp_salt('auth')` をそのまま鍵にした署名と、別の用途のトークン(送信トークン⇔確認トークン)がInvalidになるテスト
 - [ ] 同一jtiの並行2リクエストで `onComplete` が二重実行されないテスト(同一jtiの2本目のINSERTが `rows_affected === 0` となるケースを `$wpdb` スタブで再現し、獲得失敗側が再送拒否になることを検証)
 - [ ] `canonicalJson` が連想配列の順序によらず同一出力を返すテスト(決定性)
 - [ ] 署名比較が `hash_equals` であること(コードレビュー項目)

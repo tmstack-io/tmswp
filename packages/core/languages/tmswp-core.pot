@@ -25,21 +25,32 @@ msgstr ""
 msgid ", "
 msgstr ""
 
-#: Form/Form.php:56
+#: Form/Form.php:79
+#: Form/Form.php:308
 msgid "Your session has expired. Please submit the form again."
 msgstr ""
 
-#: Form/Form.php:193
+#: Form/Form.php:261
+#: Form/Form.php:445
 msgid "The form could not be resubmitted. Please start again."
 msgstr ""
 
-#: Form/Form.php:200
-#: Form/Form.php:213
+#: Form/Form.php:270
+#: Form/Form.php:276
+#: Form/Form.php:282
 msgid "The confirmation screen has expired. Please review your entries and continue again."
 msgstr ""
 
-#: Form/Form.php:207
+#: Form/Form.php:346
 msgid "This form has already been submitted."
+msgstr ""
+
+#: Form/Form.php:400
+msgid "The form could not be sent. Please try again."
+msgstr ""
+
+#: Form/Form.php:462
+msgid "Your submission could not be verified. Please try again."
 msgstr ""
 
 #: Form/Rule/Choice.php:37

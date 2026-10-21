@@ -26,6 +26,9 @@ final class FormDefinition
 
     private ?TempFileStore $store = null;
 
+    /** @var list<SpamGuardInterface> */
+    private array $spamGuards = [];
+
     private function __construct(public readonly string $id)
     {
         if (preg_match('/\A[a-z][a-z0-9_-]*\z/', $id) !== 1) {
@@ -165,6 +168,16 @@ final class FormDefinition
         return $this;
     }
 
+    /**
+     * スパム対策を登録する。複数を登録でき、登録の順に検査する(どれか1つが拒否したら送信を受け付けない)。
+     */
+    public function spamGuard(SpamGuardInterface $guard): self
+    {
+        $this->spamGuards[] = $guard;
+
+        return $this;
+    }
+
     /** @return array<string, Field|CompositeField> */
     public function fields(): array
     {
@@ -213,6 +226,12 @@ final class FormDefinition
         }
 
         return $this->store;
+    }
+
+    /** @return list<SpamGuardInterface> */
+    public function spamGuards(): array
+    {
+        return $this->spamGuards;
     }
 
     public function hasFileField(): bool
