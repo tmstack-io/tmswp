@@ -7,6 +7,7 @@ namespace TMSWP\Core\Form;
 use Psr\Log\LogLevel;
 use Throwable;
 use TMSWP\Core\Exception\Form\FormConfigException;
+use TMSWP\Core\Exception\Form\TempFileException;
 use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Exception\RuntimeException;
@@ -264,14 +265,19 @@ final class Form
 
         $this->validate();
 
-        if ($this->fieldErrors !== []) {
-            // 他の項目のエラーで入力画面に戻るときも、検証を通ったファイルは保管してトークンで引き回す(選び直させない)
-            $this->storeValidUploadedFiles();
+        try {
+            if ($this->fieldErrors !== []) {
+                // 他の項目のエラーで入力画面に戻るときも、検証を通ったファイルは保管してトークンで引き回す(選び直させない)
+                $this->storeValidUploadedFiles();
 
-            return $this->finish(FormStep::Input);
+                return $this->finish(FormStep::Input);
+            }
+
+            $this->storeUploadedFiles();
+        } catch (TempFileException $exception) {
+            return $this->failSubmission('failed to store the uploaded files of form {form}', $exception);
         }
 
-        $this->storeUploadedFiles();
         $this->confirmToken = ConfirmToken::issue($this->definition->id, $this->tokenValues());
 
         return $this->finish(FormStep::Confirm);
@@ -280,7 +286,7 @@ final class Form
     /**
      * 確認画面からの送信。トークンの検証 → 全項目の復元とファイルの存在の確認 → 今の規則での再検証 → jti の claim
      * → onComplete の順。復元できない(ファイルの消失・項目の食い違い)ときと再検証に失敗したときは、jti を claim
-     * せずに入力画面へ戻す。
+     * せずに入力画面へ戻す。ただし、ファイルが消えていて jti が claim 済みなら、完了の後の再送として拒否する。
      */
     private function handleConfirmedSubmit(FormRequest $request): FormResult
     {
@@ -307,9 +313,7 @@ final class Form
         }
 
         if ($restored['missingFiles'] !== []) {
-            $this->log(LogLevel::WARNING, 'temporary files of form {form} were missing at submission: {fields}', ['fields' => implode(', ', $restored['missingFiles'])]);
-
-            return $this->returnToInput(__('The confirmation screen has expired. Please review your entries and continue again.', 'tmswp'));
+            return $this->rejectMissingFiles($token->jti, $restored['missingFiles']);
         }
 
         // 確認の後のデプロイで規則や選択肢が変わっていることがあるため、署名済みの値も今の規則で検証し直す
@@ -327,7 +331,8 @@ final class Form
     }
 
     /**
-     * 確認画面の無いフォームの送信。送信トークンの検証 → スパム対策 → 値の検証 → jti の claim → onComplete の順。
+     * 確認画面の無いフォームの送信。送信トークンの検証 → スパム対策 → 値の検証 → jti の claim → ファイルの保管 →
+     * onComplete の順(ファイルの保管は complete() が行う)。
      */
     private function handleDirectSubmit(FormRequest $request): FormResult
     {
@@ -358,8 +363,12 @@ final class Form
     }
 
     /**
-     * jti を claim してから onComplete を呼ぶ。claim を先にするのは、並行した二重の POST で onComplete を1回だけ
-     * 実行するため。onComplete が例外で終わったら jti を手放し、同じトークンで再送できるようにする。
+     * jti を claim し、ファイルを保管してから onComplete を呼び、onComplete が消費しなかった一時ファイルを消す。
+     *
+     * claim を先にするのは、並行した二重の POST で onComplete を1回だけ実行するため。ファイルの保管を claim の後に
+     * するのは、再送として拒否する POST のファイルを保管しないため(確認画面ありのフォームは確認の時点で保管済みで、
+     * ここでは何もしない)。保管と onComplete が例外で終わったら jti を手放し、同じトークンで再送できるようにする。
+     * このとき一時ファイルは消さない(再送で使う)。
      */
     private function complete(string $jti, int $ttl): FormResult
     {
@@ -372,11 +381,15 @@ final class Form
         }
 
         if ($claim === JtiClaim::Duplicate) {
-            $this->values = $this->defaultValues();
-            $this->formErrors[] = __('This form has already been submitted.', 'tmswp');
-            $this->log(LogLevel::NOTICE, 'a resubmission of form {form} was rejected');
+            return $this->rejectResubmission();
+        }
 
-            return $this->finish(FormStep::Input);
+        try {
+            $this->storeUploadedFiles();
+        } catch (TempFileException $exception) {
+            $this->release($store, $jti, $exception);
+
+            return $this->failSubmission('failed to store the uploaded files of form {form}', $exception);
         }
 
         $handler = $this->definition->completeHandler();
@@ -391,14 +404,68 @@ final class Form
             }
         }
 
+        $this->deleteUnconsumedFiles();
+
         return $this->finish(FormStep::Complete);
     }
 
+    private function rejectResubmission(): FormResult
+    {
+        $this->values = $this->defaultValues();
+        $this->formErrors[] = __('This form has already been submitted.', 'tmswp');
+        $this->log(LogLevel::NOTICE, 'a resubmission of form {form} was rejected');
+
+        return $this->finish(FormStep::Input);
+    }
+
     /**
-     * onComplete の例外の後に jti を手放す。手放しに失敗したら記録し、onComplete の例外の扱い(debug なら投げる)を
-     * 優先する。この場合、同じトークンでの再送は再送として拒否される。
+     * 一時ファイルが消えていた確認画面からの送信。jti が claim 済みなら、送信の完了の後(完了の後始末でファイルを
+     * 消した後)の再送として拒否する。claim されていなければ(gc による消失等)、jti を claim せずに入力画面に戻す。
      *
-     * @param Throwable $failure onComplete が投げた例外(Kernel を決められないとき、previous に入れて投げる)
+     * @param list<string> $fields ファイルが消えていた項目
+     */
+    private function rejectMissingFiles(string $jti, array $fields): FormResult
+    {
+        try {
+            $claimed = (new JtiStore())->isClaimed($jti);
+        } catch (RuntimeException $exception) {
+            return $this->failSubmission('failed to look up the submission ID of form {form}', $exception);
+        }
+
+        if ($claimed) {
+            return $this->rejectResubmission();
+        }
+
+        $this->log(LogLevel::WARNING, 'temporary files of form {form} were missing at submission: {fields}', ['fields' => implode(', ', $fields)]);
+
+        return $this->returnToInput(__('The confirmation screen has expired. Please review your entries and continue again.', 'tmswp'));
+    }
+
+    /**
+     * 送信の完了の後、onComplete が移動(moveTo())も添付化(toAttachment())もしなかった一時ファイルを消す。
+     * 利用者の送信は成功しているため、削除の失敗は debug でも例外にせず、Kernel のロガーに error で記録して残りを続ける
+     * (残ったファイルは gc() が消す)。
+     */
+    private function deleteUnconsumedFiles(): void
+    {
+        foreach ($this->values as $value) {
+            if (!$value instanceof StoredFile) {
+                continue;
+            }
+
+            try {
+                $value->delete();
+            } catch (TempFileException $exception) {
+                $this->log(LogLevel::ERROR, 'failed to delete a temporary file of form {form} after completion', self::exceptionContext($exception));
+            }
+        }
+    }
+
+    /**
+     * onComplete の例外・ファイルの保管の失敗の後に jti を手放す。手放しに失敗したら記録し、元の失敗の扱い(debug なら
+     * 投げる)を優先する。この場合、同じトークンでの再送は再送として拒否される。
+     *
+     * @param Throwable $failure onComplete が投げた例外か、保管の失敗(Kernel を決められないとき、previous に入れて投げる)
      */
     private function release(JtiStore $store, string $jti, Throwable $failure): void
     {
@@ -668,17 +735,25 @@ final class Form
         return Validator::stringValue($value) ?? '';
     }
 
-    /** 値を検証する。取り込みの段階で入力の不正があった項目は、検証の結果に代えてその不正をエラーにする */
+    /**
+     * 値を検証する。取り込みの段階で入力の不正があった項目は、検証の結果に代えてその不正をエラーにする。アップロードに
+     * 失敗したファイル(サイズの超過等)は、項目の規則に関係なくエラーにする(検証を通ったファイルを必ず保管できるように
+     * するため)。
+     */
     private function validate(): void
     {
         $errors = (new Validator())->validate($this->definition, $this->values);
         $this->fieldErrors = [];
 
         foreach ($this->definition->fields() as $name => $_field) {
+            $value = $this->values[$name] ?? null;
+
             if (\array_key_exists($name, $this->inputErrors)) {
                 $this->fieldErrors[$name] = [$this->inputErrors[$name]];
             } elseif (\array_key_exists($name, $errors)) {
                 $this->fieldErrors[$name] = $errors[$name];
+            } elseif ($value instanceof UploadedFile && !$value->isValid()) {
+                $this->fieldErrors[$name] = [$value->errorMessage()];
             }
         }
 
@@ -687,6 +762,12 @@ final class Form
         }
     }
 
+    /**
+     * 値が UploadedFile の項目を保管して StoredFile に差し替える。validate() を通った後に呼ぶ(アップロードに失敗した
+     * ファイルは validate() でエラーになっている)。
+     *
+     * @throws TempFileException 保管の失敗
+     */
     private function storeUploadedFiles(): void
     {
         foreach ($this->values as $name => $value) {
@@ -696,7 +777,11 @@ final class Form
         }
     }
 
-    /** 自身の項目にエラーが無く、アップロードに成功したファイルだけを保管する(他の項目にエラーがあるとき) */
+    /**
+     * 自身の項目にエラーが無く、アップロードに成功したファイルだけを保管する(他の項目にエラーがあるとき)
+     *
+     * @throws TempFileException 保管の失敗
+     */
     private function storeValidUploadedFiles(): void
     {
         foreach ($this->values as $name => $value) {

@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Form;
 
-use FilesystemIterator;
-use SplFileInfo;
 use TMSWP\Core\Exception\Form\TempFileException;
 
 final readonly class StoredFile
@@ -23,6 +21,15 @@ final readonly class StoredFile
         return is_file($this->path);
     }
 
+    /**
+     * ファイルを $directory へ移し、トークンのディレクトリを消す。
+     *
+     * @param ?string $filename 移動先のファイル名。省略時は clientName。wp_unique_filename() で衝突を避ける
+     *
+     * @throws TempFileException ファイルが無い場合と、ディレクトリの作成・移動・トークンのディレクトリの削除の失敗
+     *
+     * @return string 移動先の絶対パス
+     */
     public function moveTo(string $directory, ?string $filename = null): string
     {
         if (!$this->exists()) {
@@ -46,50 +53,68 @@ final readonly class StoredFile
             throw new TempFileException("failed to move temporary file: {$this->path}");
         }
 
-        $this->deleteDirectory(\dirname($this->path));
+        TempFileStore::deleteDirectory(\dirname($this->path));
 
         return $target;
     }
 
+    /**
+     * メディアライブラリの添付ファイルにし、トークンのディレクトリを消す。media_handle_sideload() は管理画面の関数のため、
+     * 読み込まれていなければ(フロントのリクエスト)wp-admin/includes の file.php・media.php・image.php を読み込む。
+     *
+     * @throws TempFileException ファイルが無い場合、WordPress が読み込まれていない場合、media_handle_sideload() が
+     *                           WP_Error を返した場合(そのメッセージを持つ)と、トークンのディレクトリの削除の失敗
+     *
+     * @return int 添付ファイルの ID
+     */
     public function toAttachment(int $parentPostId = 0): int
     {
-        if (!\function_exists('media_handle_sideload')) {
-            throw new TempFileException('media_handle_sideload is not available');
+        if (!$this->exists()) {
+            throw new TempFileException('temporary file does not exist');
         }
 
+        self::loadMediaFunctions();
         $attachmentId = media_handle_sideload($this->sideloadFile(), $parentPostId);
 
         if (is_wp_error($attachmentId)) {
             throw new TempFileException($attachmentId->get_error_message());
         }
 
-        $this->deleteDirectory(\dirname($this->path));
+        TempFileStore::deleteDirectory(\dirname($this->path));
 
-        return (int) $attachmentId;
+        return $attachmentId;
     }
 
+    /**
+     * ファイルとトークンのディレクトリを消す。既に無ければ何もしない。
+     *
+     * @throws TempFileException 削除の失敗
+     */
     public function delete(): void
     {
-        if (is_file($this->path)) {
-            unlink($this->path);
-        }
+        $dir = \dirname($this->path);
 
-        $this->deleteDirectory(\dirname($this->path));
+        if (is_dir($dir)) {
+            TempFileStore::deleteDirectory($dir);
+        }
     }
 
-    private function deleteDirectory(string $dir): void
+    /**
+     * @throws TempFileException WordPress が読み込まれていない場合
+     */
+    private static function loadMediaFunctions(): void
     {
-        if (!is_dir($dir)) {
+        if (\function_exists('media_handle_sideload')) {
             return;
         }
 
-        foreach (new FilesystemIterator($dir, FilesystemIterator::SKIP_DOTS) as $fileInfo) {
-            if ($fileInfo instanceof SplFileInfo && $fileInfo->isFile()) {
-                unlink($fileInfo->getPathname());
-            }
+        if (!\defined('ABSPATH')) {
+            throw new TempFileException('WordPress is not loaded: ABSPATH is not defined');
         }
 
-        rmdir($dir);
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+        require_once ABSPATH . 'wp-admin/includes/image.php';
     }
 
     /** @return array<string, string> */

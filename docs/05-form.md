@@ -62,7 +62,7 @@ Form (final具象・ライフサイクルの持ち主。FormDefinitionを合成)
  ├─ TokenSigner (両トークンの署名と検証。用途別の鍵の派生。@internal)
  ├─ JtiStore (jti再送防止のアトミック獲得。wp_optionsへのINSERT IGNORE) ── JtiClaim
  ├─ SpamGuardInterface (スパム対策を差し込む口。実装はapp側。手本は rules/form.md)
- ├─ UploadedFile / StoredFile / TempFileStore (ファイルの一時保管と確定)
+ ├─ UploadedFile / StoredFile / TempFileStore (ファイルの一時保管と確定) ── TempFileGc (WP-Cronでの期限切れの掃除)
  ├─ FormResult (handle()の戻り値: step/values/errors)
  └─ FieldView / OptionView ── FormHtml (純関数レンダラ) ── Support\Html
 ```
@@ -79,12 +79,15 @@ POST _step=confirm                      → CSRF検証 → バインド → ス�
                                            OK → ファイルをTempFileStoreへ退避
                                                 → ConfirmToken発行 → step = Confirm
 POST _step=submit  (+ _confirm_token)   → CSRF検証 → トークン検証(署名/期限) → 全項目の復元とファイルの存在確認
-                                           → 今の規則での再検証 → jtiのclaim(再送の拒否) → onComplete(values, form) → step = Complete
+                                           → 今の規則での再検証 → jtiのclaim(再送の拒否) → onComplete(values, form)
+                                           → 未消費の一時ファイルの削除 → step = Complete
                                            NG → step = Input (理由に応じ値復元+フォームエラー)
 POST _step=back    (+ _confirm_token)   → 署名検証 → 値復元 → step = Input
 ```
 
-確認画面なし(`confirm()` 未指定)の場合は、`_step=submit`(+ `_submit_token`)が「CSRF検証 → 送信トークン検証 → バインド → スパム対策 → 検証 → jtiのclaim → onComplete」を直接実行する2状態フローになる。
+確認画面なし(`confirm()` 未指定)の場合は、`_step=submit`(+ `_submit_token`)が「CSRF検証 → 送信トークン検証 → バインド → スパム対策 → 検証 → jtiのclaim → ファイルの保管 → onComplete → 未消費の一時ファイルの削除」を直接実行する2状態フローになる。
+
+ファイルの項目は、確認画面の有無に関係なく、TempFileStoreに保管してから `onComplete` に `StoredFile` で渡す(§ファイルのライフサイクル)。`onComplete` が受け取る型と取れる操作(`moveTo()`・`toAttachment()`)は、確認画面の有無で変わらない。
 
 確認画面の有無に関係なく、送信は使い捨てのjtiで1回に限られる。確認画面なしのフォームは `open()` が埋め込む送信トークン(§SubmitToken)のjti、確認画面ありのフォームはConfirmTokenのjtiを使う(送信トークンは埋め込まない)。`handle()` と `open()` は、フォームのあるページをページキャッシュから外す(§ページキャッシュからの除外)。
 
@@ -144,7 +147,7 @@ enum FieldType: string
 }
 ```
 
-- `FieldType::Checkboxes` と `Select`(`attrs: ['multiple' => true]` 指定時は不可。複数選択selectは `Checkboxes` を使う規約とし、`FieldView::select()` は常に単一選択)以外のスカラー型は値が `string`、`Checkboxes` のみ `list<string>`、`File` のみ `UploadedFile|StoredFile|''`。
+- `FieldType::Checkboxes` と `Select`(`attrs: ['multiple' => true]` 指定時は不可。複数選択selectは `Checkboxes` を使う規約とし、`FieldView::select()` は常に単一選択)以外のスカラー型は値が `string`、`Checkboxes` のみ `list<string>`、`File` のみ `UploadedFile|StoredFile|''`(`onComplete` に渡る値は `StoredFile|''`。§ファイルのライフサイクル)。
 
 ### FormRequest
 
@@ -384,7 +387,11 @@ final class FormDefinition
     /** ConfirmTokenの有効期限秒。既定: 1800 */
     public function confirmTtl(int $seconds): self;
 
-    /** 完了処理。シグネチャ: function (array<string, mixed> $values, Form $form): void。例外の扱いは §handle() */
+    /**
+     * 完了処理。シグネチャ: function (array<string, mixed> $values, Form $form): void。例外の扱いは §handle()。
+     * ファイルの項目の値は StoredFile か ''。使うファイルは moveTo()/toAttachment() で消費する(消費しなかった一時ファイルは
+     * 完了の後に消える。§ファイルのライフサイクル)
+     */
     public function onComplete(\Closure $handler): self;
 
     /** スパム対策の登録(§SpamGuardInterface)。複数を登録でき、登録の順に検査する */
@@ -426,7 +433,7 @@ final class FormDefinition
 振る舞い仕様:
 
 - 同名フィールドの重複追加は `FormConfigException`(P2のような事故をロード時に検出)。
-- `onComplete` 未設定のままComplete遷移に到達した場合も正常動作(何もしない)。完了処理をテンプレート側で `$result->step` 分岐により書く構成を許容するため。
+- `onComplete` 未設定のままComplete遷移に到達した場合も正常動作(何もしない)。完了処理をテンプレート側で `$result->step` 分岐により書く構成を許容するため。ただし一時ファイルは `handle()` が完了の後に消すため、ファイルを扱う完了処理は `onComplete` に書く。
 - すべてのセッタは `$this` を返すfluent。`fields()` は定義順を保持した配列を返す(確認画面イテレーションの表示順保証)。
 
 ### Validator / ValidationContext / 空値セマンティクス
@@ -801,6 +808,12 @@ final class JtiStore
     /** 獲得したjtiを手放す(onCompleteの例外の後、再送できるようにする)。@throws \TMSWP\Core\Exception\RuntimeException */
     public function release(string $jti): void;
 
+    /**
+     * jtiが獲得済みか(確認画面からの送信で一時ファイルが消えていたとき、完了の後の再送かを見分ける)。
+     * @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー
+     */
+    public function isClaimed(string $jti): bool;
+
     /** 期限切れjtiの掃除。@return int 削除行数。@throws \TMSWP\Core\Exception\RuntimeException */
     public function gc(): int;
 }
@@ -822,6 +835,11 @@ claim(jti, ttl):
 
 release(jti):
   DELETE FROM {$wpdb->options} WHERE option_name = 'tmswp_form_jti_' . jti   # false → RuntimeException
+
+isClaimed(jti):
+  value = SELECT option_value FROM {$wpdb->options} WHERE option_name = 'tmswp_form_jti_' . jti
+  $wpdb->last_error !== '' → RuntimeException  # wpdb::query() はクエリの前に last_error を空にするため、残っていればこのクエリのエラー
+  return value !== null
 
 gc():
   DELETE FROM {$wpdb->options} WHERE option_name LIKE 'tmswp_form_jti_%' AND CAST(option_value AS UNSIGNED) < time()
@@ -901,13 +919,13 @@ final readonly class UploadedFile
     public function errorMessage(): string;
 }
 
-/** TempFileStore に保管済みのファイル(確認画面〜完了処理間で有効) */
+/** TempFileStore に保管済みのファイル(保管から完了処理の後始末まで有効) */
 final readonly class StoredFile
 {
     public function __construct(
         public string $token,       // /\A[a-f0-9]{32}\z/
-        public string $path,        // サーバ側で解決された絶対パス(POSTからは絶対に作らない)
-        public string $clientName,  // sanitize_file_name 済み
+        public string $path,        // サーバ側で解決された絶対パス({baseDir}/{token}/file。POSTからは絶対に作らない)
+        public string $clientName,  // sanitize_file_name 済み(表示と、移動・添付化の既定のファイル名に使う)
         public string $mime,        // 保管時にfinfoで確定した実体MIME
         public int $size,
     ) {}
@@ -918,22 +936,31 @@ final readonly class StoredFile
      * 完了処理での確定移動。$filename省略時はclientNameを採用し、wp_unique_filename で衝突回避。
      * 移動後、一時ディレクトリ(トークンディレクトリ)は削除される。
      * @return string 移動後の絶対パス
-     * @throws \TMSWP\Core\Exception\Form\TempFileException 移動失敗・既に削除済み
+     * @throws \TMSWP\Core\Exception\Form\TempFileException 既に削除済み・ディレクトリ作成・移動・トークンディレクトリの削除の失敗
      */
     public function moveTo(string $directory, ?string $filename = null): string;
 
     /**
-     * メディアライブラリへ添付ファイル化(media_handle_sideload ラッパ)。成功時に一時ファイルは消費される。
+     * メディアライブラリへ添付ファイル化(media_handle_sideload ラッパ)。成功時に一時ファイルは消費され、トークンディレクトリは削除される。
+     * media_handle_sideload() は管理画面の関数のため、読み込まれていなければ(フロントのリクエスト)
+     * ABSPATH . 'wp-admin/includes/{file,media,image}.php' を読み込んでから呼ぶ。
      * @return int attachment ID
-     * @throws \TMSWP\Core\Exception\Form\TempFileException WP_Error時(メッセージを内包)
+     * @throws \TMSWP\Core\Exception\Form\TempFileException 既に削除済み・ABSPATH未定義・WP_Error時(メッセージを内包)・トークンディレクトリの削除の失敗
      */
     public function toAttachment(int $parentPostId = 0): int;
 
+    /** ファイルとトークンディレクトリを削除(既に無ければ何もしない)。@throws TempFileException 削除の失敗 */
     public function delete(): void;
 }
 
 final class TempFileStore
 {
+    /** トークンディレクトリの中のファイルの保存名(クライアントのファイル名を使わない) */
+    public const string FILE_NAME = 'file';
+
+    /** トークンディレクトリの中のメタデータのファイル名 */
+    public const string META_NAME = 'meta.json';
+
     /** @param string $baseDir 一時保管ルート(実在しなければ生成) */
     public function __construct(private readonly string $baseDir) {}
 
@@ -942,20 +969,47 @@ final class TempFileStore
 
     /**
      * アップロード直後のファイルを一時保管しトークンを発行する。
-     * @throws TempFileException 保管失敗(ディレクトリ作成不可・move失敗)
+     * @throws TempFileException isValid()でない・保管失敗(gcのイベントのスケジュール・ディレクトリ作成不可・move失敗・メタデータの書き込み)
      */
     public function store(UploadedFile $file): StoredFile;
 
-    /** トークンの存在確認(has/get分離。DR-18) */
+    /** トークンの存在確認(has/get分離。DR-18)。メタデータとファイルの両方があるときだけ true(削除の途中の失敗で本体だけが消えたトークンは false) */
     public function exists(string $token): bool;
 
     /** @throws TempFileException トークン形式不正・不存在・メタ破損 */
     public function resolve(string $token): StoredFile;
 
+    /** トークンディレクトリの削除(無ければ何もしない)。@throws TempFileException トークン形式不正・削除の失敗 */
     public function delete(string $token): void;
 
-    /** 期限切れ一時ファイルの掃除。@return int 削除したトークンディレクトリ数 */
+    /**
+     * 期限切れ一時ファイルの掃除。1つの削除に失敗しても残りを続け、最後に失敗をまとめて例外にする。
+     * @return int 削除したトークンディレクトリ数
+     * @throws TempFileException baseDirの一覧を取れない場合と、削除に失敗したトークンディレクトリがあった場合(件数と最初の失敗をpreviousに持つ)
+     */
     public function gc(int $maxAgeSeconds = 86400): int;
+
+    /** @internal TempFileStore と StoredFile だけが使う。トークンディレクトリ内のファイルを消してからディレクトリを消す。@throws TempFileException 削除の失敗(一覧を取れない場合を含む) */
+    public static function deleteDirectory(string $dir): void;
+}
+
+/** 既定の一時保管の gc() を WP-Cron で毎時実行する(§WP-Cronによるgc) */
+final class TempFileGc
+{
+    public const string HOOK = 'tmswp_form_temp_file_gc';
+    public const string RECURRENCE = 'hourly';
+
+    /** @internal Kernel の boot だけが呼ぶ。HOOK に gc() を、`tmswp/deactivated` にイベントの解除を登録する(プロセスで1回) */
+    public static function register(\TMSWP\Core\Kernel\Kernel $kernel): void;
+
+    /** @internal TempFileStore::store() だけが呼ぶ。イベントが無ければスケジュールする。@throws TempFileException 保存の失敗 */
+    public static function schedule(): void;
+
+    /** @internal WP-Cron のフックだけが呼ぶ。@throws TempFileException debug時、gc() の失敗 */
+    public static function run(\TMSWP\Core\Kernel\Kernel $kernel): void;
+
+    /** @internal Kernel::reset() だけが呼ぶ */
+    public static function reset(): void;
 }
 ```
 
@@ -963,27 +1017,73 @@ final class TempFileStore
 
 ```
 1. $file->isValid() でなければ TempFileException(検証済みの値のみ保管する契約)
-2. token = bin2hex(random_bytes(16))                      # 128bit。推測不能
-3. dir = {baseDir}/{token}/                                # トークンがそのままディレクトリ名
-   - baseDir直下に .htaccess('Require all denied')と index.html(空)を初回生成(直リンク遮断)
-   - mkdirは0700。失敗時 TempFileException
-4. name = sanitize_file_name($file->clientName) ?: 'file.bin'
-5. move_uploaded_file($file->tmpPath, dir . name)。失敗時 TempFileException
-6. meta.json をdirへ書き出し: {name, mime: $file->detectedMime(), size, created: time()}
-7. 確率的GC: mt_rand(1, 100) === 1 のとき gc() を実行(cron不要の自己清掃)
-8. return StoredFile(token, dir . name, name, detectedMime, size)
+2. TempFileGc::schedule()                                  # 期限切れを消すWP-Cronのイベントが無ければスケジュール。失敗時 TempFileException
+3. baseDirを用意(無ければmkdir 0700)。baseDir直下の .htaccess(直リンク遮断。下記)と index.html(空)は、無いときだけ書く
+4. token = bin2hex(random_bytes(16))                      # 128bit。推測不能
+5. dir = {baseDir}/{token}/                                # トークンがそのままディレクトリ名。mkdirは0700。失敗時 TempFileException
+6. name = sanitize_file_name($file->clientName) ?: 'file.bin'   # 表示用・移動の既定名。保存名には使わない
+   mime = $file->detectedMime()                            # 移動の前に判定する
+7. move_uploaded_file($file->tmpPath, dir . FILE_NAME)。失敗時 TempFileException   # 保存名は固定の 'file'
+8. META_NAME(meta.json)をdirへ書き出し: {name, mime, size, created: time()}。失敗時 TempFileException
+9. return StoredFile(token, dir . FILE_NAME, name, mime, size)
+```
+
+- 保存名をクライアントのファイル名から作らないため、クライアントのファイル名が `meta.json` でもメタデータと衝突しない。保存名に拡張子が無いため、`.php` 等の名前で送られたファイルをWebサーバーが実行することもない。
+- `.htaccess` の内容(Apache 2.4 の `mod_authz_core` と 2.2 の両方の構文で拒否する):
+
+```apache
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order deny,allow
+    Deny from all
+</IfModule>
 ```
 
 #### baseDirの配置と保管済みファイルの不変条件
 
-- 既定の `wp_upload_dir()['basedir'] . '/tmswp-form-tmp'` は**Web公開領域**である。手順3の `.htaccess`('Require all denied')による直リンク遮断は**Apache前提**であり、nginxでは `.htaccess` が無視されるため、トークン(128bit乱数、推測不能)の秘匿性のみが防御となる。可能な環境では `baseDir` をWeb非公開領域(例: `WP_CONTENT_DIR` 外や `ABSPATH` 外の専用ディレクトリ)に変更することを**推奨**する(コンストラクタ注入で差し替え可能であることが本層の責務)。公開領域に置かざるを得ない場合のnginx向け設定(`location` ブロックでの拒否)は `rules/form.md` で案内する。
-- **検証済み不変条件**: `FileExtension`(実体MIME整合検査を含む)・`MaxFileSize` 等のファイル検証は `store()` より**前**(`UploadedFile` 段階の `validate()`)で完了しており、`StoredFile` は常に検証済みのファイルを指す。トークンディレクトリは `0700`(手順3)で所有プロセス以外から書込不可、かつ保管後にファイル実体を書き換えるAPIは本層に存在しない(`moveTo()`/`toAttachment()`/`delete()` はrename・削除のみ)。したがって確認画面往復後の `moveTo()`/`toAttachment()` で実体MIMEを再検証する必要はなく、`meta.json` の `mime`(手順6で `finfo` により確定)を以後の真実源として扱う。
+- 既定の `wp_upload_dir()['basedir'] . '/tmswp-form-tmp'` は**Web公開領域**である。手順3の `.htaccess` による直リンク遮断は**Apache前提**であり、nginxでは `.htaccess` が無視されるため、トークン(128bit乱数、推測不能)の秘匿性のみが防御となる。可能な環境では `baseDir` をWeb非公開領域(例: `WP_CONTENT_DIR` 外や `ABSPATH` 外の専用ディレクトリ)に変更することを**推奨**する(コンストラクタ注入で差し替え可能であることが本層の責務)。公開領域に置かざるを得ない場合のnginx向け設定(`location` ブロックでの拒否)は `rules/form.md` で案内する。
+- **検証済み不変条件**: `FileExtension`(実体MIME整合検査を含む)・`MaxFileSize` 等のファイル検証は `store()` より**前**(`UploadedFile` 段階の `validate()`)で完了しており、`StoredFile` は常に検証済みのファイルを指す。トークンディレクトリは `0700`(手順5)で所有プロセス以外から書込不可、かつ保管後にファイル実体を書き換えるAPIは本層に存在しない(`moveTo()`/`toAttachment()`/`delete()` はrename・削除のみ)。したがって確認画面往復後の `moveTo()`/`toAttachment()` で実体MIMEを再検証する必要はなく、`meta.json` の `mime`(手順6で `finfo` により確定)を以後の真実源として扱う。
 
 #### resolve() / gc() の仕様
 
-- `resolve(token)`: 形式 `/\A[a-f0-9]{32}\z/` に不一致なら即 `TempFileException`(**パストラバーサルの遮断はこの正規表現が境界**)。`{baseDir}/{token}/meta.json` を読み、記載のファイル名と実体の存在を確認して `StoredFile` を再構成する。トークン→パスの対応はこのサーバ側ディレクトリ構造のみが知る。
-- `gc()`: baseDir直下のトークンディレクトリを走査し、`meta.json` の `created`(読めない場合はディレクトリmtime)が `maxAgeSeconds` より古いものを再帰削除。確認画面の放置(既定TTL30分)に対して既定24時間保持は十分な余裕を持つ。
+- `resolve(token)`: 形式 `/\A[a-f0-9]{32}\z/` に不一致なら即 `TempFileException`(**パストラバーサルの遮断はこの正規表現が境界**。`exists()`・`delete()` も同じ)。`{baseDir}/{token}/meta.json` を読み、`{baseDir}/{token}/file` の存在を確認して `StoredFile` を再構成する。メタデータのファイル名はパスの組み立てに使わない。トークン→パスの対応はこのサーバ側ディレクトリ構造のみが知る。
+- `gc()`: baseDir直下の、名前がトークンの形のディレクトリだけを走査し(`.htaccess` 等のファイルや、トークンの形でない名前のディレクトリは古くても消さない)、`meta.json` の `created`(読めない場合はディレクトリmtime)が `maxAgeSeconds` より古いものを削除。確認画面の放置(既定TTL30分)に対して既定24時間保持は十分な余裕を持つ。
 - WP-CLIからの手動GC(`wp tmswp form gc` 等)はコアのWP-CLI統合文書側で扱う。本層は `gc()` をpublicに公開するまでが責務。
+
+#### ファイルのライフサイクル(保管・受け渡し・後始末)
+
+ファイルの項目は、確認画面の有無に関係なく、値の検証を通った後にTempFileStoreへ保管し、`onComplete` には `StoredFile` を渡す(`UploadedFile` は渡さない)。保管とjtiのclaimの順序は、二重送信の防止(§JtiStore)と矛盾しないように次のとおりにする。
+
+| フロー | 保管 | onComplete | 完了の後 |
+|---|---|---|---|
+| 確認画面あり | 確認(`_step=confirm`)で値の検証を通った後(他の項目にエラーがあれば、自身の検証を通ったファイルだけ)。送信の時点ではjtiのclaimより前に保管済みで、トークンから解決する | 復元した `StoredFile` | 未消費の一時ファイルを削除 |
+| 確認画面なし | 送信(`_step=submit`)で値の検証とjtiのclaimを通った後。再送として拒否するPOSTのファイルは保管しない。保管が失敗したらjtiを手放して、§handle() の `failSubmission` の扱いにする(再送できる) | 保管した `StoredFile` | 未消費の一時ファイルを削除 |
+
+- **アップロードの失敗**: `UploadedFile` が `isValid()` でない(サイズ超過・部分的なアップロード等)ときは、項目の規則に関係なく `validate()` が `errorMessage()` を項目のエラーにする。値の検証を通ったファイルは必ず保管できる(保管の失敗は環境・IOの異常だけになる)。
+- **完了の後の後始末**: `onComplete` が正常に終わったら(`onComplete` 未設定を含む)、値の中のすべての `StoredFile` について `delete()` を呼ぶ。`moveTo()`・`toAttachment()` で消費したファイルはトークンディレクトリが無いため何もしない。したがってファイルを扱う完了処理は `onComplete` の中に書く。`handle()` が返した後の `FormResult` の `StoredFile` は削除済みである。
+- **onCompleteの例外**: 一時ファイルは消さない。確認画面ありは同じ確認トークンで再送でき、復元で同じファイルを使う。確認画面なしは入力画面に戻した値に `StoredFile` が残るため、`$form->field(name)->hidden()`(`{name}__token`)を置いておけば選び直さずに送り直せる(ブラウザの再送信では同じファイルが再びアップロードされ、新しく保管する)。`onComplete` がファイルを消費してから例外になった場合、確認画面ありの再送はファイルの消失として入力画面に戻る。
+- **完了の後の再送**: 完了の後始末でファイルを消した後に同じ確認トークンを再送する(完了画面のリロード等)と、復元でファイルの消失になる。後始末の削除が途中で失敗して本体だけが消えた場合も、`exists()` がfalseになるため同じく消失として扱う。このときjtiがclaim済み(`JtiStore::isClaimed()`)なら、ファイルの消失ではなく再送として拒否する(「This form has already been submitted.」)。claimされていなければ(gcによる消失等)、ファイルの消失として入力画面に戻す。
+- **使われなくなった一時ファイル**: 確認画面での離脱、選び直しで使われなくなった古いトークン、`onComplete` の例外の後に再送されなかったファイルは、WP-Cronの `gc()`(§WP-Cronによるgc)が期限(既定24時間)を過ぎてから消す。
+
+#### WP-Cronによるgc
+
+- `TempFileStore::store()` が、保管の前に `TempFileGc::schedule()` で `TempFileGc::HOOK` の毎時(`hourly`)のイベントをスケジュールする(`wp_next_scheduled()` が無いときだけ)。ファイルを保管しないサイトにはイベントを作らない。保管ごとの確率的なgcは持たない(掃除の経路はWP-Cronだけにする)。WP-Cronを無効にしたサイト(`DISABLE_WP_CRON`)では、WordPressの他の定期処理と同じく、システムのcronで `wp cron event run --due-now` 等を実行する。
+- Kernelのboot(02-kernel §3 手順6a)が `TempFileGc::register()` を呼び、`HOOK` に既定の一時保管(`TempFileStore::default()`)の `gc()` を、`tmswp/deactivated` にイベントの解除(`wp_clear_scheduled_hook()`)を登録する。登録はプロセスで1回だけで、最初にbootしたKernelが失敗の扱い(debugの判定とログの記録先)を受け持つ。
+- TMSWPのKernelの無効化(プラグインの無効化・テーマの切り替え。`tmswp/deactivated`)でイベントを解除するのは、無効になるKernelがKernelのレジストリ(`Kernel::all()`)に登録済みの最後の1つのときだけである。ほかに登録済みのKernelがあれば(テーマとプラグインの両方がTMSWPを使う等)、そのKernelのフォームの一時ファイルを掃除し続けるため解除しない。無効化のリクエストでは、有効なテーマ・プラグインのKernelはすべてboot済みでレジストリにある(プラグインの無効化はプラグインの読み込みの後、テーマの切り替え(`switch_theme`)は切り替え元のテーマの読み込みの後に行われる)。解除の後に、新しく有効にしたテーマ・プラグインのフォームがファイルを保管すれば、その保管でスケジュールし直す。
+- 既定以外の保管場所(`FormDefinition::tempFileStore()`)を使う場合は、app側がその `gc()` を同じ `TempFileGc::HOOK` に `add_action()` で登録する。
+
+#### 一時ファイルの削除の失敗
+
+`unlink()`・`rmdir()` の失敗と、削除のためのディレクトリの一覧の取得の失敗(読み取りの権限が無い等で `FilesystemIterator` が投げる `UnexpectedValueException`。`gc()` のbaseDirの一覧とディレクトリの更新時刻の取得の失敗を含む)は、TempFileStore・StoredFileでは常に、原因をpreviousに持つ `TempFileException` にする(本層はKernelを持たないため、扱いは呼び出し側が決める)。呼び出し側の扱いはエラー方針(00-overview.md §5.6。実行時の失敗)に従い、場面ごとに次のとおりにする。
+
+| 場面 | 扱い |
+|---|---|
+| app側の `onComplete` の中の `moveTo()`・`toAttachment()`・`delete()` | 例外は `onComplete` の例外になる(§handle() の `onComplete` の例外の扱い) |
+| 完了の後の後始末(`handle()`) | 利用者の送信は成功しているため、debugでも例外にしない。FormのKernelのロガーに `error` で記録し、残りのファイルの削除を続けて `Complete` を返す(残ったファイルは `gc()` が消す) |
+| WP-Cronの `gc()`(`TempFileGc::run()`) | 1つの削除に失敗しても残りを続け、最後に `TempFileException` にする。debugでは投げ、本番では `TempFileGc` を登録したKernelのロガーに `error` で記録する |
+| イベントの解除(`tmswp/deactivated`) | `wp_clear_scheduled_hook()` の `WP_Error` は、debugでは投げ、本番では無効化したKernelのロガーに `error` で記録する |
 
 ### Form(ライフサイクルの持ち主)
 
@@ -1095,12 +1195,15 @@ app側のフォーム定義クラスの規約: `Form` を継承せず、「構�
 | ConfirmTokenの項目とフォームの項目の食い違い(デプロイをまたいだ送信) | notice |
 | ConfirmTokenの値が今の規則を通らない(確認の後に規則・選択肢が変わった) | notice(文脈の `fields` に項目名) |
 | 取り込み時の入力の不正(不正なUTF-8・不正な形のファイルのエントリ。§bind()) | notice(文脈の `fields` に項目名) |
-| 再送の拒否(jtiがDuplicate) | notice |
+| 再送の拒否(jtiがDuplicate。一時ファイルが消えていてjtiがclaim済みの確認トークンの再送を含む) | notice |
 | スパム対策による拒否 | notice |
-| onCompleteの例外・JtiStoreのデータベースのエラー(本番) | error(文脈は下記の例外の情報) |
-| onCompleteの例外の後のjtiの手放しの失敗 | error(文脈は下記の例外の情報) |
+| onCompleteの例外・JtiStoreのデータベースのエラー・一時ファイルの保管の失敗(本番) | error(文脈は下記の例外の情報) |
+| onCompleteの例外・一時ファイルの保管の失敗の後のjtiの手放しの失敗 | error(文脈は下記の例外の情報) |
+| 完了の後の一時ファイルの削除の失敗(debugでも例外にしない。§一時ファイルの削除の失敗) | error(文脈は下記の例外の情報) |
 
-例外を記録するときは、例外のオブジェクトを文脈に入れず、次の3つだけを入れる。onCompleteが利用者の入力値をメッセージに含めた例外を投げることがあり、トレースの引数にはjti等が入りうるため、例外のメッセージ・previousのメッセージ・トレースは本番のログに残さない。開発者は、debugで投げ直される元の例外で詳細を見る。
+WP-Cronの `gc()` の失敗とイベントの解除の失敗(本番)は、`TempFileGc` が `tmswp.form: ` で始まるメッセージで `error` に記録する(記録先は §WP-Cronによるgc)。文脈は下記の例外の情報だけで、フォームのIDは無い。
+
+例外を記録するときは、例外のオブジェクトを文脈に入れず、次の3つだけを入れる。onCompleteが利用者の入力値をメッセージに含めた例外を投げることがあり、トレースの引数にはjti等が入りうるため、例外のメッセージ・previousのメッセージ・トレースは本番のログに残さない。一時ファイルの例外のメッセージにはパスが入るため、同じく残さない(ファイル名・パス・内容を記録しない)。開発者は、debugで投げ直される元の例外で詳細を見る。
 
 | キー | 値 |
 |---|---|
@@ -1146,10 +1249,12 @@ handle(request = null):
       bind(request)                                    # 入力の不正(不正なUTF-8等)は値を空にして記録(§bind())
       if !passesSpamGuards(request): return finish(FormStep::Input)
       validate()                                       # 入力の不正のあった項目は、検証の結果に代えてそのエラー
-      if fieldErrors != []:
-          storeValidUploadedFiles()                    # 自身の項目にエラーが無いファイルは保管し、{name}__token で引き回す
-          return finish(FormStep::Input)
-      storeUploadedFiles()                             # UploadedFile → StoredFile(トークン化)
+      try:
+          if fieldErrors != []:
+              storeValidUploadedFiles()                # 自身の項目にエラーが無いファイルは保管し、{name}__token で引き回す
+              return finish(FormStep::Input)
+          storeUploadedFiles()                         # UploadedFile → StoredFile(トークン化)
+      catch TempFileException e: return failSubmission(e)   # 保管の失敗(環境・IOの異常)
       this.confirmToken = ConfirmToken::issue(def.id, tokenValues())
       return finish(FormStep::Confirm)
 
@@ -1166,8 +1271,8 @@ handle(request = null):
               return returnToInput(EXPIRED)            # 署名は正当: 再表示には使える
           if restored.changed:                         # トークンの項目・値の形がフォームと食い違う(デプロイをまたいだ送信)
               log notice; return returnToInput(EXPIRED)   # 例外(500)にせず、入力画面に戻す
-          if restored.missingFiles != []:              # 一時ファイルの消失(gc済み等)。jtiのclaimより前に確かめる
-              log warning; return returnToInput(EXPIRED)
+          if restored.missingFiles != []:              # 一時ファイルの消失。jtiのclaimより前に確かめる
+              return rejectMissingFiles(r.jti)
           errors = Validator.validate(def, 復元した値(複合フィールドは部品の値に分解))   # 今の規則で再検証(claimより前)
           if errors != []:                             # 確認の後のデプロイで規則・選択肢が変わった
               fieldErrors = errors
@@ -1185,8 +1290,7 @@ handle(request = null):
           if !passesSpamGuards(request): return finish(FormStep::Input)
           validate()
           if fieldErrors != []: return finish(FormStep::Input)
-          # 確認なしの場合ファイルはUploadedFileのままonCompleteへ(同一リクエスト内でtmp_nameが有効)
-          return complete(r.jti, SubmitToken::TTL + 60)
+          return complete(r.jti, SubmitToken::TTL + 60)   # ファイルはclaimの後に complete() が保管する
 
   case Back:                                           # 確認 → 入力(値を保持して戻る)
       r = ConfirmToken::verify(def.id, (string) request.post(FIELD_CONFIRM_TOKEN), def.ttl())
@@ -1199,21 +1303,41 @@ handle(request = null):
       複合フィールドの正準値を部品の値に戻す(再表示用)
       return finish(FormStep::Input)                   # 入力画面で確認からやり直すため、食い違い・消失はここでは扱わない
 
-complete(jti, ttl):                                    # jtiのclaim → onComplete
+complete(jti, ttl):                                    # jtiのclaim → ファイルの保管 → onComplete → 後始末
   try: claim = new JtiStore().claim(jti, ttl)
   catch RuntimeException e: return failSubmission(e)   # DBエラー(jtiは獲得していない)
   if claim == Duplicate:                               # 再送(リロード/二重クリック/並行二重POST)
-      this.values = 全フィールドのdefault
-      formErrors[] = __('This form has already been submitted.', 'tmswp')
-      log notice
-      return finish(FormStep::Input)
+      return rejectResubmission()                      # 再送のファイルは保管しない
+  try: storeUploadedFiles()                            # 確認画面なしのファイルを保管(確認画面ありは保管済みで何もしない)
+  catch TempFileException e:
+      JtiStore.release(jti)                            # 同じトークンで再送できる状態に戻す(失敗したら log error)
+      return failSubmission(e)
   handler = def.completeHandler()
   if handler != null:
-      try: handler(this.values, this)
+      try: handler(this.values, this)                  # ファイルの項目の値は StoredFile か ''
       catch Throwable e:
           JtiStore.release(jti)                        # 同じトークンで再送できる状態に戻す(失敗したら log error)
-          return failSubmission(e)
+          return failSubmission(e)                     # 一時ファイルは消さない(再送で使う)
+  deleteUnconsumedFiles()                              # onCompleteが消費しなかった一時ファイルを消す
   return finish(FormStep::Complete)
+
+rejectResubmission():
+  this.values = 全フィールドのdefault
+  formErrors[] = __('This form has already been submitted.', 'tmswp')
+  log notice
+  return finish(FormStep::Input)
+
+rejectMissingFiles(jti):                               # 確認画面からの送信で一時ファイルが消えていた
+  try: claimed = new JtiStore().isClaimed(jti)
+  catch RuntimeException e: return failSubmission(e)
+  if claimed: return rejectResubmission()              # 完了の後始末でファイルを消した後の再送(完了画面のリロード等)
+  log warning                                          # gc等による消失。jtiはclaimしない
+  return returnToInput(EXPIRED)
+
+deleteUnconsumedFiles():                               # 利用者の送信は成功しているため、失敗をdebugでも例外にしない
+  for value in this.values where value is StoredFile:
+      try: value.delete()                              # 消費済み(トークンディレクトリが無い)なら何もしない
+      catch TempFileException e: log error             # 残りを続ける。残ったファイルは gc() が消す
 
 failSubmission(e):                                     # エラー方針(00-overview.md §5.6)
   if FormのKernelの debug: throw e
@@ -1241,7 +1365,7 @@ finish(step):
   return this.result
 ```
 
-- `onComplete` で起きた例外はエラー方針に従う。debug時は例外として投げる(jtiは手放してから投げる)。本番ではFormのKernelのロガーに `error` で記録し、利用者には汎用の送信失敗エラーをフォームに出す。いずれもjtiは消費されず(手放しがデータベースのエラーで失敗した場合を除く。その失敗は error で記録する)、同じトークンで再送できる。`onComplete` の中の処理(メール送信等)が一部だけ済んでから例外になった場合、再送でその処理が重複しうる。重複を避ける必要がある処理は、app側の `onComplete` で冪等にする。
+- `onComplete` で起きた例外はエラー方針に従う(一時ファイルの保管の失敗も同じ扱い)。debug時は例外として投げる(jtiは手放してから投げる)。本番ではFormのKernelのロガーに `error` で記録し、利用者には汎用の送信失敗エラーをフォームに出す。いずれもjtiは消費されず(手放しがデータベースのエラーで失敗した場合を除く。その失敗は error で記録する)、同じトークンで再送できる。`onComplete` の中の処理(メール送信等)が一部だけ済んでから例外になった場合、再送でその処理が重複しうる。重複を避ける必要がある処理は、app側の `onComplete` で冪等にする。一時ファイルは再送で使うため消さない(§ファイルのライフサイクル)。
 
 #### bind()(値バインドとスカラー正規化)の確定仕様
 
@@ -1266,11 +1390,11 @@ finish(step):
 
 #### validate() / storeUploadedFiles() / tokenValues()
 
-- `validate()`: `(new Validator())->validate(def, this.values)` の結果を `fieldErrors` に格納。CompositeFieldは検証成功時に表示値を正準値(string)へ確定する。
-- `storeUploadedFiles()`: 値が `UploadedFile` のフィールドを `def.store()->store()` で `StoredFile` に差し替える。`StoredFile`(再送信で維持されたもの)はそのまま。
-- `storeValidUploadedFiles()`: 確認ボタンの押下で他の項目がエラーになったときに使う。自身の項目にエラーが無く、アップロードに成功した(`isValid()`)`UploadedFile` だけを保管する。保管したファイルは入力画面の `$form->field(name)->hidden()`(`{name}__token`)で引き回し、利用者に選び直させない。保管したまま送信されなかったファイルは、TempFileStoreの `gc()` が期限で消す。
+- `validate()`: `(new Validator())->validate(def, this.values)` の結果を `fieldErrors` に格納。取り込みの段階の入力の不正(§bind())はその結果に代えて、規則のエラーが無い項目の値が `isValid()` でない `UploadedFile` なら `errorMessage()` を、項目のエラーにする(§ファイルのライフサイクル)。CompositeFieldは検証成功時に表示値を正準値(string)へ確定する。
+- `storeUploadedFiles()`: 値が `UploadedFile` のフィールドを `def.store()->store()` で `StoredFile` に差し替える。`StoredFile`(再送信で維持されたもの)はそのまま。確認画面ありは確認で、確認画面なしは `complete()` のjtiのclaimの後に呼ぶ。保管の失敗(`TempFileException`)は `failSubmission` の扱いにする。
+- `storeValidUploadedFiles()`: 確認ボタンの押下で他の項目がエラーになったときに使う。自身の項目にエラーが無く、アップロードに成功した(`isValid()`)`UploadedFile` だけを保管する。保管したファイルは入力画面の `$form->field(name)->hidden()`(`{name}__token`)で引き回し、利用者に選び直させない。保管したまま送信されなかったファイルは、WP-Cronの `gc()` が期限で消す(§WP-Cronによるgc)。
 - `tokenValues()`: ConfirmTokenに格納する正準値を生成。`StoredFile` は `['__tmsfile' => token]` へ変換。`UploadedFile` が残っていたら `FormConfigException`(storeUploadedFiles()後には存在し得ない不変条件)。
-- `restoreValues()`: 逆変換。署名済みの値を**全項目**復元してから結果(項目の食い違いの有無・消失したファイルの項目)を返す。`store.exists()` が false のトークン(GC済み等)は値を `''` に落とし、Submitでは**期限切れトークンと同じ扱いで `formErrors` に「確認画面の有効期限が切れました」を積んで `FormStep::Input` へ戻す**(ファイルだけ黙って欠落させない)。この確認はjtiのclaimより前に行うため、ファイルが消えていた送信はjtiを消費しない。トークンの項目がフォームの項目と食い違う場合(デプロイをまたいだ送信)も、例外にせず同じく入力画面へ戻す(ユーザー入力に起因する異常はバリデーションエラーの側に倒す。§例外)。項目が揃っていても、復元した値はclaimの前に今の規則で検証し直し、通らなければ項目のエラーを付けて入力画面へ戻す(§handle())。
+- `restoreValues()`: 逆変換。署名済みの値を**全項目**復元してから結果(項目の食い違いの有無・消失したファイルの項目)を返す。`store.exists()` が false のトークン(GC済み・削除の途中の失敗で本体だけが消えたもの等)は値を `''` に落とし、Submitでは**期限切れトークンと同じ扱いで `formErrors` に「確認画面の有効期限が切れました」を積んで `FormStep::Input` へ戻す**(ファイルだけ黙って欠落させない)。この確認はjtiのclaimより前に行うため、ファイルが消えていた送信はjtiを消費しない。ただし、jtiがclaim済み(完了の後始末でファイルを消した後の再送)なら、再送として拒否する(§ファイルのライフサイクル)。トークンの項目がフォームの項目と食い違う場合(デプロイをまたいだ送信)も、例外にせず同じく入力画面へ戻す(ユーザー入力に起因する異常はバリデーションエラーの側に倒す。§例外)。項目が揃っていても、復元した値はclaimの前に今の規則で検証し直し、通らなければ項目のエラーを付けて入力画面へ戻す(§handle())。
 
 #### 二重送信・リダイレクトの責務分担
 
@@ -1501,12 +1625,12 @@ class FormConfigException extends \LogicException {}
 /** 未定義フィールド名の参照 */
 final class UnknownFieldException extends FormConfigException {}
 
-/** 一時ファイル操作の失敗(保管・解決・移動・添付化) */
+/** 一時ファイル操作の失敗(保管・解決・移動・添付化・削除・gcのイベントのスケジュールと解除) */
 final class TempFileException extends \RuntimeException {}
 ```
 
 - 設計方針: **ユーザ入力に起因する異常は例外にせずバリデーションエラーに倒す**(旧ChoiceRuleが入力不正でUnexpectedValueExceptionを投げた問題の修正)。署名済みのトークンの項目がフォームの項目と食い違う場合(デプロイをまたいだ送信)もこれに当たり、入力画面へ戻す。例外は「開発者の定義ミス」(`FormConfigException`。`handle()` の後の `applyDefaults()` のような呼び出し順の誤りは `TMSWP\Core\Exception\LogicException`)と「環境・IO異常」(`TempFileException`、JtiStoreのデータベースのエラーの `TMSWP\Core\Exception\RuntimeException`)のみ。
-- 環境・IO異常のうち、送信の処理中に起きたもの(JtiStoreのデータベースのエラー)と `onComplete` が投げた例外は、`handle()` がエラー方針(00-overview.md §5.6)に従って扱う。debug時は投げ、本番はFormのKernelのロガーに `error` で記録して汎用の送信失敗エラーをフォームに出す(§handle())。
+- 環境・IO異常のうち、送信の処理中に起きたもの(JtiStoreのデータベースのエラー・一時ファイルの保管の失敗)と `onComplete` が投げた例外は、`handle()` がエラー方針(00-overview.md §5.6)に従って扱う。debug時は投げ、本番はFormのKernelのロガーに `error` で記録して汎用の送信失敗エラーをフォームに出す(§handle())。完了の後の一時ファイルの削除の失敗は、debugでも投げずに記録する(§一時ファイルの削除の失敗)。
 
 ---
 
@@ -1795,6 +1919,8 @@ FormDefinition::create('entry')
     });
 ```
 
+`onComplete` には、確認画面の有無に関係なく `StoredFile`(未選択なら `''`)が渡る。`toAttachment()` は、フロントのリクエスト(管理画面の関数が読み込まれていない)でもそのまま呼べる。`moveTo()` も `toAttachment()` もしなかった一時ファイルは、完了の後に消える(§ファイルのライフサイクル)。
+
 テンプレート(入力画面)は `<?= $form->field('resume')->input() ?>`、確認画面は `display()` がファイル名を表示する。確認画面からの戻り時は `<?= $form->field('resume')->hidden() ?>`(= `{name}__token` hidden)を入力画面に置いておくと選択済みファイルが維持される。
 
 ### 5. プラグインからの利用(ショートコード/ブロック)
@@ -1859,11 +1985,11 @@ add_filter(
 - [ ] 全ファイル `declare(strict_types=1)`・全シグネチャ型宣言・例外は §例外 のとおり
 
 **ライフサイクル**
-- [ ] §handle()擬似コードの全分岐(GET初期表示/他フォームID無視/CSRF失敗/不明_step/confirm有効・無効/確認ありSubmit時のValid・Expired・Invalid・項目の食い違い・ファイル消失・今の規則での再検証の失敗・jti再送/確認なしSubmit時の送信トークンのValid・Expired・Invalid・jti再送/スパム対策の拒否/Back時のValid・Invalid)が網羅実装され、各分岐にユニットテストがある
+- [ ] §handle()擬似コードの全分岐(GET初期表示/他フォームID無視/CSRF失敗/不明_step/confirm有効・無効/確認ありSubmit時のValid・Expired・Invalid・項目の食い違い・ファイル消失・ファイル消失かつjtiのclaim済み(完了の後の再送)・今の規則での再検証の失敗・jti再送/確認なしSubmit時の送信トークンのValid・Expired・Invalid・jti再送/スパム対策の拒否/Back時のValid・Invalid)が網羅実装され、各分岐にユニットテストがある
 - [ ] `handle()` が冪等である(2回呼んでもonCompleteは1回)
 - [ ] 確認画面の無いフォームでも、リロードと二重クリックでonCompleteが再実行されない(統合テスト)
 - [ ] onCompleteの例外が、debugでは投げられ、本番ではFormのKernelのロガーに `error` で記録されて汎用の送信失敗エラーが出て、同じトークンで再送できる(統合テスト)
-- [ ] JtiStoreのデータベースのエラーが例外になる(`claim`・`release`・`gc`)
+- [ ] JtiStoreのデータベースのエラーが例外になる(`claim`・`release`・`gc`・`isClaimed`)
 - [ ] CSRF失敗・トークンの改ざん・再送の拒否・ファイルの消失・onCompleteの例外が §ログ のとおり記録される
 - [ ] フォームのあるページのレスポンスにnocacheのヘッダが付き、`DONOTCACHEPAGE` が定義される(統合テスト)
 - [ ] 登録したスパム対策が、入力画面の `open()` に出力され、入力を受け取るPOSTで値の検証の前に検査される
@@ -1896,9 +2022,15 @@ add_filter(
 - [ ] ja-toolkit `KanaTextField`: 半角カナ・ひらがな入力が正規化されて合格するテスト
 
 **ファイル**
-- [ ] `store()` → `resolve()` → `moveTo()`/`toAttachment()` の一連の統合テスト(wp-env)
-- [ ] `gc()` が期限内ファイルを消さず期限切れのみ削除するテスト
-- [ ] baseDirに `.htaccess`/`index.html` が生成されるテスト
+- [ ] `store()` → `resolve()` → `moveTo()`/`toAttachment()` の一連の統合テスト(wp-env)。`toAttachment()` は、実際のアップロードを受けたフロントのリクエストの `onComplete` から成功する
+- [ ] 確認画面の有無に関係なく、`onComplete` に `StoredFile` が渡る(確認画面なしは jti の claim の後に保管し、再送のファイルは保管しない)
+- [ ] `onComplete` が消費しなかった一時ファイルが完了の後に消え、`onComplete` の例外の後は消えずに再送で使える
+- [ ] アップロードに失敗したファイルが、項目の規則に関係なく項目のエラーになる
+- [ ] 一時ファイルの保管と削除の失敗が、§一時ファイルの削除の失敗 と §handle() のとおりに扱われる(完了の後の削除の失敗は debug でも送信を失敗にしない)
+- [ ] WP-Cron の `TempFileGc::HOOK` の毎時のイベントが保管でスケジュールされ、フックで既定の一時保管の `gc()` が動く(統合テスト)。Kernel の無効化では、ほかに登録済みの Kernel があれば解除せず(統合テスト)、最後の1つのときだけ解除する(ユニットテスト)
+- [ ] `gc()` が期限内ファイル・トークンの形でない名前のディレクトリを消さず期限切れのみ削除し、削除の失敗があっても残りを続けるテスト
+- [ ] 保存名がクライアントのファイル名に依らず、クライアントのファイル名が `meta.json` でもメタデータと衝突しないテスト
+- [ ] baseDirに `.htaccess`(Apache 2.4・2.2の両方の構文)/`index.html` が初回だけ生成されるテストと、Webから直接取得できない(403)統合テスト
 
 ### 検証コマンド
 

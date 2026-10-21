@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Unit;
 
+use ArrayObject;
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Closure;
 use LogicException as PhpLogicException;
@@ -11,6 +13,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use RuntimeException as PhpRuntimeException;
 use TMSWP\Core\Exception\Form\FormConfigException;
+use TMSWP\Core\Exception\Form\TempFileException;
 use TMSWP\Core\Exception\Form\UnknownFieldException;
 use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Exception\LogicException;
@@ -30,6 +33,7 @@ use TMSWP\Core\Form\Rule\Required;
 use TMSWP\Core\Form\SpamGuardInterface;
 use TMSWP\Core\Form\StoredFile;
 use TMSWP\Core\Form\SubmitToken;
+use TMSWP\Core\Form\TempFileGc;
 use TMSWP\Core\Form\TempFileStore;
 use TMSWP\Core\Form\UploadedFile;
 use TMSWP\Core\Kernel\DiscoveryFile;
@@ -364,8 +368,9 @@ final class FormRuntimeTest extends UnitTestCase
         self::assertSame(['name' => 'Taro', 'resume' => '', 'birth' => ['year' => '2026', 'month' => '6', 'day' => '13']], $result->values);
         self::assertSame([['warning', 'tmswp.form: temporary files of form {form} were missing at submission: {fields}', 'entry']], $this->logRecords());
         self::assertSame('resume', $this->logger->records[0]['context']['fields']);
-        // jti を claim していないので、ファイルが戻れば同じトークンで送信できる
-        self::assertSame([], $this->wpdb->queries());
+        // jti を claim していない(claim 済みかを確かめただけ)ので、ファイルが戻れば同じトークンで送信できる
+        self::assertCount(1, $this->wpdb->queries());
+        self::assertStringStartsWith('SELECT option_value FROM', $this->wpdb->queries()[0]);
         $this->createStoredFile($storeDir, '0123456789abcdef0123456789abcdef', 'resume.pdf', 'application/pdf', 'body');
 
         self::assertSame(FormStep::Complete, $this->form($definition)->handle($request)->step);
@@ -548,6 +553,8 @@ final class FormRuntimeTest extends UnitTestCase
         $this->stubRuntimeFunctions();
         Functions\when('TMSWP\\Core\\Form\\is_uploaded_file')->alias(static fn(string $path): bool => is_file($path));
         Functions\when('TMSWP\\Core\\Form\\move_uploaded_file')->alias(static fn(string $from, string $to): bool => rename($from, $to));
+        // 期限切れのファイルを消す WP-Cron のイベントはスケジュール済み
+        Functions\when('wp_next_scheduled')->justReturn(1);
         Functions\when('sanitize_file_name')->returnArg();
         $uploadDir = $this->createTempDirectory('form-upload');
         file_put_contents($uploadDir . '/resume.txt', 'resume');
@@ -580,6 +587,436 @@ final class FormRuntimeTest extends UnitTestCase
         // 自身の検証に失敗したファイルは保管しない
         self::assertInstanceOf(UploadedFile::class, $result->values['photo']);
         self::assertFileExists($uploadDir . '/photo.txt');
+    }
+
+    public function testFormWithoutConfirmationPassesAStoredFileToOnCompleteAndStoresNothingForAResubmission(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->stubUploads();
+        $this->bootKernel(debug: false);
+        $storeDir = $this->createTempDirectory('direct-file-store');
+        $received = [];
+        $definition = FormDefinition::create('apply')
+            ->file('resume', 'Resume')
+            ->tempFileStore(new TempFileStore($storeDir))
+            ->onComplete(static function (array $values) use (&$received): void {
+                $file = $values['resume'];
+                self::assertInstanceOf(StoredFile::class, $file);
+                $received[] = [$file->clientName, file_get_contents($file->path)];
+            });
+        $token = SubmitToken::issue('apply');
+
+        $result = $this->form($definition)->handle($this->fileSubmit('apply', $token, ['resume' => $this->upload('resume.txt', 'resume')]));
+
+        self::assertSame(FormStep::Complete, $result->step);
+        // 確認画面が無くても、保管した StoredFile が onComplete に渡る
+        self::assertSame([['resume.txt', 'resume']], $received);
+        // onComplete が消費しなかったファイルは、完了の後に消える
+        self::assertSame([], $this->tokenDirectories($storeDir));
+
+        // 再送(リロード)は jti の claim で拒否し、そのファイルを保管しない
+        $reload = $this->upload('resume.txt', 'resume');
+        $duplicate = $this->form($definition)->handle($this->fileSubmit('apply', $token, ['resume' => $reload]));
+
+        self::assertSame(['This form has already been submitted.'], $duplicate->formErrors);
+        self::assertFileExists($reload['tmp_name']);
+        self::assertSame([], $this->tokenDirectories($storeDir));
+        self::assertCount(1, $received);
+    }
+
+    public function testFilesThatOnCompleteDidNotConsumeAreDeletedAfterTheConfirmedSubmission(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->stubUploads();
+        Functions\when('wp_unique_filename')->alias(static fn(string $_directory, string $filename): string => $filename);
+        $this->bootKernel(debug: false);
+        $storeDir = $this->createTempDirectory('confirmed-file-store');
+        $targetDir = $this->createTempDirectory('confirmed-file-target');
+        $definition = FormDefinition::create('entry')
+            ->file('resume', 'Resume')
+            ->file('photo', 'Photo')
+            ->confirm()
+            ->tempFileStore(new TempFileStore($storeDir))
+            ->onComplete(static function (array $values) use ($targetDir): void {
+                self::assertInstanceOf(StoredFile::class, $values['resume']);
+                self::assertInstanceOf(StoredFile::class, $values['photo']);
+                // resume だけを移し、photo は使わない
+                $values['resume']->moveTo($targetDir);
+            });
+        $confirm = $this->form($definition);
+        $confirm->handle(new FormRequest('POST', [
+            Form::FIELD_FORM_ID => 'entry',
+            Form::FIELD_NONCE => 'ok',
+            Form::FIELD_STEP => 'confirm',
+        ], ['resume' => $this->upload('resume.txt', 'resume'), 'photo' => $this->upload('photo.txt', 'photo')]));
+
+        self::assertCount(2, $this->tokenDirectories($storeDir));
+
+        $result = $this->form($definition)->handle(new FormRequest('POST', [
+            Form::FIELD_FORM_ID => 'entry',
+            Form::FIELD_NONCE => 'ok',
+            Form::FIELD_STEP => 'submit',
+            Form::FIELD_CONFIRM_TOKEN => $this->hiddenValue($confirm->open(), Form::FIELD_CONFIRM_TOKEN),
+        ]));
+
+        self::assertSame(FormStep::Complete, $result->step);
+        self::assertSame('resume', file_get_contents($targetDir . '/resume.txt'));
+        self::assertSame([], $this->tokenDirectories($storeDir));
+        self::assertSame([], $this->logRecords());
+    }
+
+    public function testOnCompleteExceptionKeepsTheTemporaryFilesForTheResubmission(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->stubUploads();
+        $this->bootKernel(debug: false);
+        $storeDir = $this->createTempDirectory('resubmit-file-store');
+
+        foreach ([true, false] as $confirm) {
+            $received = [];
+            $this->failOnComplete = true;
+            $definition = FormDefinition::create('entry')
+                ->file('resume', 'Resume')
+                ->confirm($confirm)
+                ->tempFileStore(new TempFileStore($storeDir))
+                ->onComplete(function (array $values) use (&$received): void {
+                    if ($this->failOnComplete) {
+                        throw new PhpRuntimeException('mail server is down');
+                    }
+
+                    self::assertInstanceOf(StoredFile::class, $values['resume']);
+                    $received[] = $values['resume']->token;
+                });
+
+            if ($confirm) {
+                $confirmForm = $this->form($definition);
+                $confirmForm->handle(new FormRequest('POST', [
+                    Form::FIELD_FORM_ID => 'entry',
+                    Form::FIELD_NONCE => 'ok',
+                    Form::FIELD_STEP => 'confirm',
+                ], ['resume' => $this->upload('resume.txt', 'resume')]));
+                $submit = new FormRequest('POST', [
+                    Form::FIELD_FORM_ID => 'entry',
+                    Form::FIELD_NONCE => 'ok',
+                    Form::FIELD_STEP => 'submit',
+                    Form::FIELD_CONFIRM_TOKEN => $this->hiddenValue($confirmForm->open(), Form::FIELD_CONFIRM_TOKEN),
+                ]);
+                $failed = $this->form($definition)->handle($submit);
+                // 同じ確認トークンで再送する
+                $resubmit = $submit;
+            } else {
+                $failedForm = $this->form($definition);
+                $failed = $failedForm->handle($this->fileSubmit('entry', SubmitToken::issue('entry'), ['resume' => $this->upload('resume.txt', 'resume')]));
+                // 入力画面の hidden で一時保管のトークンを引き回し、ファイルを選び直さずに送り直す
+                $storedToken = $this->hiddenValue($failedForm->field('resume')->hidden(), 'resume__token');
+                $resubmit = $this->fileSubmit('entry', SubmitToken::issue('entry'), [], ['resume__token' => $storedToken]);
+            }
+
+            self::assertSame([self::SEND_FAILED], $failed->formErrors);
+            self::assertInstanceOf(StoredFile::class, $failed->values['resume']);
+            // 再送で使うため、一時ファイルを消さない
+            self::assertTrue($failed->values['resume']->exists());
+
+            $this->failOnComplete = false;
+
+            self::assertSame(FormStep::Complete, $this->form($definition)->handle($resubmit)->step);
+            self::assertSame([$failed->values['resume']->token], $received);
+            self::assertSame([], $this->tokenDirectories($storeDir));
+        }
+    }
+
+    /** @return iterable<string, array{int}> 後始末の削除を失敗させるトークンのディレクトリの権限 */
+    public static function undeletableDirectoryModes(): iterable
+    {
+        yield 'files cannot be unlinked' => [0500];
+        yield 'directory cannot be listed' => [0300];
+    }
+
+    #[DataProvider('undeletableDirectoryModes')]
+    public function testFailureToDeleteAFileAfterTheCompletionIsLoggedWithoutFailingTheSubmissionEvenInDebug(int $mode): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->stubUploads();
+        $this->bootKernel(debug: true);
+        $storeDir = $this->createTempDirectory('cleanup-failure-store');
+        $locked = '';
+        $definition = FormDefinition::create('apply')
+            ->file('resume', 'Resume')
+            ->tempFileStore(new TempFileStore($storeDir))
+            ->onComplete(static function (array $values) use (&$locked, $mode): void {
+                self::assertInstanceOf(StoredFile::class, $values['resume']);
+                // 後始末の削除を失敗させる
+                $locked = \dirname($values['resume']->path);
+                self::assertTrue(chmod($locked, $mode));
+            });
+        set_error_handler(static fn(): bool => true, E_WARNING);
+
+        try {
+            $result = $this->form($definition)->handle($this->fileSubmit('apply', SubmitToken::issue('apply'), ['resume' => $this->upload('resume.txt', 'resume')]));
+        } finally {
+            restore_error_handler();
+
+            if ($locked !== '') {
+                chmod($locked, 0700);
+            }
+        }
+
+        self::assertSame(FormStep::Complete, $result->step);
+        self::assertSame([], $result->formErrors);
+        self::assertSame([['error', 'tmswp.form: failed to delete a temporary file of form {form} after completion', 'apply']], $this->logRecords());
+        $context = $this->logger->records[0]['context'];
+        // 文脈にはフォームの ID と例外のクラス・場所だけを入れ、パスを含むメッセージを入れない
+        self::assertSame(['form', 'exceptionClass', 'exceptionAt', 'previousClasses'], array_keys($context));
+        self::assertSame(TempFileException::class, $context['exceptionClass']);
+        self::assertStringNotContainsString($storeDir, (string) json_encode($context));
+    }
+
+    public function testReloadAfterTheCompletionDeletedTheFileIsRejectedAsAResubmission(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: false);
+        $storeDir = $this->createTempDirectory('reload-file-store');
+        $fileToken = '0123456789abcdef0123456789abcdef';
+        $this->createStoredFile($storeDir, $fileToken, 'resume.pdf', 'application/pdf', 'body');
+        $definition = FormDefinition::create('entry')
+            ->file('resume', 'Resume')
+            ->confirm()
+            ->tempFileStore(new TempFileStore($storeDir))
+            ->onComplete($this->recordCompletion(...));
+        $request = new FormRequest('POST', [
+            Form::FIELD_FORM_ID => 'entry',
+            Form::FIELD_NONCE => 'ok',
+            Form::FIELD_STEP => 'submit',
+            Form::FIELD_CONFIRM_TOKEN => ConfirmToken::issue('entry', ['resume' => ['__tmsfile' => $fileToken]]),
+        ]);
+
+        self::assertSame(FormStep::Complete, $this->form($definition)->handle($request)->step);
+        self::assertSame([], $this->tokenDirectories($storeDir));
+
+        // 完了の後始末でファイルは消えたが、jti は claim 済み(wp_options に行がある)
+        $this->wpdb->queueVar((string) (time() + 1800));
+        $reload = $this->form($definition)->handle($request);
+
+        self::assertSame(FormStep::Input, $reload->step);
+        self::assertSame(['This form has already been submitted.'], $reload->formErrors);
+        self::assertSame([['notice', 'tmswp.form: a resubmission of form {form} was rejected', 'entry']], $this->logRecords());
+        self::assertCount(1, $this->completed);
+    }
+
+    #[RunInSeparateProcess]
+    public function testTokenWhoseFileWasDeletedButMetadataWasNotIsTreatedAsMissing(): void
+    {
+        // このプロセスの TempFileStore・StoredFile の unlink() は、メタデータのファイルだけ失敗する
+        require __DIR__ . '/../fixtures/form/meta-unlink-failure.php';
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: false);
+        $storeDir = $this->createTempDirectory('partial-delete-store');
+        $fileToken = '0123456789abcdef0123456789abcdef';
+        $this->createStoredFile($storeDir, $fileToken, 'resume.pdf', 'application/pdf', 'body');
+        $definition = FormDefinition::create('entry')
+            ->file('resume', 'Resume')
+            ->confirm()
+            ->tempFileStore(new TempFileStore($storeDir))
+            ->onComplete($this->recordCompletion(...));
+        $request = $this->confirmedSubmit(ConfirmToken::issue('entry', ['resume' => ['__tmsfile' => $fileToken]]));
+
+        $result = $this->form($definition)->handle($request);
+
+        // 後始末は本体のファイルだけを消して失敗した(送信は完了し、error を記録した)
+        self::assertSame(FormStep::Complete, $result->step);
+        self::assertFileDoesNotExist($storeDir . '/' . $fileToken . '/' . TempFileStore::FILE_NAME);
+        self::assertFileExists($storeDir . '/' . $fileToken . '/' . TempFileStore::META_NAME);
+        self::assertSame([['error', 'tmswp.form: failed to delete a temporary file of form {form} after completion', 'entry']], $this->logRecords());
+        self::assertFalse((new TempFileStore($storeDir))->exists($fileToken));
+
+        // claim 済みの確認トークンの再送(完了画面のリロード)は、再送として拒否する
+        $this->logger->records = [];
+        $this->wpdb->queueVar((string) (time() + 1800));
+        $reload = $this->form($definition)->handle($request);
+
+        self::assertSame(FormStep::Input, $reload->step);
+        self::assertSame(['This form has already been submitted.'], $reload->formErrors);
+        self::assertSame([['notice', 'tmswp.form: a resubmission of form {form} was rejected', 'entry']], $this->logRecords());
+
+        // claim していない確認トークンは、ファイルの消失として入力画面に戻す
+        $this->logger->records = [];
+        $missing = $this->form($definition)->handle($this->confirmedSubmit(ConfirmToken::issue('entry', ['resume' => ['__tmsfile' => $fileToken]])));
+
+        self::assertSame(FormStep::Input, $missing->step);
+        self::assertSame([self::EXPIRED_CONFIRMATION], $missing->formErrors);
+        self::assertSame([['warning', 'tmswp.form: temporary files of form {form} were missing at submission: {fields}', 'entry']], $this->logRecords());
+        self::assertCount(1, $this->completed);
+    }
+
+    public function testFailedUploadIsAFieldErrorEvenWithoutFileRules(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: true);
+
+        foreach ([true, false] as $confirm) {
+            $definition = FormDefinition::create('entry')
+                ->file('resume', 'Resume')
+                ->confirm($confirm)
+                ->tempFileStore(new TempFileStore($this->createTempDirectory('failed-upload-store')))
+                ->onComplete($this->recordCompletion(...));
+
+            $result = $this->form($definition)->handle(new FormRequest('POST', [
+                Form::FIELD_FORM_ID => 'entry',
+                Form::FIELD_NONCE => 'ok',
+                Form::FIELD_STEP => $confirm ? 'confirm' : 'submit',
+                Form::FIELD_SUBMIT_TOKEN => SubmitToken::issue('entry'),
+            ], ['resume' => ['name' => 'large.pdf', 'type' => 'application/pdf', 'tmp_name' => '', 'error' => UPLOAD_ERR_INI_SIZE, 'size' => 0]]));
+
+            self::assertSame(FormStep::Input, $result->step);
+            self::assertSame(['resume' => ['The uploaded file is too large.']], $result->fieldErrors);
+        }
+
+        self::assertSame([], $this->completed);
+    }
+
+    public function testFailureToStoreTheUploadedFileFollowsTheErrorPolicyAndReleasesTheJti(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->stubUploads();
+        $this->bootKernel(debug: false);
+        $readOnly = $this->createTempDirectory('store-failure');
+        $definition = FormDefinition::create('apply')
+            ->file('resume', 'Resume')
+            ->tempFileStore(new TempFileStore($readOnly . '/store'))
+            ->onComplete($this->recordCompletion(...));
+        $token = SubmitToken::issue('apply');
+        self::assertTrue(chmod($readOnly, 0500));
+        set_error_handler(static fn(): bool => true, E_WARNING);
+
+        try {
+            $failed = $this->form($definition)->handle($this->fileSubmit('apply', $token, ['resume' => $this->upload('resume.txt', 'resume')]));
+            $confirmFailed = $this->form((clone $definition)->confirm())->handle(new FormRequest('POST', [
+                Form::FIELD_FORM_ID => 'apply',
+                Form::FIELD_NONCE => 'ok',
+                Form::FIELD_STEP => 'confirm',
+            ], ['resume' => $this->upload('resume.txt', 'resume')]));
+        } finally {
+            restore_error_handler();
+            chmod($readOnly, 0700);
+        }
+
+        self::assertSame([self::SEND_FAILED], $failed->formErrors);
+        self::assertSame([self::SEND_FAILED], $confirmFailed->formErrors);
+        self::assertSame(
+            [
+                ['error', 'tmswp.form: failed to store the uploaded files of form {form}', 'apply'],
+                ['error', 'tmswp.form: failed to store the uploaded files of form {form}', 'apply'],
+            ],
+            $this->logRecords(),
+        );
+        self::assertSame(TempFileException::class, $this->logger->records[0]['context']['exceptionClass']);
+        self::assertSame([], $this->completed);
+
+        // jti を手放しているので、同じ送信トークンで送り直せる
+        self::assertSame(FormStep::Complete, $this->form($definition)->handle($this->fileSubmit('apply', $token, ['resume' => $this->upload('resume.txt', 'resume')]))->step);
+        self::assertCount(1, $this->completed);
+    }
+
+    public function testFailureToStoreTheUploadedFileIsThrownInDebug(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->stubUploads();
+        $this->bootKernel(debug: true);
+        $readOnly = $this->createTempDirectory('store-failure-debug');
+        $definition = FormDefinition::create('apply')
+            ->file('resume', 'Resume')
+            ->tempFileStore(new TempFileStore($readOnly . '/store'));
+        self::assertTrue(chmod($readOnly, 0500));
+        set_error_handler(static fn(): bool => true, E_WARNING);
+
+        try {
+            $this->form($definition)->handle($this->fileSubmit('apply', SubmitToken::issue('apply'), ['resume' => $this->upload('resume.txt', 'resume')]));
+            self::fail('TempFileException was not thrown');
+        } catch (TempFileException $exception) {
+            self::assertStringStartsWith('failed to create temporary file base directory: ', $exception->getMessage());
+        } finally {
+            restore_error_handler();
+            chmod($readOnly, 0700);
+        }
+    }
+
+    public function testGarbageCollectionIsRegisteredOnceAndItsFailureIsLoggedInProduction(): void
+    {
+        $callbacks = $this->captureGarbageCollection(debug: false);
+        $uploads = $this->createTempDirectory('gc-uploads');
+        Functions\when('wp_upload_dir')->justReturn(['basedir' => $uploads]);
+        $tokenDir = $this->createExpiredTemporaryFile($uploads . '/tmswp-form-tmp');
+
+        $this->withReadOnly($tokenDir, $callbacks[TempFileGc::HOOK]);
+
+        self::assertSame([['error', 'tmswp.form: failed to collect expired temporary files', null]], $this->logRecords());
+        self::assertSame(['exceptionClass', 'exceptionAt', 'previousClasses'], array_keys($this->logger->records[0]['context']));
+        self::assertSame([TempFileException::class], $this->logger->records[0]['context']['previousClasses']);
+        self::assertStringNotContainsString($uploads, (string) json_encode($this->logger->records[0]['context']));
+
+        // 失敗したディレクトリは次の実行で消す
+        $callbacks[TempFileGc::HOOK]();
+
+        self::assertDirectoryDoesNotExist($tokenDir);
+    }
+
+    public function testGarbageCollectionFailureIsThrownInDebug(): void
+    {
+        $callbacks = $this->captureGarbageCollection(debug: true);
+        $uploads = $this->createTempDirectory('gc-uploads-debug');
+        Functions\when('wp_upload_dir')->justReturn(['basedir' => $uploads]);
+        $tokenDir = $this->createExpiredTemporaryFile($uploads . '/tmswp-form-tmp');
+
+        $this->expectException(TempFileException::class);
+        $this->expectExceptionMessage('1 expired temporary file directories could not be deleted');
+
+        $this->withReadOnly($tokenDir, $callbacks[TempFileGc::HOOK]);
+    }
+
+    public function testDeactivationKeepsTheGarbageCollectionWhileAnotherKernelIsRegisteredAndUnschedulesItForTheLastOne(): void
+    {
+        // tmswp/deactivated に登録されたコールバック
+        $deactivated = new ArrayObject();
+        Actions\expectAdded('tmswp/deactivated')->twice()->whenHappen(static function (Closure $callback) use ($deactivated): void {
+            $deactivated->append($callback);
+        });
+        $this->stubRuntimeFunctions();
+        Functions\when('is_wp_error')->justReturn(false);
+        // wp_clear_scheduled_hook() の呼び出し
+        $cleared = new ArrayObject();
+        Functions\when('wp_clear_scheduled_hook')->alias(static function (string $hook, array $args, bool $wpError) use ($cleared): int {
+            $cleared->append([$hook, $args, $wpError]);
+
+            return 1;
+        });
+
+        // テーマとプラグインのように、2つの Kernel が登録済み(登録はプロセスで1回)
+        $this->bootKernel(debug: false);
+        $this->bootKernel(debug: false);
+        [$first, $second] = array_values(Kernel::all());
+
+        self::assertCount(1, $deactivated);
+        $unschedule = $deactivated->offsetGet(0);
+        self::assertInstanceOf(Closure::class, $unschedule);
+
+        // どちらを無効にしても、もう片方のフォームの一時ファイルの掃除を続けるため、イベントを解除しない
+        $unschedule($first);
+        $unschedule($second);
+
+        self::assertSame([], $cleared->getArrayCopy());
+
+        // 次のリクエストでは無効にした Kernel は読み込まれない。残った最後の1つの無効化でイベントを解除する
+        Kernel::reset();
+        $this->bootKernel(debug: false);
+
+        self::assertCount(2, $deactivated);
+        $unschedule = $deactivated->offsetGet(1);
+        self::assertInstanceOf(Closure::class, $unschedule);
+
+        $unschedule(array_values(Kernel::all())[0]);
+
+        self::assertSame([[TempFileGc::HOOK, [], true]], $cleared->getArrayCopy());
+        self::assertSame([], $this->logRecords());
     }
 
     public function testFromGlobalsDropsKeysThatAreNotStringsAndNeverThrows(): void
@@ -1307,6 +1744,118 @@ final class FormRuntimeTest extends UnitTestCase
         }
     }
 
+    /** 実際のアップロードの代わりに、一時ディレクトリのファイルを $_FILES のファイルとして扱う */
+    private function stubUploads(): void
+    {
+        Functions\when('TMSWP\\Core\\Form\\is_uploaded_file')->alias(static fn(string $path): bool => is_file($path));
+        Functions\when('TMSWP\\Core\\Form\\move_uploaded_file')->alias(static fn(string $from, string $to): bool => rename($from, $to));
+        Functions\when('sanitize_file_name')->returnArg();
+        // 期限切れのファイルを消す WP-Cron のイベントはスケジュール済み
+        Functions\when('wp_next_scheduled')->justReturn(1);
+    }
+
+    /** @return array{name: string, type: string, tmp_name: string, error: int, size: int} $_FILES の1つのエントリ */
+    private function upload(string $name, string $contents): array
+    {
+        $path = $this->createTempDirectory('upload') . DIRECTORY_SEPARATOR . $name;
+        file_put_contents($path, $contents);
+
+        return ['name' => $name, 'type' => 'text/plain', 'tmp_name' => $path, 'error' => UPLOAD_ERR_OK, 'size' => \strlen($contents)];
+    }
+
+    /**
+     * 確認画面の無いフォームの送信の POST(ファイルつき)。
+     *
+     * @param array<string, array<string, mixed>> $files
+     * @param array<string, string> $post
+     */
+    private function fileSubmit(string $formId, string $submitToken, array $files, array $post = []): FormRequest
+    {
+        return new FormRequest('POST', [
+            Form::FIELD_FORM_ID => $formId,
+            Form::FIELD_NONCE => 'ok',
+            Form::FIELD_STEP => 'submit',
+            Form::FIELD_SUBMIT_TOKEN => $submitToken,
+            ...$post,
+        ], $files);
+    }
+
+    private function confirmedSubmit(string $confirmToken): FormRequest
+    {
+        return new FormRequest('POST', [
+            Form::FIELD_FORM_ID => 'entry',
+            Form::FIELD_NONCE => 'ok',
+            Form::FIELD_STEP => 'submit',
+            Form::FIELD_CONFIRM_TOKEN => $confirmToken,
+        ]);
+    }
+
+    /** @return list<string> 一時保管に残っているトークンのディレクトリ */
+    private function tokenDirectories(string $storeDir): array
+    {
+        $dirs = glob($storeDir . DIRECTORY_SEPARATOR . str_repeat('[0-9a-f]', 32), GLOB_ONLYDIR);
+        self::assertIsArray($dirs);
+
+        return $dirs;
+    }
+
+    /**
+     * Kernel を boot し、boot が TempFileGc で登録した WP-Cron のフックと Kernel の無効化のフックのコールバックを返す。
+     * 2回目の register() では登録しないことも確かめる。
+     *
+     * @return array{tmswp_form_temp_file_gc: Closure, 'tmswp/deactivated': Closure}
+     */
+    private function captureGarbageCollection(bool $debug): array
+    {
+        $callbacks = [];
+
+        foreach ([TempFileGc::HOOK, 'tmswp/deactivated'] as $hook) {
+            Actions\expectAdded($hook)->once()->whenHappen(static function (Closure $callback) use (&$callbacks, $hook): void {
+                $callbacks[$hook] = $callback;
+            });
+        }
+
+        $this->stubRuntimeFunctions();
+        $this->bootKernel($debug);
+        // Kernel の boot が登録する
+        $gc = $callbacks[TempFileGc::HOOK] ?? null;
+        $deactivated = $callbacks['tmswp/deactivated'] ?? null;
+        self::assertInstanceOf(Closure::class, $gc);
+        self::assertInstanceOf(Closure::class, $deactivated);
+
+        // 2回目の register()(別の Kernel の boot)では登録しない(expectAdded()->once())
+        TempFileGc::register(array_values(Kernel::all())[0]);
+
+        return [TempFileGc::HOOK => $gc, 'tmswp/deactivated' => $deactivated];
+    }
+
+    /** @return string 期限切れのトークンのディレクトリ */
+    private function createExpiredTemporaryFile(string $storeDir): string
+    {
+        $token = 'abcdefabcdefabcdefabcdefabcdefab';
+        $this->createStoredFile($storeDir, $token, 'old.txt', 'text/plain', 'old');
+        $dir = $storeDir . DIRECTORY_SEPARATOR . $token;
+        file_put_contents($dir . '/' . TempFileStore::META_NAME, json_encode(['name' => 'old.txt', 'mime' => 'text/plain', 'size' => 3, 'created' => time() - 86401], JSON_THROW_ON_ERROR));
+
+        return $dir;
+    }
+
+    /**
+     * ディレクトリを読み取り専用にして $callback を呼ぶ(中のファイルの削除が失敗する)。失敗の警告はテストの失敗にしない。
+     */
+    private function withReadOnly(string $dir, Closure $callback): void
+    {
+        self::assertTrue(chmod($dir, 0500));
+        set_error_handler(static fn(): bool => true, E_WARNING);
+
+        try {
+            $callback();
+        } finally {
+            restore_error_handler();
+            chmod($dir, 0700);
+        }
+    }
+
     /** @param array<string, string> $choices */
     private function revalidationDefinition(int $maxLength, array $choices): FormDefinition
     {
@@ -1426,7 +1975,7 @@ PHP);
             self::fail("一時ファイルディレクトリを作成できません: {$dir}");
         }
 
-        file_put_contents($dir . DIRECTORY_SEPARATOR . $name, $contents);
+        file_put_contents($dir . DIRECTORY_SEPARATOR . TempFileStore::FILE_NAME, $contents);
         file_put_contents($dir . '/meta.json', json_encode([
             'created' => time(),
             'mime' => $mime,

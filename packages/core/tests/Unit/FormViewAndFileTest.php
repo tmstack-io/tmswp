@@ -7,6 +7,7 @@ namespace TMSWP\Core\Tests\Unit;
 use Brain\Monkey\Functions;
 use Closure;
 use Error;
+use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use stdClass;
@@ -20,6 +21,7 @@ use TMSWP\Core\Form\FormDefinition;
 use TMSWP\Core\Form\FormHtml;
 use TMSWP\Core\Form\OptionView;
 use TMSWP\Core\Form\StoredFile;
+use TMSWP\Core\Form\TempFileGc;
 use TMSWP\Core\Form\TempFileStore;
 use TMSWP\Core\Form\UploadedFile;
 use TMSWP\Core\Tests\Support\UnitTestCase;
@@ -297,6 +299,8 @@ final class FormViewAndFileTest extends UnitTestCase
         Functions\when('TMSWP\\Core\\Form\\is_uploaded_file')->alias(static fn(string $path): bool => is_file($path));
         Functions\when('sanitize_file_name')->alias(static fn(string $filename): string => $filename);
         Functions\when('TMSWP\\Core\\Form\\move_uploaded_file')->alias(static fn(string $from, string $to): bool => rename($from, $to));
+        // 期限切れのファイルを消す WP-Cron のイベントはスケジュール済み
+        Functions\when('wp_next_scheduled')->justReturn(1);
 
         $tmpPath = $this->createTempDirectory('temp-file-protection-upload') . '/upload.txt';
         file_put_contents($tmpPath, 'sample upload');
@@ -308,9 +312,46 @@ final class FormViewAndFileTest extends UnitTestCase
         $stored = $store->store(new UploadedFile($tmpPath, 'upload.txt', 'text/plain', 13, UPLOAD_ERR_OK));
 
         self::assertDirectoryExists($baseDir);
-        self::assertSame("Require all denied\n", file_get_contents($baseDir . '/.htaccess'));
+        // Apache 2.4(mod_authz_core)と 2.2 の両方の構文で拒否する
+        $htaccess = (string) file_get_contents($baseDir . '/.htaccess');
+        self::assertStringContainsString("<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>", $htaccess);
+        self::assertStringContainsString("<IfModule !mod_authz_core.c>\n    Order deny,allow\n    Deny from all\n</IfModule>", $htaccess);
         self::assertSame('', file_get_contents($baseDir . '/index.html'));
         self::assertStringStartsWith($baseDir . DIRECTORY_SEPARATOR, $stored->path);
+
+        // 2回目以降の保管では書き直さない
+        file_put_contents($baseDir . '/.htaccess', 'edited by the site');
+        file_put_contents($baseDir . '/index.html', 'edited by the site');
+        file_put_contents($tmpPath, 'second upload');
+        $store->store(new UploadedFile($tmpPath, 'upload.txt', 'text/plain', 13, UPLOAD_ERR_OK));
+
+        self::assertSame('edited by the site', file_get_contents($baseDir . '/.htaccess'));
+        self::assertSame('edited by the site', file_get_contents($baseDir . '/index.html'));
+    }
+
+    public function testStoredFileIsSavedUnderAFixedNameSoAClientNameOfMetaJsonCannotOverwriteTheMetadata(): void
+    {
+        Functions\when('TMSWP\\Core\\Form\\is_uploaded_file')->alias(static fn(string $path): bool => is_file($path));
+        Functions\when('sanitize_file_name')->alias(static fn(string $filename): string => $filename);
+        Functions\when('TMSWP\\Core\\Form\\move_uploaded_file')->alias(static fn(string $from, string $to): bool => rename($from, $to));
+        // 期限切れのファイルを消す WP-Cron のイベントはスケジュール済み
+        Functions\when('wp_next_scheduled')->justReturn(1);
+        $tmpPath = $this->createTempDirectory('meta-json-upload') . '/upload';
+        file_put_contents($tmpPath, 'uploaded contents');
+        $store = new TempFileStore($this->createTempDirectory('meta-json-store'));
+
+        $stored = $store->store(new UploadedFile($tmpPath, 'meta.json', 'application/json', 17, UPLOAD_ERR_OK));
+
+        // 保存名にクライアントのファイル名を使わない
+        self::assertSame(TempFileStore::FILE_NAME, basename($stored->path));
+        self::assertSame('meta.json', $stored->clientName);
+        self::assertSame('uploaded contents', file_get_contents($stored->path));
+
+        $resolved = $store->resolve($stored->token);
+
+        self::assertSame($stored->path, $resolved->path);
+        self::assertSame('meta.json', $resolved->clientName);
+        self::assertSame('uploaded contents', file_get_contents($resolved->path));
     }
 
     public function testTempFileStoreDetectsMimeBeforeMovingUploadedFile(): void
@@ -318,6 +359,8 @@ final class FormViewAndFileTest extends UnitTestCase
         Functions\when('TMSWP\\Core\\Form\\is_uploaded_file')->alias(static fn(string $path): bool => is_file($path));
         Functions\when('sanitize_file_name')->alias(static fn(string $filename): string => $filename);
         Functions\when('TMSWP\\Core\\Form\\move_uploaded_file')->alias(static fn(string $from, string $to): bool => rename($from, $to));
+        // 期限切れのファイルを消す WP-Cron のイベントはスケジュール済み
+        Functions\when('wp_next_scheduled')->justReturn(1);
 
         $tmpPath = $this->createTempDirectory('uploaded-mime') . '/upload.txt';
         file_put_contents($tmpPath, 'sample upload');
@@ -354,6 +397,133 @@ final class FormViewAndFileTest extends UnitTestCase
         (new TempFileStore($this->createTempDirectory('uploaded-store')))->store($file);
     }
 
+    public function testStoreSchedulesTheGarbageCollectionOnlyWhenItIsNotScheduledYet(): void
+    {
+        Functions\when('TMSWP\\Core\\Form\\is_uploaded_file')->alias(static fn(string $path): bool => is_file($path));
+        Functions\when('sanitize_file_name')->returnArg();
+        Functions\when('TMSWP\\Core\\Form\\move_uploaded_file')->alias(static fn(string $from, string $to): bool => rename($from, $to));
+        Functions\when('is_wp_error')->justReturn(false);
+        Functions\expect('wp_next_scheduled')->twice()->with(TempFileGc::HOOK)->andReturn(false, 1_900_000_000);
+        Functions\expect('wp_schedule_event')->once()->with(Mockery::type('int'), 'hourly', TempFileGc::HOOK, [], true)->andReturn(true);
+        $uploadDir = $this->createTempDirectory('schedule-upload');
+        $store = new TempFileStore($this->createTempDirectory('schedule-store'));
+
+        foreach (['first.txt', 'second.txt'] as $name) {
+            file_put_contents($uploadDir . '/' . $name, 'upload');
+            $store->store(new UploadedFile($uploadDir . '/' . $name, $name, 'text/plain', 6, UPLOAD_ERR_OK));
+        }
+    }
+
+    /** @return iterable<string, array{int, non-empty-string}> 削除を失敗させるディレクトリの権限と、例外のメッセージの先頭 */
+    public static function undeletableDirectories(): iterable
+    {
+        yield 'files cannot be unlinked' => [0500, 'failed to delete temporary file: '];
+        yield 'directory cannot be listed' => [0300, 'failed to list temporary file directory: '];
+    }
+
+    /** @param non-empty-string $message */
+    #[DataProvider('undeletableDirectories')]
+    public function testFailuresToDeleteTemporaryFilesAreExceptions(int $mode, string $message): void
+    {
+        $baseDir = $this->createTempDirectory('delete-failure');
+        $store = new TempFileStore($baseDir);
+        $token = '0123456789abcdef0123456789abcdef';
+        $this->createStoredFile($baseDir, $token, 'document.txt', 'text/plain', 'text', time());
+        $stored = $store->resolve($token);
+        $failures = [
+            'TempFileStore::delete()' => static function () use ($store, $token): void {
+                $store->delete($token);
+            },
+            'StoredFile::delete()' => static function () use ($stored): void {
+                $stored->delete();
+            },
+        ];
+
+        foreach ($failures as $case => $delete) {
+            $exception = $this->withReadOnlyDirectory($baseDir . DIRECTORY_SEPARATOR . $token, $mode, static function () use ($delete): ?TempFileException {
+                try {
+                    $delete();
+                } catch (TempFileException $exception) {
+                    return $exception;
+                }
+
+                return null;
+            });
+
+            self::assertInstanceOf(TempFileException::class, $exception, $case);
+            self::assertStringStartsWith($message, $exception->getMessage(), $case);
+        }
+
+        $store->delete($token);
+
+        self::assertFalse($store->exists($token));
+        // 既に無いものの削除は何もしない
+        $store->delete($token);
+        $stored->delete();
+    }
+
+    #[DataProvider('undeletableDirectories')]
+    public function testGarbageCollectionContinuesAfterAFailedDeletionAndReportsTheFailureAtTheEnd(int $mode, string $message): void
+    {
+        $baseDir = $this->createTempDirectory('gc-failure');
+        $store = new TempFileStore($baseDir);
+        $locked = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+        $expired = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+        $fresh = 'cccccccccccccccccccccccccccccccc';
+        $this->createStoredFile($baseDir, $locked, 'locked.txt', 'text/plain', 'locked', time() - 86401);
+        $this->createStoredFile($baseDir, $expired, 'expired.txt', 'text/plain', 'expired', time() - 86401);
+        $this->createStoredFile($baseDir, $fresh, 'fresh.txt', 'text/plain', 'fresh', time() - 60);
+        // トークンの形でない名前のディレクトリは、古くても対象にしない
+        mkdir($baseDir . '/not-a-token');
+        touch($baseDir . '/not-a-token', time() - 86401);
+        file_put_contents($baseDir . '/.htaccess', 'deny');
+
+        $exception = $this->withReadOnlyDirectory($baseDir . DIRECTORY_SEPARATOR . $locked, $mode, static function () use ($store): ?TempFileException {
+            try {
+                $store->gc(86400);
+            } catch (TempFileException $exception) {
+                return $exception;
+            }
+
+            return null;
+        });
+
+        self::assertInstanceOf(TempFileException::class, $exception);
+        self::assertStringStartsWith('1 expired temporary file directories could not be deleted (1 deleted): ' . $message, $exception->getMessage());
+        self::assertInstanceOf(TempFileException::class, $exception->getPrevious());
+        self::assertTrue($store->exists($locked));
+        self::assertFalse($store->exists($expired));
+        self::assertTrue($store->exists($fresh));
+        self::assertDirectoryExists($baseDir . '/not-a-token');
+        self::assertFileExists($baseDir . '/.htaccess');
+        self::assertSame(1, $store->gc(86400));
+        self::assertFalse($store->exists($locked));
+    }
+
+    /**
+     * ディレクトリの権限を $mode にして $callback を呼び、戻り値を返す。0500 なら中のファイルの unlink() が、0300 なら一覧の取得が失敗する。
+     * 失敗の警告はテストの失敗にしない。
+     *
+     * @template T
+     *
+     * @param int $mode chmod() の権限
+     * @param Closure(): T $callback
+     *
+     * @return T
+     */
+    private function withReadOnlyDirectory(string $dir, int $mode, Closure $callback): mixed
+    {
+        self::assertTrue(chmod($dir, $mode));
+        set_error_handler(static fn(): bool => true, E_WARNING);
+
+        try {
+            return $callback();
+        } finally {
+            restore_error_handler();
+            chmod($dir, 0700);
+        }
+    }
+
     private function stubEscapers(): void
     {
         Functions\when('esc_attr')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
@@ -368,7 +538,7 @@ final class FormViewAndFileTest extends UnitTestCase
             self::fail("一時ファイルディレクトリを作成できません: {$dir}");
         }
 
-        file_put_contents($dir . DIRECTORY_SEPARATOR . $name, $contents);
+        file_put_contents($dir . DIRECTORY_SEPARATOR . TempFileStore::FILE_NAME, $contents);
         file_put_contents($dir . '/meta.json', json_encode([
             'created' => $created,
             'mime' => $mime,

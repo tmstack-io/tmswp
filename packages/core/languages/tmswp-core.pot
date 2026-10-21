@@ -25,42 +25,42 @@ msgstr ""
 msgid ", "
 msgstr ""
 
-#: Form/Form.php:87
-#: Form/Form.php:338
+#: Form/Form.php:88
+#: Form/Form.php:343
 msgid "Your session has expired. Please submit the form again."
 msgstr ""
 
-#: Form/Form.php:291
-#: Form/Form.php:475
+#: Form/Form.php:297
+#: Form/Form.php:542
 msgid "The form could not be resubmitted. Please start again."
 msgstr ""
 
-#: Form/Form.php:300
 #: Form/Form.php:306
 #: Form/Form.php:312
+#: Form/Form.php:441
 msgid "The confirmation screen has expired. Please review your entries and continue again."
 msgstr ""
 
-#: Form/Form.php:376
+#: Form/Form.php:415
 msgid "This form has already been submitted."
 msgstr ""
 
-#: Form/Form.php:430
+#: Form/Form.php:497
 msgid "The form could not be sent. Please try again."
 msgstr ""
 
-#: Form/Form.php:492
+#: Form/Form.php:559
 msgid "Your submission could not be verified. Please try again."
 msgstr ""
 
-#: Form/Form.php:578
+#: Form/Form.php:645
 #: Form/Rule/UploadFile.php:37
 #: Form/Rule/UploadFile.php:40
 #: Form/UploadedFile.php:52
 msgid "The file upload failed."
 msgstr ""
 
-#: Form/Form.php:663
+#: Form/Form.php:730
 msgid "{label} contains characters that cannot be used."
 msgstr ""
 

@@ -37,7 +37,6 @@ final class ContactForm
                     $attachmentName = null;
 
                     if ($attachment instanceof StoredFile) {
-                        self::loadMediaFunctions();
                         $attachmentId = $attachment->toAttachment();
                         $attachmentName = $attachment->clientName;
                     }
@@ -64,20 +63,5 @@ final class ContactForm
         }
 
         return $value;
-    }
-
-    private static function loadMediaFunctions(): void
-    {
-        if (\function_exists('media_handle_sideload')) {
-            return;
-        }
-
-        if (!\defined('ABSPATH')) {
-            throw new UnexpectedValueException('ABSPATH must be defined before handling attachments');
-        }
-
-        require_once ABSPATH . 'wp-admin/includes/file.php';
-        require_once ABSPATH . 'wp-admin/includes/image.php';
-        require_once ABSPATH . 'wp-admin/includes/media.php';
     }
 }

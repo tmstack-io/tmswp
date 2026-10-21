@@ -12,6 +12,7 @@ use TMSWP\Core\Container\Container;
 use TMSWP\Core\Exception\DiscoveryException;
 use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Exception\LogicException;
+use TMSWP\Core\Form\TempFileGc;
 use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Log\LoggerRegistry;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
@@ -159,6 +160,7 @@ final class Kernel
             $kernel->registerTemplateFallback();
             $kernel->registerLifecycleHooks();
             $kernel->registerModelMigrator();
+            TempFileGc::register($kernel);
             $kernel->registerActionRouter();
             self::registerTextdomainLoader();
             // 拡張が Container に入れるサービスを、キャッチアップの初期化でも使えるよう、キャッチアップより先に登録する
@@ -266,6 +268,7 @@ final class Kernel
         self::$cliRegistered = false;
         self::$textdomainRegistered = false;
         MigrateCommand::reset();
+        TempFileGc::reset();
     }
 
     public function config(): KernelConfig

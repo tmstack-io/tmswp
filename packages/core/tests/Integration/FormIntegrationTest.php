@@ -243,13 +243,16 @@ final class FormIntegrationTest extends IntegrationTestCase
         $store = new JtiStore();
         $wpdb = self::wpdb();
 
+        self::assertFalse($store->isClaimed(self::JTI));
         self::assertSame(JtiClaim::Claimed, $store->claim(self::JTI, 60));
+        self::assertTrue($store->isClaimed(self::JTI));
         self::assertSame(JtiClaim::Duplicate, $store->claim(self::JTI, 60));
         // alloptions のキャッシュを汚さない
         self::assertSame('off', $wpdb->get_var($wpdb->prepare('SELECT autoload FROM %i WHERE option_name = %s', $wpdb->options, 'tmswp_form_jti_' . self::JTI)));
 
         $store->release(self::JTI);
 
+        self::assertFalse($store->isClaimed(self::JTI));
         self::assertSame(JtiClaim::Claimed, $store->claim(self::JTI, 60));
 
         // 期限切れの jti だけを消す
@@ -268,11 +271,20 @@ final class FormIntegrationTest extends IntegrationTestCase
         $wpdb->options = $wpdb->prefix . 'tmswp_no_such_table';
 
         try {
-            (new JtiStore())->claim(self::JTI, 60);
-            self::fail('RuntimeException was not thrown');
-        } catch (RuntimeException $exception) {
-            self::assertStringStartsWith('failed to claim the form submission ID: ', $exception->getMessage());
-            self::assertStringContainsString('tmswp_no_such_table', $exception->getMessage());
+            $calls = [
+                'failed to claim the form submission ID: ' => static fn(): JtiClaim => (new JtiStore())->claim(self::JTI, 60),
+                'failed to look up the form submission ID: ' => static fn(): bool => (new JtiStore())->isClaimed(self::JTI),
+            ];
+
+            foreach ($calls as $message => $call) {
+                try {
+                    $call();
+                    self::fail("RuntimeException was not thrown: {$message}");
+                } catch (RuntimeException $exception) {
+                    self::assertStringStartsWith($message, $exception->getMessage());
+                    self::assertStringContainsString('tmswp_no_such_table', $exception->getMessage());
+                }
+            }
         } finally {
             $wpdb->options = $options;
             $wpdb->suppress_errors($suppress);

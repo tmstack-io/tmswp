@@ -79,6 +79,29 @@ final class JtiStore
     }
 
     /**
+     * jti が claim 済みか。確認画面からの送信で一時ファイルが消えていたとき、完了の後の再送かを見分けるために使う。
+     *
+     * @throws RuntimeException データベースのエラー
+     */
+    public function isClaimed(string $jti): bool
+    {
+        $wpdb = $this->wpdb();
+        $value = $wpdb->get_var($this->prepare(
+            $wpdb,
+            'SELECT option_value FROM %i WHERE option_name = %s',
+            $wpdb->options,
+            self::OPTION_PREFIX . $jti,
+        ));
+
+        // wpdb::query() はクエリの前に last_error を空にするため、残っていればこのクエリのエラー
+        if ($wpdb->last_error !== '') {
+            throw new RuntimeException("failed to look up the form submission ID: {$wpdb->last_error}");
+        }
+
+        return $value !== null;
+    }
+
+    /**
      * 期限切れの jti を消す。
      *
      * @throws RuntimeException データベースのエラー
