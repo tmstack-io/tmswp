@@ -33,6 +33,14 @@ final class Form
     /** @var list<string> */
     private array $formErrors = [];
 
+    /**
+     * 取り込み(bind())の段階で見つけた、利用者の入力の不正(不正な UTF-8・不正な形のファイルのエントリ)。
+     * 項目名 => エラーメッセージ。validate() が、その項目の検証の結果に代えて項目のエラーにする。
+     *
+     * @var array<string, string>
+     */
+    private array $inputErrors = [];
+
     private FormStep $step = FormStep::Input;
 
     private ?FormResult $result = null;
@@ -128,21 +136,43 @@ final class Form
     }
 
     /**
+     * 確認画面に出す項目の FieldView(定義の順)。hidden とパスワードの項目(パスワードの部品を含む複合フィールドを
+     * 含む)と、FormDefinition::hideOnConfirm() で指定した項目を除く。
+     *
+     * @return array<string, FieldView>
+     */
+    public function confirmFields(): array
+    {
+        $views = [];
+
+        foreach ($this->definition->confirmFields() as $name => $_field) {
+            $views[$name] = $this->field($name);
+        }
+
+        return $views;
+    }
+
+    /**
      * `<form>` の開始タグと、必須の hidden(_form_id・_nonce、確認画面の無いフォームでは _submit_token、確認画面では
      * _confirm_token)を返す。入力画面では、登録したスパム対策の HTML も続けて返す。
      *
-     * @param array<string, mixed> $attrs
+     * @param array<array-key, mixed> $attrs action は送信先を指定できる(既定は '' で、自分のページ)。method は常に
+     *                                       post、enctype はファイルの項目の有無で決まるため、どちらも指定できない
+     *
+     * @throws FormConfigException method・enctype を指定した場合と、action が文字列にできない値の場合
      */
     public function open(array $attrs = []): string
     {
         $this->excludeFromPageCache();
-        $attrs = ['method' => 'post', 'action' => ''] + $attrs;
+        $attrs = FormHtml::normalizeAttributes($attrs);
+        $action = '';
 
-        if ($this->definition->hasFileField()) {
-            $attrs['enctype'] = 'multipart/form-data';
+        if (\array_key_exists('action', $attrs)) {
+            $action = Validator::stringValue($attrs['action']) ?? throw new FormConfigException("attribute 'action' must be scalar or Stringable");
+            unset($attrs['action']);
         }
 
-        $html = FormHtml::openTag($attrs);
+        $html = FormHtml::openTag($action, $this->definition->hasFileField(), $attrs);
         $html .= FormHtml::hidden(self::FIELD_FORM_ID, $this->definition->id);
         $html .= FormHtml::hidden(self::FIELD_NONCE, $this->createNonce());
 
@@ -477,14 +507,18 @@ final class Form
         return $this->finish(FormStep::Input);
     }
 
+    /**
+     * POST の値を項目に取り込む。不正な UTF-8 と不正な形のファイルのエントリは、例外にせず、その項目の値を空にして
+     * $inputErrors に積む(validate() で項目のエラーになる)。ログには項目名だけを残し、入力値は残さない。
+     */
     private function bind(FormRequest $request): void
     {
         $values = [];
+        $this->inputErrors = [];
 
         foreach ($this->definition->fields() as $name => $field) {
             if ($field instanceof CompositeField) {
-                $raw = $request->post($name);
-                $values[$name] = \is_array($raw) ? $raw : [];
+                $values[$name] = $this->bindComposite($field, $request);
                 continue;
             }
 
@@ -492,15 +526,61 @@ final class Form
         }
 
         $this->values = $values;
+
+        if ($this->inputErrors !== []) {
+            $this->log(LogLevel::NOTICE, 'the request to form {form} has malformed input (invalid UTF-8 or a malformed file upload) in: {fields}', ['fields' => implode(', ', array_keys($this->inputErrors))]);
+        }
     }
 
+    /**
+     * 不正な UTF-8 の部品があれば $inputErrors に積み、値を空にする。
+     *
+     * @return array<array-key, mixed> 部品の値(検証の時に正準値へ合成する)
+     *
+     * @phpstan-impure
+     */
+    private function bindComposite(CompositeField $field, FormRequest $request): array
+    {
+        $raw = $request->post($field->name);
+
+        if (!\is_array($raw)) {
+            return [];
+        }
+
+        foreach ($field->parts() as $partName => $_part) {
+            $part = Validator::stringValue($raw[$partName] ?? '');
+
+            if ($part !== null && !self::isValidUtf8($part)) {
+                $this->inputErrors[$field->name] = self::invalidCharactersMessage($field->label);
+
+                return [];
+            }
+        }
+
+        return $raw;
+    }
+
+    /**
+     * 入力の不正(不正な UTF-8・不正な形のファイルのエントリ)があれば $inputErrors に積み、値を空にする。
+     *
+     * @phpstan-impure
+     */
     private function bindField(Field $field, FormRequest $request): mixed
     {
         if ($field->type === FieldType::File) {
             $file = $request->files[$field->name] ?? null;
 
-            if (\is_array($file) && ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
-                return UploadedFile::fromFilesEntry($this->fileEntry($file));
+            // error の無いエントリも、ファイルを選ばなかった送信ではなく不正な形として扱う
+            if ($file !== null && !(\array_key_exists('error', $file) && $file['error'] === UPLOAD_ERR_NO_FILE)) {
+                $uploaded = self::uploadedFile($file);
+
+                if ($uploaded === null) {
+                    $this->inputErrors[$field->name] = __('The file upload failed.', 'tmswp');
+
+                    return '';
+                }
+
+                return $uploaded;
             }
 
             $token = $this->requestString($request, $field->name . '__token');
@@ -521,6 +601,12 @@ final class Form
             foreach ($items as $item) {
                 $value = $this->normalizeScalar($item);
 
+                if (!self::isValidUtf8($value)) {
+                    $this->inputErrors[$field->name] = self::invalidCharactersMessage($field->label);
+
+                    return [];
+                }
+
                 foreach ($field->filters as $filter) {
                     $value = $filter($value);
                 }
@@ -533,6 +619,12 @@ final class Form
 
         $value = $this->normalizeScalar($raw);
 
+        if (!self::isValidUtf8($value)) {
+            $this->inputErrors[$field->name] = self::invalidCharactersMessage($field->label);
+
+            return '';
+        }
+
         foreach ($field->filters as $filter) {
             $value = $filter($value);
         }
@@ -541,29 +633,34 @@ final class Form
     }
 
     /**
-     * @param array<string, mixed> $file
+     * $_FILES のエントリから UploadedFile を作る。1つのファイルの形(name・type・tmp_name が文字列、error・size が
+     * 整数)でないエントリ(`resume[]` のような配列のファイル等)と、ファイル名が不正な UTF-8 のエントリは null。
      *
-     * @return array{name: string, type: string, tmp_name: string, error: int, size: int}
+     * @param array<array-key, mixed> $file
      */
-    private function fileEntry(array $file): array
+    private static function uploadedFile(array $file): ?UploadedFile
     {
-        if (
-            !\is_string($file['name'] ?? null)
-            || !\is_string($file['type'] ?? null)
-            || !\is_string($file['tmp_name'] ?? null)
-            || !\is_int($file['error'] ?? null)
-            || !\is_int($file['size'] ?? null)
-        ) {
-            throw new FormConfigException('uploaded file entry is invalid');
+        $name = $file['name'] ?? null;
+        $type = $file['type'] ?? null;
+        $tmpName = $file['tmp_name'] ?? null;
+        $error = $file['error'] ?? null;
+        $size = $file['size'] ?? null;
+
+        if (!\is_string($name) || !\is_string($type) || !\is_string($tmpName) || !\is_int($error) || !\is_int($size) || !self::isValidUtf8($name)) {
+            return null;
         }
 
-        return [
-            'name' => $file['name'],
-            'type' => $file['type'],
-            'tmp_name' => $file['tmp_name'],
-            'error' => $file['error'],
-            'size' => $file['size'],
-        ];
+        return UploadedFile::fromFilesEntry(['name' => $name, 'type' => $type, 'tmp_name' => $tmpName, 'error' => $error, 'size' => $size]);
+    }
+
+    private static function isValidUtf8(string $value): bool
+    {
+        return preg_match('//u', $value) === 1;
+    }
+
+    private static function invalidCharactersMessage(string $label): string
+    {
+        return strtr(__('{label} contains characters that cannot be used.', 'tmswp'), ['{label}' => $label]);
     }
 
     private function normalizeScalar(mixed $value): string
@@ -571,9 +668,19 @@ final class Form
         return Validator::stringValue($value) ?? '';
     }
 
+    /** 値を検証する。取り込みの段階で入力の不正があった項目は、検証の結果に代えてその不正をエラーにする */
     private function validate(): void
     {
-        $this->fieldErrors = (new Validator())->validate($this->definition, $this->values);
+        $errors = (new Validator())->validate($this->definition, $this->values);
+        $this->fieldErrors = [];
+
+        foreach ($this->definition->fields() as $name => $_field) {
+            if (\array_key_exists($name, $this->inputErrors)) {
+                $this->fieldErrors[$name] = [$this->inputErrors[$name]];
+            } elseif (\array_key_exists($name, $errors)) {
+                $this->fieldErrors[$name] = $errors[$name];
+            }
+        }
 
         if ($this->fieldErrors === []) {
             $this->normalizeCompositeValues();

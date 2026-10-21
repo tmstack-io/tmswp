@@ -570,7 +570,7 @@ v0.2.0
 
 #### v0.4.0-T2: リクエスト取り込みと描画
 
-- 対象ファイル領域: packages/core/src/Form/{FormRequest,FieldView,FormHtml,OptionView,Field}.php、packages/core/src/Form/Form.php(open・fileEntry・確認画面の値処理)、packages/core/tests/Unit/FormViewAndFileTest.php(描画部分)、docs/05(§FormRequest・§Form::open・§FieldView・§確認画面)
+- 対象ファイル領域: packages/core/src/Form/{FormRequest,FieldView,FormHtml,OptionView,Field,FormDefinition}.php、packages/core/src/Form/Form.php(open・取り込み(bind)・確認画面の値処理)、packages/core/tests/Unit/FormViewAndFileTest.php(描画部分)・FormRuntimeTest.php(取り込み)・FormDefinitionTest.php、packages/core/tests/Integration/FormIntegrationTest.php(受け入れ条件3)、packages/core/languages、docs/05(§FormRequest・§Field・§FormDefinition・§Form::open・§bind()・§FieldView・§確認画面・§FormHtml)
 - 完了条件:
   - 数値キーや配列のファイル項目の POST で例外が出ず、フィールドエラーになる。
   - `open()` の action と `input()` の id が反映され、上書きできない属性の指定は例外。パスワード項目が再描画・確認画面・トークンに出ない。確認画面での表示の指定がある。

@@ -13,7 +13,7 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 "X-Domain: tmswp\n"
 
-#: Form/FieldView.php:198
+#: Form/FieldView.php:287
 msgid ", "
 msgstr "、"
 
@@ -26,23 +26,23 @@ msgstr "{label}をすべて入力してください。"
 msgid "{label} is invalid."
 msgstr "{label}の入力値が不正です。"
 
-#: Form/Form.php:79
-#: Form/Form.php:308
+#: Form/Form.php:87
+#: Form/Form.php:338
 msgid "Your session has expired. Please submit the form again."
 msgstr "セッションの有効期限が切れました。お手数ですが再度送信してください。"
 
-#: Form/Form.php:261
-#: Form/Form.php:445
+#: Form/Form.php:291
+#: Form/Form.php:475
 msgid "The form could not be resubmitted. Please start again."
 msgstr "フォームの再送信に失敗しました。お手数ですが最初から入力してください。"
 
-#: Form/Form.php:270
-#: Form/Form.php:276
-#: Form/Form.php:282
+#: Form/Form.php:300
+#: Form/Form.php:306
+#: Form/Form.php:312
 msgid "The confirmation screen has expired. Please review your entries and continue again."
 msgstr "確認画面の有効期限が切れました。内容を確認のうえ再度お進みください。"
 
-#: Form/Form.php:346
+#: Form/Form.php:376
 msgid "This form has already been submitted."
 msgstr "このフォームは既に送信されています。"
 
@@ -70,6 +70,7 @@ msgstr "ファイルを書き込めませんでした。"
 msgid "A PHP extension stopped the file upload."
 msgstr "拡張機能によりアップロードが停止されました。"
 
+#: Form/Form.php:578
 #: Form/Rule/UploadFile.php:37
 #: Form/Rule/UploadFile.php:40
 #: Form/UploadedFile.php:52
@@ -122,10 +123,14 @@ msgstr "{label}のファイルサイズは{size}以下にしてください。"
 msgid "Please enter a valid URL for {label}."
 msgstr "{label}はURLの形式で入力してください。"
 
-#: Form/Form.php:400
+#: Form/Form.php:430
 msgid "The form could not be sent. Please try again."
 msgstr "送信に失敗しました。お手数ですが再度送信してください。"
 
-#: Form/Form.php:462
+#: Form/Form.php:492
 msgid "Your submission could not be verified. Please try again."
 msgstr "送信内容を確認できませんでした。お手数ですが再度送信してください。"
+
+#: Form/Form.php:663
+msgid "{label} contains characters that cannot be used."
+msgstr "{label}に使用できない文字が含まれています。"

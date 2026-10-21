@@ -21,36 +21,47 @@ msgstr ""
 msgid "{label} is invalid."
 msgstr ""
 
-#: Form/FieldView.php:198
+#: Form/FieldView.php:287
 msgid ", "
 msgstr ""
 
-#: Form/Form.php:79
-#: Form/Form.php:308
+#: Form/Form.php:87
+#: Form/Form.php:338
 msgid "Your session has expired. Please submit the form again."
 msgstr ""
 
-#: Form/Form.php:261
-#: Form/Form.php:445
+#: Form/Form.php:291
+#: Form/Form.php:475
 msgid "The form could not be resubmitted. Please start again."
 msgstr ""
 
-#: Form/Form.php:270
-#: Form/Form.php:276
-#: Form/Form.php:282
+#: Form/Form.php:300
+#: Form/Form.php:306
+#: Form/Form.php:312
 msgid "The confirmation screen has expired. Please review your entries and continue again."
 msgstr ""
 
-#: Form/Form.php:346
+#: Form/Form.php:376
 msgid "This form has already been submitted."
 msgstr ""
 
-#: Form/Form.php:400
+#: Form/Form.php:430
 msgid "The form could not be sent. Please try again."
 msgstr ""
 
-#: Form/Form.php:462
+#: Form/Form.php:492
 msgid "Your submission could not be verified. Please try again."
+msgstr ""
+
+#: Form/Form.php:578
+#: Form/Rule/UploadFile.php:37
+#: Form/Rule/UploadFile.php:40
+#: Form/UploadedFile.php:52
+msgid "The file upload failed."
+msgstr ""
+
+#: Form/Form.php:663
+msgid "{label} contains characters that cannot be used."
 msgstr ""
 
 #: Form/Rule/Choice.php:37
@@ -93,12 +104,6 @@ msgstr ""
 
 #: Form/Rule/Retype.php:36
 msgid "{label} must match {otherLabel}."
-msgstr ""
-
-#: Form/Rule/UploadFile.php:37
-#: Form/Rule/UploadFile.php:40
-#: Form/UploadedFile.php:52
-msgid "The file upload failed."
 msgstr ""
 
 #: Form/Rule/Url.php:38

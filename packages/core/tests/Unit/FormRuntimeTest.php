@@ -7,6 +7,7 @@ namespace TMSWP\Core\Tests\Unit;
 use Brain\Monkey\Functions;
 use Closure;
 use LogicException as PhpLogicException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use RuntimeException as PhpRuntimeException;
 use TMSWP\Core\Exception\Form\FormConfigException;
@@ -579,6 +580,283 @@ final class FormRuntimeTest extends UnitTestCase
         // 自身の検証に失敗したファイルは保管しない
         self::assertInstanceOf(UploadedFile::class, $result->values['photo']);
         self::assertFileExists($uploadDir . '/photo.txt');
+    }
+
+    public function testFromGlobalsDropsKeysThatAreNotStringsAndNeverThrows(): void
+    {
+        Functions\when('wp_unslash')->alias(static fn(mixed $value): mixed => \is_string($value) ? stripslashes($value) : $value);
+        $globals = [$_SERVER, $_POST, $_FILES];
+
+        try {
+            $_SERVER['REQUEST_METHOD'] = 'post';
+            $_POST = [0 => 'numeric', '1' => 'numeric string', 'name' => 'O\\\'Brien', 'topics' => ['a', 'b']];
+            $_FILES = [0 => ['name' => 'x'], 'resume' => ['name' => ['a.pdf'], 'error' => [UPLOAD_ERR_OK]]];
+
+            $request = FormRequest::fromGlobals();
+
+            self::assertTrue($request->isPost());
+            self::assertSame(['name' => "O'Brien", 'topics' => ['a', 'b']], $request->post);
+            self::assertSame(['resume' => ['name' => ['a.pdf'], 'error' => [UPLOAD_ERR_OK]]], $request->files);
+
+            unset($_SERVER['REQUEST_METHOD']);
+
+            self::assertSame('GET', FormRequest::fromGlobals()->method);
+        } finally {
+            [$_SERVER, $_POST, $_FILES] = $globals;
+        }
+    }
+
+    public function testNumericKeysAndArrayFilesInThePostBecomeFieldErrorsInsteadOfExceptions(): void
+    {
+        $this->stubRuntimeFunctions();
+        Functions\when('wp_unslash')->returnArg();
+        $this->bootKernel(debug: false);
+        $definition = FormDefinition::create('entry')
+            ->text('name', 'Name', [new Required()])
+            ->file('resume', 'Resume')
+            ->onComplete($this->recordCompletion(...));
+        $globals = [$_SERVER, $_POST, $_FILES];
+
+        try {
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $_POST = [
+                Form::FIELD_FORM_ID => 'entry',
+                Form::FIELD_NONCE => 'ok',
+                Form::FIELD_STEP => 'submit',
+                Form::FIELD_SUBMIT_TOKEN => SubmitToken::issue('entry'),
+                0 => 'numeric key',
+                'name' => 'Taro',
+            ];
+            // <input type="file" name="resume[]" multiple> の形
+            $_FILES = ['resume' => [
+                'name' => ['a.pdf', 'b.pdf'],
+                'type' => ['application/pdf', 'application/pdf'],
+                'tmp_name' => ['/tmp/phpA', '/tmp/phpB'],
+                'error' => [UPLOAD_ERR_OK, UPLOAD_ERR_OK],
+                'size' => [1, 1],
+            ]];
+
+            $result = $this->form($definition)->handle();
+        } finally {
+            [$_SERVER, $_POST, $_FILES] = $globals;
+        }
+
+        self::assertSame(FormStep::Input, $result->step);
+        self::assertSame(['resume' => ['The file upload failed.']], $result->fieldErrors);
+        self::assertSame('Taro', $result->values['name']);
+        self::assertSame('', $result->values['resume']);
+        self::assertSame([], $this->completed);
+        self::assertSame(
+            [['notice', 'tmswp.form: the request to form {form} has malformed input (invalid UTF-8 or a malformed file upload) in: {fields}', 'entry']],
+            $this->logRecords(),
+        );
+        self::assertSame(['form' => 'entry', 'fields' => 'resume'], $this->logger->records[0]['context']);
+    }
+
+    /** @return iterable<string, array{array<array-key, mixed>}> */
+    public static function malformedFileEntries(): iterable
+    {
+        $entry = ['name' => 'a.pdf', 'type' => 'application/pdf', 'tmp_name' => '/tmp/phpA', 'error' => UPLOAD_ERR_OK, 'size' => 1];
+
+        yield 'array of files' => [['name' => ['a.pdf'], 'type' => ['application/pdf'], 'tmp_name' => ['/tmp/phpA'], 'error' => [UPLOAD_ERR_OK], 'size' => [1]]];
+        yield 'nested array of files' => [['name' => ['x' => ['a.pdf']], 'error' => ['x' => [UPLOAD_ERR_OK]]]];
+        yield 'missing tmp_name' => [array_diff_key($entry, ['tmp_name' => true])];
+        yield 'error as a string' => [['error' => '0'] + $entry];
+        yield 'size as a string' => [['size' => '1'] + $entry];
+        yield 'name of invalid UTF-8' => [['name' => "a\xff.pdf"] + $entry];
+        yield 'numeric keys only' => [[0 => 'a.pdf', 1 => UPLOAD_ERR_OK]];
+    }
+
+    /** @param array<array-key, mixed> $entry */
+    #[DataProvider('malformedFileEntries')]
+    public function testMalformedFileEntriesBecomeFieldErrorsOnConfirmAndDirectSubmit(array $entry): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: false);
+
+        foreach ([true, false] as $confirm) {
+            $this->logger->records = [];
+            $definition = FormDefinition::create('entry')
+                ->file('resume', 'Resume')
+                ->confirm($confirm)
+                ->tempFileStore(new TempFileStore($this->createTempDirectory('malformed-file-store')))
+                ->onComplete($this->recordCompletion(...));
+
+            $result = $this->form($definition)->handle(new FormRequest('POST', [
+                Form::FIELD_FORM_ID => 'entry',
+                Form::FIELD_NONCE => 'ok',
+                Form::FIELD_STEP => $confirm ? 'confirm' : 'submit',
+                Form::FIELD_SUBMIT_TOKEN => SubmitToken::issue('entry'),
+            ], ['resume' => $entry]));
+
+            self::assertSame(FormStep::Input, $result->step);
+            self::assertSame(['resume' => ['The file upload failed.']], $result->fieldErrors);
+            self::assertSame('resume', $this->logger->records[0]['context']['fields'] ?? null);
+        }
+
+        self::assertSame([], $this->completed);
+    }
+
+    public function testInvalidUtf8BecomesFieldErrorsWithoutReachingTheConfirmToken(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: false);
+        $invalid = "Taro\xff";
+
+        foreach (['confirm' => true, 'submit' => false] as $step => $confirm) {
+            $this->logger->records = [];
+            $definition = FormDefinition::create('entry')
+                ->text('name', 'Name')
+                ->text('email', 'Email', [new Required()])
+                ->checkboxes('topics', 'Topics', ['news' => 'News'])
+                ->add(new RuntimeTestDateField('birth', 'Birth date', minYear: 2000, maxYear: 2026))
+                ->confirm($confirm)
+                ->onComplete($this->recordCompletion(...));
+            $form = $this->form($definition);
+
+            $result = $form->handle(new FormRequest('POST', [
+                Form::FIELD_FORM_ID => 'entry',
+                Form::FIELD_NONCE => 'ok',
+                Form::FIELD_STEP => $step,
+                Form::FIELD_SUBMIT_TOKEN => SubmitToken::issue('entry'),
+                'name' => $invalid,
+                'email' => 'taro@example.com',
+                'topics' => ['news', $invalid],
+                'birth' => ['year' => '2026', 'month' => $invalid, 'day' => '1'],
+            ]));
+
+            self::assertSame(FormStep::Input, $result->step, $step);
+            self::assertSame(
+                [
+                    'name' => ['Name contains characters that cannot be used.'],
+                    'topics' => ['Topics contains characters that cannot be used.'],
+                    'birth' => ['Birth date contains characters that cannot be used.'],
+                ],
+                $result->fieldErrors,
+                $step,
+            );
+            self::assertSame('', $result->values['name']);
+            self::assertSame([], $result->values['topics']);
+            self::assertSame('taro@example.com', $result->values['email']);
+            self::assertStringNotContainsString(Form::FIELD_CONFIRM_TOKEN, $form->open());
+            self::assertSame(
+                [['notice', 'tmswp.form: the request to form {form} has malformed input (invalid UTF-8 or a malformed file upload) in: {fields}', 'entry']],
+                $this->logRecords(),
+            );
+            self::assertSame(['form' => 'entry', 'fields' => 'name, topics, birth'], $this->logger->records[0]['context']);
+        }
+
+        // ほかの項目がすべて検証を通っても、不正な UTF-8 の値を確認トークンの JSON に入れない(JsonException で 500 にしない)
+        $definition = FormDefinition::create('entry')->textarea('message', 'Message')->confirm();
+        $result = $this->form($definition)->handle(new FormRequest('POST', [
+            Form::FIELD_FORM_ID => 'entry',
+            Form::FIELD_NONCE => 'ok',
+            Form::FIELD_STEP => 'confirm',
+            'message' => "\xC3\x28",
+        ]));
+
+        self::assertSame(FormStep::Input, $result->step);
+        self::assertSame(['message' => ['Message contains characters that cannot be used.']], $result->fieldErrors);
+        self::assertSame([], $this->completed);
+    }
+
+    public function testOpenUsesTheGivenActionAndRejectsMethodAndEnctype(): void
+    {
+        $this->stubRuntimeFunctions();
+        Functions\when('esc_url')->alias(static fn(string $url): string => htmlspecialchars($url, ENT_QUOTES, 'UTF-8'));
+        $text = new Form(FormDefinition::create('contact')->text('name', 'Name'));
+        $upload = new Form(FormDefinition::create('entry')->file('resume', 'Resume'));
+
+        self::assertStringStartsWith('<form method="post" action="/contact/" class="contact-form">', $text->open(['action' => '/contact/', 'class' => 'contact-form']));
+        self::assertStringStartsWith('<form method="post" action="">', $text->open());
+        self::assertStringStartsWith('<form method="post" action="" enctype="multipart/form-data">', $upload->open());
+
+        foreach (['method' => 'get', 'METHOD' => 'post', 'enctype' => 'multipart/form-data'] as $name => $value) {
+            try {
+                $upload->open([$name => $value]);
+                self::fail("open() accepted {$name}");
+            } catch (FormConfigException $exception) {
+                self::assertStringContainsString(strtolower($name), $exception->getMessage());
+            }
+        }
+    }
+
+    public function testPasswordIsNotRedisplayedAfterAValidationError(): void
+    {
+        $this->stubRuntimeFunctions();
+        Functions\when('esc_html')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
+        $definition = FormDefinition::create('login')
+            ->text('user', 'User', [new Required()])
+            ->password('pass', 'Password', [new Required()])
+            ->onComplete($this->recordCompletion(...));
+        $form = new Form($definition);
+
+        $result = $form->handle($this->directSubmit('login', ['user' => '', 'pass' => 's3cret<']));
+
+        self::assertSame(FormStep::Input, $result->step);
+        self::assertSame('s3cret<', $result->values['pass']);
+        self::assertSame('<input type="password" name="pass" value="" id="login-pass">', $form->field('pass')->input());
+        self::assertArrayNotHasKey('pass', $form->confirmFields());
+    }
+
+    public function testConfirmFieldsLeaveOutHiddenPasswordAndHiddenOnConfirmFields(): void
+    {
+        $this->stubRuntimeFunctions();
+        $definition = FormDefinition::create('contact')
+            ->hidden('source', default: 'top')
+            ->text('email', 'Email')
+            ->text('email_confirm', 'Email (again)')
+            ->checkbox('agree', 'Privacy policy', checkedLabel: 'Agreed')
+            ->add(new RuntimeTestDateField('birth', 'Birth date'))
+            ->hideOnConfirm('email_confirm')
+            ->confirm();
+        $form = new Form($definition);
+
+        self::assertSame(['email', 'agree', 'birth'], array_keys($form->confirmFields()));
+        self::assertSame(['source', 'email', 'email_confirm', 'agree', 'birth'], array_keys($form->fields()));
+        self::assertSame(['email', 'agree', 'birth'], array_keys($definition->confirmFields()));
+        self::assertSame([], array_keys((new Form(FormDefinition::create('login')->password('pass', 'Password')))->confirmFields()));
+    }
+
+    /**
+     * 複合フィールドの部品のパスワードも、部品の display()・親の display()・confirmFields() のどこにも出さない。部品の
+     * ビューの内部の field は複合フィールドの親のままのため、部品の実際の型で判定する。
+     */
+    public function testPasswordPartOfACompositeFieldIsNeverDisplayed(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: false);
+        Functions\when('esc_html')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
+        $definition = FormDefinition::create('login')
+            ->text('note', 'Note')
+            ->add(new RuntimeTestCredentialField('login', 'Login', [new Required()]))
+            ->onComplete($this->recordCompletion(...));
+        $form = $this->form($definition);
+
+        $result = $form->handle($this->directSubmit('login', ['note' => 'hello', 'login' => ['user' => 'taro', 'pass' => 's3cret']]));
+
+        self::assertSame(FormStep::Complete, $result->step);
+        self::assertSame([['note' => 'hello', 'login' => 'taro:s3cret']], $this->completed);
+        self::assertSame(['note'], array_keys($form->confirmFields()));
+        self::assertSame(['note'], array_keys($definition->confirmFields()));
+        self::assertSame('<input type="password" name="login[pass]" value="" id="login-login-pass">', $form->field('login')->part('pass')->input());
+        self::assertSame('taro', $form->field('login')->part('user')->value());
+
+        $renders = [
+            'display() of the password part' => static fn(): string => $form->field('login')->part('pass')->display(),
+            'display() of the composite field' => static fn(): string => $form->field('login')->display(),
+            'hidden() of the password part' => static fn(): string => $form->field('login')->part('pass')->hidden(),
+        ];
+
+        foreach ($renders as $case => $render) {
+            try {
+                $html = $render();
+                self::fail("{$case} rendered: {$html}");
+            } catch (FormConfigException $exception) {
+                self::assertStringContainsString('password', $exception->getMessage(), $case);
+                self::assertStringNotContainsString('s3cret', $exception->getMessage(), $case);
+            }
+        }
     }
 
     public function testJtiStoreReportsClaimDuplicateAndDatabaseErrors(): void
@@ -1242,5 +1520,28 @@ final class RuntimeTestDateField extends CompositeField
         }
 
         return $choices;
+    }
+}
+
+final class RuntimeTestCredentialField extends CompositeField
+{
+    public function parts(): array
+    {
+        return [
+            'user' => Field::text($this->name . '_user', 'User'),
+            'pass' => Field::password($this->name . '_pass', 'Password'),
+        ];
+    }
+
+    public function compose(array $partValues): string
+    {
+        return ($partValues['user'] ?? '') . ':' . ($partValues['pass'] ?? '');
+    }
+
+    public function decompose(string $value): array
+    {
+        [$user, $pass] = array_pad(explode(':', $value, 2), 2, '');
+
+        return ['user' => $user, 'pass' => $pass];
     }
 }

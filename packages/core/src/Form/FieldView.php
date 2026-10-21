@@ -6,6 +6,7 @@ namespace TMSWP\Core\Form;
 
 use TMSWP\Core\Exception\Form\FormConfigException;
 use TMSWP\Core\Form\Composite\CompositeField;
+use TMSWP\Core\Support\Html;
 
 final class FieldView
 {
@@ -22,10 +23,24 @@ final class FieldView
         private readonly ?Field $partField = null,
     ) {}
 
-    /** @param array<string, mixed> $attrs */
+    /**
+     * `<input>`。type は項目の種類から決め、`$attrs['type']` で変えられる(email・tel 等)。`$attrs` の id は既定の
+     * id を、value は現在の値を上書きする。パスワードとファイルの項目は値を出さず、value を指定できない。
+     * name は指定できない(POST の名前は項目で決まる)。
+     *
+     * @param array<array-key, mixed> $attrs
+     *
+     * @throws FormConfigException
+     */
     public function input(array $attrs = []): string
     {
         $field = $this->baseField();
+
+        if (!\in_array($field->type, [FieldType::Text, FieldType::Password, FieldType::Hidden, FieldType::File], true)) {
+            throw new FormConfigException("field '{$field->name}' cannot be rendered as input");
+        }
+
+        $attrs = FormHtml::normalizeAttributes($attrs);
         $type = $field->type->value;
 
         if (\array_key_exists('type', $attrs)) {
@@ -33,16 +48,27 @@ final class FieldView
             unset($attrs['type']);
         }
 
-        $value = \array_key_exists('value', $attrs) ? $this->attributeString($attrs['value'], 'value') : $this->stringValue();
-        unset($attrs['value']);
+        // パスワードは再描画しない。ファイルの input は値を持てない
+        $hasNoValue = \in_array($field->type, [FieldType::Password, FieldType::File], true);
+        $value = $hasNoValue ? '' : $this->stringValue();
 
-        return match ($field->type) {
-            FieldType::Text, FieldType::Password, FieldType::Hidden, FieldType::File => FormHtml::input($type, $this->name(), $field->type === FieldType::File ? '' : $value, ['id' => $this->id()] + $attrs),
-            default => throw new FormConfigException("field '{$field->name}' cannot be rendered as input"),
-        };
+        if (\array_key_exists('value', $attrs)) {
+            if ($hasNoValue) {
+                throw new FormConfigException("the value of {$field->type->value} field '{$field->name}' cannot be specified");
+            }
+
+            $value = $this->attributeString($attrs['value'], 'value');
+            unset($attrs['value']);
+        }
+
+        return FormHtml::input($type, $this->name(), $value, $this->withDefaultId($attrs));
     }
 
-    /** @param array<string, mixed> $attrs */
+    /**
+     * @param array<array-key, mixed> $attrs id は上書きできる。name は指定できない
+     *
+     * @throws FormConfigException
+     */
     public function textarea(array $attrs = []): string
     {
         $field = $this->baseField();
@@ -51,10 +77,16 @@ final class FieldView
             throw new FormConfigException("field '{$field->name}' cannot be rendered as textarea");
         }
 
-        return FormHtml::textarea($this->name(), $this->stringValue(), ['id' => $this->id()] + $attrs);
+        return FormHtml::textarea($this->name(), $this->stringValue(), $this->withDefaultId(FormHtml::normalizeAttributes($attrs)));
     }
 
-    /** @param array<string, mixed> $attrs */
+    /**
+     * 単一選択の `<select>`。複数選択は checkboxes の項目で行うため、multiple は指定できない。
+     *
+     * @param array<array-key, mixed> $attrs id は上書きできる。name・multiple は指定できない
+     *
+     * @throws FormConfigException
+     */
     public function select(array $attrs = []): string
     {
         $field = $this->baseField();
@@ -63,7 +95,13 @@ final class FieldView
             throw new FormConfigException("field '{$field->name}' cannot be rendered as select");
         }
 
-        return FormHtml::select($this->name(), $field->choices, $this->stringValue(), ['id' => $this->id()] + $attrs);
+        $attrs = FormHtml::normalizeAttributes($attrs);
+
+        if (\array_key_exists('multiple', $attrs)) {
+            throw new FormConfigException("select field '{$field->name}' cannot be multiple; use a checkboxes field");
+        }
+
+        return FormHtml::select($this->name(), $field->choices, $this->stringValue(), $this->withDefaultId($attrs));
     }
 
     /** @return list<OptionView> */
@@ -88,8 +126,10 @@ final class FieldView
     }
 
     /**
-     * @param array<string, mixed> $attrs
-     * @param array<string, mixed> $labelAttrs
+     * @param array<array-key, mixed> $attrs 各選択肢の input の属性。id は選択肢ごとに決まるため指定できない
+     * @param array<array-key, mixed> $labelAttrs 各選択肢の label の属性。for は指定できない
+     *
+     * @throws FormConfigException
      */
     public function checkboxes(array $attrs = [], array $labelAttrs = []): string
     {
@@ -97,15 +137,21 @@ final class FieldView
     }
 
     /**
-     * @param array<string, mixed> $attrs
-     * @param array<string, mixed> $labelAttrs
+     * @param array<array-key, mixed> $attrs 各選択肢の input の属性。id は選択肢ごとに決まるため指定できない
+     * @param array<array-key, mixed> $labelAttrs 各選択肢の label の属性。for は指定できない
+     *
+     * @throws FormConfigException
      */
     public function radios(array $attrs = [], array $labelAttrs = []): string
     {
         return $this->optionLabels(FieldType::Radios, $attrs, $labelAttrs);
     }
 
-    /** @param array<string, mixed> $attrs */
+    /**
+     * @param array<array-key, mixed> $attrs id は上書きできる。type・name・value・checked は指定できない
+     *
+     * @throws FormConfigException
+     */
     public function checkbox(array $attrs = []): string
     {
         $field = $this->baseField();
@@ -114,12 +160,21 @@ final class FieldView
             throw new FormConfigException("field '{$field->name}' cannot be rendered as checkbox");
         }
 
-        return FormHtml::checkbox($this->name(), $field->checkedValue, $this->stringValue() === $field->checkedValue, ['id' => $this->id()] + $attrs);
+        return FormHtml::checkbox($this->name(), $field->checkedValue, $this->stringValue() === $field->checkedValue, $this->withDefaultId(FormHtml::normalizeAttributes($attrs)));
     }
 
+    /**
+     * 現在の値を持つ `<input type="hidden">`(ファイルの項目では {name}__token の hidden)。
+     *
+     * @throws FormConfigException パスワードの項目(値を HTML に出さない)
+     */
     public function hidden(): string
     {
         $field = $this->baseField();
+
+        if ($field->type === FieldType::Password) {
+            throw new FormConfigException("password field '{$field->name}' cannot be rendered as hidden");
+        }
 
         if ($field->type === FieldType::File) {
             $value = $this->value instanceof StoredFile ? $this->value->token : '';
@@ -153,14 +208,27 @@ final class FieldView
         return new self($this->field, $value, $this->errors, $this->formId, $this->errorTemplate, $key, $partFields[$key]);
     }
 
+    /**
+     * エラーの HTML。テンプレートの `%s` を、エスケープ済みのメッセージに置き換える(`%s` 以外の `%` はそのまま)。
+     *
+     * @param ?string $template null なら FormDefinition::errorHtml()
+     *
+     * @throws FormConfigException テンプレートが `%s` を含まない場合
+     */
     public function errors(?string $template = null, bool $firstOnly = false): string
     {
         $template ??= $this->errorTemplate;
+
+        if (!str_contains($template, '%s')) {
+            throw new FormConfigException('error html template must contain %s');
+        }
+
         $errors = $firstOnly ? \array_slice($this->errors, 0, 1) : $this->errors;
         $html = '';
 
         foreach ($errors as $error) {
-            $html .= \sprintf($template, FormHtml::escHtml($error));
+            // strtr は置き換えた後の文字列を再び走査しないため、メッセージに %s があってもそのまま出る
+            $html .= strtr($template, ['%s' => esc_html($error)]);
         }
 
         return $html;
@@ -179,13 +247,27 @@ final class FieldView
 
     public function label(): string
     {
-        return FormHtml::escHtml($this->baseField()->label);
+        return esc_html($this->baseField()->label);
     }
 
-    /** @param array<string, mixed> $attrs */
+    /**
+     * `<label for="{id()}">`。input() 等で id を変えたときは、同じ値を `$attrs['for']` に指定する。
+     *
+     * @param array<array-key, mixed> $attrs
+     *
+     * @throws FormConfigException
+     */
     public function labelTag(array $attrs = []): string
     {
-        return FormHtml::label($this->baseField()->label, $this->id(), $attrs);
+        $attrs = FormHtml::normalizeAttributes($attrs);
+        $for = $this->id();
+
+        if (\array_key_exists('for', $attrs)) {
+            $for = $this->attributeString($attrs['for'], 'for');
+            unset($attrs['for']);
+        }
+
+        return FormHtml::label($this->baseField()->label, $for, $attrs);
     }
 
     public function value(): mixed
@@ -193,16 +275,44 @@ final class FieldView
         return $this->value;
     }
 
+    /**
+     * 確認画面に出す表示(エスケープ済み)。選択肢はラベルに、単一のチェックボックスはチェックしたときの文言
+     * (Field::checkbox() の checkedLabel)に変える。
+     *
+     * @throws FormConfigException パスワードの項目(パスワードの部品と、それを含む複合フィールドを含む)と、checkedLabel の
+     *                             無い単一のチェックボックスの項目
+     */
     public function display(?string $separator = null): string
     {
         $separator ??= __(', ', 'tmswp');
 
+        // 部品のビューも、内部の field は複合フィールドの親のままのため、部品の実際の型で判定する
+        if ($this->partField instanceof Field && $this->partField->type === FieldType::Password) {
+            throw new FormConfigException("password field '{$this->partField->name}' cannot be displayed");
+        }
+
         if ($this->field instanceof CompositeField) {
-            return FormHtml::escHtml($this->field->display($this->stringValue()));
+            if (self::hasPasswordPart($this->field)) {
+                throw new FormConfigException("composite field '{$this->field->name}' has a password part and cannot be displayed");
+            }
+
+            return esc_html($this->field->display($this->stringValue()));
+        }
+
+        if ($this->field->type === FieldType::Password) {
+            throw new FormConfigException("password field '{$this->field->name}' cannot be displayed");
+        }
+
+        if ($this->field->type === FieldType::Checkbox) {
+            if ($this->field->checkedLabel === null) {
+                throw new FormConfigException("checkbox field '{$this->field->name}' needs checkedLabel to be displayed");
+            }
+
+            return $this->stringValue() === $this->field->checkedValue ? esc_html($this->field->checkedLabel) : '';
         }
 
         if ($this->value instanceof UploadedFile || $this->value instanceof StoredFile) {
-            return FormHtml::escHtml($this->value->clientName);
+            return esc_html($this->value->clientName);
         }
 
         if (\is_array($this->value)) {
@@ -216,16 +326,17 @@ final class FieldView
                 }
             }
 
-            return FormHtml::escHtml(implode($separator, $labels));
+            return esc_html(implode($separator, $labels));
         }
 
         $display = $this->choiceLabel($this->stringValue());
 
         return $this->field->type === FieldType::Textarea
-            ? nl2br(FormHtml::escHtml($display), false)
-            : FormHtml::escHtml($display);
+            ? nl2br(esc_html($display), false)
+            : esc_html($display);
     }
 
+    /** 既定の id(`{formId}-{name}`。複合フィールドの部品は `{formId}-{name}-{part}`) */
     public function id(): string
     {
         return $this->partKey === null ? $this->formId . '-' . $this->baseField()->name : $this->formId . '-' . $this->field->name . '-' . $this->partKey;
@@ -289,9 +400,31 @@ final class FieldView
         return $value;
     }
 
+    /** 正準値にパスワードが入る複合フィールドか */
+    private static function hasPasswordPart(CompositeField $field): bool
+    {
+        foreach ($field->parts() as $part) {
+            if ($part->type === FieldType::Password) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
-     * @param array<string, mixed> $attrs
-     * @param array<string, mixed> $labelAttrs
+     * @param array<string, mixed> $attrs 正規化済みの属性
+     *
+     * @return array<string, mixed>
+     */
+    private function withDefaultId(array $attrs): array
+    {
+        return array_replace(['id' => $this->id()], $attrs);
+    }
+
+    /**
+     * @param array<array-key, mixed> $attrs
+     * @param array<array-key, mixed> $labelAttrs
      */
     private function optionLabels(FieldType $expected, array $attrs, array $labelAttrs): string
     {
@@ -299,10 +432,18 @@ final class FieldView
             throw new FormConfigException('option label renderer does not match field type');
         }
 
+        $attrs = FormHtml::normalizeAttributes($attrs);
+        $labelAttrs = FormHtml::normalizeAttributes($labelAttrs);
+
+        // 1つの属性を全選択肢に付けるため、選択肢ごとに決まる id・for は指定できない(重複した id になる)
+        if (\array_key_exists('id', $attrs) || \array_key_exists('for', $labelAttrs)) {
+            throw new FormConfigException('id and for cannot be specified for all options at once; render options() one by one');
+        }
+
         $html = '';
 
         foreach ($this->options() as $option) {
-            $html .= '<label' . \TMSWP\Core\Support\Html::attributes(['for' => $option->id] + $labelAttrs) . '>' . $option->input($attrs) . ' ' . FormHtml::escHtml($option->label) . '</label>';
+            $html .= '<label' . Html::attributes(['for' => $option->id] + $labelAttrs) . '>' . $option->input($attrs) . ' ' . esc_html($option->label) . '</label>';
         }
 
         return $html;

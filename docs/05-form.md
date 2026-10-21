@@ -39,7 +39,7 @@
 | P6 | checkboxesレンダリングで内部hidden inputをif分岐でスキップし `data-label` 属性からラベルを取り出す暗黙規約(T05 tmpl-event-form.php) | `FieldView::options()` が `OptionView` のリストを返し、テンプレートが素直にforeachで完全制御。マジックインデックス・内部hiddenは存在しない |
 | P7 | デフォルトエラーメッセージが英語で、日本語化のためだけにルールのサブクラスを作成(T05) | ja標準メッセージを内蔵。ルール単位(`message:` 引数)とサイト全体(`tmswp/form/rule_message` フィルタ)の2層で上書き可能 |
 | P8 | `FieldSet::get_instance('name')` のグローバルシングルトンレジストリで毎リクエスト再構築・テスト困難 | `Form` はただのインスタンス。`ContactForm::create()` で都度生成、テストはコンストラクタ注入で完結 |
-| P9 | 確認画面のdl手書き列挙でコピペバグが実在(T04の「お名前」欄に `f_phone` が表示される) | `Form::fields()` のイテレーションと `FieldView::display()` で確認画面を機械的に生成可能 |
+| P9 | 確認画面のdl手書き列挙でコピペバグが実在(T04の「お名前」欄に `f_phone` が表示される) | `Form::confirmFields()` のイテレーションと `FieldView::display()` で確認画面を機械的に生成可能(hidden・パスワード・`hideOnConfirm()` の項目は出ない。§確認画面) |
 | P10 | `echo $fieldset['f_xxx']`(__toString)のエスケープ責務が不明 | `FieldView`/`FormHtml` の出力はすべてエスケープ済みHTML文字列。生値が欲しい場合のみ `value()` を明示的に使う |
 | P11 | `mb_strlen(配列)` のPHP8 TypeError、緩い比較によるchecked/selected判定のPHP8挙動差 | バインド時のスカラー正規化(配列混入は空文字に落とす)+全比較を文字列化後の厳密比較(`===`)に統一 |
 | P12 | 3層コールバック合成(FormRenderer before/after_render)で「値がvalue属性になる」だけの処理に3ファイル横断の解析が必要 | レンダリングは `FormHtml` の純粋な静的関数(入力→エスケープ済み文字列)。コールバック合成機構は全廃(DR-16) |
@@ -157,7 +157,7 @@ final readonly class FormRequest
 {
     /**
      * @param array<string, mixed> $post  unslash済みのPOSTデータ
-     * @param array<string, array<string, mixed>> $files $_FILES形式
+     * @param array<string, array<array-key, mixed>> $files $_FILES形式(エントリの形は取り込み時にFormが確かめる)
      */
     public function __construct(
         public string $method,
@@ -165,6 +165,7 @@ final readonly class FormRequest
         public array $files = [],
     ) {}
 
+    /** 利用者の入力がどんな形でも例外を投げない */
     public static function fromGlobals(): self;
 
     public function isPost(): bool;
@@ -178,7 +179,8 @@ final readonly class FormRequest
 
 振る舞い:
 
-- `fromGlobals()`: `$_SERVER['REQUEST_METHOD'] ?? 'GET'` を大文字化、`wp_unslash($_POST)`、`$_FILES` をそのまま保持。**WordPressはスーパーグローバルにスラッシュを付与するため、`wp_unslash` の適用はここが唯一の責務点**。テスト時は `new FormRequest('POST', [...])` を直接渡す。
+- `fromGlobals()`: `$_SERVER['REQUEST_METHOD']`(無ければ `'GET'`。CLI等)を大文字化、`$_POST` の各値に `wp_unslash()`、`$_FILES` は文字列のキーで値が配列のエントリだけを保持する(配列でないエントリは捨てる。PHPが作る `$_FILES` のエントリは常に配列)。保持した配列の中の形は確かめない。**WordPressはスーパーグローバルにスラッシュを付与するため、`wp_unslash` の適用はここが唯一の責務点**。テスト時は `new FormRequest('POST', [...])` を直接渡す。
+- `fromGlobals()` は、利用者の入力の形を理由に例外を投げない(誰でもPOST1本で致命的エラーを起こせる状態にしない)。`$_POST`・`$_FILES` の文字列でないキー(`$_POST[0]` のような数字のキー。PHPは `'7'` もintにする)は捨てる。項目の名前は英小文字で始まるため、どの項目にも当たらず、未定義のPOSTキーと同じく使われないから。値と、保持したファイルのエントリの中の不正(不正なUTF-8・配列のファイル等)は、`Form` の取り込み(§bind())で項目のエラーにする。
 - `post()`: 欠損キーは `''`。`hasPost()` と分離(DR-18: has/get分離の原則に整合)。
 
 ### Field
@@ -194,7 +196,7 @@ final class Field
 {
     /**
      * @param list<RuleInterface> $rules
-     * @param array<string, string> $choices 値 => 表示ラベル
+     * @param array<array-key, string> $choices 値 => 表示ラベル(数字の文字列のキーはPHPがintにする)
      * @param list<\Closure(string): string> $filters バインド時に値へ順次適用する正規化関数
      */
     private function __construct(
@@ -207,6 +209,7 @@ final class Field
         public readonly bool $multiple = false,
         public readonly array $filters = [],
         public readonly string $checkedValue = '1',
+        public readonly ?string $checkedLabel = null,
     ) {}
 
     /** @param list<RuleInterface> $rules @param list<\Closure(string): string> $filters */
@@ -214,22 +217,25 @@ final class Field
 
     public static function textarea(string $name, string $label, array $rules = [], string $default = '', array $filters = []): self;
 
-    /** trimフィルタを適用しない */
+    /** trimフィルタを適用しない。値は再描画・確認画面・ConfirmTokenのどこにも出さない(§パスワードの項目) */
     public static function password(string $name, string $label, array $rules = []): self;
 
     public static function hidden(string $name, string $label = '', array $rules = [], string $default = ''): self;
 
-    /** @param array<string, string> $choices */
+    /** @param array<array-key, string> $choices */
     public static function select(string $name, string $label, array $choices, array $rules = [], string $default = ''): self;
 
-    /** @param array<string, string> $choices */
+    /** @param array<array-key, string> $choices */
     public static function radios(string $name, string $label, array $choices, array $rules = [], string $default = ''): self;
 
-    /** 複数選択。値は list<string>。@param array<string, string> $choices @param list<string> $default */
+    /** 複数選択。値は list<string>。@param array<array-key, string> $choices @param list<string> $default */
     public static function checkboxes(string $name, string $label, array $choices, array $rules = [], array $default = []): self;
 
-    /** 単一チェックボックス(同意確認等)。チェック時の値は $checkedValue、未チェックは '' */
-    public static function checkbox(string $name, string $label, string $checkedValue = '1', array $rules = []): self;
+    /**
+     * 単一チェックボックス(同意確認等)。チェック時の値は $checkedValue、未チェックは ''。
+     * $checkedLabel はチェック時に確認画面(FieldView::display())へ出す文言。null の項目の display() は FormConfigException
+     */
+    public static function checkbox(string $name, string $label, string $checkedValue = '1', array $rules = [], ?string $checkedLabel = null): self;
 
     /** ファイル。常に単一ファイル。複数添付はフィールドを分けて定義する */
     public static function file(string $name, string $label, array $rules = []): self;
@@ -246,9 +252,20 @@ final class Field
 
 - `name` は `/\A[a-z][a-z0-9_]*\z/` に一致しなければ `FormConfigException`。予約キー(§予約POSTキー)・`__token` サフィックス付き名も拒否する。
 - **デフォルトtrimフィルタ**: `text` / `textarea` は、ユーザ指定 `$filters` の先頭に半角・全角空白トリム(`preg_replace('/\A[\s\x{3000}]++|[\s\x{3000}]++\z/u', '', $v)`)を自動挿入する。`password` / `hidden` / 選択系 / `file` には適用しない。
+- `choices` のキーは、PHPが `'1'` のような数字の文字列をintに変えるため、intのこともある。値との比較(選択状態・ラベルへの変換・選択肢の検証)は、すべてキーを文字列にしてから厳密に行う。
 - `choices` のキー `''` はプレースホルダ(「--- お選びください ---」等)として許可する。選択肢整合検証(§Validator)は空値をスキップするため、`''` 選択は `Required` で検出される。
 - `checkboxes` は `multiple = true`、POST名は `{name}[]`。
 - エッジケース: `choices` が空配列の `select`/`radios`/`checkboxes` は `FormConfigException`(定義ミス)。
+
+#### パスワードの項目
+
+パスワードの項目(`FieldType::Password`)の値は、次のどこにも出さない。複合フィールドのパスワードの部品(`parts()` に `Field::password()` を含むもの)も同じに扱う。
+
+- 再描画のvalue属性: `FieldView::input()` は常に `value=""` を出し、`attrs['value']` の指定は `FormConfigException`。`hidden()` も `FormConfigException`。複合フィールドの部品のビュー(`part('pass')`)も、部品の実際の型で判定して同じに扱う。
+- 確認画面の表示: `FieldView::display()` は `FormConfigException`。パスワードの部品を含む複合フィールドは、部品の `display()` も親の `display()`(正準値にパスワードが入る)も `FormConfigException` にする。`Form::confirmFields()` には、パスワードの項目もパスワードの部品を含む複合フィールドも含めない。
+- ConfirmToken: 確認画面のあるフォームにはパスワードの項目を置けない。`FormDefinition` は、`confirm()` と項目の追加のどちらが先でも、定義の時点で `FormConfigException` にする(部品にパスワードの項目を持つ複合フィールドも同じ)。確認画面の値は署名付きのトークン(中身はbase64で読める)でクライアントを往復するため、確認画面を経由してパスワードを `onComplete` まで届けるには、トークンに平文で入れるしかないから。
+
+パスワードの項目は、確認画面の無いフォーム(ログイン・パスワードの変更等)で使い、値は `onComplete` の `$values` で受け取る。会員登録はパスワードをフォームで受け取らず、自動で生成して、利用者にはパスワードの設定のメールで決めさせる(`rules/user-role.md` の「認証(ログイン・会員登録)」のレシピ)。
 
 ### CompositeField と同梱複合フィールド
 
@@ -341,15 +358,28 @@ final class FormDefinition
     public function select(string $name, string $label, array $choices, array $rules = [], string $default = ''): self;
     public function radios(string $name, string $label, array $choices, array $rules = [], string $default = ''): self;
     public function checkboxes(string $name, string $label, array $choices, array $rules = [], array $default = []): self;
-    public function checkbox(string $name, string $label, string $checkedValue = '1', array $rules = []): self;
+    public function checkbox(string $name, string $label, string $checkedValue = '1', array $rules = [], ?string $checkedLabel = null): self;
     public function file(string $name, string $label, array $rules = []): self;
 
-    /** Field/CompositeField を直接追加(複合フィールド・プリセット・app独自定義用) */
+    /**
+     * Field/CompositeField を直接追加(複合フィールド・プリセット・app独自定義用)。
+     * @throws FormConfigException 同名の項目がある場合と、確認画面のあるフォームにパスワードの項目を足す場合
+     */
     public function add(Field|CompositeField ...$fields): self;
 
     // ---- フロー設定 ----
-    /** 確認画面の有効化。既定: 無効(入力→完了の2状態) */
+    /**
+     * 確認画面の有効化。既定: 無効(入力→完了の2状態)。
+     * @throws FormConfigException パスワードの項目がある場合(§パスワードの項目)
+     */
     public function confirm(bool $enabled = true): self;
+
+    /**
+     * 確認画面(Form::confirmFields())に出さない項目を指定する(確認用のメールアドレスの欄等)。
+     * hidden とパスワードの項目は、指定しなくても出さない。
+     * @throws UnknownFieldException まだ足していない項目
+     */
+    public function hideOnConfirm(string ...$names): self;
 
     /** ConfirmTokenの有効期限秒。既定: 1800 */
     public function confirmTtl(int $seconds): self;
@@ -360,8 +390,12 @@ final class FormDefinition
     /** スパム対策の登録(§SpamGuardInterface)。複数を登録でき、登録の順に検査する */
     public function spamGuard(SpamGuardInterface $guard): self;
 
-    /** FieldView::errors() の既定テンプレート。%s はエスケープ済みメッセージ。既定: '<p class="form-error">%s</p>' */
-    public function errorHtml(string $sprintfTemplate): self;
+    /**
+     * FieldView::errors() の既定テンプレート。`%s` をエスケープ済みメッセージに置き換える(`%s` 以外の `%` はそのまま出す。
+     * sprintf の書式としては扱わない)。既定: '<p class="form-error">%s</p>'
+     * @throws FormConfigException `%s` を含まない場合
+     */
+    public function errorHtml(string $template): self;
 
     /** ファイル一時保管先の差し替え(テスト・特殊構成用)。既定: TempFileStore::default() */
     public function tempFileStore(TempFileStore $store): self;
@@ -369,6 +403,9 @@ final class FormDefinition
     // ---- 参照系(Form/Validator/FieldViewが使用) ----
     /** @return array<string, Field|CompositeField> 定義順を保持 */
     public function fields(): array;
+
+    /** @return array<string, Field|CompositeField> 確認画面に出す項目(定義順。hidden・パスワード(パスワードの部品を含む複合フィールドを含む)・hideOnConfirm() の項目を除く) */
+    public function confirmFields(): array;
 
     /** @throws \TMSWP\Core\Exception\Form\UnknownFieldException */
     public function field(string $name): Field|CompositeField;
@@ -992,14 +1029,22 @@ final class Form
     /** @throws UnknownFieldException */
     public function field(string $name): FieldView;
 
-    /** 定義順の全FieldView(確認画面のイテレーション用)。@return array<string, FieldView> */
+    /** 定義順の全FieldView。@return array<string, FieldView> */
     public function fields(): array;
+
+    /**
+     * 確認画面に出す項目のFieldView(定義順。§確認画面)。hidden・パスワードの項目(パスワードの部品を含む複合フィールドを含む)と、
+     * FormDefinition::hideOnConfirm() で指定した項目を除く。@return array<string, FieldView>
+     */
+    public function confirmFields(): array;
 
     /**
      * <form>開始タグ+必須hiddenを返す。hiddenは _form_id / _nonce、確認画面の無いフォームでは _submit_token
      * (呼び出しごとに新しいjtiで発行)、Confirm状態では _confirm_token。Input状態では、登録したスパム対策の
-     * render() の出力を続ける。method="post" 固定。action未指定時は ''(自己POST)。
-     * ファイルフィールドを持つ定義では enctype="multipart/form-data" を自動付与。
+     * render() の出力を続ける。
+     * attrs['action'] は送信先(未指定時は ''。自己POST)。method="post" は固定で、ファイルフィールドを持つ定義では
+     * enctype="multipart/form-data" を自動付与する。この2つはFWが決めるため、attrsで指定すると FormConfigException。
+     * @throws FormConfigException
      */
     public function open(array $attrs = []): string;
 
@@ -1049,6 +1094,7 @@ app側のフォーム定義クラスの規約: `Form` を継承せず、「構�
 | 一時ファイルの消失(確認画面からの送信時) | warning |
 | ConfirmTokenの項目とフォームの項目の食い違い(デプロイをまたいだ送信) | notice |
 | ConfirmTokenの値が今の規則を通らない(確認の後に規則・選択肢が変わった) | notice(文脈の `fields` に項目名) |
+| 取り込み時の入力の不正(不正なUTF-8・不正な形のファイルのエントリ。§bind()) | notice(文脈の `fields` に項目名) |
 | 再送の拒否(jtiがDuplicate) | notice |
 | スパム対策による拒否 | notice |
 | onCompleteの例外・JtiStoreのデータベースのエラー(本番) | error(文脈は下記の例外の情報) |
@@ -1097,9 +1143,9 @@ handle(request = null):
   switch action:
 
   case Confirm:                                        # 入力 → 確認
-      bind(request)
+      bind(request)                                    # 入力の不正(不正なUTF-8等)は値を空にして記録(§bind())
       if !passesSpamGuards(request): return finish(FormStep::Input)
-      validate()
+      validate()                                       # 入力の不正のあった項目は、検証の結果に代えてそのエラー
       if fieldErrors != []:
           storeValidUploadedFiles()                    # 自身の項目にエラーが無いファイルは保管し、{name}__token で引き回す
           return finish(FormStep::Input)
@@ -1206,8 +1252,17 @@ finish(step):
 |---|---|---|
 | スカラー(Text/Textarea/Password/Hidden/Select/Radios/Checkbox) | `''`(P3: hiddenハック不要化) | 配列が来たら `''` に落とす(攻撃対策+P11)。それ以外は `(string)` キャスト後、filtersを順次適用 |
 | Checkboxes(multiple) | `[]` | 非配列なら `[v]` に包む(`''` は `[]`)。各要素を `(string)` キャスト・連番インデックスに振り直し・filtersを各要素へ適用 |
-| File | `''` | `$_FILES[name]` があり `error !== UPLOAD_ERR_NO_FILE` なら `UploadedFile::fromFilesEntry()`。なければ `{name}__token` POST値を検査し、`store.exists(token)` なら `store.resolve(token)`(確認画面から戻った後の再送信でファイル選択を維持)。どちらもなければ `''` |
+| File | `''` | `$_FILES[name]` があり、`error` が `UPLOAD_ERR_NO_FILE` でなければ、1つのファイルの形(`name`・`type`・`tmp_name` が文字列、`error`・`size` が整数、`name` が正しいUTF-8)を確かめて `UploadedFile::fromFilesEntry()`。なければ `{name}__token` POST値を検査し、`store.exists(token)` なら `store.resolve(token)`(確認画面から戻った後の再送信でファイル選択を維持)。どちらもなければ `''` |
 | CompositeField | 全パーツ `''` | `{name}[part]` の配列から各パーツをスカラー正規化。表示値としてはパーツ値の連想配列を保持し、検証時に正準値へ合成 |
+
+取り込みの段階で見つけた利用者の入力の不正は、例外にせず、その項目の値を空(`''`・`[]`)にしてから項目のエラーにする(ユーザー入力に起因する異常はバリデーションエラーの側に倒す。§例外)。そのPOSTが検証まで進んだ場合(確認・送信)、その項目の検証の結果に代えてこのエラーを付け、入力画面に戻す。項目名だけを §ログ に notice で記録し、入力値は記録しない。
+
+| 不正 | 項目のエラー |
+|---|---|
+| 値(スカラー・Checkboxesの要素・CompositeFieldのパーツ)が不正なUTF-8 | `'{label} contains characters that cannot be used.'` |
+| 保持したファイルのエントリ(配列)が1つのファイルの形でない(`resume[]` のような配列のファイル・キーの欠落・エントリの中の項目の型の違い(`error` が文字列等)。`error` の無いエントリを含む)、またはファイル名が不正なUTF-8 | `'The file upload failed.'` |
+
+不正なUTF-8を取り込みの段階で止めるのは、確認画面のあるフォームでその値がConfirmTokenのJSONに入ると `json_encode` が例外を投げ、500になるため(確認画面の無いフォームでも同じ扱いにする)。
 
 #### validate() / storeUploadedFiles() / tokenValues()
 
@@ -1268,14 +1323,15 @@ final class FieldView
         private readonly string $errorTemplate,
     ) {}
 
-    // ---- 入力部品(エスケープ済みHTML文字列を返す) ----
+    // ---- 入力部品(エスケープ済みHTML文字列を返す。attrs の扱いは下記「属性の指定」) ----
 
-    /** <input>。typeはFieldTypeから既定(text/password/hidden/file)、attrs['type']で上書き可(email/tel等) */
+    /** <input>。typeはFieldTypeから既定(text/password/hidden/file)、attrs['type']で上書き可(email/tel等)。
+     *  password/file は値を出さない(attrs['value'] の指定も不可) */
     public function input(array $attrs = []): string;
 
     public function textarea(array $attrs = []): string;
 
-    /** choices付きフィールド用 <select>。選択状態は文字列化厳密比較。
+    /** choices付きフィールド用 <select>(単一選択。attrs['multiple'] は不可)。選択状態は文字列化厳密比較。
      *  <option> のテキスト(choicesのラベル)は esc_html()、value属性は esc_attr() を適用済み(FormHtml::select()に委譲) */
     public function select(array $attrs = []): string;
 
@@ -1285,14 +1341,15 @@ final class FieldView
      */
     public function options(): array;
 
-    /** options()の一括版: <label {labelAttrs}><input {attrs}> ラベル</label> を選択肢数ぶん連結 */
+    /** options()の一括版: <label {labelAttrs}><input {attrs}> ラベル</label> を選択肢数ぶん連結。
+     *  attrs['id']・labelAttrs['for'] は全選択肢に同じ値が付くため不可(個別に変えるときは options() を使う) */
     public function checkboxes(array $attrs = [], array $labelAttrs = []): string;
     public function radios(array $attrs = [], array $labelAttrs = []): string;
 
     /** 単一チェックボックス(FieldType::Checkbox)。checked判定は checkedValue との厳密比較 */
     public function checkbox(array $attrs = []): string;
 
-    /** 現在値を持つ <input type="hidden">(ファイルフィールドでは {name}__token のhiddenを返す) */
+    /** 現在値を持つ <input type="hidden">(ファイルフィールドでは {name}__token のhiddenを返す)。パスワードの項目は FormConfigException */
     public function hidden(): string;
 
     /** CompositeFieldのパーツビュー(例: $form->field('birthday')->part('year')->select())。
@@ -1301,7 +1358,8 @@ final class FieldView
 
     // ---- エラー・メタ情報 ----
 
-    /** エラーHTML。$template省略時はFormDefinition::errorHtml()。$firstOnly=trueで先頭のみ */
+    /** エラーHTML。$template の `%s` をエスケープ済みメッセージに置き換える(`%s` 以外の `%` はそのまま)。
+     *  $template省略時はFormDefinition::errorHtml()。`%s` を含まないテンプレートは FormConfigException。$firstOnly=trueで先頭のみ */
     public function errors(?string $template = null, bool $firstOnly = false): string;
 
     public function hasError(): bool;
@@ -1310,7 +1368,7 @@ final class FieldView
 
     /** esc_html済みラベル */
     public function label(): string;
-    /** <label for="{id()}">ラベル</label> */
+    /** <label for="{id()}">ラベル</label>。attrs['for'] で for を変えられる(input() 等の id を変えたとき) */
     public function labelTag(array $attrs = []): string;
 
     /** 生値(string | list<string> | UploadedFile | StoredFile | パーツ連想配列)。エスケープなし */
@@ -1319,13 +1377,15 @@ final class FieldView
     /**
      * 確認画面用の表示文字列(esc_html済み)。
      * - スカラー: choicesがあればラベルへ変換して表示。textarea値は nl2br 適用(esc_html後)
+     * - 単一チェックボックス: チェック時は checkedLabel、未チェックは ''。checkedLabel の無い項目は FormConfigException
      * - list: 各要素をラベル変換し $separator で連結
      * - ファイル: clientName を表示
      * - Composite: CompositeField::display() の結果をesc_html
+     * - パスワード: FormConfigException(パスワードの部品と、それを含む複合フィールドも。§パスワードの項目)
      */
     public function display(?string $separator = null): string;
 
-    /** 決定的ID: '{formId}-{fieldName}'(P: 旧crc32不安定ID問題の解消)。attrs['id']指定があればそれを優先 */
+    /** 決定的ID: '{formId}-{fieldName}'(P: 旧crc32不安定ID問題の解消)。入力部品の既定のid と labelTag() の既定のfor */
     public function id(): string;
 
     /** POST名(Checkboxesは '{name}[]'、Compositeパーツは '{name}[{part}]') */
@@ -1343,10 +1403,10 @@ final readonly class OptionView
         public FieldType $type,  // Radios または Checkboxes
     ) {}
 
-    /** <input type="checkbox|radio" ... checked> 単体(エスケープ済み) */
+    /** <input type="checkbox|radio" ... checked> 単体(エスケープ済み)。attrs['id'] で id を変えられる */
     public function input(array $attrs = []): string;
 
-    /** <label for="{id}">ラベル</label>(エスケープ済み) */
+    /** <label for="{id}">ラベル</label>(エスケープ済み)。attrs['for'] で for を変えられる */
     public function labelTag(array $attrs = []): string;
 }
 ```
@@ -1355,12 +1415,38 @@ final readonly class OptionView
 
 - checked/selected判定はすべて「双方を `(string)` キャストした上で `===`」(P11)。multipleは `in_array(strict: true)`。
 - 未チェック送信用のhidden inputは生成しない(バインド仕様が欠損キー=空を保証するため不要。P3/P6)。
-- `input()` で `attrs['value']` を渡した場合は現在値より優先する(特殊用途)。`attrs` の `class` は文字列のみ受け付ける(配列マージ等の便宜機能は持たない。シンプル第一)。
+- `input()` で `attrs['value']` を渡した場合は現在値より優先する(特殊用途。パスワード・ファイルの項目では不可)。`attrs` の `class` は文字列のみ受け付ける(配列マージ等の便宜機能は持たない。シンプル第一)。
 - 型と部品の不一致(`FieldType::Select` のフィールドに `textarea()` 等)は `FormConfigException`。テンプレート書き間違いを早期検出する。
+
+#### 属性の指定
+
+`attrs` に渡した属性は、出力に反映するか `FormConfigException` にするかのどちらかで、黙って捨てない。属性名は大文字と小文字を区別しない(`'ID'` も `id` の指定。同じ属性を2回指定すると `FormConfigException`)。名前だけの指定(`['required']`)と、名前だけの指定の `''`(`[$required ? 'required' : '']` の書き方)は `Support\Html::attributes()` と同じに扱う。
+
+| 部品 | 上書きできる属性 | 指定できない属性(FWが決める) |
+|---|---|---|
+| `Form::open()` | `action`(既定 `''`) | `method`(常に `post`)・`enctype`(ファイルの項目の有無で決まる) |
+| `FieldView::input()` | `id`・`type`・`value`(パスワード・ファイルの項目は不可) | `name` |
+| `FieldView::textarea()` | `id` | `name` |
+| `FieldView::select()` | `id` | `name`・`multiple` |
+| `FieldView::checkbox()`・`OptionView::input()` | `id` | `type`・`name`・`value`・`checked` |
+| `FieldView::checkboxes()`・`radios()` | なし(`id` は選択肢ごとに決まる) | `id`(attrs)・`for`(labelAttrs)と、`OptionView::input()` と同じ属性 |
+| `FieldView::labelTag()`・`OptionView::labelTag()` | `for` | なし |
+
+`id()` は既定のidを返す。入力部品のidを変えたときは、ラベルとの関連付けのため、同じ値を `labelTag(['for' => ...])` に渡す。`Form::field()` は呼び出しごとに新しい `FieldView` を作るため、`input()` に渡したidを `id()`・`labelTag()` が覚えておくことはできない。
+
+#### 確認画面
+
+確認画面の項目の一覧は `Form::confirmFields()` を回して `label()` と `display()` で出す(§利用例)。`Form::fields()` は全項目を返すため、確認画面には使わない。
+
+- `confirmFields()` は、hiddenの項目(利用者が入力していない値)と、パスワードの項目・パスワードの部品を含む複合フィールド(§パスワードの項目)を除く。
+- 確認用のメールアドレスの欄(`Retype`)等、確認画面に出す必要の無い項目は `FormDefinition::hideOnConfirm()` で除く。
+- 単一チェックボックスは、`Field::checkbox()` の `checkedLabel`(チェック時に出す文言。「同意する」等)を `display()` に出す。値(`'1'`)をそのまま出さないよう、`checkedLabel` の無い項目の `display()` は `FormConfigException` にする。確認画面に出さないなら `hideOnConfirm()` で除く。
 
 ### FormHtml(純関数レンダラ)
 
-HTML断片生成の最下層。**全メソッドはstatic純関数**(引数のみから出力が決まり、状態・コールバック・フックを一切持たない)。FieldView/OptionView/Form::open() はすべて本クラスへ委譲する。属性のエスケープと整形は `Support\Html::attributes()`(Support層文書で定義: 値は `esc_attr`、`true` は属性名のみ、`false|null` は省略、非空時は先頭に半角スペース1つ)に委譲する。
+HTML断片生成の最下層。**全メソッドはstatic純関数**(引数のみから出力が決まり、状態・コールバック・フックを一切持たない)。FieldView/OptionView/Form::open() はすべて本クラスへ委譲する。属性のエスケープと整形は `Support\Html::attributes()`(Support層文書で定義: 値は `esc_attr`、`true` は属性名のみ、`false|null` は省略、非空時は先頭に半角スペース1つ)に委譲する。テキストノードは `esc_html()` を直接呼んでエスケープする(`esc_html` の有無を確かめて別のエスケープに切り替える分岐は持たない。WordPressの `esc_html` フィルタを通らない出力の経路を作らないため)。
+
+引数で決める属性(`input()` の `type`・`name`・`value` 等)を `$attrs` でも指定すると、どちらを使うかが曖昧になるため `FormConfigException` にする(黙ってどちらかを捨てない)。
 
 ```php
 namespace TMSWP\Core\Form;
@@ -1369,20 +1455,32 @@ final class FormHtml
 {
     private function __construct() {}
 
+    /** attrs に type・name・value は指定できない */
     public static function input(string $type, string $name, string $value, array $attrs = []): string;
+    /** attrs に name は指定できない */
     public static function textarea(string $name, string $value, array $attrs = []): string;
 
-    /** @param array<string, string> $choices @param string|list<string> $selected 文字列化厳密比較
-     *  <option> のテキスト(choicesのラベル)は esc_html()、value属性は esc_attr() を適用してから出力する */
+    /** @param array<array-key, string> $choices @param string|list<string> $selected 文字列化厳密比較
+     *  <option> のテキスト(choicesのラベル)は esc_html()、value属性は esc_attr() を適用してから出力する。attrs に name は指定できない */
     public static function select(string $name, array $choices, string|array $selected, array $attrs = []): string;
 
+    /** attrs に type・name・value・checked は指定できない */
     public static function checkbox(string $name, string $value, bool $checked, array $attrs = []): string;
     public static function radio(string $name, string $value, bool $checked, array $attrs = []): string;
     public static function hidden(string $name, string $value): string;
+    /** attrs に for は指定できない */
     public static function label(string $text, string $for, array $attrs = []): string;
 
-    /** <form>開始タグのみ(hidden群はFormが組み立てる) */
-    public static function openTag(array $attrs): string;
+    /** <form>開始タグのみ(hidden群はFormが組み立てる)。method="post" 固定、$multipart なら enctype="multipart/form-data"。
+     *  attrs に method・action・enctype は指定できない */
+    public static function openTag(string $action, bool $multipart, array $attrs = []): string;
+
+    /**
+     * 属性の指定を、小文字の属性名をキーにした形にそろえる(['ID' => 'x'] は id の指定。['required'] は ['required' => true])。
+     * @return array<string, mixed>
+     * @throws FormConfigException 同じ属性を2回指定した場合(大文字と小文字の違いを含む)
+     */
+    public static function normalizeAttributes(array $attrs): array;
 }
 ```
 
@@ -1453,7 +1551,8 @@ final class ContactForm
                 ->text('product', '対象製品', rules: [new Required(), new MaxLength(100)])
                 ->textarea('detail', 'お問い合わせ内容', rules: [new Required(), new MaxLength(1000)])
                 ->radios('contact_method', 'ご希望の連絡方法', choices: ['email' => 'メール', 'phone' => '電話'], rules: [new Required()])
-                ->checkbox('privacy', '個人情報の取り扱いに同意する', rules: [new Required()])
+                ->checkbox('privacy', '個人情報の取り扱い', rules: [new Required()], checkedLabel: '同意する')
+                ->hideOnConfirm('email_confirm')   // 確認画面には出さない(hidden・パスワードの項目は指定しなくても出さない)
                 ->confirm()
                 ->onComplete(self::sendMail(...)),
         );
@@ -1491,7 +1590,7 @@ get_header();
 <?php elseif ($result->step === FormStep::Confirm) : ?>
     <?= $form->open() /* _form_id / _nonce / _confirm_token のhiddenを自動埋込み */ ?>
     <dl>
-        <?php foreach ($form->fields() as $view) : ?>
+        <?php foreach ($form->confirmFields() as $view) : /* 確認画面に出す項目だけ(§確認画面) */ ?>
             <dt><?= $view->label() ?></dt>
             <dd><?= $view->display() ?></dd>
         <?php endforeach; ?>
@@ -1630,7 +1729,7 @@ get_header();
 <?php if ($vm->result->step === FormStep::Confirm) : ?>
     <?= $vm->form->open() ?>
     <dl>
-        <?php foreach ($vm->form->fields() as $view) : ?>
+        <?php foreach ($vm->form->confirmFields() as $view) : ?>
             <dt><?= $view->label() ?></dt><dd><?= $view->display() ?></dd>
         <?php endforeach; ?>
     </dl>
@@ -1771,6 +1870,8 @@ add_filter(
 - [ ] `applyDefaults()` が、`handle()` の後・フォームに無い項目・値の形の違い・ファイルの項目で例外になる
 - [ ] checkbox/checkboxesのPOSTキー欠損が `''` / `[]` にバインドされる(hiddenハック不要の実証テスト)
 - [ ] 同一ページに2フォームを置いた場合、POSTが宛先フォームだけを処理する
+- [ ] 利用者の入力(数値のキー、配列のファイル、不正な形のファイルのエントリ、不正なUTF-8、未知のトークンの項目)で例外にならず、項目のエラー(未知のトークンの項目は §handle() の扱い)になる。確認画面の有無の両方で確かめる(統合テスト)
+- [ ] 確認画面の項目(`confirmFields()`)が、hidden・パスワード・`hideOnConfirm()` の項目を除き、単一チェックボックスを `checkedLabel` で表示する
 
 **セキュリティ**
 - [ ] ConfirmTokenの改ざん(値1文字変更・署名差し替え・formId差し替え)がすべてInvalidになるテスト
@@ -1781,6 +1882,9 @@ add_filter(
 - [ ] `TempFileStore::resolve()` が `../` 等のトークン形式違反を `TempFileException` で拒否するテスト
 - [ ] POST値からファイルパスを構築するコードが存在しない(`grep` レビュー項目)
 - [ ] FieldView/FormHtmlの出力に未エスケープのユーザ値が含まれない(`<script>` 入力のスナップショットテスト)
+- [ ] FieldView/FormHtmlのテキストノードが `esc_html()` を通り、`esc_html` が無い環境で別のエスケープに切り替えない
+- [ ] パスワードの項目が、再描画のvalue属性・確認画面の表示・ConfirmTokenに出ない(確認画面のあるフォームには定義の時点で置けない)
+- [ ] `open()` の `action` と入力部品の `id`・ラベルの `for` が反映され、FWが決める属性(§属性の指定)の指定が `FormConfigException` になる
 - [ ] 動的choices(ラベルに `<script>` を含む)を与えた `select()` の出力で `<option>` のラベルが `esc_html()`、valueが `esc_attr()` でエスケープされるスナップショットテスト
 
 **検証/メッセージ**

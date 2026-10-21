@@ -13,7 +13,9 @@ final class Field
     /**
      * @param list<RuleInterface> $rules
      * @param string|list<string> $default
-     * @param array<array-key, string> $choices
+     * @param array<array-key, string> $choices 値 => 表示ラベル。PHP は '1' のような数字の文字列のキーを int に
+     *                                          変えるため、キーは int のこともある。値との比較は、すべてキーを
+     *                                          文字列にしてから行う(FieldView・FormHtml・Validator)
      * @param list<Closure(string): string> $filters
      */
     private function __construct(
@@ -26,6 +28,7 @@ final class Field
         public readonly bool $multiple = false,
         public readonly array $filters = [],
         public readonly string $checkedValue = '1',
+        public readonly ?string $checkedLabel = null,
     ) {
         self::assertName($name);
         self::assertRules($rules);
@@ -72,7 +75,7 @@ final class Field
      */
     public static function select(string $name, string $label, array $choices, array $rules = [], string $default = ''): self
     {
-        return new self($name, $label, FieldType::Select, $rules, $default, self::stringChoices($choices));
+        return new self($name, $label, FieldType::Select, $rules, $default, $choices);
     }
 
     /**
@@ -81,7 +84,7 @@ final class Field
      */
     public static function radios(string $name, string $label, array $choices, array $rules = [], string $default = ''): self
     {
-        return new self($name, $label, FieldType::Radios, $rules, $default, self::stringChoices($choices));
+        return new self($name, $label, FieldType::Radios, $rules, $default, $choices);
     }
 
     /**
@@ -97,15 +100,21 @@ final class Field
             FieldType::Checkboxes,
             $rules,
             array_values(array_map(static fn(string $value): string => $value, $default)),
-            self::stringChoices($choices),
+            $choices,
             true,
         );
     }
 
-    /** @param list<RuleInterface> $rules */
-    public static function checkbox(string $name, string $label, string $checkedValue = '1', array $rules = []): self
+    /**
+     * 単一のチェックボックス。チェックしたときの値は $checkedValue、しないときは ''。
+     *
+     * @param list<RuleInterface> $rules
+     * @param ?string $checkedLabel チェックしたときに確認画面(FieldView::display())に出す文言。null のフィールドの
+     *                              display() は FormConfigException になる(値の '1' をそのまま出さない)
+     */
+    public static function checkbox(string $name, string $label, string $checkedValue = '1', array $rules = [], ?string $checkedLabel = null): self
     {
-        return new self($name, $label, FieldType::Checkbox, $rules, checkedValue: $checkedValue);
+        return new self($name, $label, FieldType::Checkbox, $rules, checkedValue: $checkedValue, checkedLabel: $checkedLabel);
     }
 
     /** @param list<RuleInterface> $rules */
@@ -116,13 +125,13 @@ final class Field
 
     public function withRules(RuleInterface ...$rules): self
     {
-        return new self($this->name, $this->label, $this->type, array_values([...$this->rules, ...$rules]), $this->default, $this->choices, $this->multiple, $this->filters, $this->checkedValue);
+        return new self($this->name, $this->label, $this->type, array_values([...$this->rules, ...$rules]), $this->default, $this->choices, $this->multiple, $this->filters, $this->checkedValue, $this->checkedLabel);
     }
 
     /** @param Closure(string): string ...$filters */
     public function withFilters(Closure ...$filters): self
     {
-        return new self($this->name, $this->label, $this->type, $this->rules, $this->default, $this->choices, $this->multiple, array_values([...$this->filters, ...$filters]), $this->checkedValue);
+        return new self($this->name, $this->label, $this->type, $this->rules, $this->default, $this->choices, $this->multiple, array_values([...$this->filters, ...$filters]), $this->checkedValue, $this->checkedLabel);
     }
 
     public function isChoiceField(): bool
@@ -159,22 +168,6 @@ final class Field
                 throw new FormConfigException('field filters must be Closure instances');
             }
         }
-    }
-
-    /**
-     * @param array<array-key, string> $choices
-     *
-     * @return array<array-key, string>
-     */
-    private static function stringChoices(array $choices): array
-    {
-        $normalized = [];
-
-        foreach ($choices as $value => $label) {
-            $normalized[(string) $value] = $label;
-        }
-
-        return $normalized;
     }
 
     /** @return Closure(string): string */

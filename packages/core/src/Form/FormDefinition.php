@@ -29,6 +29,9 @@ final class FormDefinition
     /** @var list<SpamGuardInterface> */
     private array $spamGuards = [];
 
+    /** @var array<string, true> 確認画面に出さない項目(hideOnConfirm()) */
+    private array $hiddenOnConfirm = [];
+
     private function __construct(public readonly string $id)
     {
         if (preg_match('/\A[a-z][a-z0-9_-]*\z/', $id) !== 1) {
@@ -59,7 +62,11 @@ final class FormDefinition
         return $this->add(Field::textarea($name, $label, $rules, $default, $filters));
     }
 
-    /** @param list<RuleInterface> $rules */
+    /**
+     * パスワードの項目。確認画面のあるフォームには置けない(§add())。
+     *
+     * @param list<RuleInterface> $rules
+     */
     public function password(string $name, string $label, array $rules = []): self
     {
         return $this->add(Field::password($name, $label, $rules));
@@ -100,9 +107,9 @@ final class FormDefinition
     }
 
     /** @param list<RuleInterface> $rules */
-    public function checkbox(string $name, string $label, string $checkedValue = '1', array $rules = []): self
+    public function checkbox(string $name, string $label, string $checkedValue = '1', array $rules = [], ?string $checkedLabel = null): self
     {
-        return $this->add(Field::checkbox($name, $label, $checkedValue, $rules));
+        return $this->add(Field::checkbox($name, $label, $checkedValue, $rules, $checkedLabel));
     }
 
     /** @param list<RuleInterface> $rules */
@@ -111,11 +118,18 @@ final class FormDefinition
         return $this->add(Field::file($name, $label, $rules));
     }
 
+    /**
+     * @throws FormConfigException 同じ名前の項目がある場合と、確認画面のあるフォームにパスワードの項目を足す場合
+     */
     public function add(Field|CompositeField ...$fields): self
     {
         foreach ($fields as $field) {
             if (\array_key_exists($field->name, $this->fields)) {
                 throw new FormConfigException("duplicate field name: {$field->name}");
+            }
+
+            if ($this->confirm && self::hasPassword($field)) {
+                throw self::passwordOnConfirmException($this->id, $field->name);
             }
 
             $this->fields[$field->name] = $field;
@@ -124,9 +138,40 @@ final class FormDefinition
         return $this;
     }
 
+    /**
+     * 確認画面を有効にする。パスワードの項目があるフォームでは有効にできない。確認画面の値は署名付きのトークン
+     * (ConfirmToken。中身は base64 で読める)で運ぶため、パスワードを onComplete まで届けるにはトークンに平文で
+     * 入れるしかないから。
+     *
+     * @throws FormConfigException パスワードの項目がある場合
+     */
     public function confirm(bool $enabled = true): self
     {
+        if ($enabled) {
+            foreach ($this->fields as $field) {
+                if (self::hasPassword($field)) {
+                    throw self::passwordOnConfirmException($this->id, $field->name);
+                }
+            }
+        }
+
         $this->confirm = $enabled;
+
+        return $this;
+    }
+
+    /**
+     * 確認画面(Form::confirmFields())に出さない項目を指定する。確認用のメールアドレスの欄等に使う。hidden と
+     * パスワードの項目は、指定しなくても出さない。
+     *
+     * @throws UnknownFieldException まだ足していない項目を指定した場合
+     */
+    public function hideOnConfirm(string ...$names): self
+    {
+        foreach ($names as $name) {
+            $this->field($name);
+            $this->hiddenOnConfirm[$name] = true;
+        }
 
         return $this;
     }
@@ -150,13 +195,19 @@ final class FormDefinition
         return $this;
     }
 
-    public function errorHtml(string $sprintfTemplate): self
+    /**
+     * FieldView::errors() の既定のテンプレート。`%s` をエスケープ済みのメッセージに置き換える。`%s` 以外の `%` は
+     * そのまま出す(sprintf の書式としては扱わない)。
+     *
+     * @throws FormConfigException `%s` を含まない場合
+     */
+    public function errorHtml(string $template): self
     {
-        if (!str_contains($sprintfTemplate, '%s')) {
+        if (!str_contains($template, '%s')) {
             throw new FormConfigException('error html template must contain %s');
         }
 
-        $this->errorHtml = $sprintfTemplate;
+        $this->errorHtml = $template;
 
         return $this;
     }
@@ -182,6 +233,35 @@ final class FormDefinition
     public function fields(): array
     {
         return $this->fields;
+    }
+
+    /**
+     * 確認画面に出す項目(定義の順)。hidden とパスワードの項目(パスワードの部品を含む複合フィールドを含む)と、
+     * hideOnConfirm() で指定した項目を除く。
+     *
+     * @return array<string, Field|CompositeField>
+     */
+    public function confirmFields(): array
+    {
+        $fields = [];
+
+        foreach ($this->fields as $name => $field) {
+            if (isset($this->hiddenOnConfirm[$name])) {
+                continue;
+            }
+
+            if ($field instanceof Field && $field->type === FieldType::Hidden) {
+                continue;
+            }
+
+            if (self::hasPassword($field)) {
+                continue;
+            }
+
+            $fields[$name] = $field;
+        }
+
+        return $fields;
     }
 
     public function field(string $name): Field|CompositeField
@@ -243,5 +323,29 @@ final class FormDefinition
         }
 
         return false;
+    }
+
+    /** 複合フィールドは、部品にパスワードの項目があるかを見る(正準値にパスワードが入るため) */
+    private static function hasPassword(Field|CompositeField $field): bool
+    {
+        if ($field instanceof Field) {
+            return $field->type === FieldType::Password;
+        }
+
+        foreach ($field->parts() as $part) {
+            if ($part->type === FieldType::Password) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function passwordOnConfirmException(string $formId, string $fieldName): FormConfigException
+    {
+        return new FormConfigException(
+            "form '{$formId}' cannot have the password field '{$fieldName}' with the confirmation screen: "
+            . 'the confirm token would carry the password in plain text',
+        );
     }
 }

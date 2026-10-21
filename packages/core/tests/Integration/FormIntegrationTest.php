@@ -7,14 +7,17 @@ namespace TMSWP\Core\Tests\Integration;
 use Closure;
 use RuntimeException as PhpRuntimeException;
 use TMSWP\Core\Exception\RuntimeException;
+use TMSWP\Core\Form\ConfirmToken;
 use TMSWP\Core\Form\Form;
 use TMSWP\Core\Form\FormDefinition;
 use TMSWP\Core\Form\FormRequest;
+use TMSWP\Core\Form\FormResult;
 use TMSWP\Core\Form\FormStep;
 use TMSWP\Core\Form\JtiClaim;
 use TMSWP\Core\Form\JtiStore;
 use TMSWP\Core\Form\Rule\MaxLength;
 use TMSWP\Core\Form\Rule\Required;
+use TMSWP\Core\Form\TempFileStore;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
 use TMSWP\Core\Kernel\KernelConfig;
@@ -168,6 +171,73 @@ final class FormIntegrationTest extends IntegrationTestCase
         self::assertSame([['name' => 'Taro']], $this->completed);
     }
 
+    /**
+     * 受け入れ条件3: 利用者の入力(数値のキー、配列のファイル、不正な UTF-8、未知のトークンの項目)で致命的エラーに
+     * ならない。スーパーグローバルから FormRequest::fromGlobals() で取り込む実際の経路で、確認画面の有無の両方を確かめる。
+     */
+    public function testUserInputOfAnyShapeDoesNotCauseAFatalError(): void
+    {
+        $form = $this->formFactory(debug: false);
+
+        foreach ([false, true] as $confirmEnabled) {
+            $definition = $this->entryDefinition()->confirm($confirmEnabled);
+            $step = $confirmEnabled ? 'confirm' : 'submit';
+
+            // 数値のキーと、<input type="file" name="resume[]" multiple> の形のファイル
+            $result = $this->handleGlobals($form($definition), [
+                0 => 'numeric key',
+                '7' => 'numeric string key',
+                Form::FIELD_STEP => $step,
+                'name' => 'Taro',
+            ] + $this->hiddenValues($form($definition)->open()), ['resume' => [
+                'name' => ['a.pdf', 'b.pdf'],
+                'type' => ['application/pdf', 'application/pdf'],
+                'tmp_name' => ['/tmp/phpA', '/tmp/phpB'],
+                'error' => [UPLOAD_ERR_OK, UPLOAD_ERR_OK],
+                'size' => [1, 1],
+            ]]);
+
+            self::assertSame(FormStep::Input, $result->step);
+            self::assertSame(['resume' => ['The file upload failed.']], $result->fieldErrors);
+            self::assertSame('Taro', $result->values['name']);
+
+            // 不正な UTF-8
+            $result = $this->handleGlobals($form($definition), [
+                ...$this->hiddenValues($form($definition)->open()),
+                Form::FIELD_STEP => $step,
+                'name' => "Taro\xC3\x28",
+            ]);
+
+            self::assertSame(FormStep::Input, $result->step);
+            self::assertSame(['name' => ['Name contains characters that cannot be used.']], $result->fieldErrors);
+            self::assertSame('', $result->values['name']);
+
+            // 未知のトークンの項目と、一時保管のトークンの形に合わない値
+            $result = $this->handleGlobals($form($definition), [
+                ...$this->hiddenValues($form($definition)->open()),
+                Form::FIELD_STEP => $step,
+                'name' => 'Taro',
+                'resume__token' => '../../wp-config',
+                'unknown__token' => '0123456789abcdef0123456789abcdef',
+            ]);
+
+            self::assertSame($confirmEnabled ? FormStep::Confirm : FormStep::Complete, $result->step);
+            self::assertSame('', $result->values['resume']);
+        }
+
+        // 署名済みの確認トークンに、フォームに無い項目がある(デプロイをまたいだ送信)
+        $definition = $this->entryDefinition()->confirm();
+        $result = $this->handleGlobals($form($definition), [
+            ...$this->hiddenValues($form($definition)->open()),
+            Form::FIELD_STEP => 'submit',
+            Form::FIELD_CONFIRM_TOKEN => ConfirmToken::issue('entry', ['name' => 'Taro', 'resume' => '', 'unknown' => 'value']),
+        ]);
+
+        self::assertSame(FormStep::Input, $result->step);
+        self::assertSame(['The confirmation screen has expired. Please review your entries and continue again.'], $result->formErrors);
+        self::assertSame([['name' => 'Taro', 'resume' => '']], $this->completed);
+    }
+
     public function testJtiStoreClaimsReleasesAndCollectsOnTheRealDatabase(): void
     {
         $store = new JtiStore();
@@ -245,6 +315,39 @@ final class FormIntegrationTest extends IntegrationTestCase
 
                 $this->completed[] = $values;
             });
+    }
+
+    private function entryDefinition(): FormDefinition
+    {
+        return FormDefinition::create('entry')
+            ->text('name', 'Name', [new Required()])
+            ->file('resume', 'Resume')
+            ->tempFileStore(new TempFileStore($this->createTempDirectory('integration-form-store')))
+            ->onComplete(function (array $values): void {
+                $this->completed[] = $values;
+            });
+    }
+
+    /**
+     * スーパーグローバルに POST を置いて、引数なしの handle()(FormRequest::fromGlobals())で処理する。
+     * WordPress と同じく、$_POST にはスラッシュを付けた値を置く。
+     *
+     * @param array<array-key, mixed> $post
+     * @param array<array-key, mixed> $files
+     */
+    private function handleGlobals(Form $form, array $post, array $files = []): FormResult
+    {
+        $globals = [$_SERVER, $_POST, $_FILES];
+
+        try {
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $_POST = wp_slash($post);
+            $_FILES = $files;
+
+            return $form->handle();
+        } finally {
+            [$_SERVER, $_POST, $_FILES] = $globals;
+        }
     }
 
     /**
