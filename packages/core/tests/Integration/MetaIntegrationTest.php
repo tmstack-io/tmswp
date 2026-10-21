@@ -9,13 +9,19 @@ use stdClass;
 use Stringable;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\RuntimeException;
+use TMSWP\Core\Kernel\DiscoveryFile;
+use TMSWP\Core\Kernel\DiscoveryResult;
+use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
+use TMSWP\Core\Log\LogChannel;
+use TMSWP\Core\Meta\MetaStorageInterface;
 use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Core\Meta\WpMetaStorage;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Tax\Taxonomy;
 use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Core\Tests\Support\RecordingLogger;
 use TMSWP\Core\Tests\Support\UsesTempDirectories;
 use TMSWP\Core\User\UserRole;
 use WP_Post;
@@ -180,7 +186,7 @@ PHP);
     public function testThumbnailPreviewValueIsReadAsARow(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         $previewFilters = [['get_the_terms', '_wp_preview_terms_filter'], ['get_post_metadata', '_wp_preview_post_thumbnail_filter'], ['get_post_metadata', '_wp_preview_meta_filter']];
         self::assertTrue($storage->set(ObjectType::Post, $postId, '_thumbnail_id', '123'));
         $post = get_post($postId);
@@ -220,7 +226,7 @@ PHP);
     public function testThumbnailRemovalPreviewIsReadAsNoRow(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         $previewFilters = [['get_the_terms', '_wp_preview_terms_filter'], ['get_post_metadata', '_wp_preview_post_thumbnail_filter'], ['get_post_metadata', '_wp_preview_meta_filter']];
         self::assertTrue($storage->set(ObjectType::Post, $postId, '_thumbnail_id', '123'));
         $post = get_post($postId);
@@ -310,7 +316,7 @@ PHP);
     public function testWpMetaStorageReadsIgnoreTheRegisteredDefault(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         // FW の宣言は single=false と default を併用できないため、行の list の default は WordPress に直接登録する
         register_post_meta('tmswp_meta_post', 'tmswp_raw_rows', ['type' => 'string', 'single' => false, 'default' => 'row-default']);
 
@@ -342,7 +348,7 @@ PHP);
         $postClass = self::fixtureClass(self::THEME_NAMESPACE . '\\Post\\MetaPost', PostType::class);
         $postId = self::createPost('tmswp_meta_post');
         $bag = $postClass::meta($postId);
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
 
         self::assertNull($storage->get(ObjectType::Post, $postId, self::PRICE));
         self::assertSame([], $storage->getAll(ObjectType::Post, $postId, self::CODES));
@@ -390,7 +396,7 @@ PHP);
         $postClass = self::fixtureClass(self::THEME_NAMESPACE . '\\Post\\MetaPost', PostType::class);
         $postId = self::createPost('tmswp_meta_post');
         $bag = $postClass::meta($postId);
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
 
         // 同じ値: update_metadata() が保存済みの値と === で一致して false を返す経路
         self::assertTrue($bag->set('tmswp_same', 'same'));
@@ -420,7 +426,7 @@ PHP);
     public function testSameValueAfterSanitizingReturnsFalseAndSanitizesOnce(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         $sanitized = new ArrayObject();
         add_filter('sanitize_post_meta_tmswp_counted_for_tmswp_meta_post', static function (mixed $value) use ($sanitized): mixed {
             $sanitized->append($value);
@@ -439,7 +445,7 @@ PHP);
     public function testReplacingRowsWithValuesThatSanitizeToTheStoredRowsReturnsFalse(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         add_filter('sanitize_post_meta_' . self::CODES . '_for_tmswp_meta_post', static fn(mixed $value): mixed => \is_string($value) ? trim($value) : $value);
 
         self::assertTrue($storage->setAll(ObjectType::Post, $postId, self::CODES, ['alpha', 'beta']));
@@ -451,7 +457,7 @@ PHP);
     public function testWritesStoppedByAnotherFilterReturnFalseAndKeepTheStoredValue(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         $storage->set(ObjectType::Post, $postId, 'tmswp_guarded', 'before');
         $storage->setAll(ObjectType::Post, $postId, 'tmswp_guarded_rows', ['one', 'two']);
         $stop = static fn(mixed $check, int $objectId, string $key): mixed => str_starts_with($key, 'tmswp_guarded') ? false : $check;
@@ -473,7 +479,7 @@ PHP);
     public function testDatabaseErrorsDuringWritesThrowAndKeepTheStoredValue(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         $storage->set(ObjectType::Post, $postId, 'tmswp_blocked', 'before');
         $storage->setAll(ObjectType::Post, $postId, 'tmswp_blocked_rows', ['one', 'two']);
 
@@ -517,7 +523,7 @@ PHP);
     public function testReadFailureBeforeDeletingMetaThrowsAndKeepsTheStoredValue(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         $storage->set(ObjectType::Post, $postId, 'tmswp_read_delete', 'old');
         wp_cache_delete($postId, 'post_meta');
 
@@ -529,14 +535,14 @@ PHP);
             );
         });
 
-        wp_cache_delete($postId, 'post_meta');
+        // 失敗した読み込みで WP が書いた空のメタのキャッシュは消えており、データベースの値が返る
         self::assertSame(['old'], get_post_meta($postId, 'tmswp_read_delete'));
     }
 
     public function testReadFailureBeforeReplacingRowsThrowsAndKeepsTheStoredRows(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         $storage->setAll(ObjectType::Post, $postId, 'tmswp_read_before', ['old']);
         wp_cache_delete($postId, 'post_meta');
 
@@ -547,14 +553,13 @@ PHP);
             );
         });
 
-        wp_cache_delete($postId, 'post_meta');
         self::assertSame(['old'], get_post_meta($postId, 'tmswp_read_before'));
     }
 
     public function testReadFailureAfterReplacingRowsThrows(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         // 置き換えの前の読み取りはキャッシュから行い、追加の後の読み直し(SELECT)だけを DB のエラーにする
         self::assertSame([], $storage->getAll(ObjectType::Post, $postId, 'tmswp_read_after'));
 
@@ -565,14 +570,13 @@ PHP);
             );
         });
 
-        wp_cache_delete($postId, 'post_meta');
         self::assertSame(['new'], get_post_meta($postId, 'tmswp_read_after'));
     }
 
     public function testNestedWriteToTheSameMetaDoesNotHideTheOuterDatabaseError(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         $storage->set(ObjectType::Post, $postId, 'tmswp_nested', 'old-value');
         $nested = new ArrayObject();
         // 外側の UPDATE の直前(update_post_meta アクション)に、同じメタへ保存済みの値を書く
@@ -597,7 +601,7 @@ PHP);
     public function testEarlierUnrelatedDatabaseErrorIsNotReportedForAWriteWithoutQueries(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
         $storage->set(ObjectType::Post, $postId, 'tmswp_stale', 'same');
         self::assertSame('same', $storage->get(ObjectType::Post, $postId, 'tmswp_stale'));
         $wpdb = self::wpdb();
@@ -620,7 +624,7 @@ PHP);
     public function testWpMetaStorageKeepsStoredFalseAndEmptyValuesAndRejectsNull(): void
     {
         $postId = self::createPost('tmswp_meta_post');
-        $storage = new WpMetaStorage();
+        $storage = new WpMetaStorage(self::themeKernel());
 
         self::assertTrue($storage->set(ObjectType::Post, $postId, 'tmswp_false', false));
         self::assertTrue($storage->set(ObjectType::Post, $postId, 'tmswp_empty', ''));
@@ -666,7 +670,144 @@ PHP);
         $this->assertRejectedValue(static fn(): bool => $bag->set('custom_null', null), "meta 'custom_null' cannot be set to null; use delete() to remove it");
         self::assertFalse($bag->has('custom_null'));
         // 差し替え先にだけ保存され、WP のメタには書かれていない
-        self::assertFalse((new WpMetaStorage())->has(ObjectType::Post, $postId, self::CUSTOM));
+        self::assertFalse((new WpMetaStorage(self::themeKernel()))->has(ObjectType::Post, $postId, self::CUSTOM));
+    }
+
+    /**
+     * 公開の読み取り(has・get・getAll・getMultiple)を単独で呼んだときのデータベースのエラーは、debug の Kernel では、
+     * 読み取りの対象とデータベースのエラーをメッセージに含む RuntimeException になる。失敗した読み込みで WP が書いた
+     * 空のメタのキャッシュは消えており、エラーを外して読み直すとデータベースの値が返る。
+     */
+    public function testStandaloneReadFailureThrowsInDebug(): void
+    {
+        self::assertTrue(self::themeKernel()->config()->debug);
+        $storage = new WpMetaStorage(self::themeKernel());
+        $postId = self::createPost('tmswp_meta_post');
+        $storage->set(ObjectType::Post, $postId, 'tmswp_read_alone', 'stored');
+
+        foreach (self::standaloneReads($storage, $postId, 'tmswp_read_alone') as $name => $read) {
+            // メタのキャッシュを消し、読み取りがメタの読み込みの SELECT を発行するようにする
+            wp_cache_delete($postId, 'post_meta');
+
+            self::withBrokenQueries(self::wpdb()->postmeta, 'SELECT', static function () use ($read, $name, $postId): void {
+                try {
+                    $read();
+                    self::fail("RuntimeException was not thrown for {$name}");
+                } catch (RuntimeException $exception) {
+                    self::assertStringStartsWith("failed to read post meta 'tmswp_read_alone' for object {$postId}: ", $exception->getMessage(), $name);
+                    self::assertStringContainsString('tmswp_missing_table', $exception->getMessage(), $name);
+                }
+            });
+
+            self::assertSame('stored', $storage->get(ObjectType::Post, $postId, 'tmswp_read_alone'), $name);
+        }
+    }
+
+    /**
+     * 本番の Kernel では、単独の読み取りのデータベースのエラーを、その Kernel のロガーに error で記録し、行が無いときと
+     * 同じ結果(false・null・空配列)を返す。失敗した読み込みのキャッシュは消えており、エラーを外して読み直すと
+     * データベースの値が返る。
+     */
+    public function testStandaloneReadFailureIsLoggedAndReturnsTheRowlessResultInProduction(): void
+    {
+        $logger = new RecordingLogger();
+        $storage = $this->productionKernel('MetaReadFailure', $logger)->container()->get(MetaStorageInterface::class);
+        self::assertInstanceOf(WpMetaStorage::class, $storage);
+        $postId = self::createPost('tmswp_meta_post');
+        $storage->set(ObjectType::Post, $postId, 'tmswp_read_logged', 'stored');
+        $results = [];
+
+        foreach (self::standaloneReads($storage, $postId, 'tmswp_read_logged') as $name => $read) {
+            wp_cache_delete($postId, 'post_meta');
+
+            self::withBrokenQueries(self::wpdb()->postmeta, 'SELECT', static function () use ($read, $name, &$results): void {
+                $results[$name] = $read();
+            });
+
+            self::assertSame('stored', $storage->get(ObjectType::Post, $postId, 'tmswp_read_logged'), $name);
+        }
+
+        self::assertSame(['has' => false, 'get' => null, 'getAll' => [], 'getMultiple' => []], $results);
+        self::assertCount(4, $logger->records);
+
+        foreach ($logger->records as $record) {
+            self::assertSame('error', $record['level']);
+            self::assertSame('tmswp.storage: {failure}: {error}', $record['message']);
+            self::assertSame("failed to read post meta 'tmswp_read_logged' for object {$postId}", $record['context']['failure']);
+            self::assertIsString($record['context']['error']);
+            self::assertStringContainsString('tmswp_missing_table', $record['context']['error']);
+        }
+    }
+
+    /**
+     * WP_Metadata_Lazyloader がキューにある複数のタームのメタをまとめて読む SELECT が失敗すると、WP はキャッシュに
+     * 無かったすべてのタームを空のメタとしてキャッシュする。読み取りのエラーの後、読み取りの対象だけでなく、同時に
+     * 読み込まれたほかのタームのキャッシュも消えており、エラーを外して読み直すとデータベースの値が返る。
+     */
+    public function testFailedLazyLoadOfQueuedTermsLeavesNoEmptyCacheForAnyTerm(): void
+    {
+        $storage = new WpMetaStorage(self::themeKernel());
+        [$first, $second] = [self::createCategory('tmswp-lazy-first'), self::createCategory('tmswp-lazy-second')];
+
+        foreach ([$first, $second] as $termId) {
+            $storage->set(ObjectType::Term, $termId, 'tmswp_lazy', 'stored');
+            wp_cache_delete($termId, 'term_meta');
+        }
+
+        wp_metadata_lazyloader()->queue_objects('term', [$first, $second]);
+
+        self::withBrokenQueries(self::wpdb()->termmeta, 'SELECT', static function () use ($storage, $first): void {
+            try {
+                $storage->get(ObjectType::Term, $first, 'tmswp_lazy');
+                self::fail('RuntimeException was not thrown');
+            } catch (RuntimeException $exception) {
+                self::assertStringStartsWith("failed to read term meta 'tmswp_lazy' for object {$first}: ", $exception->getMessage());
+            }
+        });
+
+        self::assertSame('stored', $storage->get(ObjectType::Term, $second, 'tmswp_lazy'));
+        self::assertSame('stored', $storage->get(ObjectType::Term, $first, 'tmswp_lazy'));
+    }
+
+    /**
+     * キャッシュから読んでクエリを発行しない読み取りは、SELECT が失敗する状態でも例外にならない。呼び出しの前の
+     * 無関係なデータベースのエラーが残っていても、クエリを発行しない読み取りと、成功したクエリの読み取りは例外にならない。
+     */
+    public function testStandaloneReadWithoutAFailedQueryDoesNotThrow(): void
+    {
+        $storage = new WpMetaStorage(self::themeKernel());
+        $postId = self::createPost('tmswp_meta_post');
+        $storage->set(ObjectType::Post, $postId, 'tmswp_read_cached', 'cached');
+        $expected = ['has' => true, 'get' => 'cached', 'getAll' => ['cached'], 'getMultiple' => ['tmswp_read_cached' => 'cached']];
+        $readAll = static function () use ($storage, $postId): array {
+            $results = [];
+
+            foreach (self::standaloneReads($storage, $postId, 'tmswp_read_cached') as $name => $read) {
+                $results[$name] = $read();
+            }
+
+            return $results;
+        };
+        // メタのキャッシュに載せる
+        self::assertSame('cached', $storage->get(ObjectType::Post, $postId, 'tmswp_read_cached'));
+
+        self::withBrokenQueries(self::wpdb()->postmeta, 'SELECT', static function () use ($readAll, $expected): void {
+            self::assertSame($expected, $readAll());
+        });
+
+        $wpdb = self::wpdb();
+        $suppressed = $wpdb->suppress_errors(true);
+
+        try {
+            $wpdb->query('SELECT * FROM tmswp_missing_table_for_stale_read');
+            self::assertNotSame('', $wpdb->last_error);
+            self::assertSame($expected, $readAll());
+
+            wp_cache_delete($postId, 'post_meta');
+            self::assertSame($expected, $readAll());
+        } finally {
+            $wpdb->suppress_errors($suppressed);
+        }
     }
 
     public function testObjectTypeRejectsInvalidIdsAndMismatchedObjects(): void
@@ -675,6 +816,52 @@ PHP);
         $this->assertInvalidMetaObject(static fn(): int => ObjectType::User->resolveId(-1));
         $this->assertInvalidMetaObject(static fn(): int => ObjectType::Post->resolveId(new WP_Post((object) ['ID' => 0])));
         $this->assertInvalidMetaObject(static fn(): int => ObjectType::Term->resolveId(new WP_Post((object) ['ID' => 1])));
+    }
+
+    /** カテゴリーのタームを作り、その ID を返す。 */
+    private static function createCategory(string $name): int
+    {
+        $term = wp_insert_term($name, 'category');
+        self::assertIsArray($term);
+
+        return (int) $term['term_id'];
+    }
+
+    /**
+     * 公開の読み取りを1つずつ呼ぶクロージャを返す。
+     *
+     * @return array{has: callable(): bool, get: callable(): mixed, getAll: callable(): list<mixed>, getMultiple: callable(): array<string, mixed>}
+     */
+    private static function standaloneReads(MetaStorageInterface $storage, int $postId, string $key): array
+    {
+        return [
+            'has' => static fn(): bool => $storage->has(ObjectType::Post, $postId, $key),
+            'get' => static fn(): mixed => $storage->get(ObjectType::Post, $postId, $key),
+            'getAll' => static fn(): array => $storage->getAll(ObjectType::Post, $postId, $key),
+            'getMultiple' => static fn(): array => $storage->getMultiple(ObjectType::Post, $postId, [$key]),
+        ];
+    }
+
+    /**
+     * 本番相当(debug=false)のプラグイン形態の、コンポーネントの無い Kernel を init より前に boot する。ログは $logger に
+     * 記録する。
+     */
+    private function productionKernel(string $name, RecordingLogger $logger): Kernel
+    {
+        $root = $this->createTempDirectory('integration-' . strtolower($name));
+        self::assertTrue(mkdir($root . '/app'));
+        $this->writeFile($root . '/plugin.php', "<?php\n");
+        $config = KernelConfig::plugin(
+            $root . '/plugin.php',
+            $root . '/app',
+            'TmswpIntegration' . $name . uniqid(),
+            false,
+            logChannels: static fn(): array => ['integration' => new LogChannel($logger)],
+        );
+        (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
+        $this->bootBeforeInit($config);
+
+        return Kernel::get($config->appNamespace);
     }
 
     /**

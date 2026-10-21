@@ -11,15 +11,33 @@ use stdClass;
 use Stringable;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\RuntimeException;
+use TMSWP\Core\Kernel\DiscoveryFile;
+use TMSWP\Core\Kernel\DiscoveryResult;
 use TMSWP\Core\Kernel\Kernel;
+use TMSWP\Core\Kernel\KernelConfig;
+use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Option\OptionRepository;
 use TMSWP\Core\Option\OptionRepositoryFactory;
+use TMSWP\Core\Option\OptionStorageInterface;
 use TMSWP\Core\Option\WpOptionStorage;
+use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Core\Tests\Support\RecordingLogger;
+use TMSWP\Core\Tests\Support\UsesTempDirectories;
 
 final class OptionIntegrationTest extends IntegrationTestCase
 {
+    use BootsKernelBeforeInit;
+    use UsesTempDirectories;
+
     private const PREFIX = 'tmswp_fixture_';
+
+    public function tear_down(): void
+    {
+        $this->unregisterAppAutoloaders();
+        $this->cleanupTempDirectories();
+        parent::tear_down();
+    }
 
     public function testOptionRepositoryReadsDefaultsAndWritesWithSchemaAutoload(): void
     {
@@ -62,7 +80,7 @@ final class OptionIntegrationTest extends IntegrationTestCase
 
     public function testWpOptionStorageKeepsStoredFalseAndEmptyValuesAndRejectsNull(): void
     {
-        $storage = new WpOptionStorage();
+        $storage = new WpOptionStorage(self::themeKernel());
 
         self::assertTrue($storage->set(self::PREFIX . 'false_value', false));
         self::assertTrue($storage->set(self::PREFIX . 'empty_value', ''));
@@ -78,7 +96,7 @@ final class OptionIntegrationTest extends IntegrationTestCase
 
     public function testWritingTheSameValueReturnsFalseWithoutFailing(): void
     {
-        $storage = new WpOptionStorage();
+        $storage = new WpOptionStorage(self::themeKernel());
         $name = self::PREFIX . 'same_value';
 
         // 同じ値: update_option() が保存済みの値と一致して false を返す経路
@@ -101,7 +119,7 @@ final class OptionIntegrationTest extends IntegrationTestCase
 
     public function testPreUpdateFilterThatRestoresTheStoredValueReturnsFalse(): void
     {
-        $storage = new WpOptionStorage();
+        $storage = new WpOptionStorage(self::themeKernel());
         $name = self::PREFIX . 'pre_update_trim';
         $storage->set($name, 'a');
         add_filter("pre_update_option_{$name}", static fn(mixed $value): mixed => \is_string($value) ? trim($value) : $value);
@@ -113,7 +131,7 @@ final class OptionIntegrationTest extends IntegrationTestCase
 
     public function testSameValueAfterSanitizingDoesNotModifyTheCallersObject(): void
     {
-        $storage = new WpOptionStorage();
+        $storage = new WpOptionStorage(self::themeKernel());
         $name = self::PREFIX . 'object_value';
         $storage->set($name, (object) ['label' => 'keep']);
         add_filter("sanitize_option_{$name}", static function (mixed $value): mixed {
@@ -132,7 +150,7 @@ final class OptionIntegrationTest extends IntegrationTestCase
 
     public function testGenericFilterAddedAtTheSamePriorityDuringTheWriteIsRespected(): void
     {
-        $storage = new WpOptionStorage();
+        $storage = new WpOptionStorage(self::themeKernel());
         $name = self::PREFIX . 'late_filter';
         $storage->set($name, 'a');
         // 名前別の pre_update_option の中から、汎用の pre_update_option に PHP_INT_MAX の trim を後から足す
@@ -148,7 +166,7 @@ final class OptionIntegrationTest extends IntegrationTestCase
 
     public function testNameWithSurroundingWhitespaceIsNormalizedLikeWordPress(): void
     {
-        $storage = new WpOptionStorage();
+        $storage = new WpOptionStorage(self::themeKernel());
         $name = self::PREFIX . 'padded_name';
         $storage->set($name, 'old');
 
@@ -160,7 +178,7 @@ final class OptionIntegrationTest extends IntegrationTestCase
 
     public function testNestedWriteToTheSameOptionDoesNotHideTheOuterDatabaseError(): void
     {
-        $storage = new WpOptionStorage();
+        $storage = new WpOptionStorage(self::themeKernel());
         $name = self::PREFIX . 'nested';
         $storage->set($name, 'old-value');
         $nested = new ArrayObject();
@@ -182,7 +200,7 @@ final class OptionIntegrationTest extends IntegrationTestCase
 
     public function testEarlierUnrelatedDatabaseErrorIsNotReportedForAWriteWithoutQueries(): void
     {
-        $storage = new WpOptionStorage();
+        $storage = new WpOptionStorage(self::themeKernel());
         $name = self::PREFIX . 'stale_error';
         $storage->set($name, 'same');
         $wpdb = self::wpdb();
@@ -202,7 +220,7 @@ final class OptionIntegrationTest extends IntegrationTestCase
 
     public function testReadFailureBeforeDeletingOrWritingAnOptionThrows(): void
     {
-        $storage = new WpOptionStorage();
+        $storage = new WpOptionStorage(self::themeKernel());
         $name = self::PREFIX . 'read_failure';
         // autoload しないオプションは、キャッシュに無ければ get_option() が1件だけを SELECT する
         $storage->set($name, 'kept', false);
@@ -214,15 +232,15 @@ final class OptionIntegrationTest extends IntegrationTestCase
             self::withBrokenQueries("'{$name}'", 'SELECT', function () use ($write, $name, $operation): void {
                 $this->assertDatabaseWriteFails($write, "failed to read option '{$name}' before " . ($operation === 'delete' ? 'deleting' : 'writing') . ' it');
             });
-        }
 
-        wp_cache_flush();
-        self::assertSame('kept', get_option($name));
+            // 失敗した読み込みで WP が notoptions に書いた名前は消えており、データベースの値が返る
+            self::assertSame('kept', get_option($name), $operation);
+        }
     }
 
     public function testDatabaseErrorsDuringWritesThrowAndKeepTheStoredValue(): void
     {
-        $storage = new WpOptionStorage();
+        $storage = new WpOptionStorage(self::themeKernel());
         $name = self::PREFIX . 'failing_write';
         $storage->set($name, 'before');
 
@@ -236,6 +254,176 @@ final class OptionIntegrationTest extends IntegrationTestCase
         wp_cache_flush();
         self::assertSame('before', $storage->get($name));
         self::assertFalse($storage->has($name . '_new'));
+    }
+
+    /**
+     * 公開の読み取り(has・get)を単独で呼んだときのデータベースのエラーは、debug の Kernel では、オプション名と
+     * データベースのエラーをメッセージに含む RuntimeException になる。失敗した読み込みで WP が notoptions に書いた
+     * 名前は消えており、エラーを外して読み直すとデータベースの値が返る。
+     */
+    public function testStandaloneReadFailureThrowsInDebug(): void
+    {
+        self::assertTrue(self::themeKernel()->config()->debug);
+        $storage = new WpOptionStorage(self::themeKernel());
+        $name = self::PREFIX . 'read_alone';
+        // autoload しないオプションは、キャッシュに無ければ get_option() が1件だけを SELECT する
+        $storage->set($name, 'stored', false);
+
+        foreach (self::standaloneReads($storage, $name) as $operation => $read) {
+            self::forgetCachedOption($name);
+
+            self::withBrokenQueries("'{$name}'", 'SELECT', static function () use ($read, $operation, $name): void {
+                try {
+                    $read();
+                    self::fail("RuntimeException was not thrown for {$operation}");
+                } catch (RuntimeException $exception) {
+                    self::assertStringStartsWith("failed to read option '{$name}': ", $exception->getMessage(), $operation);
+                    self::assertStringContainsString('tmswp_missing_table', $exception->getMessage(), $operation);
+                }
+            });
+
+            self::assertSame('stored', $storage->get($name), $operation);
+        }
+    }
+
+    /**
+     * 本番の Kernel では、単独の読み取りのデータベースのエラーを、その Kernel のロガーに error で記録し、オプションが
+     * 無いときと同じ結果(false・null)を返す。失敗した読み込みのキャッシュは消えており、エラーを外して読み直すと
+     * データベースの値が返る。
+     */
+    public function testStandaloneReadFailureIsLoggedAndReturnsTheMissingResultInProduction(): void
+    {
+        $logger = new RecordingLogger();
+        $storage = $this->productionKernel('OptionReadFailure', $logger)->container()->get(OptionStorageInterface::class);
+        self::assertInstanceOf(WpOptionStorage::class, $storage);
+        $name = self::PREFIX . 'read_logged';
+        $storage->set($name, 'stored', false);
+        $results = [];
+
+        foreach (self::standaloneReads($storage, $name) as $operation => $read) {
+            self::forgetCachedOption($name);
+
+            self::withBrokenQueries("'{$name}'", 'SELECT', static function () use ($read, $operation, &$results): void {
+                $results[$operation] = $read();
+            });
+
+            self::assertSame('stored', $storage->get($name), $operation);
+        }
+
+        self::assertSame(['has' => false, 'get' => null], $results);
+        self::assertCount(2, $logger->records);
+
+        foreach ($logger->records as $record) {
+            self::assertSame('error', $record['level']);
+            self::assertSame('tmswp.storage: {failure}: {error}', $record['message']);
+            self::assertSame("failed to read option '{$name}'", $record['context']['failure']);
+            self::assertIsString($record['context']['error']);
+            self::assertStringContainsString('tmswp_missing_table', $record['context']['error']);
+        }
+    }
+
+    /**
+     * WP は前後に空白のあるオプション名を trim() してから読み、その名前で notoptions を書く。空白のある名前で、単独の
+     * 読み取りと、set()・delete() の前の読み取りを失敗させた後も、notoptions は残らず、エラーを外して読み直すと
+     * データベースの値が返る。
+     */
+    public function testFailedReadWithSurroundingWhitespaceLeavesNoNotoptionsEntry(): void
+    {
+        $storage = new WpOptionStorage(self::themeKernel());
+        $name = self::PREFIX . 'read_padded';
+        $padded = "  {$name}  ";
+        $storage->set($name, 'stored', false);
+        $operations = [
+            'has' => static fn(): mixed => $storage->has($padded),
+            'get' => static fn(): mixed => $storage->get($padded),
+            'set' => static fn(): mixed => $storage->set($padded, 'changed'),
+            'delete' => static fn(): mixed => $storage->delete($padded),
+        ];
+
+        foreach ($operations as $operation => $call) {
+            self::forgetCachedOption($name);
+
+            self::withBrokenQueries("'{$name}'", 'SELECT', static function () use ($call, $operation): void {
+                try {
+                    $call();
+                    self::fail("RuntimeException was not thrown for {$operation}");
+                } catch (RuntimeException $exception) {
+                    self::assertStringContainsString('tmswp_missing_table', $exception->getMessage(), $operation);
+                }
+            });
+
+            self::assertSame('stored', $storage->get($padded), $operation);
+            self::assertSame('stored', $storage->get($name), $operation);
+        }
+    }
+
+    /**
+     * alloptions のキャッシュが無いときに、autoload の SELECT・全オプションの SELECT・1件の SELECT がすべて失敗すると、
+     * WP は空の配列を alloptions に書く。読み取りのエラーの後、その空の alloptions は消えており、読み直すと
+     * alloptions がデータベースから作り直されて値が返る。
+     */
+    public function testFailedAlloptionsLoadIsNotLeftInTheCache(): void
+    {
+        $storage = new WpOptionStorage(self::themeKernel());
+        $name = self::PREFIX . 'read_autoloaded';
+        $storage->set($name, 'autoloaded', true);
+        wp_cache_delete('alloptions', 'options');
+        self::forgetCachedOption($name);
+
+        self::withBrokenQueries('FROM ' . self::wpdb()->options, 'SELECT', static function () use ($storage, $name): void {
+            try {
+                $storage->get($name);
+                self::fail('RuntimeException was not thrown');
+            } catch (RuntimeException $exception) {
+                self::assertStringStartsWith("failed to read option '{$name}': ", $exception->getMessage());
+            }
+        });
+
+        self::assertNotSame([], wp_cache_get('alloptions', 'options'));
+        self::assertSame('autoloaded', $storage->get($name));
+        $alloptions = wp_cache_get('alloptions', 'options');
+        self::assertIsArray($alloptions);
+        self::assertSame('autoloaded', $alloptions[$name] ?? null);
+    }
+
+    /**
+     * キャッシュから読んでクエリを発行しない読み取りは、SELECT が失敗する状態でも例外にならない。呼び出しの前の
+     * 無関係なデータベースのエラーが残っていても、クエリを発行しない読み取りと、成功したクエリの読み取りは例外にならない。
+     */
+    public function testStandaloneReadWithoutAFailedQueryDoesNotThrow(): void
+    {
+        $storage = new WpOptionStorage(self::themeKernel());
+        $name = self::PREFIX . 'read_cached';
+        $storage->set($name, 'cached', false);
+        $readAll = static function () use ($storage, $name): array {
+            $results = [];
+
+            foreach (self::standaloneReads($storage, $name) as $operation => $read) {
+                $results[$operation] = $read();
+            }
+
+            return $results;
+        };
+        // オプションのキャッシュに載せる
+        self::assertSame('cached', $storage->get($name));
+
+        self::withBrokenQueries("'{$name}'", 'SELECT', static function () use ($readAll): void {
+            self::assertSame(['has' => true, 'get' => 'cached'], $readAll());
+        });
+
+        $wpdb = self::wpdb();
+        $suppressed = $wpdb->suppress_errors(true);
+
+        try {
+            $wpdb->query('SELECT * FROM tmswp_missing_table_for_stale_read');
+            self::assertNotSame('', $wpdb->last_error);
+            self::assertSame(['has' => true, 'get' => 'cached'], $readAll());
+
+            self::forgetCachedOption($name);
+            self::assertSame(['has' => true, 'get' => 'cached'], $readAll());
+        } finally {
+            $wpdb->suppress_errors($suppressed);
+        }
     }
 
     public function testDeleteAllReturnsOnlyTheOptionsThatExisted(): void
@@ -256,6 +444,48 @@ final class OptionIntegrationTest extends IntegrationTestCase
         self::assertSame('after-delete@example.test', $probeResult['contact']);
         self::assertFalse($probeResult['maintenanceHas']);
         self::assertSame([self::PREFIX . 'contact_email', self::PREFIX . 'maintenance'], $probeResult['deleted']);
+    }
+
+    /**
+     * 公開の読み取りを1つずつ呼ぶクロージャを返す。
+     *
+     * @return array{has: callable(): bool, get: callable(): mixed}
+     */
+    private static function standaloneReads(OptionStorageInterface $storage, string $name): array
+    {
+        return [
+            'has' => static fn(): bool => $storage->has($name),
+            'get' => static fn(): mixed => $storage->get($name),
+        ];
+    }
+
+    /** autoload しないオプションのキャッシュを消し、次の get_option() がそのオプションを SELECT するようにする。 */
+    private static function forgetCachedOption(string $name): void
+    {
+        wp_cache_delete($name, 'options');
+        wp_cache_delete('notoptions', 'options');
+    }
+
+    /**
+     * 本番相当(debug=false)のプラグイン形態の、コンポーネントの無い Kernel を init より前に boot する。ログは $logger に
+     * 記録する。
+     */
+    private function productionKernel(string $name, RecordingLogger $logger): Kernel
+    {
+        $root = $this->createTempDirectory('integration-' . strtolower($name));
+        self::assertTrue(mkdir($root . '/app'));
+        $this->writeFile($root . '/plugin.php', "<?php\n");
+        $config = KernelConfig::plugin(
+            $root . '/plugin.php',
+            $root . '/app',
+            'TmswpIntegration' . $name . uniqid(),
+            false,
+            logChannels: static fn(): array => ['integration' => new LogChannel($logger)],
+        );
+        (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
+        $this->bootBeforeInit($config);
+
+        return Kernel::get($config->appNamespace);
     }
 
     private static function siteOptionRepository(): OptionRepository

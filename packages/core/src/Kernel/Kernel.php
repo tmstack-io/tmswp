@@ -15,10 +15,14 @@ use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Log\LoggerRegistry;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
+use TMSWP\Core\Meta\MetaStorageInterface;
+use TMSWP\Core\Meta\WpMetaStorage;
 use TMSWP\Core\Model\Connection;
 use TMSWP\Core\Model\MigrateCommand;
 use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Option\OptionRepositoryFactory;
+use TMSWP\Core\Option\OptionStorageInterface;
+use TMSWP\Core\Option\WpOptionStorage;
 use TMSWP\Core\View\ActionRouter;
 use TMSWP\Core\View\Template;
 use WP_CLI;
@@ -86,6 +90,10 @@ final class Kernel
 
             return new Migrator($connection);
         });
+        // 既定のストレージは interface を登録先にする。拡張の register() で別の実装を登録でき、boot が
+        // resolveDefaultStorages() で解決して固定する
+        $this->container->set(MetaStorageInterface::class, WpMetaStorage::class);
+        $this->container->set(OptionStorageInterface::class, WpOptionStorage::class);
         $this->container->set(MetaSchemaRegistry::class, static fn(Container $container): MetaSchemaRegistry => new MetaSchemaRegistry($container));
         $this->container->set(OptionRepositoryFactory::class, static fn(Container $container): OptionRepositoryFactory => new OptionRepositoryFactory($container));
         $this->container->set(Discovery::class, function (Container $container) use ($config): Discovery {
@@ -139,6 +147,7 @@ final class Kernel
         if ($kernel->isPluginActivationSandbox()) {
             $kernel->registerLifecycleHooks();
             $kernel->registerModelMigrator();
+            $kernel->resolveDefaultStorages();
             self::$kernels[$config->appNamespace] = $kernel;
 
             return $kernel;
@@ -154,6 +163,8 @@ final class Kernel
             self::registerTextdomainLoader();
             // 拡張が Container に入れるサービスを、キャッチアップの初期化でも使えるよう、キャッチアップより先に登録する
             $kernel->registerExtensions();
+            // 拡張が登録した既定のストレージを、それを使う boot 時の初期化とキャッチアップより先に解決して固定する
+            $kernel->resolveDefaultStorages();
             // キャッチアップで動くアプリのコードが Kernel::forClass()・forFile()(Log の静的な呼び出し)で
             // この Kernel を引けるよう、キャッチアップより先にレジストリに登録する
             self::$kernels[$config->appNamespace] = $kernel;
@@ -712,6 +723,20 @@ final class Kernel
         foreach ($this->config->extensions as $extension) {
             $extension->register($this);
         }
+    }
+
+    /**
+     * 既定のストレージ(MetaStorageInterface・OptionStorageInterface の id)を解決する。拡張の register() が別の実装を
+     * 登録していればその実装、無ければ WpMetaStorage・WpOptionStorage になる。
+     *
+     * interface の型に合わない登録は、Container が登録の時点(インスタンス・クラス名)か、ここでの解決の時点(factory)で
+     * ContainerException にする。解決した id は Container が再登録を拒否するため、boot の後の差し替えも
+     * ContainerException になる。
+     */
+    private function resolveDefaultStorages(): void
+    {
+        $this->container->get(MetaStorageInterface::class);
+        $this->container->get(OptionStorageInterface::class);
     }
 
     /**

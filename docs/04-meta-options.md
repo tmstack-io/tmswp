@@ -7,7 +7,7 @@ WordPressのメタデータ(post/term/user meta)とオプション(wp_options)�
 1. **宣言の一元化**: メタキーはエンティティクラスの定数として、オプションキーはオプショングループ enum のケースとして一度だけ宣言し、`#[MetaSchema]` / `#[OptionSchema]` 属性で型・デフォルト値・REST公開等のスキーマを付与する。
 2. **WPコアへの自動登録**: 宣言されたメタスキーマは Kernel の boot の中で集めて検証し、`init`(priority 20)で `register_post_meta()` / `register_term_meta()` / `register_meta('user', ...)` へ自動登録する(4.9)。
 3. **型安全な読み書き**: `MetaBag` / オプショングループ enum(`OptionAccess` trait)の型付きgetter(`int()`/`string()`/`bool()`/`float()`/`list()`/`json()`)と、FW同梱のPHPStan拡張による戻り値型ナローイングで、メタ値の型をコードとして検証可能にする。
-4. **ストレージの差し替え可能性**: `MetaStorageInterface` / `OptionStorageInterface` により、ACF等の外部ストレージへの委譲を「エンティティ単位の明示オプトイン」で行える(DR-18)。グローバルフィルタによる暗黙差し替えと null センチネルは全廃する。
+4. **ストレージの差し替え可能性**: `MetaStorageInterface` / `OptionStorageInterface` により、ACF等の外部ストレージへの委譲を「エンティティ単位の明示オプトイン」で行える(DR-18)。グローバルフィルタによる暗黙差し替えと null センチネルは全廃する。既定のストレージは Container の interface の id で解決し、テストでは boot の前に別の実装を登録して差し替えられる(4.16)。
 5. **プレビュー時メタの整合**: WP 6.4 の `revisions_enabled` 機構を用いた ACF 非依存のプレビュー時メタ保存を、クラス属性 `#[WithMetaRevisions]` による宣言的オプトインで提供する。
 
 マジックメソッド(`__callStatic`)・`is_subclass_of` による暗黙のオブジェクト種別分岐・null センチネルフィルタは本層に存在しない(設計根拠の章を参照)。
@@ -379,12 +379,15 @@ interface MetaStorageInterface
 - `getMultiple()` は「キーが結果配列に存在するか」で has 相当の情報を持ち帰る。値がnullでもキーは含める。
 - 書き込みの戻り値は「書き込んだか」であり、成否ではない。false は「書き込まなかった(保存値は変わっていない)」を意味する。データベースのエラー等で書き込みに失敗したら、`false` を返さずに例外(FW の基底 `RuntimeException`。4.17)を投げる。「書き込まなかった」と「失敗した」を戻り値で区別できないストレージ API(WP の `update_metadata()` 等)を使う実装は、実装の中で両者を判別する(4.6)。
 - `null` は保存しない(`MetaBag::set()` が拒否する。4.8)。削除は `delete()` に一本化する。
+- テストで既定のストレージと差し替える実装(4.16)も、この規約(書き込みの戻り値と `null` の拒否)を守る。データベースに依存しない契約は、契約テストの trait(`MetaStorageContract`)で確かめられる。
 
 ### 4.6 `TMSWP\Core\Meta\WpMetaStorage`
 
 #### 役割
 
-`MetaStorageInterface` のWP標準実装。WPメタAPI(`metadata_exists` / `get_metadata_raw` / `get_metadata` / `update_metadata` / `add_metadata` / `delete_metadata`)への薄い委譲であり、本クラスがコアのデフォルトストレージとなる。WP関数呼び出しを本クラスに閉じ込めることで、`MetaBag` 以上の層をWP非依存でユニットテスト可能にする(DR-12の2層テスト戦略)。
+`MetaStorageInterface` のWP標準実装。WPメタAPI(`metadata_exists` / `get_metadata_raw` / `get_metadata` / `update_metadata` / `add_metadata` / `delete_metadata`)への薄い委譲であり、本クラスがコアのデフォルトストレージとなる(Kernel が Container の `MetaStorageInterface` の id に登録する。4.16)。WP関数呼び出しを本クラスに閉じ込めることで、`MetaBag` 以上の層をWP非依存でユニットテスト可能にする(DR-12の2層テスト戦略。テストでは既定のストレージを差し替える。4.16)。
+
+コンストラクタで Kernel を受け取り、単独の読み取りのデータベースのエラーをその Kernel の debug とロガーで扱う(下の「データベースのエラーの判定」)。Container が解決したインスタンスは、その Container を持つ Kernel を受け取る。エンティティの `meta()` は `Kernel::forClass(エンティティクラス)` の Container から `MetaBag` を作るため、エンティティの Kernel の debug とロガーに従う。
 
 #### シグネチャ
 
@@ -395,8 +398,13 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Meta;
 
+use TMSWP\Core\Kernel\Kernel;
+
 final class WpMetaStorage implements MetaStorageInterface
 {
+    /** @param Kernel $kernel 単独の読み取りのデータベースのエラーを扱う debug とロガーの Kernel */
+    public function __construct(Kernel $kernel);
+
     public function has(ObjectType $type, int $objectId, string $key): bool;
     public function get(ObjectType $type, int $objectId, string $key): mixed;
     public function getAll(ObjectType $type, int $objectId, string $key): array;
@@ -417,19 +425,22 @@ final class WpMetaStorage implements MetaStorageInterface
 | `has()` | `get_metadata_raw($type->metaType(), $objectId, $key, false)` が行を返せば true。null・false・空の配列とスカラーの空文字 `''` は行なし、空でない配列は各行(`''`・`'0'` の行も行として数える)、それ以外の値(フィルタが返した空でないスカラー。WP のサムネイルのプレビューのフィルタ `_wp_preview_post_thumbnail_filter` は single が false でもサムネイルの ID を文字列で返す)は1行として扱う。スカラーの `''` を行なしとするのは、アイキャッチを外すプレビューで `_wp_preview_post_thumbnail_filter` が `''` を返し、WP 自身も `metadata_exists()`・`has_post_thumbnail()` を false とするためである。`metadata_exists()` は使わない(`get_{$meta_type}_metadata` フィルタの結果を `(bool)` にするため、プレビューのフィルタ(4.11)が `'0'`・`''` を返すと、行があっても false になる) |
 | `get()` | `has()` と同じ `get_metadata_raw($type->metaType(), $objectId, $key, false)` の読み込みで、先頭の行(`maybe_unserialize` 済み)を返す。行が無ければ null(WPメタは null を物理保存できないため、raw の null ⇔ 行なし が成立する。行の有無と行の扱いは `has()` と同じなので、`has()` が false なら必ず null) |
 | `getAll()` | `array_values(get_metadata_raw($type->metaType(), $objectId, $key, false) ?? [])`(single=false かつ行なし時の null を `?? []` で吸収) |
-| `getMultiple()` | 要求キーごとに `get_metadata_raw($type->metaType(), $objectId, $key, false)` を呼び、行を返したキーだけを、先頭行(`maybe_unserialize` 済み)で返す(行の有無と行の扱いは `has()` と同じ)。single=false のキーがここで要求された場合も先頭行のみ返す(バルクは単一値スキーマ用途)。キーごとに読むのは、`get_{$meta_type}_metadata` フィルタ(プレビューの `_wp_preview_meta_filter` 等)をキーごとに効かせるためである(キーを `''` にして全メタを読む `get_metadata($type, $id)` は、キーを指定しないためプレビューのフィルタに当たらない)。最初の読み込みが `update_meta_cache()` で対象のメタをすべてメタのキャッシュに載せ、残りのキーはキャッシュから読むため、データベースへの問い合わせは全メタを1回で読む場合と同じく1回である。キーの数だけフィルタの適用とキャッシュの参照が増えるが、メタのキー数(数十程度)ではデータベースの問い合わせに比べて無視できる |
-| `set()` | `update_metadata($type->metaType(), $objectId, wp_slash($key), wp_slash($value))`。WPの戻り値 int(新規meta_id)/true は true。false の場合は表の下の「書き込みの false とデータベースのエラーの判定」に従う |
+| `getMultiple()` | 要求キーごとに `get_metadata_raw($type->metaType(), $objectId, $key, false)` を呼び、行を返したキーだけを、先頭行(`maybe_unserialize` 済み)で返す(行の有無と行の扱いは `has()` と同じ)。single=false のキーがここで要求された場合も先頭行のみ返す(バルクは単一値スキーマ用途)。キーごとに読むのは、`get_{$meta_type}_metadata` フィルタ(プレビューの `_wp_preview_meta_filter` 等)をキーごとに効かせるためである(キーを `''` にして全メタを読む `get_metadata($type, $id)` は、キーを指定しないためプレビューのフィルタに当たらない)。最初の読み込みが `update_meta_cache()` で対象のメタをすべてメタのキャッシュに載せ、残りのキーはキャッシュから読むため、データベースへの問い合わせは全メタを1回で読む場合と同じく1回である。キーの数だけフィルタの適用とキャッシュの参照が増えるが、メタのキー数(数十程度)ではデータベースの問い合わせに比べて無視できる。データベースのエラーの判定もキーごとに行い(次のクエリの `wpdb::query()` が `last_error` を空にするため)、本番でエラーになったキーは結果に含めない |
+| `set()` | `update_metadata($type->metaType(), $objectId, wp_slash($key), wp_slash($value))`。WPの戻り値 int(新規meta_id)/true は true。false の場合は表の下の「データベースのエラーの判定」に従う |
 | `setAll()` | 置換の前に行を読み(`getAll()`)、行があれば `delete_metadata(...)`、その後 `$values` を順に `add_metadata(...)`(キーと値は `wp_slash()` して渡す)。どれもデータベースのエラーなら `RuntimeException`(ロールバックはしない。wpdbにトランザクション保証がないため、途中で失敗した場合は一部の行だけが置き換わった状態で残る)。フィルタが削除を止めた場合は、行を足すと置換にならないため何も追加せず false。置換の前後で保存された行(DB に書かれる文字列の形の list)が変わったら true、変わらなければ false。置換の前後の読み取りのデータベースのエラーも `RuntimeException`(読み取りの失敗を「行が無い」として扱わない) |
 | `delete()` | 行が無ければ false(`has()` を先行確認。この読み取りのデータベースのエラーは `RuntimeException`)。あれば `delete_metadata($type->metaType(), $objectId, wp_slash($key))` を呼び、削除できたら true、WP が false を返したら下の判定に従う(データベースのエラーなら `RuntimeException`、そうでなければ false) |
 
 - `get_metadata_raw()`(WP 5.5+)はコアの default 注入層(`get_metadata_default()` / `filter_default_metadata`)を経由しないため、`register_meta` の default 介在が原理的に起きない。default 介在の回避は実装内の順序契約(`has()` の先行呼び出し)ではなく、コアAPI 1呼び出しの保証による。同関数は `_` 接頭辞なし・`@access private` 注記なしの正規の公開関数(`@since 5.5.0`)で、コア自身が default 機構の土台として安定使用している。なおこの最適化はWP実装(`WpMetaStorage`)固有であり、`AcfMetaStorage` 等の外部ストレージ実装には適用されない。
 - `update_metadata` を経由するため、`register_meta` で登録した `sanitize_callback` は `sanitize_meta()` フィルタとしてWPコアが自動適用する。FW側で二重適用しない(書き込みの false の判定のためにも再実行しない)。
-- **書き込みの false とデータベースのエラーの判定**(`set()`・`setAll()`・`delete()`、4.14 の `WpOptionStorage` も同じ。実装は内部クラス `WpDatabaseGuard`): WP の書き込み関数は「同じ値」「ほかのプラグインのフィルタ(短絡フィルタ `update_{$meta_type}_metadata` 等)による中止」「データベースのエラー」のどれでも false を返す。値を比べて区別するのではなく、データベースのエラーで判定する。
-  - 書き込み関数を呼ぶ前に `$wpdb->num_queries` を控える。戻り値が false で、呼び出しの間に `num_queries` が増えており、かつ `$wpdb->last_error !== ''` なら `RuntimeException`(メッセージに `last_error` を含める)。それ以外の false は「書き込まなかった」として false を返す(保存値は変わっていない)。
-  - 書き込み操作の中で行う読み取り(`setAll()` の置換の前後の `getAll()`、`delete()` の前の `has()`、`WpOptionStorage` の `set()`・`delete()` の前の `has()`)も同じ方法で判定し、呼び出しの間のクエリでデータベースのエラーが起きていれば、debug に関係なく `RuntimeException` にする。WP の読み取り関数はクエリの失敗を「行が無い」と同じ結果で返すため、そのまま使うと置換や削除を誤る。公開の読み取りメソッド(`get()`・`has()`・`getAll()`・`getMultiple()`)を単独で呼んだ場合は、この判定をしない。
+- **データベースのエラーの判定**(書き込み `set()`・`setAll()`・`delete()` と読み取り `has()`・`get()`・`getAll()`・`getMultiple()`。4.14 の `WpOptionStorage` も同じ。実装は内部クラス `WpDatabaseGuard`): WP の書き込み関数は「同じ値」「ほかのプラグインのフィルタ(短絡フィルタ `update_{$meta_type}_metadata` 等)による中止」「データベースのエラー」のどれでも false を返し、読み取り関数はクエリの失敗を「行が無い」と同じ結果で返す。値を比べて区別するのではなく、データベースのエラーで判定する。
+  - 判定: 関数を呼ぶ前に `$wpdb->num_queries` を控え、呼び出しの間に `num_queries` が増えており、かつ `$wpdb->last_error !== ''` ならデータベースのエラーとする。キャッシュから読んでクエリを発行しなかった読み取りと、呼び出しの前の無関係なクエリのエラーは、エラーにしない。
+  - 書き込み: 戻り値が false で、データベースのエラーなら `RuntimeException`(メッセージに `last_error` を含める)。それ以外の false は「書き込まなかった」として false を返す(保存値は変わっていない)。
+  - 書き込み操作の中で行う読み取り(`setAll()` の置換の前後の行の取得、`delete()` の前の存在の確認、`WpOptionStorage` の `set()`・`delete()` の前の存在の確認): データベースのエラーなら、debug に関係なく `RuntimeException` にする。読み取りの失敗を「行が無い」として扱うと、置換や削除を誤るため。
+  - 公開の読み取り(`has()`・`get()`・`getAll()`・`getMultiple()`)を単独で呼んだとき: エラー方針(00-overview §5.6。実行時のデータ取得失敗)に従う。コンストラクタで受け取った Kernel の debug では `RuntimeException`(メッセージは `failed to read {metaType} meta '{key}' for object {id}: {last_error}`)。本番ではその Kernel のロガー(`$kernel->logger()`)の `error()` に `tmswp.storage: {failure}: {error}` で記録し、行が無いときと同じ結果(`has()` は false、`get()` は null、`getAll()`・`getMultiple()` は空配列。`getMultiple()` はエラーになったキーを除く)を返す。値が無いこととデータベースのエラーを区別できないまま、エラーを黙って捨てないためである(D-47)。
+  - 失敗した読み込みのキャッシュ: WP の読み取り関数は、読み込みの SELECT が失敗しても、結果を「無い」としてオブジェクトキャッシュに書く。そのままでは、後の同じ対象の読み取りがクエリを発行せずに黙って「無い」を返す(永続的なオブジェクトキャッシュでは後のリクエストも同じ)。そのため、読み取り(単独の読み取りと、書き込み操作の中の読み取りの両方)でデータベースのエラーを検出したら、例外を投げる前・ログに記録する前に、その読み込みで WP が書いたキャッシュだけを消す。メタでは、WP 7.0 の `update_meta_cache()`(wp-includes/meta.php)が、`update_{$meta_type}_metadata_cache` フィルタが null を返したら、渡された ID のうち `wp_cache_get_multiple()` がキャッシュに無い(false)とした ID を1回の SELECT で読み、SELECT が失敗してもそれらの ID を空の配列として `wp_cache_add_multiple()` で書く(グループ `{$meta_type}_meta`、キーは ID)。読み込む ID は読み取りの対象だけとは限らない(`get_metadata_raw()` のフィルタで動く `WP_Metadata_Lazyloader` は、キューにあるほかの対象もまとめて読む)。そのため、読み取りの間だけ `update_{$meta_type}_metadata_cache` フィルタを最後の priority で付け、`$check` が null の呼び出しで、その時点でキャッシュに無い ID を記録する(フィルタは `$check` を変えずに返し、読み取りの後に外す)。後始末は、記録した ID のキャッシュだけを `wp_cache_delete()` で消す。消した後の読み取りは、データベースから読み直す。オプションは 4.14。
   - 根拠(WP 7.0): `wpdb::query()` は実行の前に `flush()` で `last_error` を空にし、実行後に `mysqli_error()` を入れる。クエリを実際に発行すると `wpdb::_do_query()` が `num_queries` を増やす(wp-includes/class-wpdb.php)。`update_metadata()`・`add_metadata()`・`delete_metadata()`(wp-includes/meta.php)は、書き込みのクエリが失敗するとほかのクエリを発行せずにすぐ false を返すため、失敗したときの最後のクエリは書き込みのクエリになる。呼び出しの前の無関係なクエリのエラーを拾わないために、呼び出しの間に `num_queries` が増えた場合だけ `last_error` を見る。
-  - 受け入れる限界(書き込みにも、書き込み操作の中の読み取りにも同じく当てはまる):
-    1. 呼び出しの間にほかのフックが発行したクエリが失敗して最後のクエリとして残った場合は、書き込み関数・読み取り関数そのものが成功していても `RuntimeException` にする(fail-fast)。
+  - 受け入れる限界(2 は書き込みだけ。1・3・4 は書き込み・書き込み操作の中の読み取り・単独の読み取りのすべてに当てはまる):
+    1. 呼び出しの間にほかのフックが発行したクエリが失敗して最後のクエリとして残った場合は、書き込み関数・読み取り関数そのものが成功していてもデータベースのエラーとして扱う(fail-fast。単独の読み取りでは、debug は `RuntimeException`、本番は記録して行が無いときと同じ結果)。
     2. `delete_option()` は削除のクエリが失敗した後もキャッシュを更新し、autoload のオプションで `alloptions` のキャッシュが無いときは読み直しのクエリを発行する。その場合は削除のエラーが `last_error` から消え、false(書き込まなかった)になる(4.14)。
     3. `wpdb::query()` が `num_queries` を増やさずに `last_error` だけを入れる経路(不正なデータを含むクエリの拒否)では、`num_queries` が増えないため、書き込みは false(書き込まなかった)、読み取りは成功として扱う。
     4. 接続が切れて再接続にも失敗した場合、`wpdb::query()` は `last_error` を入れる前に false を返すため、書き込みは false(書き込まなかった)、読み取りは成功として扱う。データベースのサーバーの障害の経路であり、そのときはほかの処理も目に見えて失敗する。`wpdb` の内部(接続ハンドル等)に依存して検出すると WP の版の変更で壊れやすいため、検出しない。
@@ -697,7 +708,8 @@ final class MetaSchemaRegistry
 3. エンティティ内でメタキー文字列が重複 → DuplicateMetaKeyException
 4. レジストリ全体で (objectType, subtype, key) が既登録 → DuplicateMetaKeyException
    (同一keyでも subtype が異なれば共存可。例: 'price' を product と shop の両CPTで宣言)
-5. #[UseMetaStorage] 属性を読み取り、storageClass を記録(4.10)
+5. #[UseMetaStorage] 属性を読み取り、storageClass を記録(4.10)。属性が無ければ MetaStorageInterface::class
+   (Kernel が既定のストレージを登録した Container の id。4.16)
 6. #[WithMetaRevisions] 属性を読み取り(4.11)、付与されている場合は
    (a) objectType === ObjectType::Post であること
    (b) エンティティの definition() の supports が 'revisions' を含むこと
@@ -715,7 +727,7 @@ final class MetaSchemaRegistry
 1. 内部マップから entityClass のエントリを取得。なければ EntityNotRegisteredException
    (メッセージ例: "ProductPost is not registered. Did you forget #[AsPostType]?")
 2. objectType->resolveId($object) でIDを解決
-3. storageClass(デフォルト WpMetaStorage::class)を container->get() で解決
+3. storageClass(属性が無ければ MetaStorageInterface::class。既定は WpMetaStorage)を container->get() で解決
 4. new MetaBag(entityClass, objectType, id, storage, schemas, fn(): bool => registerAll() が完了したか) を返す
    (第6引数の Closure は、呼ぶたびにこのレジストリの登録の状態を返す。MetaBag は sanitize を宣言したキーの
    書き込みのたびにこれを呼ぶため、登録の前に作った MetaBag も登録の後は書ける。4.8)
@@ -784,7 +796,7 @@ final class UseMetaStorage
 
 #### 振る舞い仕様
 
-- `MetaSchemaRegistry::registerEntity()` が読み取り、`bagFor()` でのストレージ解決に使う。属性なし時は `WpMetaStorage::class`。
+- `MetaSchemaRegistry::registerEntity()` が読み取り、`bagFor()` でのストレージ解決に使う。属性なし時は `MetaStorageInterface::class`(Kernel が既定のストレージを登録した Container の id。何も登録しなければ `WpMetaStorage`。4.16)。属性で明示したクラスは、そのクラスの id で解決するため、既定のストレージの差し替え(4.16)の影響を受けない。
 - `storageClass` がコンテナで解決できない、または `MetaStorageInterface` 非実装の場合、`registerEntity()` 時に `InvalidSchemaException`(遅延させず起動時に失敗させる)。
 - 1クラスに複数付与した場合(`IS_REPEATABLE` ではないためPHPがコンパイルエラーにする)は考慮不要。
 - 利用例(acf-bridge 利用時):
@@ -853,7 +865,6 @@ namespace TMSWP\Core\Attribute;
 use Attribute;
 use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Option\OptionStorageInterface;
-use TMSWP\Core\Option\WpOptionStorage;
 
 // enum もクラスの一種であるため TARGET_CLASS で enum に付与できる
 #[Attribute(Attribute::TARGET_CLASS)]
@@ -862,11 +873,12 @@ final class AsOptionGroup
     /**
      * @param string $prefix 全キーに付くオプション名プレフィックス(例: 'myapp_')。
      *                       実オプション名 = prefix . ケースの backing value。空文字可だがスターターでは必須を推奨。
-     * @param class-string<OptionStorageInterface> $storage グループ単位のストレージ実装
+     * @param class-string<OptionStorageInterface> $storage グループ単位のストレージ実装の Container の id。
+     *                       既定は Kernel が既定のストレージを登録した OptionStorageInterface(4.16)
      */
     public function __construct(
         public readonly string $prefix = '',
-        public readonly string $storage = WpOptionStorage::class,
+        public readonly string $storage = OptionStorageInterface::class,
     ) {
     }
 }
@@ -978,6 +990,11 @@ final class OptionSchemaSet
 
 オプションの物理ストレージ抽象とそのWP標準実装。メタ側と同じく `has()`/`get()` 分離で null センチネルを排除する。`get_option()` は「未保存」と「falseが保存されている」を区別できないため、`WpOptionStorage` は内部センチネルオブジェクト技法で has を実装する。
 
+`WpOptionStorage` は、Kernel が Container の `OptionStorageInterface` の id に登録する既定のストレージである(テストでは差し替えられる。4.16)。`WpMetaStorage`(4.6)と同じく、コンストラクタで Kernel を受け取り、単独の読み取りのデータベースのエラーをその Kernel の debug とロガーで扱う。どの Kernel を使うかは、ストレージを解決した Container で決まる。
+
+- オプショングループ(`OptionAccess`・`OptionRepository`): `Kernel::forClass(グループの enum)` の Container の `OptionRepositoryFactory` が保存先を解決するため、グループの enum の Kernel。
+- 素のオプション名(他プラグインのオプション等。4.15): エンティティやグループのクラスが無いため、アプリが自分の Kernel の Container から `OptionStorageInterface` を取り出す(Container が作るクラスはコンストラクタの引数に `OptionStorageInterface` を書けば注入される)。取り出した Container の Kernel が使われる。`new WpOptionStorage($kernel)` は Kernel を明示する経路として動くが、テストの差し替えが効かないため、アプリのコードでは使わない(rules/options.md)。
+
 #### シグネチャ
 
 ```php
@@ -1020,6 +1037,9 @@ interface OptionStorageInterface
 
 final class WpOptionStorage implements OptionStorageInterface
 {
+    /** @param \TMSWP\Core\Kernel\Kernel $kernel 単独の読み取りのデータベースのエラーを扱う debug とロガーの Kernel */
+    public function __construct(\TMSWP\Core\Kernel\Kernel $kernel);
+
     public function has(string $name): bool;
     public function get(string $name): mixed;
     public function set(string $name, mixed $value, ?bool $autoload = null): bool;
@@ -1030,33 +1050,50 @@ final class WpOptionStorage implements OptionStorageInterface
 #### WpOptionStorage 振る舞い仕様
 
 ```
-has($name):
+exists($name):                              # 内部の読み取り
   $sentinel = new \stdClass();              # 毎回生成するローカルセンチネル(外部に漏れない)
   return get_option($name, $sentinel) !== $sentinel;
 
-get($name):
+value($name):                               # 内部の読み取り
   $sentinel = new \stdClass();
   $value = get_option($name, $sentinel);
   return $value === $sentinel ? null : $value;
 
+# 4.6 の「データベースのエラーの判定」に従う:
+#   readOrDefault(...): 単独の読み取り。データベースのエラーなら、debug は RuntimeException、
+#     本番は Kernel のロガーに記録して既定値(オプションが無いときと同じ結果)
+#   read(...): 書き込み操作の中の読み取り。データベースのエラーなら debug に関係なく RuntimeException
+#   write(...): 書き込み関数が false を返し、データベースのエラーなら RuntimeException、
+#     そうでなければ false(書き込まなかった)。書き込んだと返したら true
+#   readOrDefault・read は、データベースのエラーのとき、例外・記録の前に forgetFailedRead($name) で
+#     失敗した読み込みのキャッシュ(下の箇条)を消す
+has($name):
+  return readOrDefault(exists($name), default: false)   # 失敗のメッセージ: failed to read option '{name}'
+
+get($name):
+  return readOrDefault(value($name), default: null)
+
 set($name, $value, $autoload):
   if ($value === null) throw InvalidArgumentException   # null は保存しない。削除は delete()
-  # write(...) は 4.6 の「書き込みの false とデータベースのエラーの判定」:
-  #   書き込み関数が false を返し、呼び出しの間のクエリでデータベースのエラーが起きていれば RuntimeException、
-  #   そうでなければ false(書き込まなかった)。書き込んだと返したら true
-  # read(...) は同じ判定の読み取り版: 呼び出しの間のクエリでデータベースのエラーが起きていれば RuntimeException
-  if (!read(has($name))) return write(add_option($name, $value, '', $autoload))
+  if (!read(exists($name))) return write(add_option($name, $value, '', $autoload))
   return write(update_option($name, $value, $autoload))
 
 delete($name):
-  if (!read(has($name))) return false;      # 冪等(何もしない)
+  if (!read(exists($name))) return false;   # 冪等(何もしない)
   return write(delete_option($name))
 ```
 
 - センチネルオブジェクトは `has()`/`get()` の実装詳細としてのみ存在し、インターフェース契約・戻り値・wp_options の保存値には一切現れない。「APIとしてのnullセンチネル全廃」と矛盾しない。オプションの値として `null` を保存する手段は持たない(null を表すセンチネルを wp_options に書くと、他の読み手には `__PHP_Incomplete_Class` になるため)。
 - 「同じ値」の判断は WP の `update_option()` に任せる。サニタイズ(`sanitize_option_{$name}`)や `pre_update_option*` フィルタが値を保存済みの値と同じにした場合、オプション名の前後の空白を WP が取り除いて同じオプションになった場合は、WP が書き込まずに false を返すので false になる(例外にしない)。本クラスはサニタイズもフィルタも再実行せず、呼び出し元が渡した値も変えない(`update_option()` は object を clone してからサニタイズする)。
 - 根拠(WP 7.0 の wp-includes/option.php): `update_option()`・`add_option()`・`delete_option()` は、書き込みのクエリ(`$wpdb->update()`・`INSERT ... ON DUPLICATE KEY UPDATE`・`$wpdb->delete()`)が失敗すると false を返す。`update_option()` と `add_option()` はその直後に false を返す。`delete_option()` は失敗の後もキャッシュを更新するため、autoload のオプションで `alloptions` のキャッシュが無いときは読み直しのクエリが走り、削除のエラーが `last_error` から消えて false(書き込まなかった)になりうる(4.6 の受け入れる限界2)。ほかの受け入れる限界(4.6 の1・3・4)も同じく当てはまる。
-- `set()`・`delete()` の前の存在の確認(`has()`)の読み取りも、4.6 と同じ方法で判定し、データベースのエラーなら `RuntimeException` にする。
+- `set()`・`delete()` の前の存在の確認の読み取りも、4.6 と同じ方法で判定し、データベースのエラーなら debug に関係なく `RuntimeException` にする。
+- `has()`・`get()` を単独で呼んだときのデータベースのエラーは、4.6 と同じくエラー方針に従う(debug では `RuntimeException`、本番では Kernel のロガーに記録して false・null)。`get_option()` は、autoload のオプションとキャッシュ済みのオプションをクエリを発行せずに返すため、そのときはエラーにならない。
+- 失敗した読み込みのキャッシュ(4.6 と同じく、単独の読み取りと `set()`・`delete()` の前の存在の確認の両方): データベースのエラーを検出したら、例外を投げる前・ログに記録する前に、WP 7.0 の `get_option()`(wp-includes/option.php)が失敗した読み込みで書くキャッシュだけを消す。`get_option()` は名前を `trim()` してから読み、その名前でキャッシュを書くため、後始末も `trim()` した名前を使う。
+  - `notoptions`(グループ `options`): 1件の SELECT(`SELECT option_value ... WHERE option_name = ...`)が失敗すると、WP はそのオプションを無いものとして `notoptions` の配列に `$name => true` を書く。その名前の要素だけを取り除き、ほかの名前は残す。
+  - `alloptions`(グループ `options`): `alloptions` のキャッシュが無いときの `wp_load_alloptions()` は、autoload の SELECT と、その結果が空のときの全オプションの SELECT の両方が失敗すると、空の配列を `wp_cache_add()` で書く。キャッシュの `alloptions` が空の配列のときだけ消す(WP は空の `alloptions` を毎回読み直すが、`wp_cache_add()` は既存のキーを上書きしないため、消さないと空の配列が残り続ける)。
+  - その名前のキャッシュ(グループ `options`、キーはオプション名)は、SELECT が成功したときだけ書かれるため消さない。
+  - 消した後の読み取りは、データベースから読み直す。
+  - 限界: `get_option()` は、非推奨の名前(`blacklist_keys`・`comment_whitelist`)を新しい名前(`disallowed_keys`・`comment_previously_approved`)に読み替えて `notoptions` を書く。後始末はこの読み替えを再現しないため、非推奨の名前で読み込みに失敗した場合は、新しい名前の `notoptions` が残る。素のオプション名は、新しい名前で読むこと。
 - オプションが無い場合は `update_option()` を通さず `add_option()` を呼ぶ。
 
 ### 4.15 `TMSWP\Core\Option\OptionRepository` / `TMSWP\Core\Option\OptionRepositoryFactory`(Factoryは新設)
@@ -1164,7 +1201,7 @@ final class OptionRepositoryFactory
 - `set()` はスキーマの `autoload` を `storage->set()` の第3引数へ渡す。未宣言キーは `null`(WP既定)を渡す。
 - `set()` は `null` を `InvalidArgumentException` で拒否し、永続化しない(宣言の有無に関係なく。削除は `delete()` に一本化する)。宣言済みキーの値は `ValueCaster::accepts()`(4.7)でスキーマの型に合うことを確かめ、合わなければ `InvalidArgumentException`(キャストはしない)。未宣言キーは型を検査しない。戻り値はストレージの戻り値(書き込んだか)で、データベースのエラーはストレージが例外にする(4.14)。
 - `deleteAll()` は宣言済みの全キーについて `storage->delete()` を呼び、true を返した(実際に削除した)実オプション名だけを返す。
-- **未宣言キーの扱い**: enum ファサード(4.16)はケースに存在しないキーを表現できないため、「グループ経由の未宣言キー読み取り」はファサードの対象外である。グループ名前空間内の未宣言キー(プレフィックス付きで他オプションを読む用途)は、本クラス `OptionRepository::get()` 等の**直接利用が正式経路**である(`SiteOption::repository()->get('legacy_key')` の形。4.16)。未宣言キーは「許可するがスキーマ恩恵なし」で、プレフィックスは**適用される**(グループ経由のアクセスは常にグループの名前空間内)。素のオプション名(他プラグインのオプション等)は `OptionStorageInterface`(`WpOptionStorage`)の直接利用を正とし、`get_option()` 直書きは非推奨とする(この経路規約は rules/ に明記)。
+- **未宣言キーの扱い**: enum ファサード(4.16)はケースに存在しないキーを表現できないため、「グループ経由の未宣言キー読み取り」はファサードの対象外である。グループ名前空間内の未宣言キー(プレフィックス付きで他オプションを読む用途)は、本クラス `OptionRepository::get()` 等の**直接利用が正式経路**である(`SiteOption::repository()->get('legacy_key')` の形。4.16)。未宣言キーは「許可するがスキーマ恩恵なし」で、プレフィックスは**適用される**(グループ経由のアクセスは常にグループの名前空間内)。素のオプション名(他プラグインのオプション等)は、アプリの Kernel の Container から取り出した `OptionStorageInterface`(既定は `WpOptionStorage`)の直接利用を正とし、`get_option()` 直書きは非推奨とする(この経路規約は rules/ に明記)。データベースのエラーは取り出した Container の Kernel の debug とロガーで扱われ(4.14)、テストで差し替えた実装にもなる(4.16)。
 - `OptionRepositoryFactory::for()` の構築手順:
 
 ```
@@ -1177,7 +1214,8 @@ final class OptionRepositoryFactory
    ReflectionEnumUnitCase::getAttributes() 経由で OptionSchemaDefinition::fromAttribute()
    により検証付き収集(属性なしケースは宣言キーとして扱わずスキーマ恩恵なし。
    enum に継承は無いため 4.9 の宣言クラス規則は不要)
-4. storage を container->get(attribute->storage) で解決
+4. storage を container->get(attribute->storage) で解決(既定の OptionStorageInterface::class は、Kernel が
+   既定のストレージを登録した id。何も登録しなければ WpOptionStorage。4.16)
 5. new OptionRepository(...) をメモ化して返す
 ```
 
@@ -1217,8 +1255,8 @@ use TMSWP\Core\Kernel\Kernel;
  */
 trait OptionAccess
 {
-    /** 自グループのリポジトリを取得する。テスト時は repository() 差し替えではなく
-        コンテナへのモックストレージ束縛で代替する(rules/ 参照) */
+    /** 自グループのリポジトリを取得する。テスト時は repository() を差し替えず、
+        boot の前に既定のストレージを差し替える(下の「テストでの既定のストレージの差し替え」) */
     final public static function repository(): OptionRepository;
 
     // ---- ケース単位の読み取り(インスタンスメソッド。キーは $this->value) ----
@@ -1272,6 +1310,17 @@ public static function contactEmail(): string
 }
 ```
 
+#### テストでの既定のストレージの差し替え
+
+WordPress なしのユニットテストでアプリのコードを確かめるため、メタとオプションの既定のストレージを、boot の前に別の実装へ差し替えられる(D-46)。`repository()` や `MetaBag` は差し替えない。
+
+- 既定のストレージは interface を登録先とする。Kernel は Container を作るときに `MetaStorageInterface::class` に `WpMetaStorage::class`、`OptionStorageInterface::class` に `WpOptionStorage::class` を登録する(02-kernel §3 手順3)。`#[UseMetaStorage]` の無いエンティティのメタ(4.9・4.10)と、`#[AsOptionGroup]` で `storage` を指定しないグループ(4.12・4.15)は、この id から解決する。Container から取り出す素のオプション名の保存先(4.15)も同じ。
+- 登録の方法は1つだけ: `KernelConfig` の `extensions` に渡した拡張の `register()`(02-kernel §3.10)の中で、`$kernel->container()->set(MetaStorageInterface::class, ...)`・`set(OptionStorageInterface::class, ...)` で別の実装を登録する。新しい公開 API は持たない。
+- Kernel は、拡張の登録の後、boot 時の初期化(エンティティのメタスキーマの登録)とキャッチアップより前に、2つの id を解決して固定する(02-kernel §3 手順7b)。
+- interface を実装しないものの登録は fail-fast にする。インスタンスとクラス名は登録の時点で、factory(Closure)は boot の中の解決の時点で、Container が `ContainerException` にし、boot は失敗する(02-kernel §8)。
+- boot の後の差し替えは受け付けない。解決済みの id への `set()`・`alias()` は、Container が `ContainerException` にする。
+- 差し替えに使うメモリの実装は FW に含めない。実装の例は rules/meta.md・options.md の「テスト」に置き、アプリの tests/ に書く。src/ は本番で読み込まれるコードだけを置き、テストのための公開 API を増やさないためである。FW 自身のテストの同じ実装(tests/Support)は、`MetaStorageInterface` の契約テストのうちデータベースに依存しない部分(`MetaStorageContract`)を満たす。
+
 ### 4.17 例外クラス
 
 本層が送出する例外。すべて `TMSWP\Core\Exception\` 配下(コーディング規約)。FWの基底例外(`LogicException`/`RuntimeException`/`InvalidArgumentException`)とマーカーinterface `TmswpExceptionInterface` はKernel設計書の例外章(`02-kernel.md` §9)が定義し、ここでは本層固有のクラスのみ定義する。
@@ -1293,6 +1342,7 @@ final class EntityNotRegisteredException extends LogicException {}
 - ここでの `LogicException` は `TMSWP\Core\Exception\` 配下のFWの基底例外を指す。FWの基底は `\LogicException` を継承して `TmswpExceptionInterface` を実装するため、上記の例外は `catch (\LogicException $e)` でも `catch (TmswpExceptionInterface $e)` でも捕まえられる。
 - 引数不正(ObjectType とWPオブジェクトの不一致、ID<1、single=false への非list set、`null` の set、宣言済みキーへのスキーマの型に合わない値の set、メタへの object の set 等)は、FWの基底 `InvalidArgumentException`(`07-support.md` §6。`\InvalidArgumentException` 系)を送出する。
 - 書き込み(`set`・`setAll`・`delete`)でのデータベースのエラーは、FWの基底 `RuntimeException`(`\RuntimeException` 系)を送出する。書き込みの戻り値は「書き込んだか」であり、データベースのエラーを `false` で返すことはしない。ほかのプラグインのフィルタが書き込みを止めた場合は、保存値が変わっていないので false である(4.5・4.6・4.14)。
+- 読み取り(`has`・`get`・`getAll`・`getMultiple`)を単独で呼んだときの `WpMetaStorage`・`WpOptionStorage` のデータベースのエラーは、debug では同じ `RuntimeException` を送出し、本番では Kernel のロガーに記録して行・オプションが無いときと同じ結果を返す(4.6・4.14)。
 - `InvalidSchemaException` には、4.1 の宣言の誤り(public でない定数、REST に出す Array/Object 型のスキーマ欠落を含む)、WP が `register_*_meta` を拒否したこと(4.9)、`#[OptionSchema]` の enum ケース以外への付与(4.12)も含む。
 - 方針: スキーマ・宣言系の誤りは2つの時点で検出する。宣言の誤りは Kernel の boot の中の `registerEntity()`(4.9)で、WordPress が `register_*_meta` を拒否した場合と sanitize の callable が実在しない場合は `init` 20 の `registerAll()`(4.9)で検出する。どちらの時点でも、検出した設定の誤りは debug に関係なく LogicException 系の例外にして黙って捨てず、本番実行時の黙殺・フォールスルー(旧FWのフィルタ名不一致が3年以上発覚しなかった原因)を構造的に防ぐ。
 
@@ -1596,14 +1646,17 @@ final class ProductPost extends PostType
 - [ ] `markExternallyManaged()`・`markExternallyManagedInAllSubtypes()` 済みキーは `register_*_meta` が発行されず、同キーのPHP側 `#[MetaSchema]` 宣言が存在する場合は `DuplicateMetaKeyException` となる(acf-bridge連携点のコア側単体で検証)。サブタイプの文字列 `'all'` は特別な意味を持たない。ACF のフィールドグループで管理するキーを `#[MetaSchema]` と `#[UseMetaStorage(AcfMetaStorage::class)]` で宣言できるようにするのは v0.6.0 の acf-bridge 側の対応である(「メタ・設定の使い分け」の v0.6.0 までの境目)。
 - [ ] `MetaBag` の全getterについて「ストレージ値 → 引数default → スキーマdefault → ゼロ値/null」の解決順がユニットテスト(モックストレージ、Brain Monkey不要)で網羅されている。
 - [ ] `ValueCaster` のキャスト表(4.7)の全セルがユニットテストで固定されている。
-- [ ] `MetaStorageInterface` 契約テスト(has/get分離、getMultipleのキー有無セマンティクス、deleteの冪等性)が抽象テストケースとして存在し、`WpMetaStorage` が統合テスト(wp-env)でそれを満たす。
+- [ ] `MetaStorageInterface` 契約テスト(has/get分離、getMultipleのキー有無セマンティクス、deleteの冪等性)が抽象テストケースとして存在し、`WpMetaStorage` が統合テスト(wp-env)でそれを満たす。データベースに依存しない契約は trait(`MetaStorageContract`)に分けて置き、テストでの差し替えに使うメモリの実装がユニットテストでそれを満たす。
 - [ ] `register_meta` の `default` が設定されたキーでも、`WpMetaStorage::get()`/`getAll()` は default を介在させず「行なし」を null / `[]` として返す(統合テスト。`get_metadata_raw()` 経路の実証)。
 - [ ] false/空文字を保存した場合に `has()` が true になる(nullセンチネル不在の実証。メタ・オプション両方)。`get()` は、空文字ならその値を返し、false ならオプションは false、メタは WP のメタの仕様どおり `''` を返す(4.6。Boolean のスキーマのキーは `MetaBag::bool()` で false に戻る)。`null` の `set` は `InvalidArgumentException` となり、何も保存しない(メタ・オプション両方。統合テスト)。
 - [ ] バックスラッシュを含む文字列(`json_encode()` の出力・Windows のパス・正規表現)と、それを含む配列・single=false の行が、`MetaBag` の書き込みと読み出しで往復する(統合テスト)。
 - [ ] 書き込みが「書き込んだ」で true、「書き込まなかった」で false を返す。false には、同じ値(保存済みの `'2500'` と int 2500、サニタイズや `pre_update_option*` の後に一致する値、前後に空白のあるオプション名を含む)と、ほかのプラグインのフィルタ(短絡を含む)による中止が当たり、保存値は変わらない。呼び出しの間のデータベースのエラーは、`last_error` をメッセージに含む `RuntimeException` となる(同じ対象への入れ子の書き込みがあっても同じ)。呼び出しの前の無関係なデータベースのエラーは拾わない。書き込み操作の中の読み取り(`setAll()` の置換の前後、`delete()`・オプションの `set()` の前の存在の確認)のデータベースのエラーも `RuntimeException` となる(メタ・オプション両方。統合テスト)。サニタイズは再実行せず、呼び出し元の値を変えない。`setAll()` は削除・追加のデータベースのエラーも例外にする。
+- [ ] 公開の読み取り(メタの `has()`・`get()`・`getAll()`・`getMultiple()`、オプションの `has()`・`get()`)を単独で呼んだときのデータベースのエラーが、debug の Kernel では読み取りの対象と `last_error` をメッセージに含む `RuntimeException` になり、本番の Kernel ではその Kernel のロガーに error で記録されて、行・オプションが無いときと同じ結果(false・null・空配列)が返る。キャッシュから読んでクエリを発行しない読み取りと、呼び出しの前の無関係なデータベースのエラーは、例外にも記録にもならない(メタ・オプション両方。統合テスト)。
+- [ ] 読み取り(単独の読み取りと書き込み操作の中の読み取り)のデータベースのエラーの後、失敗した読み込みで WP が書いたキャッシュ(メタの `{$meta_type}_meta`、オプションの `notoptions` の名前と空の `alloptions`)が残らず、エラーを外して同じ対象を読み直すとデータベースの値が返る。`WP_Metadata_Lazyloader` が同時に読み込んだほかの対象のメタと、前後に空白のあるオプション名でも同じ(メタ・オプション両方。統合テスト)。
 - [ ] 宣言済みキーへのスキーマの型に合わない値の `set` が `InvalidArgumentException` となる(メタ・オプション両方。ユニットテスト)。String のスキーマへの `Stringable` のオブジェクトも、メタ・オプションの両方で同じ `InvalidArgumentException` となる(統合テスト)。
 - [ ] `MetaBag::all()` の single=false のキーの値が `get()` と同じ全行の list である(ユニットテスト・統合テスト)。
-- [ ] `#[UseMetaStorage]` 付きエンティティの `meta()` が指定ストレージ実装で読み書きし、属性なしエンティティは `WpMetaStorage` を使う。不正なstorageClassはブート時例外。
+- [ ] `#[UseMetaStorage]` 付きエンティティの `meta()` が指定ストレージ実装で読み書きし、属性なしエンティティは Container の `MetaStorageInterface` の id のストレージ(既定は `WpMetaStorage`)を使う。不正なstorageClassはブート時例外。
+- [ ] 拡張の `register()` で Container の `MetaStorageInterface`・`OptionStorageInterface` の id に登録したメモリの実装を、WordPress なしで boot した Kernel の `#[UseMetaStorage]` の無いエンティティの `meta()` とオプショングループの読み書きが使い、WordPress の関数を呼ばない。`#[UseMetaStorage]` で明示したストレージは差し替えの影響を受けない。interface を実装しない登録は登録の時点か boot の時点で `ContainerException` になり、boot の後の差し替えも `ContainerException` になる(ユニットテスト。4.16)。
 - [ ] `ObjectType::resolveId()` が種別不一致のWPオブジェクト・ID<1 で `InvalidArgumentException` を送出する。
 - [ ] `#[WithMetaRevisions]` 付きエンティティのメタが `revisions_enabled => true` で登録され(統合テスト)、Post以外のエンティティ・revisions非サポート投稿タイプへの付与がブート時(`registerEntity()`)に `InvalidSchemaException` となる。
 - [ ] `#[WithMetaRevisions]` 付きエンティティのプレビューで、オートセーブの偽の値(Integer の default 100 のキーを 0 にした値)を `has()`・`int()`・`get()`・`all()` が返す(統合テスト)。

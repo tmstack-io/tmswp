@@ -283,8 +283,9 @@ final class MetaSchemaRegistry
     {
         $attributes = $reflection->getAttributes(UseMetaStorage::class);
 
+        // #[UseMetaStorage] が無ければ、Kernel が既定のストレージを登録した interface の id で解決する
         if ($attributes === []) {
-            return WpMetaStorage::class;
+            return MetaStorageInterface::class;
         }
 
         $attribute = $attributes[0]->newInstance();

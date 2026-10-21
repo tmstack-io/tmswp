@@ -125,7 +125,7 @@ enum KernelContext: string
 
 - テーマの `functions.php` は `setup_theme` と `after_setup_theme` の間にロードされるため、テーマで利用可能な最速フックは `after_setup_theme`。
 - プラグイン本体は通常リクエストでは `plugins_loaded` 発火前にロードされるため、プラグインの最速フックは `plugins_loaded`。mu-plugins も `plugins_loaded` 前にロードされるため Plugin コンテキストをそのまま使える(後述のmu-plugin注意点参照)。
-- WordPressのプラグイン有効化サンドボックス(`WP_SANDBOX_SCRAPING`)では、プラグイン本体が `plugins_loaded` 後に読み込まれる。この経路では通常の属性初期化スケジューリングは行わず、`register_activation_hook` / `register_deactivation_hook` と Model migrator の購読だけを登録する。通常リクエストの遅延bootは引き続き例外とする。
+- WordPressのプラグイン有効化サンドボックス(`WP_SANDBOX_SCRAPING`)では、プラグイン本体が `plugins_loaded` 後に読み込まれる。この経路では通常の属性初期化スケジューリングは行わず、`register_activation_hook` / `register_deactivation_hook` と Model migrator の購読だけを登録する。拡張の `register()` も呼ばないが、既定のメタ・オプションのストレージは通常の boot と同じく解決して固定する(§3 手順7b。boot の後の差し替えを受け付けない)。通常リクエストの遅延bootは引き続き例外とする。
 
 ## 2. KernelConfig
 
@@ -367,6 +367,8 @@ boot(config):
         container->alias(\Psr\Container\ContainerInterface::class, Container::class)
         container->set(DiscoveryFile::class, new DiscoveryFile(config))  // 即値
         container->set(LoggerRegistry::class, logger)                    // 即値(Kernel::logger() と同一)
+        container->set(MetaStorageInterface::class, WpMetaStorage::class)      // 既定のメタのストレージ(04 §4.16)
+        container->set(OptionStorageInterface::class, WpOptionStorage::class)  // 既定のオプションのストレージ(04 §4.16)
         container->set(Discovery::class, fn(Container c) => new Discovery(
             config, c->get(DiscoveryFile::class),
         ))
@@ -382,6 +384,10 @@ boot(config):
     6. kernel.registerLifecycleHooks()  // コンテキスト別運用フック(下記)
     7. kernel.registerActionRouter()    // §3.7。Themeかつconfig.actions=trueのときのみ
     7a. config.extensions を渡した順に extension->register(kernel)   // §3.10。キャッチアップより前
+    7b. container->get(MetaStorageInterface::class)                  // 既定のストレージを解決して固定する(04 §4.16)。
+        container->get(OptionStorageInterface::class)                // 拡張が登録した実装、無ければ WpMetaStorage・WpOptionStorage。
+                                                                     // 型の合わない factory はここで ContainerException。以後の差し替え
+                                                                     // (解決済み id への set()・alias())は ContainerException
     8. self::$kernels[ns] = kernel      // キャッチアップより前に登録する(§3.3)
        kernel.initializeAtBoot()        // boot 時の初期化(§7)。拡張の登録より後、キャッチアップより前
     8a. kernel.catchUp(missed)          // 本番の遅延bootのキャッチアップ(§3.3)。missed が空なら何もしない
@@ -554,7 +560,8 @@ interface ExtensionInterface
 }
 ```
 
-- boot の手順7a で、`extensions` に渡した順に1回ずつ `register($kernel)` を呼ぶ。本番の遅延bootのキャッチアップ(手順8a)より前なので、拡張が Container に入れたサービスはキャッチアップの初期化でも使える。プラグインの有効化のサンドボックス(`WP_SANDBOX_SCRAPING`。§1)では、コンポーネントの初期化と同じく呼ばない。`register()` の中から別の Kernel を boot すると `KernelException` になる(boot の再入の禁止。§3.1)。
+- boot の手順7a で、`extensions` に渡した順に1回ずつ `register($kernel)` を呼ぶ。本番の遅延bootのキャッチアップ(手順8a)より前なので、拡張が Container に入れたサービスはキャッチアップの初期化でも使える。
+- 拡張の `register()` は、Kernel の既定のメタ・オプションのストレージ(Container の `MetaStorageInterface`・`OptionStorageInterface` の id)を別の実装に差し替える唯一の場所でもある(04-meta-options §4.16。テストでメモリの実装に差し替える用途)。boot は手順7bでこの2つの id を解決して固定するため、boot の後の差し替えは Container が `ContainerException` にする。プラグインの有効化のサンドボックス(`WP_SANDBOX_SCRAPING`。§1)では、コンポーネントの初期化と同じく呼ばない。`register()` の中から別の Kernel を boot すると `KernelException` になる(boot の再入の禁止。§3.1)。
 - 拡張は、受け取った Kernel の debug に従い(`WP_DEBUG` を直接見ない)、ログは受け取った Kernel の `logger()` に記録する(07-support §5.1)。拡張のクラスは先に読み込まれた tmswp/* の1組が全 Kernel で共有されるため、プロセス全体の static な状態に Kernel ごとの設定を持たない。
 - 同じ Kernel に同じクラスの拡張を2回登録すると、`KernelConfig` の生成時に例外になる(§2 手順6)。テーマとプラグインが、それぞれの Kernel に同じクラスの拡張を登録するのは正当である。
 
@@ -1801,6 +1808,7 @@ final class ContainerTest extends TestCase
 - [ ] `Kernel::reset()` 後に同一名前空間で再bootできる(テスト隔離)
 - [ ] `Kernel::boot()` が、WordPress 7.0 未満(`$wp_version` の最初の `-` より前を比べる。`6.9-RC1` を含む)で debug に関係なく `KernelException` を投げ、`7.0-RC1` 等の 7.0 のリリース候補・開発版と 7.0 以降は受け付ける。`$wp_version` が無いと `KernelException` を投げる
 - [ ] `KernelConfig` の debug を省略すると、`WP_DEBUG` の真偽が既定値になる(`1` 等の真値でも true、未定義・偽値なら false)
+- [ ] 拡張の `register()` で Container の `MetaStorageInterface`・`OptionStorageInterface` の id に登録した実装を、`#[UseMetaStorage]` の無いエンティティの `meta()` と `storage` を指定しないオプショングループが使う。何も登録しなければ `WpMetaStorage`・`WpOptionStorage` になる。interface を実装しない登録は登録の時点か boot の時点で `ContainerException` になって boot が失敗し、boot の後の差し替えは `ContainerException` になる(04-meta-options §4.16)
 - [ ] `KernelConfig` の `extensions` の拡張が、boot 中に渡した順で1回ずつ、その Kernel を受け取って呼ばれ、拡張はその Kernel の debug を受け取る。同じ Kernel に同じクラスの拡張を2回渡すと debug に関係なく `KernelException` になり、別の Kernel が同じクラスを登録するのは通る。プラグインの有効化のサンドボックスでは呼ばれない
 - [ ] `KernelConfig` の `logChannels` で宣言したチャンネルが `Kernel::logger()`(Container の `LoggerRegistry::class` と同一)になり、戻り値がチャンネル名 => `LogChannel` の空でない配列でなければ boot が `KernelException` になる
 - [ ] 他の vendor の installed.php の tmswp/core のリリース版が `Kernel::VERSION` と食い違うと、boot が版と install_path を含む `KernelException` になる。同じ版・dev 版・プレリリース・replace だけの記載は通る

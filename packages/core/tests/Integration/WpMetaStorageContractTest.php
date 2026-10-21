@@ -14,7 +14,7 @@ final class WpMetaStorageContractTest extends MetaStorageContractTestCase
 {
     protected function storage(): MetaStorageInterface
     {
-        return new WpMetaStorage();
+        return new WpMetaStorage(self::themeKernel());
     }
 
     protected function objectType(): ObjectType

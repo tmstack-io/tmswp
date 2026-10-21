@@ -80,6 +80,11 @@ final class ProductPost extends PostType
 - WordPress への `register_*_meta` は `init` の priority 20 で行われる。WordPress が `sanitize` を適用するのはその後なので、`sanitize` を宣言したキーの `set()` は `init` の priority 20 より後で呼ぶ。それより前に呼ぶと `LogicException` になる。
 - REST への公開のような、WordPress への登録に頼るほかの動作も `init` の priority 20 より後で効く。
 
+## 読み取りの規則
+
+- 読み取り(`has()`・`get()`・型付きの getter・`all()`)の途中でデータベースのエラーが起きたら、エンティティの Kernel の debug では `RuntimeException` が投げられる。本番では、その Kernel のログに error で記録され、値が無いときと同じ結果(引数の既定値・スキーマの既定値等)が返る。
+- キャッシュから読んでデータベースに問い合わせなかった読み取りは、エラーにならない。
+
 ## 書き込みの規則
 
 - `set()` は書き込んだら `true`、書き込まなかったら `false` を返す。`false` は失敗ではなく、同じ値だった場合と、ほかのプラグインのフィルタが書き込みを止めた場合で、保存されている値は変わっていない。データベースのエラーで書き込めなかったら `RuntimeException` が投げられる。
@@ -131,8 +136,190 @@ final class ProductMetaDefaultsHook extends Hook
 
 ## テスト
 
-- 既定の保存先 `WpMetaStorage` は、テストのために別の実装へ差し替えられない(final のクラスで、Container は同じ id に別の型を登録できない)。メタを読み書きするコードは、wp-env の統合テストで、本物の WordPress の保存先に対して確かめる。
+- WordPressなしのユニットテストでは、既定の保存先をメモリに保存する実装に差し替える。既定の保存先は Container の `MetaStorageInterface` の id で解決される(何も登録しなければ `WpMetaStorage`)。
+- 差し替えは、`KernelConfig` の `extensions` に渡す拡張の `register()` の中で、`$kernel->container()->set(MetaStorageInterface::class, ...)` で登録する。方法はこれだけ。boot の後に登録すると `ContainerException` になる。
+- `MetaStorageInterface` を実装しないものを登録すると、登録の時点か boot の時点で `ContainerException` になる。
+- `#[UseMetaStorage]` を付けたエンティティは、差し替えに関係なく属性で指定したストレージを使う。
+- メモリの実装はFWに含まれない。下の例をアプリの `tests/` に置く。値はそのまま保存するため、WordPressのメタと違い `false` は `''` にならない。
 - `MetaBag` を直接 `new` しない。テストでも `::meta($object)` で取得する。
+- `WpMetaStorage` そのものの動き(保存の形、データベースのエラーの扱い)に頼るコードは、wp-env の統合テストで確かめる。
+
+`tests/Support/MemoryMetaStorage.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Support;
+
+use TMSWP\Core\Exception\InvalidArgumentException;
+use TMSWP\Core\Meta\MetaStorageInterface;
+use TMSWP\Core\Meta\ObjectType;
+
+final class MemoryMetaStorage implements MetaStorageInterface
+{
+    /** @var array<string, non-empty-list<mixed>> 対象とキーごとの全行 */
+    private array $rows = [];
+
+    public function has(ObjectType $type, int $objectId, string $key): bool
+    {
+        return \array_key_exists(self::slot($type, $objectId, $key), $this->rows);
+    }
+
+    public function get(ObjectType $type, int $objectId, string $key): mixed
+    {
+        return $this->rows[self::slot($type, $objectId, $key)][0] ?? null;
+    }
+
+    public function getAll(ObjectType $type, int $objectId, string $key): array
+    {
+        return $this->rows[self::slot($type, $objectId, $key)] ?? [];
+    }
+
+    public function getMultiple(ObjectType $type, int $objectId, array $keys): array
+    {
+        $values = [];
+
+        foreach ($keys as $key) {
+            if ($this->has($type, $objectId, $key)) {
+                $values[$key] = $this->get($type, $objectId, $key);
+            }
+        }
+
+        return $values;
+    }
+
+    public function set(ObjectType $type, int $objectId, string $key, mixed $value): bool
+    {
+        return $this->setAll($type, $objectId, $key, [$value]);
+    }
+
+    public function setAll(ObjectType $type, int $objectId, string $key, array $values): bool
+    {
+        foreach ($values as $value) {
+            if ($value === null) {
+                throw new InvalidArgumentException("meta '{$key}' cannot store null; use delete() to remove it");
+            }
+        }
+
+        $slot = self::slot($type, $objectId, $key);
+        $before = $this->rows[$slot] ?? [];
+
+        if ($values === []) {
+            unset($this->rows[$slot]);
+        } else {
+            $this->rows[$slot] = $values;
+        }
+
+        return $values !== $before;
+    }
+
+    public function delete(ObjectType $type, int $objectId, string $key): bool
+    {
+        $existed = $this->has($type, $objectId, $key);
+        unset($this->rows[self::slot($type, $objectId, $key)]);
+
+        return $existed;
+    }
+
+    private static function slot(ObjectType $type, int $objectId, string $key): string
+    {
+        return "{$type->value}:{$objectId}:{$key}";
+    }
+}
+```
+
+`tests/Support/MemoryMetaStorageExtension.php`(boot の中で既定の保存先を登録する拡張):
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Support;
+
+use TMSWP\Core\Kernel\ExtensionInterface;
+use TMSWP\Core\Kernel\Kernel;
+use TMSWP\Core\Meta\MetaStorageInterface;
+
+final class MemoryMetaStorageExtension implements ExtensionInterface
+{
+    public function __construct(
+        private readonly MemoryMetaStorage $storage,
+    ) {}
+
+    public function register(Kernel $kernel): void
+    {
+        $kernel->container()->set(MetaStorageInterface::class, $this->storage);
+    }
+}
+```
+
+`tests/Unit/ProductPriceTest.php`。WordPressなしで boot するため、`$wp_version`・`$wp_actions`・`$wpdb` のグローバルを置き、フック関数は Brain Monkey に任せる。`WP_Post` と `wpdb` は Mockery の代役にする。
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Unit;
+
+use App\Post\ProductPost;
+use App\Tests\Support\MemoryMetaStorage;
+use App\Tests\Support\MemoryMetaStorageExtension;
+use Brain\Monkey;
+use Mockery;
+use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
+use PHPUnit\Framework\TestCase;
+use TMSWP\Core\Kernel\Kernel;
+use TMSWP\Core\Kernel\KernelConfig;
+use TMSWP\Core\Meta\ObjectType;
+use WP_Post;
+use wpdb;
+
+final class ProductPriceTest extends TestCase
+{
+    use MockeryPHPUnitIntegration;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Monkey\setUp();
+        $GLOBALS['wp_version'] = '7.0';
+        $GLOBALS['wp_actions'] = [];
+        $GLOBALS['wpdb'] = Mockery::mock(wpdb::class);
+    }
+
+    protected function tearDown(): void
+    {
+        Kernel::reset();
+        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions'], $GLOBALS['wpdb']);
+        Monkey\tearDown();
+        parent::tearDown();
+    }
+
+    public function testPriceIsReadFromTheMemoryStorage(): void
+    {
+        $storage = new MemoryMetaStorage();
+        $storage->set(ObjectType::Post, 10, ProductPost::META_PRICE, 2500);
+        Kernel::boot(KernelConfig::theme(
+            \dirname(__DIR__, 2) . '/app',
+            debug: true,
+            extensions: [new MemoryMetaStorageExtension($storage)],
+        ));
+
+        $post = Mockery::mock(WP_Post::class);
+        self::assertInstanceOf(WP_Post::class, $post);
+        $post->ID = 10;
+        $post->post_type = 'product';
+
+        self::assertSame(2500, ProductPost::price($post));
+        self::assertTrue(ProductPost::meta($post)->set(ProductPost::META_PRICE, 3000));
+        self::assertSame(3000, $storage->get(ObjectType::Post, 10, ProductPost::META_PRICE));
+    }
+}
+```
 
 ## してはいけないこと
 

@@ -590,7 +590,7 @@ PHP);
             // 差し替え先にだけ保存され、WP のメタには書かれない
             self::assertTrue($storedClass::meta($postId)->set('tmswp_stored_note', 'kept'));
             self::assertSame('kept', (new $storage())->get(ObjectType::Post, $postId, 'tmswp_stored_note'));
-            self::assertFalse((new WpMetaStorage())->has(ObjectType::Post, $postId, 'tmswp_stored_note'));
+            self::assertFalse((new WpMetaStorage(self::themeKernel()))->has(ObjectType::Post, $postId, 'tmswp_stored_note'));
 
             self::fireInit($initCallbacks);
 

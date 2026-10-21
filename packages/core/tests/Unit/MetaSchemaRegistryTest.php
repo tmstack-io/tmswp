@@ -21,13 +21,14 @@ use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
+use TMSWP\Core\Tests\Support\MemoryMetaStorage;
 use TMSWP\Core\Tests\Support\UnitTestCase;
 
 final class MetaSchemaRegistryTest extends UnitTestCase
 {
     public function testItAllowsSameMetaKeyAcrossDifferentSubtypesAndRejectsDuplicateScope(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
         $registry->registerEntity(RegistryOtherProductPost::class, ObjectType::Post, 'registry_other');
 
@@ -42,7 +43,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
     /** 1つのエンティティの中で同じキーを2つの定数に宣言すると DuplicateMetaKeyException になる。 */
     public function testDuplicateKeyWithinOneEntityIsRejected(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
 
         $this->expectException(DuplicateMetaKeyException::class);
         $this->expectExceptionMessage("duplicate meta key 'same_key' in " . RegistrySelfDuplicatePost::class);
@@ -56,7 +57,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
      */
     public function testRegisterAllDoesNotRegisterExternallyManagedKeys(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'acf_field');
         $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'acf_shared_field');
         $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
@@ -70,7 +71,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testExternallyManagedKeysCannotBeDeclaredByPhpSchema(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key');
 
         $this->expectException(DuplicateMetaKeyException::class);
@@ -80,7 +81,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testMarkingAnAlreadyDeclaredKeyAsExternallyManagedIsRejected(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
 
         $this->expectException(DuplicateMetaKeyException::class);
@@ -91,7 +92,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testExternallyManagedInAllSubtypesCoversConcreteSubtypes(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'shared_key');
 
         self::assertTrue($registry->isExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key'));
@@ -105,7 +106,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testExternallyManagedInAllSubtypesRejectsKeysDeclaredInAnySubtype(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         $registry->registerEntity(RegistryOtherProductPost::class, ObjectType::Post, 'registry_other');
 
         $this->expectException(DuplicateMetaKeyException::class);
@@ -116,7 +117,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testSubtypeNamedAllIsAnOrdinarySubtype(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         // 'all' という名前の投稿タイプへの申告は、その投稿タイプだけを対象にする(全サブタイプの意味を持たない)
         $registry->markExternallyManaged(ObjectType::Post, 'all', 'shared_key');
 
@@ -130,7 +131,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
     #[DataProvider('nonPublicMetaSchemaConstantProvider')]
     public function testMetaSchemaOnNonPublicConstantIsRejected(string $entityClass, string $constantName): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         require_once __DIR__ . '/../fixtures/meta/non-public-meta-schema-entities.php';
 
         if (!is_subclass_of($entityClass, PostType::class)) {
@@ -152,7 +153,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testRegisterAllRejectsMetaThatWordPressRefusesToRegister(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
         Functions\expect('register_post_meta')
             ->once()
@@ -167,7 +168,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testRegisterAllRegistersEachDeclaredMetaWithWordPress(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
         Functions\expect('register_post_meta')
             ->once()
@@ -184,7 +185,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testRegisteringEntityAfterRegisterAllIsRejected(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         $registry->registerAll();
 
         $this->expectException(LogicException::class);
@@ -195,7 +196,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testBagRejectsWritingSanitizedKeyUntilRegisterAllHasRegisteredIt(): void
     {
-        $container = new Container();
+        $container = self::container();
         $registry = new MetaSchemaRegistry($container);
         $registry->registerEntity(RegistrySanitizedPost::class, ObjectType::Post, 'registry_sanitized');
         // 登録の前に作った MetaBag も、登録の後は書ける(登録の状態は書き込みのたびに確かめる)
@@ -218,7 +219,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testUseMetaStorageControlsBagStorage(): void
     {
-        $container = new Container();
+        $container = self::container();
         $registry = new MetaSchemaRegistry($container);
         $registry->registerEntity(RegistryCustomStoragePost::class, ObjectType::Post, 'registry_custom');
 
@@ -231,7 +232,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testItRejectsInvalidStorageClass(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         require_once __DIR__ . '/../fixtures/meta/invalid-storage-entity.php';
         $entityClass = 'TMSWP\\Core\\Tests\\Fixtures\\Meta\\InvalidStoragePost';
 
@@ -246,7 +247,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testItRejectsMissingSanitizeCallableWhenRegisteringMeta(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
         $registry->registerEntity(RegistryMissingSanitizePost::class, ObjectType::Post, 'registry_missing_sanitize');
 
         $this->expectException(InvalidSchemaException::class);
@@ -256,7 +257,7 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testWithMetaRevisionsRequiresPostTypeWithRevisionSupport(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
 
         $this->expectException(InvalidSchemaException::class);
 
@@ -265,11 +266,31 @@ final class MetaSchemaRegistryTest extends UnitTestCase
 
     public function testWithMetaRevisionsIsOnlyAllowedForPostObjectType(): void
     {
-        $registry = new MetaSchemaRegistry(new Container());
+        $registry = new MetaSchemaRegistry(self::container());
 
         $this->expectException(InvalidSchemaException::class);
 
         $registry->registerEntity(RegistryRevisionedPost::class, ObjectType::Term, 'registry_term');
+    }
+
+    /** #[UseMetaStorage] の無いエンティティの MetaBag は、Container の MetaStorageInterface の id に登録したストレージを使う。 */
+    public function testEntityWithoutUseMetaStorageUsesTheStorageRegisteredForTheInterface(): void
+    {
+        $container = self::container();
+        $registry = new MetaSchemaRegistry($container);
+        $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
+
+        self::assertTrue($registry->bagFor(RegistryProductPost::class, 10)->set(RegistryProductPost::META_SHARED, 'stored'));
+        self::assertSame('stored', $container->get(MetaStorageInterface::class)->get(ObjectType::Post, 10, 'shared_key'));
+    }
+
+    /** Kernel と同じく、既定のメタのストレージを MetaStorageInterface の id に登録した Container。 */
+    private static function container(): Container
+    {
+        $container = new Container();
+        $container->set(MetaStorageInterface::class, new MemoryMetaStorage());
+
+        return $container;
     }
 }
 
