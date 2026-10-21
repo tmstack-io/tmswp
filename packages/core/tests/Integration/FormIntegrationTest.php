@@ -15,9 +15,15 @@ use TMSWP\Core\Form\FormResult;
 use TMSWP\Core\Form\FormStep;
 use TMSWP\Core\Form\JtiClaim;
 use TMSWP\Core\Form\JtiStore;
+use TMSWP\Core\Form\Rule\Callback;
+use TMSWP\Core\Form\Rule\Choice;
+use TMSWP\Core\Form\Rule\MaxFileSize;
 use TMSWP\Core\Form\Rule\MaxLength;
 use TMSWP\Core\Form\Rule\Required;
+use TMSWP\Core\Form\Rule\RuleInterface;
+use TMSWP\Core\Form\StoredFile;
 use TMSWP\Core\Form\TempFileStore;
+use TMSWP\Core\Form\Validator;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
 use TMSWP\Core\Kernel\KernelConfig;
@@ -119,6 +125,39 @@ final class FormIntegrationTest extends IntegrationTestCase
 
         self::assertSame(FormStep::Complete, $form($before)->handle($submit)->step);
         self::assertSame([['name' => 'Taro Yamada']], $this->completed);
+    }
+
+    public function testSingleCheckboxRejectsValuesOtherThanItsCheckedValueThroughTheRealRuleMessageFilter(): void
+    {
+        $form = $this->formFactory(debug: false);
+        $filter = static fn(string $message, RuleInterface $rule): string => $rule instanceof Choice ? 'Please choose {label} properly.' : $message;
+        add_filter('tmswp/form/rule_message', $filter, 10, 2);
+
+        try {
+            $definition = FormDefinition::create('consent')
+                ->checkbox('privacy', 'Privacy policy', 'agree', [new Required()])
+                ->text('note', 'Note', [new Callback(static fn(mixed $value): bool => false)])
+                ->confirm()
+                ->onComplete(function (array $values): void {
+                    $this->completed[] = $values;
+                });
+            $result = $form($definition)->handle($this->confirmRequest($form($definition)->open(), ['privacy' => 'any string', 'note' => 'text']));
+        } finally {
+            remove_filter('tmswp/form/rule_message', $filter, 10);
+        }
+
+        // 任意の文字列は Required を通っても確認画面に進まない
+        self::assertSame(FormStep::Input, $result->step);
+        self::assertSame(['privacy' => ['Please choose Privacy policy properly.'], 'note' => ['Note is invalid.']], $result->fieldErrors);
+        self::assertSame([], $this->completed);
+    }
+
+    public function testMaxFileSizeMessageShowsTheSizeFormattedByWordPress(): void
+    {
+        $definition = FormDefinition::create('upload')->file('photo', 'Photo', [MaxFileSize::mb(1)]);
+        $file = new StoredFile(self::JTI, '/tmp/photo.jpg', 'photo.jpg', 'image/jpeg', 2 * 1024 * 1024);
+
+        self::assertSame(['photo' => ['Photo must be 1 MB or smaller.']], (new Validator())->validate($definition, ['photo' => $file]));
     }
 
     public function testOnCompleteExceptionInProductionIsLoggedAndTheSameTokenCanBeResubmitted(): void

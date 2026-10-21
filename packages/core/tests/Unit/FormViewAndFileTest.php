@@ -7,6 +7,7 @@ namespace TMSWP\Core\Tests\Unit;
 use Brain\Monkey\Functions;
 use Closure;
 use Error;
+use Exception;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
@@ -373,6 +374,37 @@ final class FormViewAndFileTest extends UnitTestCase
         self::assertFileDoesNotExist($tmpPath);
     }
 
+    public function testUploadedFileMimeDetectionFailuresAreTempFileExceptionsInsteadOfADefaultMime(): void
+    {
+        $missing = new UploadedFile($this->createTempDirectory('mime-missing') . '/gone.txt', 'gone.txt', 'text/plain', 1, UPLOAD_ERR_OK);
+
+        try {
+            $missing->detectedMime();
+            self::fail('TempFileException was not thrown for a file that cannot be read');
+        } catch (TempFileException $exception) {
+            self::assertStringStartsWith('failed to detect the MIME type of the uploaded file ', $exception->getMessage());
+        }
+
+        $path = $this->createTempDirectory('mime-magic') . '/upload.txt';
+        file_put_contents($path, 'sample upload');
+        $file = new UploadedFile($path, 'upload.txt', 'text/plain', 13, UPLOAD_ERR_OK);
+        // libmagic は環境変数 MAGIC の magic のデータベースを読む。読めないデータベースで finfo の初期化を失敗させる
+        $magic = getenv('MAGIC');
+        putenv('MAGIC=' . $path . '.missing-magic');
+
+        try {
+            $file->detectedMime();
+            self::fail('TempFileException was not thrown for finfo that cannot be initialized');
+        } catch (TempFileException $exception) {
+            self::assertSame('failed to initialize finfo to detect the MIME type of an uploaded file', $exception->getMessage());
+            self::assertInstanceOf(Exception::class, $exception->getPrevious());
+        } finally {
+            putenv($magic === false ? 'MAGIC' : "MAGIC={$magic}");
+        }
+
+        self::assertSame('text/plain', $file->detectedMime());
+    }
+
     public function testTempFileStoreDefaultRequiresWordPressUploadDir(): void
     {
         Functions\when('wp_upload_dir')->justReturn(['error' => 'failed']);
@@ -491,17 +523,22 @@ final class FormViewAndFileTest extends UnitTestCase
         self::assertInstanceOf(TempFileException::class, $exception);
         self::assertStringStartsWith('1 expired temporary file directories could not be deleted (1 deleted): ' . $message, $exception->getMessage());
         self::assertInstanceOf(TempFileException::class, $exception->getPrevious());
-        self::assertTrue($store->exists($locked));
+        // 削除に失敗したディレクトリは残る(0300 では、名前で消せる本体とメタデータは消えてから一覧の取得で失敗する)
+        self::assertDirectoryExists($baseDir . DIRECTORY_SEPARATOR . $locked);
         self::assertFalse($store->exists($expired));
         self::assertTrue($store->exists($fresh));
         self::assertDirectoryExists($baseDir . '/not-a-token');
         self::assertFileExists($baseDir . '/.htaccess');
+
+        // 次の gc で消える(メタデータが消えた場合はディレクトリの更新時刻で期限を判定するため、古い時刻にする)
+        self::assertTrue(touch($baseDir . DIRECTORY_SEPARATOR . $locked, time() - 86401));
         self::assertSame(1, $store->gc(86400));
-        self::assertFalse($store->exists($locked));
+        self::assertDirectoryDoesNotExist($baseDir . DIRECTORY_SEPARATOR . $locked);
     }
 
     /**
-     * ディレクトリの権限を $mode にして $callback を呼び、戻り値を返す。0500 なら中のファイルの unlink() が、0300 なら一覧の取得が失敗する。
+     * ディレクトリの権限を $mode にして $callback を呼び、戻り値を返す。0500 なら中のファイルの unlink() が、0300 なら一覧の取得が
+     * 失敗する(0300 でも、名前で指定する本体とメタデータの unlink() は成功する)。
      * 失敗の警告はテストの失敗にしない。
      *
      * @template T

@@ -10,15 +10,18 @@ use TMSWP\Core\Form\Rule\RuleInterface;
 
 abstract class CompositeField
 {
-    /** @param list<RuleInterface> $rules */
+    /**
+     * @param list<RuleInterface> $rules
+     *
+     * @throws FormConfigException 名前が Field と同じ検査に通らない場合と、rules に RuleInterface でない要素がある場合
+     */
     public function __construct(
         public readonly string $name,
         public readonly string $label,
         public readonly array $rules = [],
     ) {
-        if (preg_match('/\A[a-z][a-z0-9_]*\z/', $name) !== 1) {
-            throw new FormConfigException("invalid composite field name: {$name}");
-        }
+        Field::assertName($name);
+        Field::assertRules($rules);
     }
 
     /** @return array<string, Field> */

@@ -17,12 +17,12 @@ msgstr ""
 msgid ", "
 msgstr "、"
 
-#: Form/Composite/CompositeField.php:35
+#: Form/Composite/CompositeField.php:38
 msgid "Please complete all parts of {label}."
 msgstr "{label}をすべて入力してください。"
 
-#: Form/Composite/CompositeField.php:46
-#: Form/Rule/Callback.php:40
+#: Form/Composite/CompositeField.php:49
+#: Form/Rule/Callback.php:37
 msgid "{label} is invalid."
 msgstr "{label}の入力値が不正です。"
 
@@ -46,39 +46,37 @@ msgstr "確認画面の有効期限が切れました。内容を確認のうえ
 msgid "This form has already been submitted."
 msgstr "このフォームは既に送信されています。"
 
-#: Form/UploadedFile.php:46
+#: Form/UploadedFile.php:79
 msgid "The uploaded file is too large."
 msgstr "アップロードされたファイルが大きすぎます。"
 
-#: Form/UploadedFile.php:47
+#: Form/UploadedFile.php:80
 msgid "The file was only partially uploaded."
 msgstr "ファイルが一部しかアップロードされませんでした。"
 
-#: Form/UploadedFile.php:48
+#: Form/UploadedFile.php:81
 msgid "Please select a file."
 msgstr "ファイルを選択してください。"
 
-#: Form/UploadedFile.php:49
+#: Form/UploadedFile.php:82
 msgid "The temporary upload folder is missing."
 msgstr "一時フォルダが見つかりません。"
 
-#: Form/UploadedFile.php:50
+#: Form/UploadedFile.php:83
 msgid "The file could not be written."
 msgstr "ファイルを書き込めませんでした。"
 
-#: Form/UploadedFile.php:51
+#: Form/UploadedFile.php:84
 msgid "A PHP extension stopped the file upload."
 msgstr "拡張機能によりアップロードが停止されました。"
 
 #: Form/Form.php:645
-#: Form/Rule/UploadFile.php:37
-#: Form/Rule/UploadFile.php:40
-#: Form/UploadedFile.php:52
+#: Form/UploadedFile.php:85
 msgid "The file upload failed."
 msgstr "ファイルのアップロードに失敗しました。"
 
 #: Form/Rule/Required.php:29
-#: Form/Rule/RequiredIf.php:52
+#: Form/Rule/RequiredIf.php:66
 msgid "{label} is required."
 msgstr "{label}を入力してください。"
 
@@ -103,15 +101,14 @@ msgid "{label} must be between {min} and {max}."
 msgstr "{label}は{min}から{max}の間で入力してください。"
 
 #: Form/Rule/Choice.php:37
-#: Form/Validator.php:36
 msgid "{label} has an invalid choice."
 msgstr "{label}の選択値が不正です。"
 
-#: Form/Rule/Retype.php:36
+#: Form/Rule/Retype.php:39
 msgid "{label} must match {otherLabel}."
 msgstr "{label}が{otherLabel}と一致しません。"
 
-#: Form/Rule/FileExtension.php:61
+#: Form/Rule/FileExtension.php:57
 msgid "Please upload {label} as one of these file types: {extensions}."
 msgstr "{label}は{extensions}形式のファイルを指定してください。"
 

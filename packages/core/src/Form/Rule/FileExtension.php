@@ -44,10 +44,6 @@ final class FileExtension extends Rule
         }
 
         if ($value instanceof UploadedFile) {
-            if (!\function_exists('wp_check_filetype_and_ext')) {
-                throw new FormConfigException('wp_check_filetype_and_ext is not available');
-            }
-
             $check = wp_check_filetype_and_ext($value->tmpPath, $value->clientName);
 
             return \is_array($check) && ($check['ext'] ?? false) !== false;

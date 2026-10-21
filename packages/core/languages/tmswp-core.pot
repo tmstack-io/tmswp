@@ -12,12 +12,12 @@ msgstr ""
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: tmswp\n"
 
-#: Form/Composite/CompositeField.php:35
+#: Form/Composite/CompositeField.php:38
 msgid "Please complete all parts of {label}."
 msgstr ""
 
-#: Form/Composite/CompositeField.php:46
-#: Form/Rule/Callback.php:40
+#: Form/Composite/CompositeField.php:49
+#: Form/Rule/Callback.php:37
 msgid "{label} is invalid."
 msgstr ""
 
@@ -54,9 +54,7 @@ msgid "Your submission could not be verified. Please try again."
 msgstr ""
 
 #: Form/Form.php:645
-#: Form/Rule/UploadFile.php:37
-#: Form/Rule/UploadFile.php:40
-#: Form/UploadedFile.php:52
+#: Form/UploadedFile.php:85
 msgid "The file upload failed."
 msgstr ""
 
@@ -65,7 +63,6 @@ msgid "{label} contains characters that cannot be used."
 msgstr ""
 
 #: Form/Rule/Choice.php:37
-#: Form/Validator.php:36
 msgid "{label} has an invalid choice."
 msgstr ""
 
@@ -73,7 +70,7 @@ msgstr ""
 msgid "Please enter a valid email address for {label}."
 msgstr ""
 
-#: Form/Rule/FileExtension.php:61
+#: Form/Rule/FileExtension.php:57
 msgid "Please upload {label} as one of these file types: {extensions}."
 msgstr ""
 
@@ -98,11 +95,11 @@ msgid "{label} has an invalid format."
 msgstr ""
 
 #: Form/Rule/Required.php:29
-#: Form/Rule/RequiredIf.php:52
+#: Form/Rule/RequiredIf.php:66
 msgid "{label} is required."
 msgstr ""
 
-#: Form/Rule/Retype.php:36
+#: Form/Rule/Retype.php:39
 msgid "{label} must match {otherLabel}."
 msgstr ""
 
@@ -110,26 +107,26 @@ msgstr ""
 msgid "Please enter a valid URL for {label}."
 msgstr ""
 
-#: Form/UploadedFile.php:46
+#: Form/UploadedFile.php:79
 msgid "The uploaded file is too large."
 msgstr ""
 
-#: Form/UploadedFile.php:47
+#: Form/UploadedFile.php:80
 msgid "The file was only partially uploaded."
 msgstr ""
 
-#: Form/UploadedFile.php:48
+#: Form/UploadedFile.php:81
 msgid "Please select a file."
 msgstr ""
 
-#: Form/UploadedFile.php:49
+#: Form/UploadedFile.php:82
 msgid "The temporary upload folder is missing."
 msgstr ""
 
-#: Form/UploadedFile.php:50
+#: Form/UploadedFile.php:83
 msgid "The file could not be written."
 msgstr ""
 
-#: Form/UploadedFile.php:51
+#: Form/UploadedFile.php:84
 msgid "A PHP extension stopped the file upload."
 msgstr ""

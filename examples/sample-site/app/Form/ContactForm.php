@@ -11,7 +11,6 @@ use TMSWP\Core\Form\Rule\Email;
 use TMSWP\Core\Form\Rule\FileExtension;
 use TMSWP\Core\Form\Rule\MaxFileSize;
 use TMSWP\Core\Form\Rule\Required;
-use TMSWP\Core\Form\Rule\UploadFile;
 use TMSWP\Core\Form\StoredFile;
 use UnexpectedValueException;
 
@@ -26,7 +25,6 @@ final class ContactForm
                 ->textarea('message', 'お問い合わせ内容', [new Required()])
                 ->file('attachment', '添付ファイル', [
                     new Required(),
-                    new UploadFile(),
                     new FileExtension(['txt']),
                     MaxFileSize::mb(1),
                 ])

@@ -60,7 +60,7 @@ final class TempFileStore
      * ファイルを保管する。保管の前に、期限切れのファイルを消す WP-Cron のイベント(TempFileGc)が無ければスケジュールする。
      *
      * @throws TempFileException アップロードに成功したファイルでない場合と、保管の失敗(イベントのスケジュール・
-     *                           ディレクトリの作成・移動・メタデータの書き込み)
+     *                           ディレクトリの作成・実体の MIME の判定・移動・メタデータの書き込み)
      */
     public function store(UploadedFile $file): StoredFile
     {
@@ -199,8 +199,10 @@ final class TempFileStore
     }
 
     /**
-     * トークンのディレクトリの中のファイルを消してから、ディレクトリを消す。トークンのディレクトリはファイルだけを持つ
-     * ため、サブディレクトリがあれば rmdir() が失敗して例外になる。
+     * トークンのディレクトリの中のファイルを消してから、ディレクトリを消す。個人情報を含みうる本体(FILE_NAME)を先に、
+     * 次にメタデータ(META_NAME)を、最後にそのほかの残りを消す。順はファイルシステムの列挙の順に依存しないため、途中で
+     * 失敗しても、本体の削除より前にほかのファイルで止まることは無い。トークンのディレクトリはファイルだけを持つため、
+     * サブディレクトリがあれば rmdir() が失敗して例外になる。
      *
      * @internal TempFileStore と StoredFile だけが使う。
      *
@@ -208,6 +210,14 @@ final class TempFileStore
      */
     public static function deleteDirectory(string $dir): void
     {
+        foreach ([self::FILE_NAME, self::META_NAME] as $name) {
+            $path = $dir . DIRECTORY_SEPARATOR . $name;
+
+            if (is_file($path) && !unlink($path)) {
+                throw new TempFileException("failed to delete temporary file: {$path}");
+            }
+        }
+
         try {
             foreach (new FilesystemIterator($dir, FilesystemIterator::SKIP_DOTS) as $fileInfo) {
                 if ($fileInfo instanceof SplFileInfo && !$fileInfo->isDir() && !unlink($fileInfo->getPathname())) {

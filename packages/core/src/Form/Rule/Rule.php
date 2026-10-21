@@ -23,7 +23,7 @@ abstract class Rule implements RuleInterface
 
     final public function validate(mixed $value, ValidationContext $context): ?string
     {
-        return $this->passes($value, $context) ? null : Messages::resolve($this, $context);
+        return $this->passes($value, $context) ? null : Messages::resolve($this, $this->customMessage() ?? $this->defaultMessage(), $context, $this->messageParams());
     }
 
     abstract protected function passes(mixed $value, ValidationContext $context): bool;

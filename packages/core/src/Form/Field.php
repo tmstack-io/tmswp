@@ -6,6 +6,7 @@ namespace TMSWP\Core\Form;
 
 use Closure;
 use TMSWP\Core\Exception\Form\FormConfigException;
+use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Form\Rule\RuleInterface;
 
 final class Field
@@ -139,7 +140,14 @@ final class Field
         return $this->choices !== [];
     }
 
-    private static function assertName(string $name): void
+    /**
+     * 項目の名前を検査する。CompositeField の名前もこれで検査する。
+     *
+     * @internal
+     *
+     * @throws FormConfigException 名前の形が違う場合と、予約された名前(`__token` の接尾辞を含む)の場合
+     */
+    public static function assertName(string $name): void
     {
         if (preg_match('/\A[a-z][a-z0-9_]*\z/', $name) !== 1) {
             throw new FormConfigException("invalid field name: {$name}");
@@ -150,8 +158,16 @@ final class Field
         }
     }
 
-    /** @param list<RuleInterface> $rules */
-    private static function assertRules(array $rules): void
+    /**
+     * rules の要素が RuleInterface であることを検査する。CompositeField の rules もこれで検査する。
+     *
+     * @internal
+     *
+     * @param list<RuleInterface> $rules
+     *
+     * @throws FormConfigException
+     */
+    public static function assertRules(array $rules): void
     {
         foreach ($rules as $rule) {
             if (!$rule instanceof RuleInterface) {
@@ -170,13 +186,15 @@ final class Field
         }
     }
 
-    /** @return Closure(string): string */
+    /**
+     * 前後の空白(全角の空白を含む)を取り除くフィルタ。Form は不正な UTF-8 を取り込みの段階で止めるため、Form 経由では
+     * 正しい UTF-8 だけが届く。Validator を直接呼ぶ等で不正な UTF-8 が届いたら、元の値のまま通さずに例外にする。
+     *
+     * @return Closure(string): string
+     */
     private static function trimFilter(): Closure
     {
-        return static function (string $value): string {
-            $trimmed = preg_replace('/\A[\s\x{3000}]++|[\s\x{3000}]++\z/u', '', $value);
-
-            return \is_string($trimmed) ? $trimmed : $value;
-        };
+        return static fn(string $value): string => preg_replace('/\A[\s\x{3000}]++|[\s\x{3000}]++\z/u', '', $value)
+            ?? throw new LogicException('the trim filter of a form field failed: ' . preg_last_error_msg());
     }
 }

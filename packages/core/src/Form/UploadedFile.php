@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Form;
 
+use Exception;
 use finfo;
+use TMSWP\Core\Exception\Form\TempFileException;
 
 final readonly class UploadedFile
 {
@@ -27,12 +29,43 @@ final readonly class UploadedFile
         return $this->error === UPLOAD_ERR_OK && is_uploaded_file($this->tmpPath);
     }
 
+    /**
+     * 実体の MIME を finfo で判定する。判定できないときに既定の MIME で代えると、実体の検査を黙って飛ばすことになる
+     * ため、例外にする。どちらの失敗も保管(TempFileStore::store())の中で起き、Form はエラー方針に従って扱う。
+     *
+     * @throws TempFileException finfo を使えない場合(fileinfo の拡張が無い・magic のデータベースを読めない等の環境の異常)と、
+     *                           ファイルを判定できない場合(読み取れない等)
+     */
     public function detectedMime(): string
     {
-        $finfo = new finfo(FILEINFO_MIME_TYPE);
-        $mime = $finfo->file($this->tmpPath);
+        if (!\extension_loaded('fileinfo')) {
+            throw new TempFileException('the fileinfo extension is required to detect the MIME type of an uploaded file');
+        }
 
-        return \is_string($mime) ? $mime : 'application/octet-stream';
+        try {
+            $finfo = new finfo(FILEINFO_MIME_TYPE);
+        } catch (Exception $exception) {
+            throw new TempFileException('failed to initialize finfo to detect the MIME type of an uploaded file', previous: $exception);
+        }
+
+        $error = null;
+        set_error_handler(static function (int $_severity, string $message) use (&$error): bool {
+            $error = $message;
+
+            return true;
+        });
+
+        try {
+            $mime = $finfo->file($this->tmpPath);
+        } finally {
+            restore_error_handler();
+        }
+
+        if (!\is_string($mime)) {
+            throw new TempFileException("failed to detect the MIME type of the uploaded file {$this->tmpPath}" . ($error === null ? '' : " ({$error})"));
+        }
+
+        return $mime;
     }
 
     public function clientExtension(): string

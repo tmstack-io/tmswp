@@ -39,12 +39,26 @@ final class RequiredIf extends Rule
 
     protected function passes(mixed $value, ValidationContext $context): bool
     {
-        $actual = Validator::stringValue($context->value($this->field));
-        $condition = $this->equals === null
-            ? $context->filled($this->field)
-            : $actual === $this->equals;
+        return !$this->conditionMet($context) || !Validator::isEmpty($value);
+    }
 
-        return !$condition || !Validator::isEmpty($value);
+    /** equals() の条件は、配列の値(checkboxes)ならその要素のどれかと、それ以外なら値と、文字列として厳密に比べる */
+    private function conditionMet(ValidationContext $context): bool
+    {
+        if ($this->equals === null) {
+            return $context->filled($this->field);
+        }
+
+        $actual = $context->value($this->field);
+        $candidates = \is_array($actual) ? $actual : [$actual];
+
+        foreach ($candidates as $candidate) {
+            if (Validator::stringValue($candidate) === $this->equals) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function defaultMessage(): string

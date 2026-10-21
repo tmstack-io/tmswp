@@ -6,6 +6,7 @@ namespace TMSWP\Core\Form;
 
 use Stringable;
 use TMSWP\Core\Form\Composite\CompositeField;
+use TMSWP\Core\Form\Rule\Choice;
 
 final class Validator
 {
@@ -32,12 +33,7 @@ final class Validator
                 continue;
             }
 
-            if ($field->isChoiceField() && !self::isEmpty($value) && !$this->isValidChoice($field, $value)) {
-                $errors[$name] = [strtr(__('{label} has an invalid choice.', 'tmswp'), ['{label}' => $field->label])];
-                continue;
-            }
-
-            $message = $this->validateRules($field->rules, $value, $context, $field->multiple);
+            $message = $this->validateField($field, $value, $context);
 
             if ($message !== null) {
                 $errors[$name] = [$message];
@@ -63,6 +59,48 @@ final class Validator
         }
 
         return null;
+    }
+
+    /**
+     * 選べる値の暗黙の検証の後に、項目の rules を検証する。複合フィールドのパーツも同じ手順で検証する。
+     */
+    private function validateField(Field $field, mixed $value, ValidationContext $context): ?string
+    {
+        if ($field->multiple && !\is_array($value)) {
+            // 取り込みと同じく、複数選択の配列でない値は1つの要素として包む(空値は [])。暗黙の検証と明示した規則の
+            // どちらも、配列で渡したときと同じ結果にする
+            $value = self::isEmpty($value) ? [] : [$value];
+        }
+
+        $choice = self::implicitChoice($field);
+
+        if ($choice !== null && !self::isEmpty($value)) {
+            // 複数選択は要素ごとに選べる値かを確かめる
+            $elements = $field->multiple && \is_array($value) ? $value : [$value];
+
+            foreach ($elements as $element) {
+                $message = $choice->validate($element, $context);
+
+                if ($message !== null) {
+                    return $message;
+                }
+            }
+        }
+
+        return $this->validateRules($field->rules, $value, $context, $field->multiple);
+    }
+
+    /**
+     * 選べる値が決まっている項目(choices を持つ項目と単一のチェックボックス)に暗黙に適用する Choice。
+     * メッセージは明示した Choice と同じく Messages で解決する(フィルタには、この Choice が渡る)。
+     */
+    private static function implicitChoice(Field $field): ?Choice
+    {
+        if ($field->type === FieldType::Checkbox) {
+            return new Choice([$field->checkedValue]);
+        }
+
+        return $field->isChoiceField() ? new Choice(array_keys($field->choices)) : null;
     }
 
     /** @param list<Rule\RuleInterface> $rules */
@@ -111,7 +149,7 @@ final class Validator
             return strtr($field->incompleteMessage(), ['{label}' => $field->label]);
         } else {
             foreach ($field->parts() as $partName => $part) {
-                $message = $this->validateRules($part->rules, $partValues[$partName] ?? '', $context, false);
+                $message = $this->validateField($part, $partValues[$partName] ?? '', $context);
 
                 if ($message !== null) {
                     return $message;
@@ -185,30 +223,5 @@ final class Validator
         }
 
         return true;
-    }
-
-    private function isValidChoice(Field $field, mixed $value): bool
-    {
-        $candidates = array_map('strval', array_keys($field->choices));
-
-        if ($field->multiple) {
-            if (!\is_array($value)) {
-                return false;
-            }
-
-            foreach ($value as $item) {
-                $candidate = self::stringValue($item);
-
-                if ($candidate === null || !\in_array($candidate, $candidates, true)) {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        $candidate = self::stringValue($value);
-
-        return $candidate !== null && \in_array($candidate, $candidates, true);
     }
 }

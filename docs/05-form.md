@@ -254,10 +254,11 @@ final class Field
 振る舞い仕様:
 
 - `name` は `/\A[a-z][a-z0-9_]*\z/` に一致しなければ `FormConfigException`。予約キー(§予約POSTキー)・`__token` サフィックス付き名も拒否する。
-- **デフォルトtrimフィルタ**: `text` / `textarea` は、ユーザ指定 `$filters` の先頭に半角・全角空白トリム(`preg_replace('/\A[\s\x{3000}]++|[\s\x{3000}]++\z/u', '', $v)`)を自動挿入する。`password` / `hidden` / 選択系 / `file` には適用しない。
+- **デフォルトtrimフィルタ**: `text` / `textarea` は、ユーザ指定 `$filters` の先頭に半角・全角空白トリム(`preg_replace('/\A[\s\x{3000}]++|[\s\x{3000}]++\z/u', '', $v)`)を自動挿入する。`password` / `hidden` / 選択系 / `file` には適用しない。不正なUTF-8を渡すと、元の値のまま通さずに `TMSWP\Core\Exception\LogicException` を投げる(Formは取り込みの段階で不正なUTF-8を止めるため(§bind())、Form経由では届かない。`Validator` を直接呼ぶ場合は呼び出し側が正しいUTF-8を渡す)。
 - `choices` のキーは、PHPが `'1'` のような数字の文字列をintに変えるため、intのこともある。値との比較(選択状態・ラベルへの変換・選択肢の検証)は、すべてキーを文字列にしてから厳密に行う。
 - `choices` のキー `''` はプレースホルダ(「--- お選びください ---」等)として許可する。選択肢整合検証(§Validator)は空値をスキップするため、`''` 選択は `Required` で検出される。
 - `checkboxes` は `multiple = true`、POST名は `{name}[]`。
+- `checkbox` の値は `checkedValue` か `''` のどちらか。それ以外の値は選択肢整合検証(§Validator)で違反にする(`Required` だけでは任意の文字列が通るため)。
 - エッジケース: `choices` が空配列の `select`/`radios`/`checkboxes` は `FormConfigException`(定義ミス)。
 
 #### パスワードの項目
@@ -270,19 +271,24 @@ final class Field
 
 パスワードの項目は、確認画面の無いフォーム(ログイン・パスワードの変更等)で使い、値は `onComplete` の `$values` で受け取る。会員登録はパスワードをフォームで受け取らず、自動で生成して、利用者にはパスワードの設定のメールで決めさせる(`rules/user-role.md` の「認証(ログイン・会員登録)」のレシピ)。
 
-### CompositeField と同梱複合フィールド
+### CompositeField
 
-複数の入力部品が論理的に1つの値(正準値)を構成するフィールドの抽象基底。**正準値は常に `string`**(ConfirmTokenのJSON表現とメタ保存を単純化するため)。
+複数の入力部品が論理的に1つの値(正準値)を構成するフィールドの抽象基底。**正準値は常に `string`**(ConfirmTokenのJSON表現とメタ保存を単純化するため)。コアが同梱するのはこの抽象基底だけで、具体的な複合フィールド(生年月日等)はapp側で定義する。
 
 ```php
 namespace TMSWP\Core\Form\Composite;
 
+use TMSWP\Core\Exception\Form\FormConfigException;
 use TMSWP\Core\Form\Field;
 use TMSWP\Core\Form\Rule\RuleInterface;
 
 abstract class CompositeField
 {
-    /** @param list<RuleInterface> $rules 正準値に対して適用されるルール */
+    /**
+     * @param list<RuleInterface> $rules 正準値に対して適用されるルール
+     * @throws FormConfigException name が Field の name と同じ検査(形・予約キー・`__token` サフィックス)に通らない場合と、
+     *                             rules に RuleInterface でない要素がある場合(定義の時点で検出する)
+     */
     public function __construct(
         public readonly string $name,
         public readonly string $label,
@@ -292,7 +298,7 @@ abstract class CompositeField
     /**
      * パーツ定義。キーはパーツ名(/\A[a-z][a-z0-9_]*\z/)。
      * POST名は "{$this->name}[{パーツ名}]" となる。
-     * パーツFieldのrulesは各パーツ値に対して正準値合成前に適用される。
+     * パーツFieldは、正準値の合成の前に、通常の項目と同じ手順(選択肢整合検証 → rules)で各パーツ値を検証する。
      * @return array<string, Field>
      */
     abstract public function parts(): array;
@@ -328,9 +334,9 @@ abstract class CompositeField
 検証順序(Validatorが保証する不変の手順):
 
 1. 各パーツ値にパーツFieldのfiltersを適用
-2. 全パーツが空 → 正準値 `''`。手順5へ
+2. 全パーツが空 → 正準値 `''`。手順7へ
 3. 一部のみ入力 → `incompleteMessage()` をエラーとし、このフィールドの検証を終了
-4. 各パーツのrulesを検証(違反したら終了)
+4. 各パーツを通常の項目と同じ手順で検証する(違反したら終了)。choicesを持つパーツ(年月日のselect等)と単一チェックボックスのパーツには選択肢整合検証を暗黙に適用し(範囲外の年等を拒否する)、その後にパーツのrulesを検証する。メッセージの `{label}` は複合フィールドのラベル
 5. `validateParts()` でパーツ間の整合性を検証(違反したら `invalidPartsMessage()` をエラーとして終了)
 6. `compose()` で正準値を得る
 7. 正準値に対し `$this->rules` を通常フィールドと同じ規則で検証
@@ -494,19 +500,23 @@ for (name, field) in definition.fields():
     ctx = new ValidationContext(definition, values, name)
 
     if field is CompositeField:
-        # §CompositeField の検証順序1〜5を実行。エラーは errors[name] に1件だけ積んで次のフィールドへ
+        # §CompositeField の検証順序1〜7を実行。エラーは errors[name] に1件だけ積んで次のフィールドへ
         continue
 
-    # --- 選択肢整合検証(choicesを持つフィールドへ暗黙適用。ユーザがChoiceルールを書く必要はない) ---
-    if field.choices != [] and not isEmpty(value):
-        candidates = array_keys(field.choices) を各々 (string) キャスト
-        if field.multiple:
-            ok = value の全要素が candidates に厳密一致(in_array(strict: true))
-        else:
-            ok = in_array((string) value, candidates, strict: true)
-        if not ok:
-            errors[name][] = __('{label} has an invalid choice.', 'tmswp') を置換したもの
-            continue   # 以降のルールは実行しない
+    # --- 複数選択の値の形をそろえる(取り込みと同じ。以降の暗黙の検証とルールは、配列で渡したときと同じ結果になる) ---
+    if field.multiple and value が配列でない:
+        value = isEmpty(value) ? [] : [value]
+
+    # --- 選択肢整合検証(選べる値が決まっているフィールドへ暗黙適用。ユーザがChoiceルールを書く必要はない) ---
+    # choicesを持つフィールドは new Choice(array_keys(field.choices))、単一チェックボックスは new Choice([field.checkedValue])
+    choice = 上記の Choice(該当しないフィールドは null)
+    if choice != null and not isEmpty(value):
+        elements = field.multiple ? value : [value]
+        for element in elements:
+            msg = choice.validate(element, ctx)   # メッセージは明示した Choice と同じく Messages で解決する
+            if msg != null:
+                errors[name][] = msg
+                continue 2   # 以降のルールは実行しない
 
     # --- ルール実行(フィールドごとに最初の違反で停止) ---
     for rule in field.rules:
@@ -543,13 +553,14 @@ interface RuleInterface
     /** multipleフィールドで各要素に個別適用するか(falseなら配列全体を受け取る) */
     public function eachElement(): bool;
 
-    /** 合格なら null、違反なら表示用に解決済みのエラーメッセージを返す */
+    /** 合格なら null、違反なら Messages::resolve() で解決したエラーメッセージを返す */
     public function validate(mixed $value, ValidationContext $context): ?string;
 }
 
 /**
- * 標準実装基底。メッセージ解決(個別指定 → デフォルト → tmswp/form/rule_message フィルタ → {placeholder}置換)を共通化する。
- * 動的メッセージが必要なルール(Callback / UploadFile)はRuleInterfaceを直接実装する。
+ * 標準実装基底。メッセージ(個別指定 → デフォルト)と置換パラメータを Messages::resolve() に渡す処理を共通化する。
+ * 違反ごとにメッセージや置換パラメータが変わるルール(Callback / Retype)はRuleInterfaceを直接実装し、同じく
+ * Messages::resolve() でメッセージを解決する(フィルタと {placeholder} 置換を通らない経路を作らない)。
  */
 abstract class Rule implements RuleInterface
 {
@@ -559,7 +570,7 @@ abstract class Rule implements RuleInterface
     public function eachElement(): bool;  // 既定 true
 
     final public function validate(mixed $value, ValidationContext $context): ?string;
-    // passes() ? null : Messages::resolve($this, $context)
+    // passes() ? null : Messages::resolve($this, customMessage() ?? defaultMessage(), $context, messageParams())
 
     /** 検証本体 */
     abstract protected function passes(mixed $value, ValidationContext $context): bool;
@@ -591,13 +602,14 @@ abstract class Rule implements RuleInterface
 | `Email` | `(?string $message = null)` | true / true | `filter_var((string) $value, FILTER_VALIDATE_EMAIL) !== false`。DNSチェックは行わない(旧check_dnsは廃止) | `Please enter a valid email address for {label}.` |
 | `Url` | `(array $protocols = ['http', 'https'], ?string $message = null)` | true / true | `filter_var` (FILTER_VALIDATE_URL) 合格かつスキームが `$protocols` に含まれる(旧Symfony製巨大正規表現は廃止) | `Please enter a valid URL for {label}.` |
 | `Regex` | `(string $pattern, ?string $message = null)` | true / true | `preg_match($pattern, (string) $value) === 1`。`preg_match` が `false`(パターン不正)なら `FormConfigException`(入力起因ではなく定義バグのため) | `{label} has an invalid format.` |
-| `Choice` | `(array $choices, ?string $message = null)` | true / true | `in_array((string) $value, $choicesの値リストを文字列化, strict: true)`。choices付きフィールドへの暗黙検証とは別に、choicesを持たないフィールド(hidden等)で明示利用する | `{label} has an invalid choice.` |
-| `Callback` | `(\Closure $callback, ?string $message = null)` | true / false | `$callback(mixed $value, ValidationContext $ctx): bool\|string` を呼ぶ。`true`=合格、`false`=`$message`(未指定時はデフォルト)、`string`=その文字列をエラーメッセージとして採用 | `{label} is invalid.` |
-| `Retype` | `(string $field, ?string $message = null)` | true / false | `(string) $value === (string) $ctx->value($field)`(厳密一致)。メール確認・パスワード確認用 | `{label} must match {otherLabel}.` |
+| `Choice` | `(array $choices, ?string $message = null)` | true / true | `in_array((string) $value, $choicesの値リストを文字列化, strict: true)`。choices付きフィールド・単一チェックボックスへの暗黙検証(§Validator)とは別に、choicesを持たないフィールド(hidden等)で明示利用する | `{label} has an invalid choice.` |
+| `Callback` | `(\Closure $callback, ?string $message = null)` | true / false | `$callback(mixed $value, ValidationContext $ctx): bool\|string` を呼ぶ。`true`=合格、`false`=`$message`(未指定時はデフォルト)、`string`=その文字列をエラーメッセージとして採用。どちらのメッセージも `Messages::resolve()` を通る(フィルタと `{label}` 置換が効く)。`bool` と `string` 以外の戻り値は `FormConfigException`(コールバックの定義の誤り。違反として扱わない) | `{label} is invalid.` |
+| `Retype` | `(string $field, ?string $message = null)` | true / false | `(string) $value === (string) $ctx->value($field)`(厳密一致)。メール確認・パスワード確認用。`{otherLabel}` は `$field` のラベル | `{label} must match {otherLabel}.` |
 | `Range` | `(int\|float $min, int\|float $max, ?string $message = null)` | true / true | `is_numeric((string) $value)` でなければ違反(PHP8比較セマンティクスに依存しない)。数値化後 `$min <= $v && $v <= $max` | `{label} must be between {min} and {max}.` |
-| `UploadFile` | `(?string $message = null)` | true / false | `UploadedFile` → `isValid()`、`StoredFile` → `exists()`、それ以外の非空値 → 違反 | PHPアップロードエラーコード別の英語ソース文言表(`UploadedFile::errorMessage()`)。判定不能時は `The file upload failed.` |
 | `FileExtension` | `(array $extensions, ?string $message = null)` | true / false | 拡張子(クライアント名由来)を小文字化して `$extensions` に含まれ、**かつ** 実体MIME(`finfo`)が `wp_check_filetype_and_ext()` で当該拡張子と矛盾しないこと。拡張子偽装(.jpg偽装のPHP等)を実体検査で遮断 | `Please upload {label} as one of these file types: {extensions}.` |
-| `MaxFileSize` | `(int $bytes, ?string $message = null)` + `static mb(int $mb): self` | true / false | `UploadedFile::$size` / `StoredFile::$size` が `$bytes` 以下 | `{label} must be {size} or smaller.`({size}は `size_format()` による表示) |
+| `MaxFileSize` | `(int $bytes, ?string $message = null)` + `static mb(int $mb, ?string $message = null): self` | true / false | `UploadedFile::$size` / `StoredFile::$size` が `$bytes` 以下 | `{label} must be {size} or smaller.`({size}は `size_format()` による表示) |
+
+アップロードに失敗したファイル(`isValid()` でない `UploadedFile`)は、ルールではなく `Form` が項目の規則に関係なくエラーにする(§validate())。確認画面から戻った後に引き継ぐ `StoredFile` は、取り込みと復元の段階で `exists()` を確かめる(§bind()・`restoreValues()`)。そのため、アップロードの成否を確かめるルールは同梱しない。
 
 `RequiredIf` のファクトリ(nullセンチネル不使用。DR-18):
 
@@ -607,7 +619,7 @@ final class RequiredIf extends Rule
     /** $field が空でないとき必須 */
     public static function filled(string $field, ?string $message = null): self;
 
-    /** $field の値が $value と厳密一致((string)比較)するとき必須 */
+    /** $field の値が $value と厳密一致((string)比較)するとき必須。配列の値(checkboxes)は、要素のどれかが一致するとき必須 */
     public static function equals(string $field, string $value, ?string $message = null): self;
 }
 ```
@@ -641,17 +653,23 @@ final class Messages
     private function __construct() {}
 
     /**
-     * メッセージ解決の正準実装。手順:
-     *   1. ルールインスタンスの customMessage()、なければ defaultMessage() で生メッセージを得る
-     *   2. apply_filters('tmswp/form/rule_message', string $message, Rule $rule, ValidationContext $context)
-     *      でサイト全体の上書きを適用する(第2引数がRuleインスタンスのため instanceof による
-     *      ルール単位・親クラス単位の判定が自然に書け、第3引数でフィールド文脈も参照できる)
-     *   3. {label}(= currentFieldのラベル)と messageParams() の {key} を strtr で置換する
+     * メッセージ解決の正準実装。同梱の全ルールと選択肢整合検証(§Validator)のメッセージは、すべてここを通る。手順:
+     *   1. 呼び出し側が生メッセージを渡す(Rule基底は customMessage()、なければ defaultMessage()。Callback は
+     *      コールバックが返した文字列か、$message、なければ既定のメッセージ)
+     *   2. apply_filters('tmswp/form/rule_message', string $message, RuleInterface $rule, ValidationContext $context)
+     *      でサイト全体の上書きを適用する(第2引数がルールのインスタンスのため instanceof による
+     *      ルール単位・親クラス単位の判定が自然に書け、第3引数でフィールド文脈も参照できる)。
+     *      フィルタが文字列以外を返したら FormConfigException(黙って元のメッセージに戻さない)
+     *   3. {label}(= currentFieldのラベル)と $params の {key} を strtr で置換する
      *      (フィルタは置換の前段で効くため、上書き文言内のプレースホルダも展開される)
+     * @param array<string, scalar|null> $params Rule基底は messageParams()、Retype は ['otherLabel' => ...]
+     * @throws \TMSWP\Core\Exception\Form\FormConfigException
      */
-    public static function resolve(Rule\Rule $rule, ValidationContext $context): string;
+    public static function resolve(Rule\RuleInterface $rule, string $message, ValidationContext $context, array $params = []): string;
 }
 ```
+
+- `apply_filters()` はWordPressの関数を直接呼ぶ(有無を確かめて別の処理に切り替える分岐は持たない)。ユニットテストではBrain Monkeyが定義した `apply_filters()` を使う。`MaxFileSize` の `{size}` の `size_format()` も同じ。
 
 - デフォルトメッセージは英語ソースを `__('...', 'tmswp')` にリテラルで渡して内蔵し(`wp i18n make-pot` が抽出できる形。01 §7.1)、日本語は同梱翻訳ファイルで提供する(DR-17/01 §7)。`__()` は `defaultMessage()` 等のメソッドの中で呼び、ルールを作った時点では評価しない。
 - プレースホルダ書式は `{name}` 固定(旧 `%name%` から変更。sprintf `%s` との衝突事故=旧UploadFileRule未展開バグの再発防止)。
@@ -905,9 +923,13 @@ final readonly class UploadedFile
     public function isValid(): bool;
 
     /**
-     * finfo_file による実体MIME(呼び出し毎に判定する純粋アクセサ)。判定不能時 'application/octet-stream'。
+     * finfo_file による実体MIME(呼び出し毎に判定する純粋アクセサ)。判定できないときは、既定のMIMEで代えずに例外にする
+     * (実体の検査を黙って飛ばさない)。
      * readonlyクラスのためメモ化は行わない(readonly解除やstaticキャッシュによるメモ化の導入は禁止)。
-     * 呼び出し箇所は FileExtension ルールと TempFileStore::store() 手順6の最大2回/リクエストでコストは無視できる。
+     * 呼び出し箇所は TempFileStore::store() 手順6だけ(1ファイルにつき1回/リクエスト)でコストは無視できる。
+     * @throws TempFileException finfoを使えない場合(fileinfoの拡張が無い・magicのデータベースを読めない等の環境の異常)と、
+     *                           ファイルを判定できない場合(読み取れない等)。どちらも保管の失敗として、Formが
+     *                           エラー方針に従って扱う(§handle()。debugは投げ、本番はerrorで記録して汎用の送信失敗エラー)
      * 保管後は StoredFile::$mime(meta.json由来、手順6でfinfo確定)が真実源(§baseDirの配置と保管済みファイルの不変条件)。
      */
     public function detectedMime(): string;
@@ -989,7 +1011,12 @@ final class TempFileStore
      */
     public function gc(int $maxAgeSeconds = 86400): int;
 
-    /** @internal TempFileStore と StoredFile だけが使う。トークンディレクトリ内のファイルを消してからディレクトリを消す。@throws TempFileException 削除の失敗(一覧を取れない場合を含む) */
+    /**
+     * @internal TempFileStore と StoredFile だけが使う。トークンディレクトリ内のファイルを消してからディレクトリを消す。
+     * 個人情報を含みうる本体(FILE_NAME)を先に、次にメタデータ(META_NAME)を、最後にそのほかの残りを消す(ファイルシステムの
+     * 列挙の順に依存しない。途中で失敗しても、本体より先にほかのファイルで止まらない)。
+     * @throws TempFileException 削除の失敗(一覧を取れない場合を含む。原因をpreviousに持つ)
+     */
     public static function deleteDirectory(string $dir): void;
 }
 
@@ -1022,7 +1049,7 @@ final class TempFileGc
 4. token = bin2hex(random_bytes(16))                      # 128bit。推測不能
 5. dir = {baseDir}/{token}/                                # トークンがそのままディレクトリ名。mkdirは0700。失敗時 TempFileException
 6. name = sanitize_file_name($file->clientName) ?: 'file.bin'   # 表示用・移動の既定名。保存名には使わない
-   mime = $file->detectedMime()                            # 移動の前に判定する
+   mime = $file->detectedMime()                            # 移動の前に判定する。判定できなければ TempFileException
 7. move_uploaded_file($file->tmpPath, dir . FILE_NAME)。失敗時 TempFileException   # 保存名は固定の 'file'
 8. META_NAME(meta.json)をdirへ書き出し: {name, mime, size, created: time()}。失敗時 TempFileException
 9. return StoredFile(token, dir . FILE_NAME, name, mime, size)
@@ -1061,7 +1088,7 @@ final class TempFileGc
 | 確認画面あり | 確認(`_step=confirm`)で値の検証を通った後(他の項目にエラーがあれば、自身の検証を通ったファイルだけ)。送信の時点ではjtiのclaimより前に保管済みで、トークンから解決する | 復元した `StoredFile` | 未消費の一時ファイルを削除 |
 | 確認画面なし | 送信(`_step=submit`)で値の検証とjtiのclaimを通った後。再送として拒否するPOSTのファイルは保管しない。保管が失敗したらjtiを手放して、§handle() の `failSubmission` の扱いにする(再送できる) | 保管した `StoredFile` | 未消費の一時ファイルを削除 |
 
-- **アップロードの失敗**: `UploadedFile` が `isValid()` でない(サイズ超過・部分的なアップロード等)ときは、項目の規則に関係なく `validate()` が `errorMessage()` を項目のエラーにする。値の検証を通ったファイルは必ず保管できる(保管の失敗は環境・IOの異常だけになる)。
+- **アップロードの失敗**: `UploadedFile` が `isValid()` でない(サイズ超過・部分的なアップロード等)ときは、項目の規則に関係なく、規則のエラーより先に `validate()` が `errorMessage()` を項目のエラーにする(失敗したアップロードに拡張子等の規則のエラーを出さない)。値の検証を通ったファイルは必ず保管できる(保管の失敗は環境・IOの異常だけになる)。
 - **完了の後の後始末**: `onComplete` が正常に終わったら(`onComplete` 未設定を含む)、値の中のすべての `StoredFile` について `delete()` を呼ぶ。`moveTo()`・`toAttachment()` で消費したファイルはトークンディレクトリが無いため何もしない。したがってファイルを扱う完了処理は `onComplete` の中に書く。`handle()` が返した後の `FormResult` の `StoredFile` は削除済みである。
 - **onCompleteの例外**: 一時ファイルは消さない。確認画面ありは同じ確認トークンで再送でき、復元で同じファイルを使う。確認画面なしは入力画面に戻した値に `StoredFile` が残るため、`$form->field(name)->hidden()`(`{name}__token`)を置いておけば選び直さずに送り直せる(ブラウザの再送信では同じファイルが再びアップロードされ、新しく保管する)。`onComplete` がファイルを消費してから例外になった場合、確認画面ありの再送はファイルの消失として入力画面に戻る。
 - **完了の後の再送**: 完了の後始末でファイルを消した後に同じ確認トークンを再送する(完了画面のリロード等)と、復元でファイルの消失になる。後始末の削除が途中で失敗して本体だけが消えた場合も、`exists()` がfalseになるため同じく消失として扱う。このときjtiがclaim済み(`JtiStore::isClaimed()`)なら、ファイルの消失ではなく再送として拒否する(「This form has already been submitted.」)。claimされていなければ(gcによる消失等)、ファイルの消失として入力画面に戻す。
@@ -1390,7 +1417,7 @@ finish(step):
 
 #### validate() / storeUploadedFiles() / tokenValues()
 
-- `validate()`: `(new Validator())->validate(def, this.values)` の結果を `fieldErrors` に格納。取り込みの段階の入力の不正(§bind())はその結果に代えて、規則のエラーが無い項目の値が `isValid()` でない `UploadedFile` なら `errorMessage()` を、項目のエラーにする(§ファイルのライフサイクル)。CompositeFieldは検証成功時に表示値を正準値(string)へ確定する。
+- `validate()`: `(new Validator())->validate(def, this.values)` の結果を `fieldErrors` に格納。取り込みの段階の入力の不正(§bind())と、値が `isValid()` でない `UploadedFile` の `errorMessage()` は、この順に優先して、規則のエラーに代えて項目のエラーにする(§ファイルのライフサイクル)。CompositeFieldは検証成功時に表示値を正準値(string)へ確定する。
 - `storeUploadedFiles()`: 値が `UploadedFile` のフィールドを `def.store()->store()` で `StoredFile` に差し替える。`StoredFile`(再送信で維持されたもの)はそのまま。確認画面ありは確認で、確認画面なしは `complete()` のjtiのclaimの後に呼ぶ。保管の失敗(`TempFileException`)は `failSubmission` の扱いにする。
 - `storeValidUploadedFiles()`: 確認ボタンの押下で他の項目がエラーになったときに使う。自身の項目にエラーが無く、アップロードに成功した(`isValid()`)`UploadedFile` だけを保管する。保管したファイルは入力画面の `$form->field(name)->hidden()`(`{name}__token`)で引き回し、利用者に選び直させない。保管したまま送信されなかったファイルは、WP-Cronの `gc()` が期限で消す(§WP-Cronによるgc)。
 - `tokenValues()`: ConfirmTokenに格納する正準値を生成。`StoredFile` は `['__tmsfile' => token]` へ変換。`UploadedFile` が残っていたら `FormConfigException`(storeUploadedFiles()後には存在し得ない不変条件)。
@@ -1625,7 +1652,7 @@ class FormConfigException extends \LogicException {}
 /** 未定義フィールド名の参照 */
 final class UnknownFieldException extends FormConfigException {}
 
-/** 一時ファイル操作の失敗(保管・解決・移動・添付化・削除・gcのイベントのスケジュールと解除) */
+/** 一時ファイル操作の失敗(保管(実体MIMEの判定を含む)・解決・移動・添付化・削除・gcのイベントのスケジュールと解除) */
 final class TempFileException extends \RuntimeException {}
 ```
 
@@ -1906,7 +1933,6 @@ FormDefinition::create('registration')
 ```php
 FormDefinition::create('entry')
     ->file('resume', '履歴書', rules: [
-        new UploadFile(),
         new FileExtension(['pdf']),
         MaxFileSize::mb(5),
     ])
@@ -1945,15 +1971,15 @@ register_block_type('myplugin/contact-form', [
 
 ### 6. サイト全体のメッセージ調整(functions.php)
 
-`tmswp/form/rule_message` フィルタで上書きする。フィルタは `Rule` インスタンスを受け取るため `instanceof` でルール単位・親クラス単位の判定が書け、プレースホルダ置換の前段で効くため上書き文言内の `{label}` も展開される。
+`tmswp/form/rule_message` フィルタで上書きする。フィルタはルールのインスタンス(`RuleInterface`。`Callback`・`Retype` のように `Rule` を継承しないルールもある)を受け取るため `instanceof` でルール単位・親クラス単位の判定が書け、プレースホルダ置換の前段で効くため上書き文言内の `{label}` も展開される。選択肢整合検証(§Validator)のメッセージには `Choice` のインスタンスが渡る。フィルタは必ず文字列を返す(文字列以外は `FormConfigException`)。
 
 ```php
 use TMSWP\Core\Form\Rule\Required;
-use TMSWP\Core\Form\Rule\Rule;
+use TMSWP\Core\Form\Rule\RuleInterface;
 
 add_filter(
     'tmswp/form/rule_message',
-    static fn(string $message, Rule $rule): string
+    static fn(string $message, RuleInterface $rule): string
         => $rule instanceof Required ? '{label}は必須項目です。' : $message,
     10,
     2,
@@ -1977,7 +2003,7 @@ add_filter(
 実装は以下をすべて満たすこと。
 
 **API/構造**
-- [ ] 本文書の全クラス・enum・例外と全メソッドがシグネチャ通りに存在する(`TMSWP\Core\Form\` 配下、Rule群13種・Composite同梱2種を含む)
+- [ ] 本文書の全クラス・enum・例外と全メソッドがシグネチャ通りに存在する(`TMSWP\Core\Form\` 配下、Rule群13種と抽象基底 `CompositeField` を含む)
 - [ ] コアのruntime依存が増えていない(psr/log・psr/container以外のcomposer依存なし。DR-14)
 - [ ] `FormRenderer` 系・コールバック合成・`__callStatic`・`extract()` が存在しない
 - [ ] `Form` がfinal具象クラスであり、`abstract` メソッド・`create(): static`・nullセンチネルコンストラクタが存在しない(コンストラクタは `FormDefinition` 必須引数のみ)
@@ -2016,8 +2042,8 @@ add_filter(
 **検証/メッセージ**
 - [ ] 空値スルー: `''` に対して `Email`/`MaxLength` 等がスキップされ、`Required` だけが失敗するテスト。`'0'` が空扱いされないテスト
 - [ ] multipleフィールドへの `MaxLength` が各要素適用され、TypeErrorが発生しないテスト
-- [ ] choices付きフィールドへの選択肢外値・配列混入が検証エラー(例外でなく)になるテスト
-- [ ] メッセージ解決の優先順(個別 → 英語ソース既定)と、`tmswp/form/rule_message` フィルタによるサイト全体上書き(`instanceof` 判定・フィルタ適用が `{label}` 置換の前段であること)のテスト。`{label}` `{length}` 置換の検証
+- [ ] choices付きフィールドへの選択肢外値・配列混入が検証エラー(例外でなく)になるテスト。単一チェックボックスの `checkedValue` 以外の値と、複合フィールドのパーツの選択肢外の値(範囲外の年等)も検証エラーになるテスト
+- [ ] メッセージ解決の優先順(個別 → 英語ソース既定)と、`tmswp/form/rule_message` フィルタによるサイト全体上書き(`instanceof` 判定・フィルタ適用が `{label}` 置換の前段であること)のテスト。`{label}` `{length}` 置換の検証。`Callback`・`Retype`・選択肢整合検証のメッセージもフィルタを通り、フィルタの文字列以外の戻り値と `Callback` の `bool`・`string` 以外の戻り値が `FormConfigException` になるテスト
 - [ ] app側 `BirthDateField`: 部分入力エラー・checkdate不正(2/30)・`compose(decompose($v)) === $v` のテスト
 - [ ] ja-toolkit `KanaTextField`: 半角カナ・ひらがな入力が正規化されて合格するテスト
 

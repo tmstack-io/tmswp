@@ -9,6 +9,8 @@ use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Closure;
 use LogicException as PhpLogicException;
+use org\bovigo\vfs\vfsStream;
+use org\bovigo\vfs\vfsStreamDirectory;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use RuntimeException as PhpRuntimeException;
@@ -24,9 +26,11 @@ use TMSWP\Core\Form\Field;
 use TMSWP\Core\Form\Form;
 use TMSWP\Core\Form\FormDefinition;
 use TMSWP\Core\Form\FormRequest;
+use TMSWP\Core\Form\FormResult;
 use TMSWP\Core\Form\FormStep;
 use TMSWP\Core\Form\JtiClaim;
 use TMSWP\Core\Form\JtiStore;
+use TMSWP\Core\Form\Rule\FileExtension;
 use TMSWP\Core\Form\Rule\MaxFileSize;
 use TMSWP\Core\Form\Rule\MaxLength;
 use TMSWP\Core\Form\Rule\Required;
@@ -556,6 +560,7 @@ final class FormRuntimeTest extends UnitTestCase
         // 期限切れのファイルを消す WP-Cron のイベントはスケジュール済み
         Functions\when('wp_next_scheduled')->justReturn(1);
         Functions\when('sanitize_file_name')->returnArg();
+        Functions\when('size_format')->alias(static fn(int $bytes): string => "{$bytes} B");
         $uploadDir = $this->createTempDirectory('form-upload');
         file_put_contents($uploadDir . '/resume.txt', 'resume');
         file_put_contents($uploadDir . '/photo.txt', 'a photo that is too large');
@@ -579,7 +584,7 @@ final class FormRuntimeTest extends UnitTestCase
 
         self::assertSame(FormStep::Input, $result->step);
         self::assertArrayHasKey('name', $result->fieldErrors);
-        self::assertArrayHasKey('photo', $result->fieldErrors);
+        self::assertSame(['写真 must be 5 B or smaller.'], $result->fieldErrors['photo']);
         // 自身の検証を通ったファイルは保管し、入力画面の hidden でトークンを引き回す
         self::assertInstanceOf(StoredFile::class, $result->values['resume']);
         self::assertSame('resume', file_get_contents($result->values['resume']->path));
@@ -803,26 +808,47 @@ final class FormRuntimeTest extends UnitTestCase
         self::assertCount(1, $this->completed);
     }
 
-    #[RunInSeparateProcess]
-    public function testTokenWhoseFileWasDeletedButMetadataWasNotIsTreatedAsMissing(): void
+    /** @return iterable<string, array{list<string>}> トークンのディレクトリにファイルを作る順(vfsStream は作った順に列挙する) */
+    public static function temporaryFileCreationOrders(): iterable
     {
-        // このプロセスの TempFileStore・StoredFile の unlink() は、メタデータのファイルだけ失敗する
-        require __DIR__ . '/../fixtures/form/meta-unlink-failure.php';
+        yield 'payload listed first' => [[TempFileStore::FILE_NAME, TempFileStore::META_NAME]];
+        yield 'metadata listed first' => [[TempFileStore::META_NAME, TempFileStore::FILE_NAME]];
+    }
+
+    /** @param list<string> $creationOrder */
+    #[DataProvider('temporaryFileCreationOrders')]
+    public function testTokenWhoseFileWasDeletedButMetadataWasNotIsTreatedAsMissing(array $creationOrder): void
+    {
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: false);
-        $storeDir = $this->createTempDirectory('partial-delete-store');
         $fileToken = '0123456789abcdef0123456789abcdef';
-        $this->createStoredFile($storeDir, $fileToken, 'resume.pdf', 'application/pdf', 'body');
+        // メタデータだけを削除できないトークンのディレクトリ。列挙の順に関係なく、本体を先に消すことを確かめる
+        $tokenDir = (new RuntimeTestMetadataUndeletableDirectory($fileToken, 0700))->at(vfsStream::newDirectory('store', 0700)->at(vfsStream::setup('root')));
+        $contents = [
+            TempFileStore::FILE_NAME => 'body',
+            TempFileStore::META_NAME => json_encode(['name' => 'resume.pdf', 'mime' => 'application/pdf', 'size' => 4, 'created' => time()], JSON_THROW_ON_ERROR),
+        ];
+
+        foreach ($creationOrder as $name) {
+            vfsStream::newFile($name, 0600)->withContent($contents[$name])->at($tokenDir);
+        }
+
+        $storeDir = vfsStream::url('root/store');
         $definition = FormDefinition::create('entry')
             ->file('resume', 'Resume')
             ->confirm()
             ->tempFileStore(new TempFileStore($storeDir))
             ->onComplete($this->recordCompletion(...));
         $request = $this->confirmedSubmit(ConfirmToken::issue('entry', ['resume' => ['__tmsfile' => $fileToken]]));
+        set_error_handler(static fn(): bool => true, E_USER_WARNING | E_WARNING);
 
-        $result = $this->form($definition)->handle($request);
+        try {
+            $result = $this->form($definition)->handle($request);
+        } finally {
+            restore_error_handler();
+        }
 
-        // 後始末は本体のファイルだけを消して失敗した(送信は完了し、error を記録した)
+        // 後始末は本体のファイルを消してから、メタデータの削除で失敗した(送信は完了し、error を記録した)
         self::assertSame(FormStep::Complete, $result->step);
         self::assertFileDoesNotExist($storeDir . '/' . $fileToken . '/' . TempFileStore::FILE_NAME);
         self::assertFileExists($storeDir . '/' . $fileToken . '/' . TempFileStore::META_NAME);
@@ -874,6 +900,26 @@ final class FormRuntimeTest extends UnitTestCase
         self::assertSame([], $this->completed);
     }
 
+    public function testFailedUploadErrorTakesPrecedenceOverTheErrorsOfFileRules(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: true);
+        $definition = FormDefinition::create('entry')
+            ->file('resume', 'Resume', [new Required(), new FileExtension(['pdf'])])
+            ->confirm()
+            ->tempFileStore(new TempFileStore($this->createTempDirectory('failed-upload-rules-store')));
+
+        $result = $this->form($definition)->handle(new FormRequest('POST', [
+            Form::FIELD_FORM_ID => 'entry',
+            Form::FIELD_NONCE => 'ok',
+            Form::FIELD_STEP => 'confirm',
+        ], ['resume' => ['name' => 'large.txt', 'type' => 'text/plain', 'tmp_name' => '', 'error' => UPLOAD_ERR_INI_SIZE, 'size' => 0]]));
+
+        self::assertSame(FormStep::Input, $result->step);
+        // 拡張子の規則のエラーではなく、アップロードの失敗を出す
+        self::assertSame(['resume' => ['The uploaded file is too large.']], $result->fieldErrors);
+    }
+
     public function testFailureToStoreTheUploadedFileFollowsTheErrorPolicyAndReleasesTheJti(): void
     {
         $this->stubRuntimeFunctions();
@@ -915,6 +961,60 @@ final class FormRuntimeTest extends UnitTestCase
         // jti を手放しているので、同じ送信トークンで送り直せる
         self::assertSame(FormStep::Complete, $this->form($definition)->handle($this->fileSubmit('apply', $token, ['resume' => $this->upload('resume.txt', 'resume')]))->step);
         self::assertCount(1, $this->completed);
+    }
+
+    public function testFailureToDetectTheMimeTypeFollowsTheErrorPolicyOnConfirmAndDirectSubmit(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->stubUploads();
+        $this->bootKernel(debug: false);
+        $definition = FormDefinition::create('apply')
+            ->file('resume', 'Resume')
+            ->tempFileStore(new TempFileStore($this->createTempDirectory('mime-failure-store')))
+            ->onComplete($this->recordCompletion(...));
+        $token = SubmitToken::issue('apply');
+        $confirm = new FormRequest('POST', [Form::FIELD_FORM_ID => 'apply', Form::FIELD_NONCE => 'ok', Form::FIELD_STEP => 'confirm'], ['resume' => $this->upload('resume.txt', 'resume')]);
+
+        [$failed, $confirmFailed] = $this->withUnreadableMagicDatabase(fn(): array => [
+            $this->form($definition)->handle($this->fileSubmit('apply', $token, ['resume' => $this->upload('resume.txt', 'resume')])),
+            $this->form((clone $definition)->confirm())->handle($confirm),
+        ]);
+
+        self::assertSame([self::SEND_FAILED], $failed->formErrors);
+        self::assertSame([self::SEND_FAILED], $confirmFailed->formErrors);
+        self::assertSame(
+            [
+                ['error', 'tmswp.form: failed to store the uploaded files of form {form}', 'apply'],
+                ['error', 'tmswp.form: failed to store the uploaded files of form {form}', 'apply'],
+            ],
+            $this->logRecords(),
+        );
+        self::assertSame(TempFileException::class, $this->logger->records[0]['context']['exceptionClass']);
+        self::assertSame([], $this->completed);
+
+        // jti を手放しているので、判定できるようになれば同じ送信トークンで送り直せる
+        self::assertSame(FormStep::Complete, $this->form($definition)->handle($this->fileSubmit('apply', $token, ['resume' => $this->upload('resume.txt', 'resume')]))->step);
+        self::assertCount(1, $this->completed);
+    }
+
+    public function testFailureToDetectTheMimeTypeIsThrownInDebug(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->stubUploads();
+        $this->bootKernel(debug: true);
+        $definition = FormDefinition::create('apply')
+            ->file('resume', 'Resume')
+            ->confirm()
+            ->tempFileStore(new TempFileStore($this->createTempDirectory('mime-failure-debug-store')));
+
+        $this->expectException(TempFileException::class);
+        $this->expectExceptionMessage('failed to initialize finfo to detect the MIME type of an uploaded file');
+
+        $this->withUnreadableMagicDatabase(fn(): FormResult => $this->form($definition)->handle(new FormRequest('POST', [
+            Form::FIELD_FORM_ID => 'apply',
+            Form::FIELD_NONCE => 'ok',
+            Form::FIELD_STEP => 'confirm',
+        ], ['resume' => $this->upload('resume.txt', 'resume')])));
     }
 
     public function testFailureToStoreTheUploadedFileIsThrownInDebug(): void
@@ -1745,6 +1845,27 @@ final class FormRuntimeTest extends UnitTestCase
     }
 
     /** 実際のアップロードの代わりに、一時ディレクトリのファイルを $_FILES のファイルとして扱う */
+    /**
+     * libmagic が読む環境変数 MAGIC を読めないデータベースに向けて、finfo の初期化を失敗させた状態で $run を実行する。
+     *
+     * @template T
+     *
+     * @param Closure(): T $run
+     *
+     * @return T
+     */
+    private function withUnreadableMagicDatabase(Closure $run): mixed
+    {
+        $magic = getenv('MAGIC');
+        putenv('MAGIC=' . $this->createTempDirectory('missing-magic') . '/magic.mgc');
+
+        try {
+            return $run();
+        } finally {
+            putenv($magic === false ? 'MAGIC' : "MAGIC={$magic}");
+        }
+    }
+
     private function stubUploads(): void
     {
         Functions\when('TMSWP\\Core\\Form\\is_uploaded_file')->alias(static fn(string $path): bool => is_file($path));
@@ -2092,5 +2213,18 @@ final class RuntimeTestCredentialField extends CompositeField
         [$user, $pass] = array_pad(explode(':', $value, 2), 2, '');
 
         return ['user' => $user, 'pass' => $pass];
+    }
+}
+
+/** メタデータのファイルだけを削除できない vfsStream のディレクトリ(削除の途中の失敗を作る) */
+final class RuntimeTestMetadataUndeletableDirectory extends vfsStreamDirectory
+{
+    public function removeChild($name): bool
+    {
+        if ($name === TempFileStore::META_NAME) {
+            return false;
+        }
+
+        return parent::removeChild($name);
     }
 }

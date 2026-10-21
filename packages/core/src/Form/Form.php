@@ -737,8 +737,8 @@ final class Form
 
     /**
      * 値を検証する。取り込みの段階で入力の不正があった項目は、検証の結果に代えてその不正をエラーにする。アップロードに
-     * 失敗したファイル(サイズの超過等)は、項目の規則に関係なくエラーにする(検証を通ったファイルを必ず保管できるように
-     * するため)。
+     * 失敗したファイル(サイズの超過等)は、項目の規則に関係なく、規則のエラーより先にエラーにする(検証を通ったファイルを
+     * 必ず保管できるようにするため。失敗したアップロードに拡張子等の規則のエラーを出さないため)。
      */
     private function validate(): void
     {
@@ -750,10 +750,10 @@ final class Form
 
             if (\array_key_exists($name, $this->inputErrors)) {
                 $this->fieldErrors[$name] = [$this->inputErrors[$name]];
-            } elseif (\array_key_exists($name, $errors)) {
-                $this->fieldErrors[$name] = $errors[$name];
             } elseif ($value instanceof UploadedFile && !$value->isValid()) {
                 $this->fieldErrors[$name] = [$value->errorMessage()];
+            } elseif (\array_key_exists($name, $errors)) {
+                $this->fieldErrors[$name] = $errors[$name];
             }
         }
 
