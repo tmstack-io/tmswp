@@ -6,7 +6,8 @@
          colors="true"
          convertDeprecationsToExceptions="true"
          failOnWarning="true"
-         beStrictAboutTestsThatDoNotTestAnything="true">
+         beStrictAboutTestsThatDoNotTestAnything="true"
+         testdox="true">
     <testsuites>
         <testsuite name="core">
             <directory>packages/core/tests/Integration</directory>

@@ -109,12 +109,20 @@ final class Field
     /**
      * 単一のチェックボックス。チェックしたときの値は $checkedValue、しないときは ''。
      *
+     * @param string $checkedValue 空文字列は指定できない(しないときの '' とチェックの有無を区別できず、Required が常に
+     *                             失敗するため)
      * @param list<RuleInterface> $rules
      * @param ?string $checkedLabel チェックしたときに確認画面(FieldView::display())に出す文言。null のフィールドの
      *                              display() は FormConfigException になる(値の '1' をそのまま出さない)
+     *
+     * @throws FormConfigException $checkedValue が空文字列の場合
      */
     public static function checkbox(string $name, string $label, string $checkedValue = '1', array $rules = [], ?string $checkedLabel = null): self
     {
+        if ($checkedValue === '') {
+            throw new FormConfigException("checkbox field '{$name}' must have a non-empty checkedValue: an unchecked checkbox is ''");
+        }
+
         return new self($name, $label, FieldType::Checkbox, $rules, checkedValue: $checkedValue, checkedLabel: $checkedLabel);
     }
 

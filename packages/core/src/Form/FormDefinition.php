@@ -106,7 +106,11 @@ final class FormDefinition
         return $this->add(Field::checkboxes($name, $label, $choices, $rules, $default));
     }
 
-    /** @param list<RuleInterface> $rules */
+    /**
+     * @param list<RuleInterface> $rules
+     *
+     * @throws FormConfigException $checkedValue が空文字列の場合(Field::checkbox())
+     */
     public function checkbox(string $name, string $label, string $checkedValue = '1', array $rules = [], ?string $checkedLabel = null): self
     {
         return $this->add(Field::checkbox($name, $label, $checkedValue, $rules, $checkedLabel));

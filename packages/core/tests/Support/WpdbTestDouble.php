@@ -24,6 +24,7 @@ if (!class_exists(wpdb::class, false)) {
  *
  * 実行した SQL と insert/update/delete の呼び出しを記録し、読み取り結果はキューから返す。
  * failNextWrite() で、書き込み系の呼び出しを実 wpdb の失敗と同じく false で返させられる。
+ * failNextRead() で、読み取り系の呼び出しを実 wpdb の失敗と同じく last_error を残して null で返させられる。
  */
 final class WpdbTestDouble extends wpdb
 {
@@ -71,6 +72,9 @@ final class WpdbTestDouble extends wpdb
     /** 次の書き込み系呼び出しを失敗させるときに wpdb::$last_error へ入れる値。null なら失敗させない。 */
     private ?string $tmswpNextWriteError = null;
 
+    /** 次の読み取り系呼び出しを失敗させるときに wpdb::$last_error へ入れる値。null なら失敗させない。 */
+    private ?string $tmswpNextReadError = null;
+
     /** @var list<mixed> */
     private array $tmswpLastArgs = [];
 
@@ -111,6 +115,21 @@ final class WpdbTestDouble extends wpdb
     public function failNextWrite(string $lastError = ''): void
     {
         $this->tmswpNextWriteError = $lastError;
+    }
+
+    /**
+     * 次の読み取り系呼び出し（get_results / get_row / get_var）を、実 wpdb の失敗と同じく失敗させる。
+     *
+     * 実 wpdb の読み取り系はデータベースのエラーでも false を返さず、null を返して wpdb::$last_error に MySQL の
+     * エラー文を残す。キューの値は消費しない。
+     */
+    public function failNextRead(string $lastError): void
+    {
+        if ($lastError === '') {
+            throw new InvalidArgumentException('a failed read must leave the error in last_error');
+        }
+
+        $this->tmswpNextReadError = $lastError;
     }
 
     /**
@@ -211,8 +230,11 @@ final class WpdbTestDouble extends wpdb
             throw new InvalidArgumentException('query must be string');
         }
 
-        $this->last_error = '';
         $this->tmswpQueries[] = $query;
+
+        if ($this->consumeReadFailure()) {
+            return null;
+        }
 
         $rows = array_shift($this->tmswpResultSets);
 
@@ -246,8 +268,11 @@ final class WpdbTestDouble extends wpdb
             throw new InvalidArgumentException('query must be string');
         }
 
-        $this->last_error = '';
         $this->tmswpQueries[] = $query;
+
+        if ($this->consumeReadFailure()) {
+            return null;
+        }
 
         $row = array_shift($this->tmswpRows) ?? null;
 
@@ -273,8 +298,11 @@ final class WpdbTestDouble extends wpdb
             throw new InvalidArgumentException('query must be string');
         }
 
-        $this->last_error = '';
         $this->tmswpQueries[] = $query;
+
+        if ($this->consumeReadFailure()) {
+            return null;
+        }
 
         return array_shift($this->tmswpVars);
     }
@@ -449,6 +477,23 @@ final class WpdbTestDouble extends wpdb
         $this->last_error = $this->tmswpNextWriteError;
         $this->tmswpNextWriteError = null;
         $this->rows_affected = 0;
+
+        return true;
+    }
+
+    /**
+     * 実 wpdb の flush() と同じく直前の last_error を消し、failNextRead() の予約があれば消費して失敗状態にする。
+     */
+    private function consumeReadFailure(): bool
+    {
+        $this->last_error = '';
+
+        if ($this->tmswpNextReadError === null) {
+            return false;
+        }
+
+        $this->last_error = $this->tmswpNextReadError;
+        $this->tmswpNextReadError = null;
 
         return true;
     }

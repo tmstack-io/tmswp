@@ -21,7 +21,7 @@ final class FormDefinitionTest extends UnitTestCase
     public function testFieldNamesRejectInvalidReservedAndTokenSuffixNames(): void
     {
         $this->expectException(FormConfigException::class);
-        Field::text('BadName', '不正');
+        Field::text('BadName', 'Invalid');
     }
 
     public function testReservedFieldNameIsRejected(): void
@@ -33,7 +33,7 @@ final class FormDefinitionTest extends UnitTestCase
     public function testTokenSuffixFieldNameIsRejected(): void
     {
         $this->expectException(FormConfigException::class);
-        Field::text('upload__token', '不正');
+        Field::text('upload__token', 'Invalid');
     }
 
     public function testDuplicateFieldsAreRejected(): void
@@ -41,15 +41,43 @@ final class FormDefinitionTest extends UnitTestCase
         $this->expectException(FormConfigException::class);
 
         FormDefinition::create('contact')
-            ->text('name', '名前')
-            ->text('name', '氏名');
+            ->text('name', 'Name')
+            ->text('name', 'Full name');
     }
 
     public function testChoiceFieldRequiresChoices(): void
     {
         $this->expectException(FormConfigException::class);
 
-        Field::select('pref', '都道府県', []);
+        Field::select('pref', 'Prefecture', []);
+    }
+
+    /** @return iterable<string, array{Closure(): mixed}> */
+    public static function checkboxesWithAnEmptyCheckedValue(): iterable
+    {
+        yield 'Field::checkbox()' => [static fn(): Field => Field::checkbox('agree', 'Agree', '')];
+        yield 'FormDefinition::checkbox()' => [static fn(): FormDefinition => FormDefinition::create('contact')->checkbox('agree', 'Agree', '')];
+    }
+
+    /**
+     * 単一のチェックボックスの checkedValue が '' だと、チェックの有無(しないときも '')を区別できず、Required が常に
+     * 失敗するため、定義の時点で拒否する。
+     *
+     * @param Closure(): mixed $define
+     */
+    #[DataProvider('checkboxesWithAnEmptyCheckedValue')]
+    public function testCheckboxWithAnEmptyCheckedValueIsRejected(Closure $define): void
+    {
+        $this->expectException(FormConfigException::class);
+        $this->expectExceptionMessage("checkbox field 'agree' must have a non-empty checkedValue");
+
+        $define();
+    }
+
+    public function testCheckboxAcceptsANonEmptyCheckedValueIncludingZero(): void
+    {
+        self::assertSame('0', Field::checkbox('agree', 'Agree', '0')->checkedValue);
+        self::assertSame('1', Field::checkbox('agree', 'Agree')->checkedValue);
     }
 
     public function testDefinitionRejectsUnknownFieldLookup(): void
@@ -101,8 +129,8 @@ final class FormDefinitionTest extends UnitTestCase
     {
         $store = new \TMSWP\Core\Form\TempFileStore($this->createTempDirectory('form-store'));
         $definition = FormDefinition::create('entry-form')
-            ->text('name', '名前')
-            ->checkboxes('topics', '関心', ['1' => 'ニュース', '2' => '資料'], default: ['2'])
+            ->text('name', 'Name')
+            ->checkboxes('topics', 'Topics', ['1' => 'News', '2' => 'Docs'], default: ['2'])
             ->confirm()
             ->confirmTtl(90)
             ->errorHtml('<span class="error">%s</span>')

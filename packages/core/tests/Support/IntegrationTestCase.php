@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Support;
 
 use LogicException;
+use ReflectionProperty;
 use TMSWP\Core\Kernel\Kernel;
 use WP_UnitTestCase;
 use wpdb;
@@ -24,8 +25,25 @@ abstract class IntegrationTestCase extends WP_UnitTestCase
     protected const PLUGIN_NAMESPACE = 'TmswpFixturePlugin';
 
     /**
+     * 最初のテストの開始の時点の Kernel のレジストリ(fixture のテーマとプラグインの Kernel)。
+     *
+     * @var array<string, Kernel>|null
+     */
+    private static ?array $fixtureKernels = null;
+
+    /**
+     * このテストの開始の時点の Kernel のレジストリ。tear_down でこの状態に戻す。
+     *
+     * @var array<string, Kernel>
+     */
+    private array $kernelsAtSetUp = [];
+
+    /**
      * WP のテストライブラリは各テストの tear_down で登録済みメタキーをすべて解除する。boot した Kernel が
      * init で登録したメタキーを各テストで使えるよう、tests/fixtures/_boot.php が wp_loaded で控えた登録を戻す。
+     *
+     * Kernel のレジストリは、前のテストが boot した Kernel が残っていない(fixture の Kernel だけである)ことを確かめて
+     * から控える。
      */
     public function set_up(): void
     {
@@ -36,6 +54,20 @@ abstract class IntegrationTestCase extends WP_UnitTestCase
         }
 
         $GLOBALS['wp_meta_keys'] = $GLOBALS['tmswp_tests_registered_meta_keys'];
+
+        self::$fixtureKernels ??= Kernel::all();
+        self::assertSame(array_keys(self::$fixtureKernels), array_keys(Kernel::all()), 'a previous test left booted kernels in the registry');
+        $this->kernelsAtSetUp = Kernel::all();
+    }
+
+    /**
+     * テストが boot した Kernel(一時ディレクトリの app/ を持ち、テストの後始末で消える)をレジストリから外し、
+     * fixture の Kernel だけの状態に戻す。Kernel のフックの登録は WP のテストライブラリが各テストの後に戻す。
+     */
+    public function tear_down(): void
+    {
+        self::replaceKernelRegistry($this->kernelsAtSetUp);
+        parent::tear_down();
     }
 
     protected static function themeKernel(): Kernel
@@ -80,6 +112,17 @@ abstract class IntegrationTestCase extends WP_UnitTestCase
         self::assertGreaterThan(0, $postId);
 
         return $postId;
+    }
+
+    /**
+     * Kernel のレジストリを置き換える。Kernel は登録した Kernel を個別に外す API を持たず、Kernel::reset() は fixture の
+     * Kernel も外すため、テストの後始末に限り、レジストリの静的プロパティを直接書き戻す。
+     *
+     * @param array<string, Kernel> $kernels
+     */
+    private static function replaceKernelRegistry(array $kernels): void
+    {
+        (new ReflectionProperty(Kernel::class, 'kernels'))->setValue(null, $kernels);
     }
 
     protected static function wpdb(): wpdb

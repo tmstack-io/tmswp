@@ -42,13 +42,13 @@ final class FormValidationTest extends UnitTestCase
     public function testScalarRulesValidateAndSkipOptionalEmptyValues(): void
     {
         $definition = FormDefinition::create('contact')
-            ->text('name', '名前', [new Required(), new MaxLength(3)])
-            ->text('code', 'コード', [new MinLength(2), new Regex('/\A[A-Z]+\z/u')])
-            ->text('email', 'メール', [new Email()])
+            ->text('name', 'Name', [new Required(), new MaxLength(3)])
+            ->text('code', 'Code', [new MinLength(2), new Regex('/\A[A-Z]+\z/u')])
+            ->text('email', 'Email', [new Email()])
             ->text('url', 'URL', [new Url()])
-            ->text('age', '年齢', [new Range(18, 65)])
-            ->text('kind', '種別', [new Choice(['a', 'b'])])
-            ->text('note', '備考', [new Callback(static fn(mixed $value): bool|string => $value === 'ok' ? true : '備考が不正です。')]);
+            ->text('age', 'Age', [new Range(18, 65)])
+            ->text('kind', 'Type', [new Choice(['a', 'b'])])
+            ->text('note', 'Note', [new Callback(static fn(mixed $value): bool|string => $value === 'ok' ? true : 'Note is not valid.')]);
 
         $validator = new Validator();
 
@@ -72,23 +72,23 @@ final class FormValidationTest extends UnitTestCase
             'note' => 'ng',
         ]);
 
-        self::assertSame('名前 must be 3 characters or fewer.', $errors['name'][0]);
-        self::assertSame('コード must be at least 2 characters.', $errors['code'][0]);
-        self::assertSame('Please enter a valid email address for メール.', $errors['email'][0]);
+        self::assertSame('Name must be 3 characters or fewer.', $errors['name'][0]);
+        self::assertSame('Code must be at least 2 characters.', $errors['code'][0]);
+        self::assertSame('Please enter a valid email address for Email.', $errors['email'][0]);
         self::assertSame('Please enter a valid URL for URL.', $errors['url'][0]);
-        self::assertSame('年齢 must be between 18 and 65.', $errors['age'][0]);
-        self::assertSame('種別 has an invalid choice.', $errors['kind'][0]);
-        self::assertSame('備考が不正です。', $errors['note'][0]);
+        self::assertSame('Age must be between 18 and 65.', $errors['age'][0]);
+        self::assertSame('Type has an invalid choice.', $errors['kind'][0]);
+        self::assertSame('Note is not valid.', $errors['note'][0]);
     }
 
     public function testRequiredIfRetypeAndMultipleChoiceValidation(): void
     {
         $definition = FormDefinition::create('account')
-            ->select('type', '種別', ['personal' => '個人', 'company' => '法人'])
-            ->text('company', '会社名', [RequiredIf::equals('type', 'company')])
-            ->password('password', 'パスワード')
-            ->password('password_confirmation', '確認用パスワード', [new Retype('password')])
-            ->checkboxes('topics', '関心', ['news' => 'ニュース', 'docs' => '資料'], [new Required()]);
+            ->select('type', 'Type', ['personal' => 'Personal', 'company' => 'Company'])
+            ->text('company', 'Company name', [RequiredIf::equals('type', 'company')])
+            ->password('password', 'Password')
+            ->password('password_confirmation', 'Password confirmation', [new Retype('password')])
+            ->checkboxes('topics', 'Topics', ['news' => 'News', 'docs' => 'Docs'], [new Required()]);
 
         $errors = (new Validator())->validate($definition, [
             'type' => 'company',
@@ -98,9 +98,9 @@ final class FormValidationTest extends UnitTestCase
             'topics' => ['news', 'bad'],
         ]);
 
-        self::assertSame('会社名 is required.', $errors['company'][0]);
-        self::assertSame('確認用パスワード must match パスワード.', $errors['password_confirmation'][0]);
-        self::assertSame('関心 has an invalid choice.', $errors['topics'][0]);
+        self::assertSame('Company name is required.', $errors['company'][0]);
+        self::assertSame('Password confirmation must match Password.', $errors['password_confirmation'][0]);
+        self::assertSame('Topics has an invalid choice.', $errors['topics'][0]);
     }
 
     public function testInvalidRegexPatternThrowsConfigException(): void
@@ -108,7 +108,7 @@ final class FormValidationTest extends UnitTestCase
         $this->expectException(FormConfigException::class);
 
         (new Validator())->validate(
-            FormDefinition::create('search')->text('keyword', 'キーワード', [new Regex('/[/')]),
+            FormDefinition::create('search')->text('keyword', 'Keyword', [new Regex('/[/')]),
             ['keyword' => 'text'],
         );
     }
@@ -121,11 +121,11 @@ final class FormValidationTest extends UnitTestCase
             ->andReturn('{label}: max {length} chars');
 
         $errors = (new Validator())->validate(
-            FormDefinition::create('contact')->text('name', '名前', [new MaxLength(3)]),
+            FormDefinition::create('contact')->text('name', 'Name', [new MaxLength(3)]),
             ['name' => 'abcd'],
         );
 
-        self::assertSame('名前: max 3 chars', $errors['name'][0]);
+        self::assertSame('Name: max 3 chars', $errors['name'][0]);
     }
 
     public function testFileRulesAcceptStoredFileAndRejectItsExtensionAndSize(): void
@@ -227,6 +227,21 @@ final class FormValidationTest extends UnitTestCase
         );
     }
 
+    /**
+     * 複数選択の項目への MaxLength は、先頭だけでなく全要素に適用する。先頭は正しく、2番目以降だけが長さの違反になる
+     * 値(どの要素も選択肢の中)で確かめる。
+     */
+    public function testMaxLengthOfAMultipleFieldChecksEveryElementNotOnlyTheFirst(): void
+    {
+        $definition = FormDefinition::create('inquiry')
+            ->checkboxes('length', 'Length', ['ok' => 'OK', 'yes' => 'Yes', 'long' => 'Long'], [new MaxLength(3)]);
+        $validator = new Validator();
+
+        self::assertSame([], $validator->validate($definition, ['length' => ['ok', 'yes']]));
+        self::assertSame(['length' => ['Length must be 3 characters or fewer.']], $validator->validate($definition, ['length' => ['ok', 'long']]));
+        self::assertSame(['length' => ['Length must be 3 characters or fewer.']], $validator->validate($definition, ['length' => ['ok', 'yes', 'long']]));
+    }
+
     public function testCallbackReturningNeitherBoolNorStringThrows(): void
     {
         $callback = require __DIR__ . '/../fixtures/form-validation/callback-returning-null.php';
@@ -303,15 +318,15 @@ final class FormValidationTest extends UnitTestCase
         Functions\when('wp_salt')->justReturn('secret');
 
         $definition = FormDefinition::create('profile')
-            ->add(new ValidationTestDateField('birth', '生年月日', [new Required()], minYear: 2000, maxYear: 2026));
+            ->add(new ValidationTestDateField('birth', 'Birth date', [new Required()], minYear: 2000, maxYear: 2026));
         $validator = new Validator();
 
         self::assertSame(
-            'Please complete all parts of 生年月日.',
+            'Please complete all parts of Birth date.',
             $validator->validate($definition, ['birth' => ['year' => '2026', 'month' => '', 'day' => '1']])['birth'][0],
         );
         self::assertSame(
-            '生年月日 is not a valid date.',
+            'Birth date is not a valid date.',
             $validator->validate($definition, ['birth' => ['year' => '2026', 'month' => '2', 'day' => '31']])['birth'][0],
         );
 
@@ -333,6 +348,34 @@ final class FormValidationTest extends UnitTestCase
 
         self::assertSame(FormStep::Complete, $result->step);
         self::assertSame('2026-02-03', $result->values['birth']);
+    }
+
+    /**
+     * app 側の複合フィールド(生年月日)。正準値は compose(decompose($v)) === $v で往復し、部分入力と存在しない日付
+     * (2/30・平年の 2/29)は項目のエラーになる。
+     */
+    public function testCompositeDateRoundTripsItsCanonicalValueAndRejectsPartialAndNonexistentDates(): void
+    {
+        $field = new ValidationTestDateField('birth', 'Birth date', [new Required()], minYear: 2000, maxYear: 2026);
+        $definition = FormDefinition::create('profile')->add($field);
+        $validator = new Validator();
+
+        foreach (['2026-02-03', '2000-12-31', '2024-02-29'] as $value) {
+            self::assertSame($value, $field->compose($field->decompose($value)));
+            self::assertSame([], $validator->validate($definition, ['birth' => $field->decompose($value)]), $value);
+        }
+
+        foreach ([['2026', '2', '30'], ['2025', '2', '29']] as [$year, $month, $day]) {
+            self::assertSame(
+                ['birth' => ['Birth date is not a valid date.']],
+                $validator->validate($definition, ['birth' => ['year' => $year, 'month' => $month, 'day' => $day]]),
+            );
+        }
+
+        self::assertSame(
+            ['birth' => ['Please complete all parts of Birth date.']],
+            $validator->validate($definition, ['birth' => ['year' => '2026', 'month' => '', 'day' => '']]),
+        );
     }
 
     public function testCompositePartsAreCheckedAgainstTheirChoices(): void
@@ -410,9 +453,9 @@ final class ValidationTestDateField extends CompositeField
     public function parts(): array
     {
         return [
-            'year' => Field::select($this->name . '_year', '年', $this->yearChoices()),
-            'month' => Field::select($this->name . '_month', '月', $this->rangeChoices(1, 12)),
-            'day' => Field::select($this->name . '_day', '日', $this->rangeChoices(1, 31)),
+            'year' => Field::select($this->name . '_year', 'Year', $this->yearChoices()),
+            'month' => Field::select($this->name . '_month', 'Month', $this->rangeChoices(1, 12)),
+            'day' => Field::select($this->name . '_day', 'Day', $this->rangeChoices(1, 31)),
         ];
     }
 
@@ -437,7 +480,7 @@ final class ValidationTestDateField extends CompositeField
 
     public function invalidPartsMessage(): string
     {
-        return __('{label} is not a valid date.', 'tmswp');
+        return __('{label} is not a valid date.', 'tmswp-tests');
     }
 
     /** @return array<array-key, string> */

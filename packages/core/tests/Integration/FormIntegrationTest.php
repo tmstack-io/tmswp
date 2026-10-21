@@ -88,6 +88,135 @@ final class FormIntegrationTest extends IntegrationTestCase
         );
     }
 
+    /**
+     * 実際の nonce の検証(wp_verify_nonce())。別のフォームの nonce・別の利用者の nonce・形の合わない値は CSRF の失敗として
+     * 入力画面に戻し、onComplete を実行しない。open() が出力した nonce だけが通る。
+     */
+    public function testRealNonceCheckRejectsNoncesOfOtherFormsOtherUsersAndForgedValues(): void
+    {
+        $form = $this->formFactory(debug: false);
+        $definition = $this->contactDefinition();
+        $hidden = $this->hiddenValues($form($definition)->open());
+        $otherUser = self::factory()->user->create();
+        self::assertIsInt($otherUser);
+        $previousUser = get_current_user_id();
+        wp_set_current_user($otherUser);
+        $otherUsersNonce = wp_create_nonce('tmswp_form_contact');
+        wp_set_current_user($previousUser);
+
+        foreach ([
+            'nonce of another form' => wp_create_nonce('tmswp_form_other'),
+            'nonce of another user' => $otherUsersNonce,
+            'forged value' => 'abcdef1234',
+            'missing' => '',
+        ] as $case => $nonce) {
+            $this->logger->records = [];
+            $result = $form($definition)->handle(new FormRequest('POST', [...$hidden, Form::FIELD_NONCE => $nonce, Form::FIELD_STEP => 'submit', 'name' => 'Taro']));
+
+            self::assertSame(FormStep::Input, $result->step, $case);
+            self::assertSame(['Your session has expired. Please submit the form again.'], $result->formErrors, $case);
+            self::assertSame('Taro', $result->values['name'], $case);
+            self::assertSame(['warning'], array_column($this->logger->records, 'level'), $case);
+            self::assertSame('tmswp.form: the CSRF check (nonce) of form {form} failed', $this->logger->records[0]['message'], $case);
+        }
+
+        self::assertSame([], $this->completed);
+        self::assertSame(FormStep::Complete, $form($definition)->handle($this->submitRequest($form($definition)->open(), ['name' => 'Taro']))->step);
+        self::assertSame([['name' => 'Taro']], $this->completed);
+    }
+
+    /**
+     * 二重クリックの2本目が、1本目の onComplete の実行中に届く(並行した同じ jti の POST)。実際のデータベースの
+     * INSERT IGNORE で2本目の claim が失敗し、再送として拒否される。確認画面の有無の両方で確かめる。
+     */
+    public function testConcurrentSecondRequestIsRejectedByTheRealDatabaseWhileTheFirstRunsOnComplete(): void
+    {
+        $form = $this->formFactory(debug: false);
+
+        foreach (['without confirmation' => false, 'with confirmation' => true] as $case => $confirm) {
+            $this->completed = [];
+            $definition = FormDefinition::create('contact')->text('name', 'Name')->confirm($confirm);
+            $submit = $this->submitRequestFor($form, $definition, ['name' => 'Taro']);
+            // 1本目の onComplete の中で処理した2本目の結果
+            $concurrent = [];
+            $definition->onComplete(function (array $values) use (&$concurrent, $form, $definition, $submit): void {
+                $this->completed[] = $values;
+
+                // 2本目が onComplete に進んでも、さらに次の POST は送らない
+                if (\count($this->completed) === 1) {
+                    $concurrent[] = $form($definition)->handle($submit);
+                }
+            });
+
+            self::assertSame(FormStep::Complete, $form($definition)->handle($submit)->step, $case);
+            self::assertCount(1, $concurrent, $case);
+            self::assertSame(FormStep::Input, $concurrent[0]->step, $case);
+            self::assertSame(['This form has already been submitted.'], $concurrent[0]->formErrors, $case);
+            self::assertSame([['name' => 'Taro']], $this->completed, $case);
+        }
+    }
+
+    /**
+     * チェックを外した checkbox・checkboxes は POST にキーが無い。スーパーグローバルからの取り込みで、空値の hidden を
+     * 置かなくても '' と [] になる(既定値に戻らない)。確認画面の有無の両方で確かめる。
+     */
+    public function testUncheckedCheckboxesWithoutPostKeysAreBoundAsEmptyValues(): void
+    {
+        $form = $this->formFactory(debug: false);
+
+        foreach (['without confirmation' => false, 'with confirmation' => true] as $case => $confirm) {
+            $this->completed = [];
+            $definition = FormDefinition::create('consent')
+                ->checkbox('agree', 'Agree')
+                ->checkboxes('topics', 'Topics', ['news' => 'News', 'docs' => 'Docs'], default: ['news'])
+                ->confirm($confirm)
+                ->onComplete(function (array $values): void {
+                    $this->completed[] = $values;
+                });
+
+            $result = $this->handleGlobals($form($definition), [
+                ...$this->hiddenValues($form($definition)->open()),
+                Form::FIELD_STEP => $confirm ? 'confirm' : 'submit',
+            ]);
+
+            self::assertSame($confirm ? FormStep::Confirm : FormStep::Complete, $result->step, $case);
+            self::assertSame(['agree' => '', 'topics' => []], $result->values, $case);
+            self::assertSame($confirm ? [] : [['agree' => '', 'topics' => []]], $this->completed, $case);
+        }
+    }
+
+    /**
+     * 同じページの2つのフォーム。POST は宛先(_form_id)のフォームだけが処理し、もう一方は同じ名前の項目の値も
+     * 取り込まず、エラーの無い入力画面のまま(実際の nonce で確かめる)。
+     */
+    public function testTwoFormsOnTheSamePageProcessOnlyTheFormThePostIsAddressedTo(): void
+    {
+        $form = $this->formFactory(debug: false);
+        $newsletterCompleted = [];
+        $newsletter = FormDefinition::create('newsletter')
+            ->text('email', 'Email', [new Required()])
+            ->text('name', 'Name', default: 'Subscriber')
+            ->onComplete(static function (array $values) use (&$newsletterCompleted): void {
+                $newsletterCompleted[] = $values;
+            });
+        $contact = $this->contactDefinition();
+        // 同じページで2つのフォームを描画し、利用者は contact を送る
+        $form($newsletter)->open();
+        $post = $this->submitRequest($form($contact)->open(), ['name' => 'Taro', 'email' => 'taro@example.com']);
+
+        $newsletterResult = $form($newsletter)->handle($post);
+        $contactResult = $form($contact)->handle($post);
+
+        self::assertSame(FormStep::Input, $newsletterResult->step);
+        self::assertSame(['email' => '', 'name' => 'Subscriber'], $newsletterResult->values);
+        self::assertSame([], $newsletterResult->fieldErrors);
+        self::assertSame([], $newsletterResult->formErrors);
+        self::assertSame([], $newsletterCompleted);
+        self::assertSame(FormStep::Complete, $contactResult->step);
+        self::assertSame([['name' => 'Taro']], $this->completed);
+        self::assertSame([], $this->logger->records);
+    }
+
     public function testResubmittingTheConfirmTokenRunsOnCompleteOnce(): void
     {
         $form = $this->formFactory(debug: false);
@@ -240,6 +369,16 @@ final class FormIntegrationTest extends IntegrationTestCase
             self::assertSame(['resume' => ['The file upload failed.']], $result->fieldErrors);
             self::assertSame('Taro', $result->values['name']);
 
+            // error の無い、不正な形のファイルのエントリ
+            $result = $this->handleGlobals($form($definition), [
+                ...$this->hiddenValues($form($definition)->open()),
+                Form::FIELD_STEP => $step,
+                'name' => 'Taro',
+            ], ['resume' => ['name' => 'a.pdf', 'type' => 'application/pdf', 'tmp_name' => '/tmp/phpA', 'size' => 1]]);
+
+            self::assertSame(FormStep::Input, $result->step);
+            self::assertSame(['resume' => ['The file upload failed.']], $result->fieldErrors);
+
             // 不正な UTF-8
             $result = $this->handleGlobals($form($definition), [
                 ...$this->hiddenValues($form($definition)->open()),
@@ -313,6 +452,10 @@ final class FormIntegrationTest extends IntegrationTestCase
             $calls = [
                 'failed to claim the form submission ID: ' => static fn(): JtiClaim => (new JtiStore())->claim(self::JTI, 60),
                 'failed to look up the form submission ID: ' => static fn(): bool => (new JtiStore())->isClaimed(self::JTI),
+                'failed to release the form submission ID: ' => static function (): void {
+                    (new JtiStore())->release(self::JTI);
+                },
+                'failed to delete expired form submission IDs: ' => static fn(): int => (new JtiStore())->gc(),
             ];
 
             foreach ($calls as $message => $call) {

@@ -92,16 +92,16 @@ final class FormRuntimeTest extends UnitTestCase
     public function testGetAndOtherFormPostReturnInputWithoutCsrf(): void
     {
         $this->stubRuntimeFunctions();
-        $definition = FormDefinition::create('contact')->text('name', '名前', default: '初期値');
+        $definition = FormDefinition::create('contact')->text('name', 'Name', default: 'Initial');
 
         self::assertSame(FormStep::Input, (new Form($definition))->handle(new FormRequest('GET'))->step);
-        self::assertSame('初期値', (new Form($definition))->values()['name']);
+        self::assertSame('Initial', (new Form($definition))->values()['name']);
 
         $post = new FormRequest('POST', [Form::FIELD_FORM_ID => 'other', 'name' => 'ignored']);
         $result = (new Form($definition))->handle($post);
 
         self::assertSame(FormStep::Input, $result->step);
-        self::assertSame('初期値', $result->values['name']);
+        self::assertSame('Initial', $result->values['name']);
     }
 
     public function testCsrfFailureBindsValuesReturnsFormErrorAndIsLogged(): void
@@ -110,7 +110,7 @@ final class FormRuntimeTest extends UnitTestCase
         Functions\when('wp_verify_nonce')->justReturn(false);
         $this->bootKernel(debug: false);
 
-        $result = $this->form(FormDefinition::create('contact')->text('name', '名前'))->handle(new FormRequest('POST', [
+        $result = $this->form(FormDefinition::create('contact')->text('name', 'Name'))->handle(new FormRequest('POST', [
             Form::FIELD_FORM_ID => 'contact',
             Form::FIELD_NONCE => 'bad',
             Form::FIELD_STEP => 'submit',
@@ -127,7 +127,7 @@ final class FormRuntimeTest extends UnitTestCase
     {
         $this->stubRuntimeFunctions();
 
-        $result = (new Form(FormDefinition::create('contact')->text('name', '名前')))
+        $result = (new Form(FormDefinition::create('contact')->text('name', 'Name')))
             ->handle(new FormRequest('POST', [
                 Form::FIELD_FORM_ID => 'contact',
                 Form::FIELD_NONCE => 'ok',
@@ -139,12 +139,111 @@ final class FormRuntimeTest extends UnitTestCase
         self::assertSame('Taro', $result->values['name']);
     }
 
+    /**
+     * チェックを外した checkbox・checkboxes は、POST にキーが無い。空値の hidden を置かなくても '' と [] に取り込む
+     * (既定値に戻らない)。確認画面の有無の両方で確かめる。
+     */
+    public function testMissingKeysOfUncheckedCheckboxesAreBoundAsEmptyValues(): void
+    {
+        $this->stubRuntimeFunctions();
+
+        foreach (['without confirmation' => false, 'with confirmation' => true] as $case => $confirm) {
+            $this->completed = [];
+            $optional = FormDefinition::create('consent')
+                ->checkbox('agree', 'Agree')
+                ->checkboxes('topics', 'Topics', ['news' => 'News', 'docs' => 'Docs'], default: ['news'])
+                ->confirm($confirm)
+                ->onComplete($this->recordCompletion(...));
+            $required = FormDefinition::create('consent')
+                ->checkbox('agree', 'Agree', rules: [new Required()])
+                ->checkboxes('topics', 'Topics', ['news' => 'News', 'docs' => 'Docs'], [new Required()], ['news'])
+                ->confirm($confirm);
+            $request = $confirm
+                ? new FormRequest('POST', [Form::FIELD_FORM_ID => 'consent', Form::FIELD_NONCE => 'ok', Form::FIELD_STEP => 'confirm'])
+                : $this->directSubmit('consent', []);
+
+            $result = (new Form($optional))->handle($request);
+
+            self::assertSame($confirm ? FormStep::Confirm : FormStep::Complete, $result->step, $case);
+            self::assertSame(['agree' => '', 'topics' => []], $result->values, $case);
+            self::assertSame($confirm ? [] : [['agree' => '', 'topics' => []]], $this->completed, $case);
+
+            $result = (new Form($required))->handle($request);
+
+            self::assertSame(FormStep::Input, $result->step, $case);
+            self::assertSame(['agree' => ['Agree is required.'], 'topics' => ['Topics is required.']], $result->fieldErrors, $case);
+        }
+    }
+
+    /**
+     * 同じページに置いた2つのフォームは、同じ POST を受けても宛先(_form_id)のフォームだけが処理する。宛先でない
+     * フォームは nonce も確かめず、同じ名前の項目の値も取り込まず、エラーの無い入力画面のまま。
+     */
+    public function testOnlyTheFormThatThePostIsAddressedToProcessesIt(): void
+    {
+        Functions\when('wp_create_nonce')->justReturn('nonce');
+        Functions\when('wp_salt')->justReturn('secret');
+        Functions\when('nocache_headers')->justReturn();
+        Functions\expect('wp_verify_nonce')->once()->with('ok', 'tmswp_form_contact')->andReturn(1);
+        $newsletterCompleted = [];
+        $newsletter = new Form(FormDefinition::create('newsletter')
+            ->text('email', 'Email', [new Required()])
+            ->text('name', 'Name', default: 'Subscriber')
+            ->onComplete(static function (array $values) use (&$newsletterCompleted): void {
+                $newsletterCompleted[] = $values;
+            }));
+        $contact = new Form(FormDefinition::create('contact')
+            ->text('name', 'Name', [new Required()])
+            ->onComplete($this->recordCompletion(...)));
+        $request = $this->directSubmit('contact', ['name' => 'Taro']);
+
+        $newsletterResult = $newsletter->handle($request);
+        $contactResult = $contact->handle($request);
+
+        self::assertSame(FormStep::Input, $newsletterResult->step);
+        self::assertSame(['email' => '', 'name' => 'Subscriber'], $newsletterResult->values);
+        self::assertSame([], $newsletterResult->fieldErrors);
+        self::assertSame([], $newsletterResult->formErrors);
+        self::assertSame([], $newsletterCompleted);
+        self::assertSame(FormStep::Complete, $contactResult->step);
+        self::assertSame([['name' => 'Taro']], $this->completed);
+    }
+
+    /**
+     * 項目のエラーの設定と消去(旧 iwf2b の FieldTest の仕様)。エラーは handle() の検証の結果で決まり、FieldView に
+     * 出る。項目の定義はエラーを持たないため、次のリクエストの Form には前のリクエストのエラーが残らない。
+     */
+    public function testFieldErrorsComeOnlyFromTheValidationOfTheCurrentRequest(): void
+    {
+        $this->stubRuntimeFunctions();
+        Functions\when('esc_html')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
+        $definition = FormDefinition::create('contact')->text('name', 'Name', [new Required(), new MaxLength(3)]);
+        $invalid = new Form($definition);
+
+        self::assertFalse($invalid->field('name')->hasError());
+
+        $invalid->handle($this->directSubmit('contact', ['name' => 'Taro']));
+
+        // 1つの項目に記録するエラーは最初の1件だけ
+        self::assertSame(['Name must be 3 characters or fewer.'], $invalid->field('name')->errorList());
+        self::assertSame('<p>Name must be 3 characters or fewer.</p>', $invalid->field('name')->errors('<p>%s</p>'));
+        self::assertSame(['name' => ['Name must be 3 characters or fewer.']], $invalid->errors());
+        self::assertTrue($invalid->hasErrors());
+
+        $next = new Form($definition);
+        $next->handle($this->directSubmit('contact', ['name' => 'Tom']));
+
+        self::assertSame([], $next->field('name')->errorList());
+        self::assertSame('', $next->field('name')->errors());
+        self::assertFalse($next->hasErrors());
+    }
+
     public function testConfirmDisabledTreatsConfirmActionAsSubmit(): void
     {
         $this->stubRuntimeFunctions();
 
         $definition = FormDefinition::create('contact')
-            ->text('name', '名前', [new Required()])
+            ->text('name', 'Name', [new Required()])
             ->onComplete($this->recordCompletion(...));
 
         $result = (new Form($definition))->handle(new FormRequest('POST', [
@@ -164,7 +263,7 @@ final class FormRuntimeTest extends UnitTestCase
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: false);
         $definition = FormDefinition::create('contact')
-            ->text('name', '名前', [new Required()])
+            ->text('name', 'Name', [new Required()])
             ->onComplete($this->recordCompletion(...));
         $html = $this->form($definition)->open();
         $submitToken = $this->hiddenValue($html, Form::FIELD_SUBMIT_TOKEN);
@@ -201,7 +300,7 @@ final class FormRuntimeTest extends UnitTestCase
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: false);
         $definition = FormDefinition::create('contact')
-            ->text('name', '名前')
+            ->text('name', 'Name')
             ->onComplete($this->recordCompletion(...));
         $valid = SubmitToken::issue('contact');
         [$body, $signature] = explode('.', $valid, 2);
@@ -238,7 +337,7 @@ final class FormRuntimeTest extends UnitTestCase
     {
         $this->stubRuntimeFunctions();
         $definition = FormDefinition::create('contact')
-            ->text('name', '名前')
+            ->text('name', 'Name')
             ->onComplete($this->recordCompletion(...));
 
         $result = (new Form($definition))->handle(new FormRequest('POST', [
@@ -261,8 +360,8 @@ final class FormRuntimeTest extends UnitTestCase
         $this->bootKernel(debug: false);
 
         $definition = FormDefinition::create('entry')
-            ->text('name', '名前', [new Required()])
-            ->add(new RuntimeTestDateField('birth', '生年月日', minYear: 2000, maxYear: 2026))
+            ->text('name', 'Name', [new Required()])
+            ->add(new RuntimeTestDateField('birth', 'Birth date', minYear: 2000, maxYear: 2026))
             ->confirm()
             ->onComplete($this->recordCompletion(...));
 
@@ -303,14 +402,58 @@ final class FormRuntimeTest extends UnitTestCase
         self::assertSame([['notice', 'tmswp.form: a resubmission of form {form} was rejected', 'entry']], $this->logRecords());
     }
 
+    /**
+     * 同じ jti の並行した2本の POST(二重クリック)。1本目の onComplete の実行中に2本目が届いても、jti の claim を
+     * onComplete より前に行うため、2本目の INSERT は rows_affected が 0 になり、再送として拒否される。確認画面の有無の
+     * 両方で確かめる。
+     */
+    public function testConcurrentRequestWithTheSameJtiIsRejectedWhileTheFirstRunsOnComplete(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: false);
+
+        foreach (['without confirmation' => false, 'with confirmation' => true] as $case => $confirm) {
+            $this->completed = [];
+            $definition = FormDefinition::create('contact')->text('name', 'Name')->confirm($confirm);
+            $request = $confirm
+                ? new FormRequest('POST', [
+                    Form::FIELD_FORM_ID => 'contact',
+                    Form::FIELD_NONCE => 'ok',
+                    Form::FIELD_STEP => 'submit',
+                    Form::FIELD_CONFIRM_TOKEN => ConfirmToken::issue('contact', ['name' => 'Taro']),
+                ])
+                : $this->directSubmit('contact', ['name' => 'Taro']);
+            // 1本目の onComplete の中で処理した2本目の結果
+            $concurrent = [];
+            $definition->onComplete(function (array $values) use (&$concurrent, $definition, $request): void {
+                $this->completed[] = $values;
+
+                // 2本目が onComplete に進んでも、さらに次の POST は送らない
+                if (\count($this->completed) === 1) {
+                    $concurrent[] = $this->form($definition)->handle($request);
+                }
+            });
+
+            $first = $this->form($definition)->handle($request);
+
+            self::assertSame(FormStep::Complete, $first->step, $case);
+            self::assertCount(1, $concurrent, $case);
+            self::assertSame(FormStep::Input, $concurrent[0]->step, $case);
+            self::assertSame(['This form has already been submitted.'], $concurrent[0]->formErrors, $case);
+            // 2本目の INSERT IGNORE は0行(獲得の失敗)
+            self::assertSame(0, $this->wpdb->rows_affected, $case);
+            self::assertSame([['name' => 'Taro']], $this->completed, $case);
+        }
+    }
+
     public function testInvalidAndExpiredConfirmTokensReturnInputState(): void
     {
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: false);
 
         $definition = FormDefinition::create('entry')
-            ->text('name', '名前')
-            ->add(new RuntimeTestDateField('birth', '生年月日'))
+            ->text('name', 'Name')
+            ->add(new RuntimeTestDateField('birth', 'Birth date'))
             ->confirm()
             ->confirmTtl(1);
         $expired = ConfirmToken::issue('entry', ['birth' => '2026-06-13', 'name' => 'Taro'], now: time() - 10);
@@ -339,15 +482,62 @@ final class FormRuntimeTest extends UnitTestCase
         self::assertSame([self::EXPIRED_CONFIRMATION], $expiredResult->formErrors);
     }
 
+    /**
+     * 改ざんした確認トークン(値の1文字の変更・別のトークンの署名への差し替え・formId の差し替え)は、どれも Invalid として
+     * 入力画面に戻し、jti を claim せずに warning を記録する。
+     */
+    public function testTamperedConfirmTokensAreRejectedAsInvalidAndLogged(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: false);
+        $definition = FormDefinition::create('entry')
+            ->text('name', 'Name')
+            ->confirm()
+            ->onComplete($this->recordCompletion(...));
+        [$body, $signature] = explode('.', ConfirmToken::issue('entry', ['name' => 'Taro']), 2);
+        $json = base64_decode(strtr($body, '-_', '+/'), true);
+        self::assertIsString($json);
+        $encode = static fn(string $json): string => rtrim(strtr(base64_encode($json), '+/', '-_'), '=');
+        [, $otherSignature] = explode('.', ConfirmToken::issue('entry', ['name' => 'Jiro']), 2);
+        $tokens = [
+            'one character of a value' => $encode(str_replace('"Taro"', '"Tara"', $json)) . '.' . $signature,
+            'signature of another token' => $body . '.' . $otherSignature,
+            'form ID in the payload' => $encode(str_replace('"f":"entry"', '"f":"other"', $json)) . '.' . $signature,
+            'token issued for another form' => ConfirmToken::issue('other', ['name' => 'Taro']),
+        ];
+        self::assertStringContainsString('"f":"entry"', $json);
+
+        foreach ($tokens as $case => $token) {
+            $this->logger->records = [];
+            $result = $this->form($definition)->handle(new FormRequest('POST', [
+                Form::FIELD_FORM_ID => 'entry',
+                Form::FIELD_NONCE => 'ok',
+                Form::FIELD_STEP => 'submit',
+                Form::FIELD_CONFIRM_TOKEN => $token,
+            ]));
+
+            self::assertSame(FormStep::Input, $result->step, $case);
+            self::assertSame(['The form could not be resubmitted. Please start again.'], $result->formErrors, $case);
+            self::assertSame(
+                [['warning', 'tmswp.form: the confirm token of form {form} was rejected as invalid (malformed, tampered or issued for another form)', 'entry']],
+                $this->logRecords(),
+                $case,
+            );
+        }
+
+        self::assertSame([], $this->completed);
+        self::assertSame([], $this->wpdb->queries());
+    }
+
     public function testMissingFileIsDetectedBeforeClaimAndAllValuesAreRestored(): void
     {
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: false);
         $storeDir = $this->createTempDirectory('form-missing-file-store');
         $definition = FormDefinition::create('entry')
-            ->text('name', '名前')
-            ->file('resume', '履歴書')
-            ->add(new RuntimeTestDateField('birth', '生年月日'))
+            ->text('name', 'Name')
+            ->file('resume', 'Resume')
+            ->add(new RuntimeTestDateField('birth', 'Birth date'))
             ->confirm()
             ->tempFileStore(new TempFileStore($storeDir))
             ->onComplete($this->recordCompletion(...));
@@ -386,8 +576,8 @@ final class FormRuntimeTest extends UnitTestCase
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: false);
         $definition = FormDefinition::create('entry')
-            ->text('name', '名前')
-            ->checkboxes('topics', '関心', ['news' => 'ニュース', 'docs' => '資料'])
+            ->text('name', 'Name')
+            ->checkboxes('topics', 'Topics', ['news' => 'News', 'docs' => 'Docs'])
             ->confirm()
             ->onComplete($this->recordCompletion(...));
         $tokens = [
@@ -432,7 +622,7 @@ final class FormRuntimeTest extends UnitTestCase
     {
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: false);
-        $before = $this->revalidationDefinition(20, ['news' => 'ニュース', 'docs' => '資料']);
+        $before = $this->revalidationDefinition(20, ['news' => 'News', 'docs' => 'Docs']);
         $confirm = $this->form($before);
         self::assertSame(FormStep::Confirm, $confirm->handle(new FormRequest('POST', [
             Form::FIELD_FORM_ID => 'entry',
@@ -449,7 +639,7 @@ final class FormRuntimeTest extends UnitTestCase
             Form::FIELD_CONFIRM_TOKEN => $this->hiddenValue($confirm->open(), Form::FIELD_CONFIRM_TOKEN),
         ]);
         // 確認の後のデプロイで、MaxLength を小さくし、選択肢を減らした
-        $after = $this->revalidationDefinition(5, ['news' => 'ニュース']);
+        $after = $this->revalidationDefinition(5, ['news' => 'News']);
 
         $result = $this->form($after)->handle($submit);
 
@@ -477,8 +667,8 @@ final class FormRuntimeTest extends UnitTestCase
         $this->createStoredFile($storeDir, $token, 'resume.pdf', 'application/pdf', 'body');
         $store = new TempFileStore($storeDir);
         $definition = FormDefinition::create('entry')
-            ->text('name', '名前')
-            ->file('resume', '履歴書')
+            ->text('name', 'Name')
+            ->file('resume', 'Resume')
             ->confirm()
             ->tempFileStore($store);
         $confirmToken = ConfirmToken::issue('entry', [
@@ -502,7 +692,7 @@ final class FormRuntimeTest extends UnitTestCase
     public function testBackRestoresCompositeFieldsAsPartsForTheInputScreen(): void
     {
         $this->stubRuntimeFunctions();
-        $definition = FormDefinition::create('entry')->add(new RuntimeTestDateField('birth', '生年月日'))->confirm();
+        $definition = FormDefinition::create('entry')->add(new RuntimeTestDateField('birth', 'Birth date'))->confirm();
 
         $result = (new Form($definition))->handle(new FormRequest('POST', [
             Form::FIELD_FORM_ID => 'entry',
@@ -518,7 +708,7 @@ final class FormRuntimeTest extends UnitTestCase
     {
         $this->stubRuntimeFunctions();
 
-        $result = (new Form(FormDefinition::create('contact')->text('name', '名前')))->handle(new FormRequest('POST', [
+        $result = (new Form(FormDefinition::create('contact')->text('name', 'Name')))->handle(new FormRequest('POST', [
             Form::FIELD_FORM_ID => 'contact',
             Form::FIELD_NONCE => 'ok',
             Form::FIELD_STEP => 'back',
@@ -534,7 +724,7 @@ final class FormRuntimeTest extends UnitTestCase
     {
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: false);
-        $definition = FormDefinition::create('entry')->text('name', '名前', default: '初期値')->confirm();
+        $definition = FormDefinition::create('entry')->text('name', 'Name', default: 'Initial')->confirm();
 
         $result = $this->form($definition)->handle(new FormRequest('POST', [
             Form::FIELD_FORM_ID => 'entry',
@@ -544,7 +734,7 @@ final class FormRuntimeTest extends UnitTestCase
         ]));
 
         self::assertSame(FormStep::Input, $result->step);
-        self::assertSame('初期値', $result->values['name']);
+        self::assertSame('Initial', $result->values['name']);
         self::assertSame(['The form could not be resubmitted. Please start again.'], $result->formErrors);
         self::assertSame(
             [['warning', 'tmswp.form: the confirm token of form {form} was rejected as invalid on going back (malformed, tampered or issued for another form)', 'entry']],
@@ -565,9 +755,9 @@ final class FormRuntimeTest extends UnitTestCase
         file_put_contents($uploadDir . '/resume.txt', 'resume');
         file_put_contents($uploadDir . '/photo.txt', 'a photo that is too large');
         $definition = FormDefinition::create('entry')
-            ->text('name', '名前', [new Required()])
-            ->file('resume', '履歴書')
-            ->file('photo', '写真', [new MaxFileSize(5)])
+            ->text('name', 'Name', [new Required()])
+            ->file('resume', 'Resume')
+            ->file('photo', 'Photo', [new MaxFileSize(5)])
             ->confirm()
             ->tempFileStore(new TempFileStore($this->createTempDirectory('form-upload-store')));
         $form = new Form($definition);
@@ -584,7 +774,7 @@ final class FormRuntimeTest extends UnitTestCase
 
         self::assertSame(FormStep::Input, $result->step);
         self::assertArrayHasKey('name', $result->fieldErrors);
-        self::assertSame(['写真 must be 5 B or smaller.'], $result->fieldErrors['photo']);
+        self::assertSame(['Photo must be 5 B or smaller.'], $result->fieldErrors['photo']);
         // 自身の検証を通ったファイルは保管し、入力画面の hidden でトークンを引き回す
         self::assertInstanceOf(StoredFile::class, $result->values['resume']);
         self::assertSame('resume', file_get_contents($result->values['resume']->path));
@@ -1457,7 +1647,7 @@ final class FormRuntimeTest extends UnitTestCase
     {
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: true);
-        $definition = FormDefinition::create('contact')->text('name', '名前')->onComplete($this->recordCompletion(...));
+        $definition = FormDefinition::create('contact')->text('name', 'Name')->onComplete($this->recordCompletion(...));
         $this->wpdb->failNextWrite('Lost connection');
 
         try {
@@ -1475,7 +1665,7 @@ final class FormRuntimeTest extends UnitTestCase
     {
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: false);
-        $definition = FormDefinition::create('contact')->text('name', '名前')->onComplete($this->recordCompletion(...));
+        $definition = FormDefinition::create('contact')->text('name', 'Name')->onComplete($this->recordCompletion(...));
         $request = $this->directSubmit('contact', ['name' => 'Taro']);
         $this->wpdb->failNextWrite('Lost connection');
 
@@ -1492,13 +1682,61 @@ final class FormRuntimeTest extends UnitTestCase
         self::assertSame(FormStep::Complete, $this->form($definition)->handle($request)->step);
     }
 
+    /**
+     * 確認画面からの送信で一時ファイルが消えていたときの、jti が claim 済みかの確認(JtiStore::isClaimed())の
+     * データベースのエラー。本番は Kernel のロガーに error で記録して汎用の送信失敗エラーを出し、jti を claim しない
+     * (ファイルが戻れば同じトークンで送信できる)。
+     */
+    public function testDatabaseErrorOnLookingUpTheJtiOfMissingFilesIsLoggedInProduction(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: false);
+        $storeDir = $this->createTempDirectory('lookup-error-store');
+        [$definition, $request] = $this->submissionWithMissingFile($storeDir);
+        $this->wpdb->failNextRead('Lost connection');
+
+        $result = $this->form($definition)->handle($request);
+
+        self::assertSame(FormStep::Input, $result->step);
+        self::assertSame([self::SEND_FAILED], $result->formErrors);
+        self::assertSame('Taro', $result->values['name']);
+        self::assertSame([], $this->completed);
+        self::assertSame([['error', 'tmswp.form: failed to look up the submission ID of form {form}', 'entry']], $this->logRecords());
+        self::assertSame(RuntimeException::class, $this->logger->records[0]['context']['exceptionClass']);
+        self::assertArrayNotHasKey('exception', $this->logger->records[0]['context']);
+        self::assertSame([], array_filter($this->wpdb->queries(), static fn(string $query): bool => str_starts_with($query, 'INSERT')));
+
+        $this->createStoredFile($storeDir, '0123456789abcdef0123456789abcdef', 'resume.pdf', 'application/pdf', 'body');
+
+        self::assertSame(FormStep::Complete, $this->form($definition)->handle($request)->step);
+        self::assertCount(1, $this->completed);
+    }
+
+    public function testDatabaseErrorOnLookingUpTheJtiOfMissingFilesIsThrownInDebug(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: true);
+        [$definition, $request] = $this->submissionWithMissingFile($this->createTempDirectory('lookup-error-debug-store'));
+        $this->wpdb->failNextRead('Lost connection');
+
+        try {
+            $this->form($definition)->handle($request);
+            self::fail('the database error was not thrown');
+        } catch (RuntimeException $exception) {
+            self::assertSame('failed to look up the form submission ID: Lost connection', $exception->getMessage());
+        }
+
+        self::assertSame([], $this->completed);
+        self::assertSame([], $this->logRecords());
+    }
+
     public function testOnCompleteExceptionIsThrownInDebugWithoutConsumingTheJti(): void
     {
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: true);
         $this->failOnComplete = true;
         $definition = FormDefinition::create('contact')
-            ->text('name', '名前')
+            ->text('name', 'Name')
             ->onComplete(function (array $values): void {
                 if ($this->failOnComplete) {
                     throw new PhpRuntimeException('mail server is down');
@@ -1527,8 +1765,8 @@ final class FormRuntimeTest extends UnitTestCase
         $this->bootKernel(debug: false);
         $this->failOnComplete = true;
         $definition = FormDefinition::create('entry')
-            ->text('name', '名前')
-            ->add(new RuntimeTestDateField('birth', '生年月日'))
+            ->text('name', 'Name')
+            ->add(new RuntimeTestDateField('birth', 'Birth date'))
             ->confirm()
             ->onComplete(function (array $values): void {
                 if ($this->failOnComplete) {
@@ -1563,7 +1801,7 @@ final class FormRuntimeTest extends UnitTestCase
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: false);
         $definition = FormDefinition::create('contact')
-            ->text('name', '名前')
+            ->text('name', 'Name')
             ->onComplete(function (): void {
                 // claim の後の次の書き込み(jti の手放し)を失敗させる
                 $this->wpdb->failNextWrite('Lost connection');
@@ -1592,7 +1830,7 @@ final class FormRuntimeTest extends UnitTestCase
         $this->stubRuntimeFunctions();
         $this->bootKernel(debug: false);
         $definition = FormDefinition::create('contact')
-            ->text('email', 'メール')
+            ->text('email', 'Email')
             ->onComplete(function (array $values): void {
                 $email = \is_string($values['email']) ? $values['email'] : '';
                 $exception = new PhpRuntimeException("failed to send mail to {$email}", 0, new PhpLogicException("smtp rejected {$email}"));
@@ -1622,7 +1860,7 @@ final class FormRuntimeTest extends UnitTestCase
     {
         $this->stubRuntimeFunctions();
         $definition = FormDefinition::create('contact')
-            ->text('name', '名前')
+            ->text('name', 'Name')
             ->onComplete(function (): void {
                 // claim の後の次の書き込み(jti の手放し)を失敗させる
                 $this->wpdb->failNextWrite('Lost connection');
@@ -1644,7 +1882,7 @@ final class FormRuntimeTest extends UnitTestCase
     {
         $this->stubRuntimeFunctions();
         $definition = FormDefinition::create('contact')
-            ->text('name', '名前')
+            ->text('name', 'Name')
             ->onComplete(static function (): void {
                 throw new PhpRuntimeException('mail server is down');
             });
@@ -1665,7 +1903,7 @@ final class FormRuntimeTest extends UnitTestCase
         Functions\when('wp_salt')->justReturn('secret');
         Functions\when('esc_attr')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
         Functions\expect('nocache_headers')->twice();
-        $form = new Form(FormDefinition::create('contact')->text('name', '名前'));
+        $form = new Form(FormDefinition::create('contact')->text('name', 'Name'));
 
         $form->handle(new FormRequest('GET'));
         $form->open();
@@ -1680,7 +1918,7 @@ final class FormRuntimeTest extends UnitTestCase
 
         self::assertFalse(\defined('DONOTCACHEPAGE'));
 
-        (new Form(FormDefinition::create('contact')->text('name', '名前')))->handle(new FormRequest('GET'));
+        (new Form(FormDefinition::create('contact')->text('name', 'Name')))->handle(new FormRequest('GET'));
 
         self::assertTrue(\constant('DONOTCACHEPAGE'));
     }
@@ -1692,7 +1930,7 @@ final class FormRuntimeTest extends UnitTestCase
 
         self::assertFalse(\defined('DONOTCACHEPAGE'));
 
-        (new Form(FormDefinition::create('contact')->text('name', '名前')))->open();
+        (new Form(FormDefinition::create('contact')->text('name', 'Name')))->open();
 
         self::assertTrue(\constant('DONOTCACHEPAGE'));
     }
@@ -1703,7 +1941,7 @@ final class FormRuntimeTest extends UnitTestCase
         $this->bootKernel(debug: false);
         $guard = new RuntimeTestSpamGuard();
         $definition = FormDefinition::create('contact')
-            ->text('name', '名前', [new Required()])
+            ->text('name', 'Name', [new Required()])
             ->spamGuard($guard)
             ->onComplete($this->recordCompletion(...));
 
@@ -1741,7 +1979,7 @@ final class FormRuntimeTest extends UnitTestCase
         $this->bootKernel(debug: false);
         $guard = new RuntimeTestSpamGuard();
         $definition = FormDefinition::create('entry')
-            ->text('name', '名前')
+            ->text('name', 'Name')
             ->spamGuard($guard)
             ->confirm()
             ->onComplete($this->recordCompletion(...));
@@ -1787,14 +2025,14 @@ final class FormRuntimeTest extends UnitTestCase
     {
         $this->stubRuntimeFunctions();
         $form = new Form(FormDefinition::create('settings')
-            ->text('title', 'タイトル', default: '既定')
-            ->checkboxes('topics', '関心', ['news' => 'ニュース', 'docs' => '資料'])
-            ->add(new RuntimeTestDateField('birth', '生年月日')));
+            ->text('title', 'Title', default: 'Default')
+            ->checkboxes('topics', 'Topics', ['news' => 'News', 'docs' => 'Docs'])
+            ->add(new RuntimeTestDateField('birth', 'Birth date')));
 
-        $form->applyDefaults(['title' => '保存済み', 'topics' => ['docs'], 'birth' => '2026-06-13']);
+        $form->applyDefaults(['title' => 'Saved', 'topics' => ['docs'], 'birth' => '2026-06-13']);
 
         self::assertSame(
-            ['title' => '保存済み', 'topics' => ['docs'], 'birth' => ['year' => '2026', 'month' => '6', 'day' => '13']],
+            ['title' => 'Saved', 'topics' => ['docs'], 'birth' => ['year' => '2026', 'month' => '6', 'day' => '13']],
             $form->handle(new FormRequest('GET'))->values,
         );
     }
@@ -1802,18 +2040,18 @@ final class FormRuntimeTest extends UnitTestCase
     public function testApplyDefaultsAfterHandleIsRejected(): void
     {
         $this->stubRuntimeFunctions();
-        $form = new Form(FormDefinition::create('settings')->text('title', 'タイトル'));
+        $form = new Form(FormDefinition::create('settings')->text('title', 'Title'));
         $form->handle(new FormRequest('GET'));
 
         $this->expectException(LogicException::class);
         $this->expectExceptionMessage("applyDefaults() of form 'settings' must be called before handle()");
 
-        $form->applyDefaults(['title' => '保存済み']);
+        $form->applyDefaults(['title' => 'Saved']);
     }
 
     public function testApplyDefaultsRejectsUnknownFields(): void
     {
-        $form = new Form(FormDefinition::create('settings')->text('title', 'タイトル'));
+        $form = new Form(FormDefinition::create('settings')->text('title', 'Title'));
 
         $this->expectException(UnknownFieldException::class);
 
@@ -1823,9 +2061,9 @@ final class FormRuntimeTest extends UnitTestCase
     public function testApplyDefaultsRejectsValuesOfTheWrongShapeAndFileFields(): void
     {
         $definition = FormDefinition::create('settings')
-            ->text('title', 'タイトル')
-            ->checkboxes('topics', '関心', ['news' => 'ニュース'])
-            ->file('resume', '履歴書');
+            ->text('title', 'Title')
+            ->checkboxes('topics', 'Topics', ['news' => 'News'])
+            ->file('resume', 'Resume');
         $cases = [
             "default value of field 'title' must be a string, int given" => ['title' => 5],
             "default value of field 'title' must be a string, array given" => ['title' => ['a']],
@@ -1977,13 +2215,36 @@ final class FormRuntimeTest extends UnitTestCase
         }
     }
 
+    /**
+     * 一時ファイルが消えた後の、確認画面からの送信(ファイルのトークンは 0123456789abcdef0123456789abcdef)。
+     *
+     * @return array{FormDefinition, FormRequest}
+     */
+    private function submissionWithMissingFile(string $storeDir): array
+    {
+        $definition = FormDefinition::create('entry')
+            ->text('name', 'Name')
+            ->file('resume', 'Resume')
+            ->confirm()
+            ->tempFileStore(new TempFileStore($storeDir))
+            ->onComplete($this->recordCompletion(...));
+        $request = new FormRequest('POST', [
+            Form::FIELD_FORM_ID => 'entry',
+            Form::FIELD_NONCE => 'ok',
+            Form::FIELD_STEP => 'submit',
+            Form::FIELD_CONFIRM_TOKEN => ConfirmToken::issue('entry', ['name' => 'Taro', 'resume' => ['__tmsfile' => '0123456789abcdef0123456789abcdef']]),
+        ]);
+
+        return [$definition, $request];
+    }
+
     /** @param array<string, string> $choices */
     private function revalidationDefinition(int $maxLength, array $choices): FormDefinition
     {
         return FormDefinition::create('entry')
-            ->text('name', '名前', [new Required(), new MaxLength($maxLength)])
-            ->checkboxes('topics', '関心', $choices)
-            ->add(new RuntimeTestDateField('birth', '生年月日', [new Required()], minYear: 2000, maxYear: 2026))
+            ->text('name', 'Name', [new Required(), new MaxLength($maxLength)])
+            ->checkboxes('topics', 'Topics', $choices)
+            ->add(new RuntimeTestDateField('birth', 'Birth date', [new Required()], minYear: 2000, maxYear: 2026))
             ->confirm()
             ->onComplete($this->recordCompletion(...));
     }
@@ -2142,9 +2403,9 @@ final class RuntimeTestDateField extends CompositeField
     public function parts(): array
     {
         return [
-            'year' => Field::select($this->name . '_year', '年', $this->yearChoices()),
-            'month' => Field::select($this->name . '_month', '月', $this->rangeChoices(1, 12)),
-            'day' => Field::select($this->name . '_day', '日', $this->rangeChoices(1, 31)),
+            'year' => Field::select($this->name . '_year', 'Year', $this->yearChoices()),
+            'month' => Field::select($this->name . '_month', 'Month', $this->rangeChoices(1, 12)),
+            'day' => Field::select($this->name . '_day', 'Day', $this->rangeChoices(1, 31)),
         ];
     }
 

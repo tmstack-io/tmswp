@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Integration;
 
+use GdImage;
 use stdClass;
 use TMSWP\Core\Exception\EntityDataException;
 use TMSWP\Core\Exception\EntityPersistenceException;
@@ -106,6 +107,53 @@ final class EntityFacadeIntegrationTest extends IntegrationTestCase
 
         self::assertNull($productPost::thumbnail($postId));
         self::assertNull($productPost::thumbnailUrl($postId));
+    }
+
+    /**
+     * アイキャッチのある投稿のthumbnail()。旧iwf2bのテストと同じく、GDで作った実際の画像をWordPressのファクトリ
+     * (create_upload_object())でアップロードし、URL・幅・高さ・altと、サイズの指定(WordPressが作った中間サイズ)を
+     * 確かめる。アイキャッチがあればtmswp/post/thumbnail_fallbackのフィルタは使わない。
+     */
+    public function testThumbnailResolvesTheFeaturedImageGeneratedWithGd(): void
+    {
+        $productPost = self::productPost();
+        $postId = self::createPost($productPost::slug());
+        $image = self::createJpegWithGd(200, 150);
+        $attachmentId = null;
+
+        try {
+            $attachmentId = self::factory()->attachment->create_upload_object($image, $postId);
+            self::assertIsInt($attachmentId);
+            update_post_meta($attachmentId, '_wp_attachment_image_alt', 'Image alt text');
+            self::assertNotFalse(set_post_thumbnail($postId, $attachmentId));
+            $fallbackCalls = 0;
+            add_filter('tmswp/post/thumbnail_fallback', static function () use (&$fallbackCalls): Thumbnail {
+                ++$fallbackCalls;
+
+                return new Thumbnail('https://example.com/fallback.jpg', 640, 480, 'Fallback');
+            });
+
+            $full = $productPost::thumbnail($postId);
+
+            self::assertInstanceOf(Thumbnail::class, $full);
+            self::assertSame(wp_get_attachment_url($attachmentId), $full->url);
+            self::assertSame([200, 150, 'Image alt text'], [$full->width, $full->height, $full->alt]);
+
+            // 既定のthumbnailサイズ(150x150の切り抜き)
+            $small = $productPost::thumbnail($postId, 'thumbnail');
+
+            self::assertInstanceOf(Thumbnail::class, $small);
+            self::assertStringEndsWith('-150x150.jpg', $small->url);
+            self::assertSame([150, 150], [$small->width, $small->height]);
+            self::assertSame($small->url, $productPost::thumbnailUrl($postId, 'thumbnail'));
+            self::assertSame(0, $fallbackCalls);
+        } finally {
+            if (\is_int($attachmentId)) {
+                wp_delete_attachment($attachmentId, true);
+            }
+
+            unlink($image);
+        }
     }
 
     /**
@@ -352,6 +400,25 @@ final class EntityFacadeIntegrationTest extends IntegrationTestCase
 
         self::assertSame([], get_posts(['post_type' => $productPost::slug(), 'title' => 'Rejected', 'post_status' => 'any', 'fields' => 'ids']));
         self::assertFalse(get_user_by('login', 'tmswp_rejected_user'));
+    }
+
+    /**
+     * GDで幅×高さのJPEG画像を一時ディレクトリに作り、そのパスを返す(呼び出し側が消す)。
+     *
+     * @param positive-int $width
+     * @param positive-int $height
+     */
+    private static function createJpegWithGd(int $width, int $height): string
+    {
+        $image = imagecreatetruecolor($width, $height);
+        self::assertInstanceOf(GdImage::class, $image);
+        $color = imagecolorallocate($image, 32, 96, 160);
+        self::assertIsInt($color);
+        self::assertTrue(imagefilledrectangle($image, 0, 0, $width - 1, $height - 1, $color));
+        $path = get_temp_dir() . 'tmswp-thumbnail-' . uniqid() . '.jpg';
+        self::assertTrue(imagejpeg($image, $path));
+
+        return $path;
     }
 
     /**

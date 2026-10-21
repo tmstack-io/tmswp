@@ -34,8 +34,8 @@ final class FormViewAndFileTest extends UnitTestCase
         $this->stubEscapers();
 
         $definition = FormDefinition::create('contact')
-            ->text('name', '名前')
-            ->select('pref', '都道府県', ['tokyo' => '<東京>']);
+            ->text('name', 'Name')
+            ->select('pref', 'Prefecture', ['tokyo' => '<Tokyo>']);
         $form = new Form($definition);
 
         self::assertSame(
@@ -43,7 +43,7 @@ final class FormViewAndFileTest extends UnitTestCase
             $form->field('name')->input(['data-label' => '<name>']),
         );
         self::assertSame(
-            '<select name="pref" id="contact-pref"><option value="tokyo">&lt;東京&gt;</option></select>',
+            '<select name="pref" id="contact-pref"><option value="tokyo">&lt;Tokyo&gt;</option></select>',
             $form->field('pref')->select(),
         );
     }
@@ -53,22 +53,22 @@ final class FormViewAndFileTest extends UnitTestCase
         $this->stubEscapers();
 
         $checkboxes = new FieldView(
-            Field::checkboxes('topics', '関心', ['news' => 'ニュース', 'docs' => '資料']),
+            Field::checkboxes('topics', 'Topics', ['news' => 'News', 'docs' => 'Docs']),
             ['docs'],
-            ['選択してください。'],
+            ['Please choose.'],
             'contact',
             '<span>%s</span>',
         );
         $file = new FieldView(
-            Field::file('resume', '履歴書'),
+            Field::file('resume', 'Resume'),
             new StoredFile('0123456789abcdef0123456789abcdef', '/tmp/resume.pdf', 'resume.pdf', 'application/pdf', 10),
             [],
             'contact',
             '<span>%s</span>',
         );
 
-        self::assertSame('<span>選択してください。</span>', $checkboxes->errors());
-        self::assertSame('資料', $checkboxes->display());
+        self::assertSame('<span>Please choose.</span>', $checkboxes->errors());
+        self::assertSame('Docs', $checkboxes->display());
         self::assertStringContainsString('name="topics[]" value="docs" checked', $checkboxes->checkboxes());
         self::assertSame('<input type="hidden" name="resume__token" value="0123456789abcdef0123456789abcdef">', $file->hidden());
     }
@@ -77,17 +77,17 @@ final class FormViewAndFileTest extends UnitTestCase
     {
         $this->stubEscapers();
 
-        $option = new OptionView('yes', '同意', true, 'contact-agree-0', 'agree', FieldType::Radios);
+        $option = new OptionView('yes', 'Agree', true, 'contact-agree-0', 'agree', FieldType::Radios);
 
         self::assertSame('<input type="radio" name="agree" value="yes" checked id="contact-agree-0">', $option->input());
-        self::assertSame('<label for="contact-agree-0">同意</label>', $option->labelTag());
+        self::assertSame('<label for="contact-agree-0">Agree</label>', $option->labelTag());
     }
 
     public function testFieldViewRejectsInvalidAttributeValue(): void
     {
         $this->expectException(FormConfigException::class);
 
-        (new FieldView(Field::text('name', '名前'), '', [], 'contact', '%s'))->input(['value' => new stdClass()]);
+        (new FieldView(Field::text('name', 'Name'), '', [], 'contact', '%s'))->input(['value' => new stdClass()]);
     }
 
     public function testEveryTextNodeIsEscapedWithEscHtml(): void
@@ -293,6 +293,43 @@ final class FormViewAndFileTest extends UnitTestCase
 
         $this->expectException(TempFileException::class);
         $store->resolve($token);
+    }
+
+    /**
+     * resolve() は、トークンの形(32桁の小文字の16進数)でない値を、パスにする前に TempFileException で拒否する。保管場所の
+     * 外に保管済みのファイルと同じ形のファイルを置き、`../` 等でそれを指しても読めないことを確かめる。
+     */
+    public function testTempFileStoreResolveRejectsTokensThatAreNotOfTheTokenForm(): void
+    {
+        $root = $this->createTempDirectory('temp-file-traversal');
+        $baseDir = $root . DIRECTORY_SEPARATOR . 'store';
+        self::assertTrue(mkdir($baseDir));
+        $store = new TempFileStore($baseDir);
+        $outsideToken = '0123456789abcdef0123456789abcdef';
+        // 保管場所の外(親ディレクトリ)の、保管済みのファイルと同じ形のファイル
+        $this->createStoredFile($root, 'sibling', 'secret.txt', 'text/plain', 'secret', time());
+        $this->createStoredFile($root, $outsideToken, 'secret.txt', 'text/plain', 'secret', time());
+
+        foreach ([
+            '../sibling',
+            '../' . $outsideToken,
+            'store/../../sibling',
+            $root . DIRECTORY_SEPARATOR . 'sibling',
+            '..',
+            '',
+            strtoupper($outsideToken),
+            substr($outsideToken, 0, 31),
+            $outsideToken . "\n",
+        ] as $token) {
+            try {
+                $store->resolve($token);
+                self::fail('resolve() accepted ' . var_export($token, true));
+            } catch (TempFileException $exception) {
+                self::assertSame("invalid temporary file token: {$token}", $exception->getMessage());
+            }
+
+            self::assertFalse($store->exists($token), var_export($token, true));
+        }
     }
 
     public function testTempFileStoreCreatesProtectedBaseDirectoryOnFirstStore(): void

@@ -28,7 +28,9 @@ use WP_Error;
  * フォームのファイル(一時保管・添付ファイル化・完了の後の後始末・WP-Cron の gc)を、実物の WordPress で確かめる。
  *
  * 実際のアップロード(is_uploaded_file() が真になる $_FILES)とフロントのリクエストは PHPUnit の中では作れないため、
- * wp-env の開発用サイトのページ(tests/fixtures/http/form-file.php)へ HTTP でファイルを送って確かめる。
+ * wp-env の開発用サイトのページ(tests/fixtures/http/form-file.php)へ HTTP でファイルを送って確かめる。開発用サイトの
+ * DB はテストの後に戻らないため、ページが応答の後にそのリクエストの jti と新しい gc のイベントを消し、request() が
+ * その結果を確かめる。
  */
 final class FormFileIntegrationTest extends IntegrationTestCase
 {
@@ -306,9 +308,17 @@ final class FormFileIntegrationTest extends IntegrationTestCase
 
         $response = json_decode($body, true);
 
-        if (!\is_array($response) || !\is_string($response['step'] ?? null) || !\is_string($response['html'] ?? null) || !\is_array($response['report'] ?? null)) {
+        if (!\is_array($response) || !\is_string($response['step'] ?? null) || !\is_string($response['html'] ?? null) || !\is_array($response['report'] ?? null) || !\is_array($response['cleanup'] ?? null)) {
             self::fail("the form page did not return the expected JSON: {$body}");
         }
+
+        // 開発用サイトの DB に、このリクエストが作った jti と gc のイベントを残さない(ページがその場で消した結果)
+        $cleanup = $response['cleanup'];
+        self::assertSame(['jtiClaimedBeforeCleanup', 'jtiClaimedAfterCleanup', 'gcEventCreated', 'gcEventLeft'], array_keys($cleanup));
+        $completed = $response['step'] === 'complete';
+        self::assertSame($completed ? true : null, $cleanup['jtiClaimedBeforeCleanup'], 'the jti claimed on the development site');
+        self::assertSame($completed ? false : null, $cleanup['jtiClaimedAfterCleanup'], 'the jti left on the development site');
+        self::assertFalse($cleanup['gcEventLeft'], 'the gc event left on the development site');
 
         return ['step' => $response['step'], 'html' => $response['html'], 'report' => $response['report']];
     }

@@ -236,6 +236,7 @@ final class Field
 
     /**
      * 単一チェックボックス(同意確認等)。チェック時の値は $checkedValue、未チェックは ''。
+     * $checkedValue に '' を渡すと FormConfigException(未チェックの '' と区別できないため)。
      * $checkedLabel はチェック時に確認画面(FieldView::display())へ出す文言。null の項目の display() は FormConfigException
      */
     public static function checkbox(string $name, string $label, string $checkedValue = '1', array $rules = [], ?string $checkedLabel = null): self;
@@ -248,6 +249,22 @@ final class Field
 
     /** フィルタを末尾に追加した新インスタンスを返す(イミュータブル) */
     public function withFilters(\Closure ...$filters): self;
+
+    /** choices を持つか(select・radios・checkboxes)。Validator が選択肢整合検証の要否の判定に使う */
+    public function isChoiceField(): bool;
+
+    /**
+     * @internal 項目の名前の検査(下記の振る舞い仕様)。Field の生成時と CompositeField のコンストラクタが呼ぶ
+     * @throws \TMSWP\Core\Exception\Form\FormConfigException
+     */
+    public static function assertName(string $name): void;
+
+    /**
+     * @internal rules の要素が RuleInterface であることの検査。Field の生成時と CompositeField のコンストラクタが呼ぶ
+     * @param list<RuleInterface> $rules
+     * @throws \TMSWP\Core\Exception\Form\FormConfigException
+     */
+    public static function assertRules(array $rules): void;
 }
 ```
 
@@ -259,6 +276,7 @@ final class Field
 - `choices` のキー `''` はプレースホルダ(「--- お選びください ---」等)として許可する。選択肢整合検証(§Validator)は空値をスキップするため、`''` 選択は `Required` で検出される。
 - `checkboxes` は `multiple = true`、POST名は `{name}[]`。
 - `checkbox` の値は `checkedValue` か `''` のどちらか。それ以外の値は選択肢整合検証(§Validator)で違反にする(`Required` だけでは任意の文字列が通るため)。
+- `checkbox` の `checkedValue` に `''` は指定できない(`Field::checkbox()`・`FormDefinition::checkbox()` が定義の時点で `FormConfigException` にする)。未チェックの値 `''` と区別できず、チェックの有無が分からなくなり、`Required` が常に失敗するため。`'0'` は指定できる。
 - エッジケース: `choices` が空配列の `select`/`radios`/`checkboxes` は `FormConfigException`(定義ミス)。
 
 #### パスワードの項目
@@ -458,6 +476,12 @@ final class Validator
 
     /** 空値判定の正準実装: null / '' / [] のみ空。'0'・0・false は空ではない */
     public static function isEmpty(mixed $value): bool;
+
+    /**
+     * 値を比較・検証用の文字列にする。string はそのまま、int・float・bool・Stringable は (string) にし、それ以外
+     * (配列・null・その他のオブジェクト)は null。Form の取り込み・同梱のルール・FieldView が共通に使う
+     */
+    public static function stringValue(mixed $value): ?string;
 }
 
 final readonly class ValidationContext
@@ -1464,7 +1488,7 @@ use TMSWP\Core\Form\Composite\CompositeField;
 
 final class FieldView
 {
-    /** @internal Formのみが生成する */
+    /** @internal Formのみが生成する($partKey・$partField は part() が複合フィールドの部品のビューを作るときだけ渡す) */
     public function __construct(
         private readonly Field|CompositeField $field,
         private readonly mixed $value,
@@ -1472,6 +1496,8 @@ final class FieldView
         private readonly array $errors,
         private readonly string $formId,
         private readonly string $errorTemplate,
+        private readonly ?string $partKey = null,
+        private readonly ?Field $partField = null,
     ) {}
 
     // ---- 入力部品(エスケープ済みHTML文字列を返す。attrs の扱いは下記「属性の指定」) ----
@@ -1789,22 +1815,11 @@ get_header();
 <?php get_footer(); ?>
 ```
 
-完了後にサンクスページへリダイレクトしたい場合(PRG)は、テンプレートではなく `template_redirect` フックで処理する(出力開始前であることが保証されるため):
+`handle()` はテンプレートの先頭(`get_header()` の前)で明示的に呼ぶ。出力の前のため、ページキャッシュからの除外のヘッダが効く。リダイレクトしないこの構成でも、完了画面のリロードはjtiの消費により「This form has already been submitted.」になり、完了処理は再実行されない(§二重送信・リダイレクトの責務分担)。
 
-```php
-add_action('template_redirect', static function (): void {
-    if (!is_page_template('tmpl-contact.php')) {
-        return;
-    }
-    $result = ContactFormHolder::form()->handle();   // 下記「リクエスト内共有」を参照
-    if ($result->step === FormStep::Complete) {
-        wp_safe_redirect(home_url('/contact/thanks/'));
-        exit;
-    }
-});
-```
+完了後にサンクスページへリダイレクトしたい場合(PRG)も、テンプレートの先頭で前処理クラスを明示的に呼ぶ(§2A)。`template_redirect` フックでテンプレートを判定してフォームを駆動する形は採らない(どのテンプレートで何が駆動されるかを、テンプレートのファイルから追えなくなるため)。
 
-`handle()` は冪等なので、テンプレート側で再度 `handle()` を呼んでも完了処理は二重実行されない。フックとテンプレートで同一インスタンスを使うための保持はapp側の責務(最小実装):
+テンプレートを持たない文脈(§5)のうち、プラグインのショートコードでリダイレクトを伴う完了処理をする場合に限り、出力の前のフックで `handle()` を先に呼ぶ(下記の例の判定はショートコード専用である。ブロックで出す場合は、ブロックを含むページかを出力の前に判定する別の処理が要る)。`handle()` は冪等なので、ショートコード側で再度 `handle()` を呼んでも完了処理は二重実行されない。フックとショートコードで同一インスタンスを使うための保持はapp側の責務(最小実装):
 
 ```php
 final class ContactFormHolder
@@ -1816,6 +1831,18 @@ final class ContactFormHolder
         return self::$form ??= ContactForm::create();
     }
 }
+
+add_action('template_redirect', static function (): void {
+    // ショートコード [contact_form] を含むページだけで駆動する
+    if (!is_singular() || !has_shortcode((string) get_post_field('post_content'), 'contact_form')) {
+        return;
+    }
+    $result = ContactFormHolder::form()->handle();
+    if ($result->step === FormStep::Complete) {
+        wp_safe_redirect(home_url('/contact/thanks/'), 303);
+        exit;   // 00-overview.md 原則1の例外(PRGのリダイレクト直後)
+    }
+});
 ```
 
 ### 2A. テンプレート前処理の明示呼び出しによる3画面遷移(正準形)
@@ -2068,4 +2095,17 @@ composer test:integration  # wp-env + WordPress のテストライブラリ: non
 composer qa        # 上記一括(CI同等)
 ```
 
-ユニットテストの最低限の対象クラス: `ConfirmTokenTest` / `ValidatorTest` / `RuleTest`(全13ルール) / `FormHandleTest`(状態機械全分岐) / `FieldTest` / `CompositeFieldTest` / `FieldViewTest` / `FormHtmlTest` / `MessagesTest` / `JtiStoreTest` / `TempFileStoreTest`。
+ユニットテストの最低限の対象と、テストを置くファイル(`packages/core/tests/Unit/`):
+
+| 対象 | テストのファイル |
+|---|---|
+| `ConfirmToken`・`SubmitToken`・`TokenSigner` | `ConfirmTokenTest` |
+| `Validator`・`Messages`・`CompositeField` | `FormValidationTest` |
+| 同梱の全13ルールと空値スルー | `FormRuleTest` |
+| `Form` の状態機械の全分岐・`JtiStore`・`TempFileGc` | `FormRuntimeTest` |
+| `Field`・`FormDefinition` | `FormDefinitionTest` |
+| `FieldView`・`OptionView`・`UploadedFile`・`StoredFile`・`TempFileStore` | `FormViewAndFileTest` |
+| `FormHtml` と出力のスナップショット(`<script>` の入力・動的な選択肢) | `FormHtmlTest` |
+| API/構造の受け入れ基準 | `FormStructureTest` |
+
+統合テスト(`packages/core/tests/Integration/`)は、`FormIntegrationTest`(nonce の実際の検証・`JtiStore` の実際の DB・nocache のヘッダ)と `FormFileIntegrationTest`(`TempFileStore` の実際の IO・`toAttachment()`・WP-Cron)に置く。
