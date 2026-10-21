@@ -79,6 +79,7 @@ v0.3.0・v0.4.0・v0.5.0 は v0.2.0 の後に並列に進められる。v0.6.0(v
 | packages/core/tests/Support/(WpdbTestDouble 等) | v0.4.0-T6 → v0.5.0-T6 |
 | packages/core/phpstan/(extension.neon を含む) | v0.5.0-T1 → v0.5.0-T3 |
 | phpstan.neon.dist | v0.5.0-T1 → v0.6.0-T3(どちらが先でもよいが同時に触らない) |
+| docs/10-quality.md | v0.4.0-T6(§8.1)と v0.5.0-T1(§3A)(どちらが先でもよいが同時に触らない) |
 | packages/core/rules/extensions.md | v0.6.0-T1 → v0.7.0-T5(版の依存で逐次) |
 | packages/core/rules/acf.md | v0.2.0-T3 → v0.2.0-T6 → v0.6.0-T1 → v0.6.0-T7 |
 | tests/fixtures/(fixture のテーマ・プラグインと探索結果ファイル) | v0.3.0〜v0.5.0 で fixture を変えるタスク(同時に触らない。fixture を変えたタスクが探索結果ファイルを再生成する) |
@@ -598,8 +599,10 @@ v0.2.0
 
 #### v0.4.0-T6: 受け入れテスト
 
-- 対象ファイル領域: packages/core/tests/Unit/Form*.php、packages/core/tests/Integration/(Form を新設)、packages/core/tests/Support/(WpdbTestDouble 等)
-- 完了条件: docs/05 の受け入れ基準の各項目にテストがあり、nonce・TempFileStore の実 IO・toAttachment・JtiStore の実 DB が統合テストで確認されている。fixture のソース文字列が英語(§1.13)。
+- 対象ファイル領域: packages/core/tests/Unit/Form*.php、packages/core/tests/Integration/(Form を新設)、packages/core/tests/Support/(WpdbTestDouble 等)、packages/core/tests/Integration/EntityFacadeIntegrationTest.php(サムネイルの解決のテスト)、docs/10 §8.1(Form の行と 21b)
+- 完了条件:
+  - docs/05 の受け入れ基準の各項目にテストがあり、nonce・TempFileStore の実 IO・toAttachment・JtiStore の実 DB が統合テストで確認されている。fixture のソース文字列が英語(§1.13)。
+  - docs/10 §8.1 の Form の行(5・7・9〜18)の移植先が実在するテストのファイルを指し、その行の「移植する仕様」がテストにある。21b(サムネイルの解決)の「GD 画像生成 + WP ファクトリの作法を踏襲」が、テストの実際の作り方と一致している(v0.3.0 の時点では、これらの Form の行の移植先のファイルが無く、21b の EntityFacadeIntegrationTest は GD で画像を生成していない)。
 - 検証コマンド: `composer test:unit`、`composer test:integration`
 
 #### v0.4.0-T7: 受け入れ確認と記録
@@ -612,7 +615,7 @@ v0.2.0
 
 - 順序: T1 → T2 → T3 → T4 → {T5 ∥ T6} → T7
 - T1〜T4 は docs/05 を共有し、T1〜T3 は Form.php も共有するため逐次。
-- T5(rules/)と T6(tests/)はファイル領域が重ならない。T6 の tests/Support は §0.5 の順で v0.5.0-T6 と調整する。
+- T5(rules/)と T6(tests/ と docs/10 §8.1)はファイル領域が重ならない。T6 の tests/Support は v0.5.0-T6 と、T6 の docs/10 は v0.5.0-T1 と、§0.5 の順で調整する。
 
 ### 受け入れ条件
 
@@ -664,13 +667,14 @@ v0.2.0
 
 #### v0.5.0-T4: Migrator の作り直し
 
-- 対象ファイル領域: packages/core/src/Model/{Migrator,MigrationResult,MigrationStatus,MigrateCommand}.php、packages/core/src/Kernel/Kernel.php(Migrator の配線)、packages/core/tests/Integration/ModelIntegrationTest.php(Migrator 部分)、docs/06 §5・§7(Kernel 統合契約の `listen()` の呼び出し)、docs/02(マイグレーションの契機)
+- 対象ファイル領域: packages/core/src/Model/{Migrator,MigrationResult,MigrationStatus,MigrateCommand}.php、packages/core/src/Kernel/Kernel.php(Migrator の配線)、packages/core/tests/Integration/ModelIntegrationTest.php(Migrator 部分)、packages/core/tests/Unit/KernelStorageTest.php(`$wpdb` の無い boot)、docs/06 §5・§7(Kernel 統合契約の `listen()` の呼び出し)、docs/02(マイグレーションの契機)
 - 完了条件:
   - `wp tmswp migrate` で適用し、dbDelta の後に `lastError()` と残った差分を確認し、失敗した場合はハッシュを更新しない。
   - テーブル定義のハッシュが DB と食い違うと、権限のある管理者に `admin_notices` で通知する。起動時・admin_init・ajax・cron で自動適用しない(§1.5)。
   - `action` が enum で、シグネチャと出力が docs/06 どおり。
   - docs/06 §5・§7 の `listen()` のシグネチャと呼び出しの記述が実装と一致している(v0.2.0 の時点では、文書が `listen(bool $isTheme, ?string $pluginFile = null)`、実装が `listen(Kernel $kernel)`)。
   - Migrator が `WP_DEBUG` を直接参照せず、`listen()` に渡した Kernel の `KernelConfig::$debug` で判定する(§1.7)。対象: packages/core/src/Model/Migrator.php の 161 行(v0.2.0 の時点の行)。
+  - WordPress なしのユニットテストで Kernel を boot するときに、グローバルの `$wpdb` を要さない。v0.3.0 の時点では、boot の中の Migrator の配線(Kernel.php の `registerModelMigrator()`)が `Connection::fromGlobal()` を解決するため、アプリのユニットテストは `$wpdb` の代役を置く必要がある(rules/meta.md・options.md の「テスト」の例)。`$wp_version`(WordPress 7.0 未満の拒否)と `$wp_actions`(発火済みのフックの判定)は boot の仕様として残す。
 - 検証コマンド: `composer test:integration`、`node node_modules/@wordpress/env/bin/wp-env run cli wp tmswp migrate`、`composer test:unit`
 
 #### v0.5.0-T5: Template
@@ -696,7 +700,7 @@ v0.2.0
 - 順序: {T1 ∥ T2} → {T3 ∥ T5} → T4 → T6 → T7
 - T1 と T2 はファイル領域が重ならない(View・phpstan・Kernel.php・starters・sample-site・docs/00・02・07・10/Model/ の Connection・QueryBuilder と docs/06)。
 - T3 は T1(phpstan/)と T2(docs/06)の後。T5(View/ の Template と docs/07)は T1 の後で、T3 と重ならない。T4 は T3(docs/06)の後。
-- T1 と T4 の Kernel.php・docs/02、T1 の docs/00 は §0.5 の順で他の版と調整する。
+- T1 と T4 の Kernel.php・docs/02、T1 の docs/00・docs/10 は §0.5 の順で他の版と調整する。
 
 ### 受け入れ条件
 
@@ -721,7 +725,7 @@ v0.3.0(v0.2.0 を含む)
 
 #### v0.6.0-T1: Kernel ごとの登録と CLI
 
-- 対象ファイル領域: packages/acf-bridge/src/{AcfBridge,BridgeConfig}.php、packages/acf-bridge/src/Cli/、packages/acf-bridge/src/Manifest/、packages/core/rules/extensions.md(acf-bridge の登録例)、docs/09 §1.4(パッケージ構成の例外)・§2・§5.4・§7・§8.2・§9、docs/00 DR-06、docs/04 と packages/core/rules/{meta,acf}.md(ACF で編集する単純な値の「v0.6.0 までの境目」の説明)
+- 対象ファイル領域: packages/acf-bridge/src/{AcfBridge,BridgeConfig}.php、packages/acf-bridge/src/Cli/、packages/acf-bridge/src/Manifest/、packages/core/src/Meta/MetaSchemaRegistry.php・packages/core/tests/Unit/MetaSchemaRegistryTest.php(外部管理の申告の引数と、重複の例外のメッセージ)、packages/core/rules/extensions.md(acf-bridge の登録例)、docs/09 §1.4(パッケージ構成の例外)・§2・§5.4・§7・§8.2・§9、docs/00 DR-06、docs/04 と packages/core/rules/{meta,acf}.md(ACF で編集する単純な値の「v0.6.0 までの境目」の説明)
 - 完了条件:
   - acf-bridge が `KernelConfig` 経由で Kernel ごとに登録され、テーマとプラグインの両方で使える(統合テスト)。CLI に `--app=` がある。save_json が登録元の acf-json に向く。
   - acf-bridge の debug による分岐が、登録した Kernel の debug に従う(§1.7)。
@@ -730,14 +734,17 @@ v0.3.0(v0.2.0 を含む)
   - docs/09 §1.4 のパッケージ構成の図の `Exception/` が、packages/acf-bridge/src/Exception/ の例外クラスと一致している(v0.2.0 の時点では、AcfBridge・BridgeConfig・AcfCommand が投げる `AcfBridgeRuntimeException` が図に無い)。
   - ACF のフィールドグループで管理するキーを、`#[MetaSchema]` と `#[UseMetaStorage(AcfMetaStorage::class)]` で宣言できる(§1.9)。外部管理の登録(`markExternallyManaged` 系)と衝突せず、`DuplicateMetaKeyException` にならない(統合テスト)。
   - docs/04 の「メタ・設定の使い分け」と rules(meta.md・acf.md・extensions.md)の「v0.6.0 までの境目」の説明を、v0.6.0 の完了後の形に改め、docs/09 §7.3・§8.2 の重複検出と推奨の記述、`00-overview.md` DR-06 の「PHP 手書き宣言との同一キー重複はエラー」をこの契約に揃えている。
+  - 重複として例外にする場合、その例外のメッセージが docs/09 §7.3 のとおり、衝突したキー・(ObjectType, サブタイプ)・宣言クラスに加えて、`#[MetaSchema]` の定数名と ACF のフィールドグループの key を含む(v0.3.0 の時点では、外部管理の申告の API がグループの key を受け取らないため、定数名とグループの key を含まない)。
+  - CLI(packages/acf-bridge/src/Cli/AcfCommand.php)が、WP-CLI の API を `['WP_CLI', ...]` の callable を組み立てて呼ばず、core の DiscoverCommand・MigrateCommand と同じく `WP_CLI::` で直接呼ぶ(v0.3.0 の時点では、`halt()` と `callWpCli()` が callable を組み立てて呼んでいる)。
 - 検証コマンド: `composer test:unit`、`composer test:integration`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`
 
 #### v0.6.0-T2: 実行時アクセス(AcfFieldAccess と AcfMetaStorage)
 
-- 対象ファイル領域: packages/acf-bridge/src/{AcfFieldAccess,AcfMetaStorage,AcfTypes}.php、packages/acf-bridge/tests/Integration/AcfBridgeIntegrationTest.php、tests/fixtures/themes/tmswp-fixture-theme/(ACF のフィールドグループ)、docs/09 §6・§8・§10
+- 対象ファイル領域: packages/acf-bridge/src/{AcfFieldAccess,AcfMetaStorage,AcfTypes}.php、packages/acf-bridge/tests/Integration/AcfBridgeIntegrationTest.php、packages/acf-bridge/tests/Integration/AcfMetaStorageContractTest.php(新設)、tests/fixtures/themes/tmswp-fixture-theme/(ACF のフィールドグループ)、docs/09 §6・§8・§10
 - 完了条件:
   - 未設定の正規化と形の不一致(debug は例外、本番は Kernel のロガーに `error` で記録)が区別され、gallery は要素単位で検査される。
   - `has()` がメタの存在で判定し、AcfMetaStorage の getAll / setAll / delete が WpMetaStorage と同じ意味になる。DateTime が `wp_timezone()` で往復する。
+  - AcfMetaStorage が docs/04 §4.5 の実装者への規約(書き込みの戻り値は「書き込んだか」で、同じ値なら false。データベースのエラー等の失敗は例外。`null` は保存しない)を満たし、packages/core/tests/Support の `MetaStorageContractTestCase`(データベースに依存しない契約は trait `MetaStorageContract`)による契約テストを、実物の ACF の統合テストで通す(v0.3.0 の時点では、この規約を満たしていない)。
   - 実物の ACF で、ACF 管理外・管理下の両方のキーについて、MetaBag 経由の削除と `has()` が正しく動くことを統合テストで確認する。
 - 検証コマンド: `composer test:unit`、`composer test:integration`
 
@@ -771,6 +778,7 @@ v0.3.0(v0.2.0 を含む)
 - 対象ファイル領域: packages/acf-bridge/tests/、docs/09 §14(テスト方針)
 - 完了条件:
   - 無料版 ACF にある型について、正規化、key の解決、マーク、E101、UseMetaStorage が CI の統合テストで確認され、CLI のテストがある。全ユニットテストが UnitTestCase を継承する。
+  - マークの振り分け(ACF の location の値 `all` のキーを `markExternallyManagedInAllSubtypes()` に、それ以外のキーを `markExternallyManaged()` に渡すこと)を acf-bridge のテストで確かめる(v0.3.0 の時点では、packages/acf-bridge/src/AcfBridge.php のこの振り分けに acf-bridge 側のテストが無い)。
   - Pro 専用の型(repeater、flexible_content、gallery、clone)と他の Pro 限定機能のテストは、ライセンスキーを環境変数で渡したときだけ手元で走り、その結果を記録している(§1.2)。実物の ACF Pro での最終確認は v0.9.0-T1 で行う。
   - 対象領域(acf-bridge)を再点検して、件数のみ判明している軽微な不具合(1 件)を特定し、すべて対処した。
 - 検証コマンド: `composer test:unit`、`composer test:integration`
@@ -838,6 +846,7 @@ v0.2.0、v0.4.0、v0.6.0
   - `KernelConfig` 経由の登録になり、制約(外部ストレージ非対応等)が docs/08 に書かれている(§1.3)。
   - 拡張の内部のログは、静的な `Log` ではなく、登録した Kernel のロガー(`$kernel->logger()`)に記録する(§1.8)。対象: packages/thumbnail/src/Thumbnail.php の 44 行(`Log::warning`)、packages/thumbnail/src/RestController.php の 150・158・167 行(`Log::error`)(v0.2.0-T6 の時点の行)。packages/thumbnail/tests/Unit/ThumbnailTest.php の暫定の Kernel の起動(`bootKernelContainingThumbnail()`。packages/thumbnail をルートにして静的な `Log` を記録させる形)をやめる。docs/08 の 145・195・861 行(v0.2.0-T6 の時点の行)を、Kernel のロガーへの記録の説明に揃える。
   - `tms_thumb` を `function_exists` で囲んで定義しておらず、同名の関数が先に定義されている場合に黙ってそちらが使われない(明示エラーになる)。
+  - CLI(packages/thumbnail/src/Cli/ThumbCommand.php)が、WP-CLI の API を `['WP_CLI', ...]` の callable を組み立てて呼ばず、core の DiscoverCommand・MigrateCommand と同じく `WP_CLI::` で直接呼ぶ(v0.3.0 の時点では、callable を組み立てて呼んでいる)。
 - 検証コマンド: `composer test:unit`、`composer test:integration`(実画像の生成)
 
 #### v0.7.0-T3: ja-toolkit
@@ -948,7 +957,10 @@ v0.2.0〜v0.7.0
 #### v0.8.0-T7: rules・AGENTS.md・README の全面整備
 
 - 対象ファイル領域: packages/*/rules/、packages/*/README.md、AGENTS.md、README.md、starters/*/AGENTS.md
-- 完了条件: rules/・AGENTS.md・README が v0.2.0〜v0.8.0 で確定した API を反映し、docs/11 が定める項目(配置決定木、コーディング規約、デバッグ節、探索結果ファイルの扱い等)を備え、コード例が抽出・検査を通る。CLAUDE.md を置いていない(§1.18)。
+- 完了条件:
+  - rules/・AGENTS.md・README が v0.2.0〜v0.8.0 で確定した API を反映し、docs/11 が定める項目(配置決定木、コーディング規約、デバッグ節、探索結果ファイルの扱い等)を備え、コード例が抽出・検査を通る。CLAUDE.md を置いていない(§1.18)。
+  - packages/core/rules に次の注意がある(v0.3.0 の時点では無い)。builtin の `post` のクラスに `#[WithMetaRevisions]` を付けるには、定義で `supports('revisions')` を指定する(`MetaSchemaRegistry` は定義の supports を検査するため、WordPress が `post` に付ける revisions では足りない)。attachment のアダプタのクラスの `query()` は、`status('inherit')` を指定しないと添付ファイルを返さない(PostQuery の既定の `post_status` は `publish`)。
+  - rules/meta.md・options.md の「テスト」の例が、v0.5.0-T4 の後の boot に要るグローバルだけを置いている(v0.3.0 の時点では `$wpdb` の代役も置いている)。
 - 検証コマンド: `php tools/extract-rules-code.php && php tools/verify-rules-code.php`
 
 #### v0.8.0-T8: 受け入れ確認と記録

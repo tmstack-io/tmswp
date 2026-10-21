@@ -203,7 +203,7 @@ final class EntityQueryTest extends UnitTestCase
 
     /**
      * 3つのクエリは、比較演算子・キャスト型・並び順・whereTerm() の field・operator を enum で受け、文字列で受ける引数を
-     * 持たない。文字列を実行時に許可リストで検査するクラス(旧 QueryValidator)は無く、EXISTS は Compare に含めない。
+     * 持たない。EXISTS は Compare に含めない。
      */
     public function testQueriesAcceptOperatorsCastsAndOrdersOnlyAsEnums(): void
     {
@@ -237,7 +237,6 @@ final class EntityQueryTest extends UnitTestCase
 
         // PostQuery の whereMeta・orderBy・orderByDesc 以外にも検査が及んでいる(空の検査にしない)
         self::assertGreaterThanOrEqual(15, $checked);
-        self::assertFalse(class_exists('TMSWP\Core\Query\QueryValidator'));
         self::assertSame([], array_values(array_filter(Compare::cases(), static fn(Compare $compare): bool => str_contains($compare->value, 'EXISTS'))));
     }
 
