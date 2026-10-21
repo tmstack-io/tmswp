@@ -16,6 +16,7 @@
 | 投稿/ターム/ユーザーにカスタムフィールドを持たせる | `vendor/tmswp/core/rules/meta.md` |
 | ACFでフィールドを管理する | `vendor/tmswp/core/rules/acf.md` |
 | フォームを実装する | `vendor/tmswp/core/rules/form.md` |
+| フォームの完了処理でメールを送る | `vendor/tmswp/core/rules/form-mail.md` |
 | 独自DBテーブルを作る | `vendor/tmswp/core/rules/model.md` |
 | サイト設定値を定義する | `vendor/tmswp/core/rules/options.md` |
 | add_action/add_filter をまとめる | `vendor/tmswp/core/rules/hooks.md` |

@@ -72,13 +72,14 @@ tmswp/ (monorepo)
 ├── AGENTS.md                       … §4 全文(コントリビュータ向け)
 ├── packages/
 │   └── core/
-│       └── rules/                  … §6 レシピ12本(パッケージに同梱して配布。本文はこのディレクトリが正本)
+│       └── rules/                  … §6 レシピ13本(パッケージに同梱して配布。本文はこのディレクトリが正本)
 │           ├── post-type.md
 │           ├── taxonomy.md
 │           ├── user-role.md
 │           ├── meta.md
 │           ├── acf.md
 │           ├── form.md
+│           ├── form-mail.md
 │           ├── actions.md
 │           ├── model.md
 │           ├── options.md
@@ -258,6 +259,7 @@ composer fix                # コードスタイル自動修正
 | 投稿/ターム/ユーザーにカスタムフィールド(非ACF)を持たせる | vendor/tmswp/core/rules/meta.md |
 | ACFでフィールドを管理する(acf-json運用) | vendor/tmswp/core/rules/acf.md |
 | フォーム(問い合わせ・申込み等)を実装する | vendor/tmswp/core/rules/form.md |
+| フォームの完了処理でメールを送る | vendor/tmswp/core/rules/form-mail.md |
 | テンプレートの前処理(データ取得・フォーム駆動)を分離する | vendor/tmswp/core/rules/actions.md |
 | 独自DBテーブルを作って読み書きする | vendor/tmswp/core/rules/model.md |
 | サイト設定値(オプション)を定義する | vendor/tmswp/core/rules/options.md |
@@ -382,7 +384,7 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所のみ差
 
 ### 6.1 構成
 
-`packages/core/rules/` に以下12ファイルを置く。tmswp/coreパッケージの配布物に含める(composer.jsonのarchive excludeに入れない)。
+`packages/core/rules/` に以下13ファイルを置く。tmswp/coreパッケージの配布物に含める(composer.jsonのarchive excludeに入れない)。
 
 | ファイル | 対象タスク | 主依存文書 |
 |---|---|---|
@@ -392,6 +394,7 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所のみ差
 | meta.md | 非ACFカスタムフィールド | 04-meta-options |
 | acf.md | acf-json運用+型付きアクセサ生成 | 09-acf-bridge |
 | form.md | フォーム実装(3画面+メール) | 05-form |
+| form-mail.md | フォームの完了処理のメール送信(ヘッダインジェクション対策・自動返信・失敗時のログ) | 05-form |
 | actions.md | テンプレート前処理(テンプレート同名 actions/ ファイル規約) | 07-support |
 | model.md | 独自テーブル | 06-model |
 | options.md | サイト設定値 | 04-meta-options |
@@ -957,7 +960,7 @@ fwrite(STDOUT, "\n  Project initialized: {$name} ({$slug})\n\n"
 ### 12.1 成果物の存在と形式
 
 - [ ] monorepoルートに `AGENTS.md`(§4の内容)が存在し、`CLAUDE.md` はmonorepo・スターターのどこにも存在しない。
-- [ ] `packages/core/rules/` に12ファイル(post-type/taxonomy/user-role/meta/acf/form/actions/model/options/hooks/view/extensions)が存在し、composer配布物に含まれる(`composer archive` の内容で確認)。
+- [ ] `packages/core/rules/` に13ファイル(post-type/taxonomy/user-role/meta/acf/form/form-mail/actions/model/options/hooks/view/extensions)が存在し、composer配布物に含まれる(`composer archive` の内容で確認)。
 - [ ] 各レシピが共通フォーマット(§6.2: 手順/完全な実装例/してはいけないこと/確認方法)を満たす。
 - [ ] `starters/theme` / `starters/plugin` が§8/§9のツリーどおりに存在する。
 - [ ] スターター直下に `README.md`(§8.7)が存在し、セットアップ手順・create-project例・AGENTS.md/rules/への導線を含む(規約本文の転載はないこと)。
