@@ -31,7 +31,6 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
   - `src/Attribute/Filter.php` — `TMSWP\Core\Attribute\Filter` (メソッドレベルフック属性。本文書で新設定義。§5)
   - `src/Attribute/AsHook.php` / `src/Hook/Hook.php` / `src/Hook/HookInitializer.php` — `#[AsHook]` 属性・Hook 基底・Hook の Initializer(本文書が正準定義。§5)
   - 各コンポーネント属性は本文書の `ComponentAttributeInterface` 契約に従う。コア属性は6種(`AsPostType` / `AsTaxonomy` / `AsUserRole` / `AsModel` / `AsHook` / `AsOptionGroup`)。属性のパラメータ仕様と各 Initializer の中身は各機能文書が定義する。ただし `AsHook` と Hook 基底・`HookInitializer`、メソッドレベルのフック属性 `#[Action]` / `#[Filter]` は本文書が正準定義する(§5)
-  - `src/View/ActionRouter.php` — `TMSWP\Core\View\ActionRouter`(本文書はboot時の生成・登録のみを定義。dispatch の正準仕様・actions ファイル規約・View 変数バッグは View/Support/Log 文書が定義する)
   - `src/Container/Container.php` — `TMSWP\Core\Container\Container`
   - `src/Exception/TmswpExceptionInterface.php` / `LogicException.php` / `RuntimeException.php` / `KernelException.php` / `DiscoveryException.php` / `ContainerException.php` / `NotFoundException.php` / `CircularDependencyException.php`(§9)
 
@@ -84,7 +83,7 @@ init(20) … MetaSchema の WordPress への登録(register_*_meta)
 宣言フック発火時 … #[Action]/#[Filter] メソッド(Hookクラスはここで初ロード)
 ```
 
-boot() 時点で発生する副作用は **add_action / add_filter(`#[Action]`/`#[Filter]` メソッドの直接登録、テーマ形態の ActionRouter の `template_include` 登録) / register_activation_hook / WP-CLIコマンド登録** に限定される。boot はファイルを書かない(探索結果ファイルを書くのは探索コマンドだけ。§3.6)。`register_post_type`・`register_*_meta` 等のWP登録系APIはすべて上記フック発火時に実行される。WordPress の状態を変えない処理として、boot はエンティティのメタスキーマを Kernel の `MetaSchemaRegistry` に登録する(boot 時の初期化。§7)。そのため boot の後なら、init の前でも `meta()` が使える。
+boot() 時点で発生する副作用は **add_action / add_filter(`#[Action]`/`#[Filter]` メソッドの直接登録) / register_activation_hook / WP-CLIコマンド登録** に限定される。boot はファイルを書かない(探索結果ファイルを書くのは探索コマンドだけ。§3.6)。`register_post_type`・`register_*_meta` 等のWP登録系APIはすべて上記フック発火時に実行される。WordPress の状態を変えない処理として、boot はエンティティのメタスキーマを Kernel の `MetaSchemaRegistry` に登録する(boot 時の初期化。§7)。そのため boot の後なら、init の前でも `meta()` が使える。
 
 Kernel はコアの翻訳(テキストドメイン `tmswp`)を `init`(priority 1)でロードする(ロード手順の正準は 01-architecture §7.3)。CPT/Taxラベル生成は gettext 非依存のテンプレート方式(DR-17)であり、コアの例外・ログメッセージは翻訳対象外の開発者向け英語で固定する。
 
@@ -125,7 +124,7 @@ enum KernelContext: string
 
 - テーマの `functions.php` は `setup_theme` と `after_setup_theme` の間にロードされるため、テーマで利用可能な最速フックは `after_setup_theme`。
 - プラグイン本体は通常リクエストでは `plugins_loaded` 発火前にロードされるため、プラグインの最速フックは `plugins_loaded`。mu-plugins も `plugins_loaded` 前にロードされるため Plugin コンテキストをそのまま使える(後述のmu-plugin注意点参照)。
-- WordPressのプラグイン有効化サンドボックス(`WP_SANDBOX_SCRAPING`)では、プラグイン本体が `plugins_loaded` 後に読み込まれる。この経路では通常の属性初期化スケジューリングは行わず、`register_activation_hook` / `register_deactivation_hook` と Model migrator の購読だけを登録する。拡張の `register()` も呼ばないが、既定のメタ・オプションのストレージは通常の boot と同じく解決して固定する(§3 手順7b。boot の後の差し替えを受け付けない)。通常リクエストの遅延bootは引き続き例外とする。
+- WordPressのプラグイン有効化サンドボックス(`WP_SANDBOX_SCRAPING`)では、プラグイン本体が `plugins_loaded` 後に読み込まれる。この経路では通常の属性初期化スケジューリングは行わず、`register_activation_hook` / `register_deactivation_hook` と Model migrator の購読だけを登録する。拡張の `register()` も呼ばないが、既定のメタ・オプションのストレージは通常の boot と同じく解決して固定する(§3 手順7a。boot の後の差し替えを受け付けない)。通常リクエストの遅延bootは引き続き例外とする。
 
 ## 2. KernelConfig
 
@@ -150,7 +149,6 @@ final readonly class KernelConfig
      * @param string        $appNamespace アプリ名前空間ルート(先頭・末尾の \ を除去した正規形。例: 'App')
      * @param string|null   $pluginFile  プラグイン本体ファイルの絶対実パス。Themeコンテキストでは必ずnull
      * @param bool          $debug       デバッグモード(app/ の走査と探索結果ファイルの読み込みの切替・例外化の挙動を切替)
-     * @param bool          $actions     テーマ形態のテンプレート前処理(ActionRouter)を有効化するか(既定 true)。Pluginコンテキストでは常に false へ正規化される(§3.7)
      * @param list<ExtensionInterface> $extensions この Kernel で有効にする拡張(§3.10)
      * @param (\Closure(): array<string, \TMSWP\Core\Log\LogChannel>)|null $logChannels この Kernel のログのチャンネルを返すクロージャ(07-support §5)
      * @param \TMSWP\Core\Label\LabelLanguage $labelLanguage labelLanguage() を指定しない PostTypeDefinition・TaxonomyDefinition のラベル言語(03-entities §2.2)
@@ -161,7 +159,6 @@ final readonly class KernelConfig
         public string $appNamespace,
         public ?string $pluginFile,
         public bool $debug,
-        public bool $actions,
         public array $extensions,
         public ?\Closure $logChannels,
         public LabelLanguage $labelLanguage,
@@ -172,7 +169,6 @@ final readonly class KernelConfig
         string $appDir,
         string $appNamespace = 'App',
         ?bool $debug = null,
-        bool $actions = true,
         array $extensions = [],
         ?\Closure $logChannels = null,
         LabelLanguage $labelLanguage = LabelLanguage::En,
@@ -216,7 +212,7 @@ final readonly class KernelConfig
 7. `$logChannels` はここでは呼ばない。boot 中に、psr/log の検査(§3.8)の後で1回だけ呼ぶ(`SimpleLogger` 等の `Psr\Log\LoggerInterface` を実装するクラスを、検査より前に読み込まないため。§3 手順3)。null なら遅延デフォルトチャンネル(07-support §5.4)。
 8. `$labelLanguage` の既定は `LabelLanguage::En`。`labelLanguage()` を指定しない PostTypeDefinition・TaxonomyDefinition は、ラベルを組み立てる時点(初期化時)にこの言語を使う(03-entities §2.2)。
 
-`theme()` は `pluginFile = null`、`context = KernelContext::Theme`、`actions` は引数値(既定 true)で構築する。`plugin()` は `context = KernelContext::Plugin`、`actions = false`(プラグイン形態は ActionRouter を持たない。§3.7)で構築する。
+`theme()` は `pluginFile = null`、`context = KernelContext::Theme` で構築する。`plugin()` は `context = KernelContext::Plugin` で構築する。
 
 ### エッジケース
 
@@ -384,9 +380,8 @@ boot(config):
     6. kernel.registerLifecycleHooks()  // コンテキスト別運用フック(下記)
     6a. TempFileGc::register(kernel)    // フォームの一時ファイルの gc を WP-Cron のフックと tmswp/deactivated に登録する
                                         // (プロセスで1回。05-form §WP-Cronによるgc)。フック登録のみ
-    7. kernel.registerActionRouter()    // §3.7。Themeかつconfig.actions=trueのときのみ
-    7a. config.extensions を渡した順に extension->register(kernel)   // §3.10。キャッチアップより前
-    7b. container->get(MetaStorageInterface::class)                  // 既定のストレージを解決して固定する(04 §4.16)。
+    7. config.extensions を渡した順に extension->register(kernel)    // §3.10。キャッチアップより前
+    7a. container->get(MetaStorageInterface::class)                  // 既定のストレージを解決して固定する(04 §4.16)。
         container->get(OptionStorageInterface::class)                // 拡張が登録した実装、無ければ WpMetaStorage・WpOptionStorage。
                                                                      // 型の合わない factory はここで ContainerException。以後の差し替え
                                                                      // (解決済み id への set()・alias())は ContainerException
@@ -411,11 +406,11 @@ boot(config):
 
 - **同一 appNamespace への2回目の boot は常に `KernelException`。** 冪等に既存インスタンスを返す仕様にはしない。理由: 同一 functions.php の二重読込や copy&paste 起因の二重bootは構成バグであり、黙って既存を返すと「2回目の config の差分が無視される」というサイレント失敗になる(旧FWの黙殺文化の排除)。
 - 異なる appNamespace + 異なる appDir であれば回数無制限に boot できる(テーマ1 + プラグインN の共存)。
-- **boot の途中から別の Kernel を boot することはできない(再入の禁止)。** logChannels(手順3)・拡張の `register()`(手順7a)・本番の遅延bootのキャッチアップで動く初期化(手順8a)の中から `Kernel::boot()` を呼ぶと、内側の boot は `KernelException`(進行中の名前空間と、新しく boot しようとした名前空間を含む)になり、外側の boot もその例外で失敗する(レジストリには何も残らない)。理由: 手順8より前の logChannels・拡張の `register()` の時点では外側の Kernel はまだレジストリに無いため、再入を許すと手順1・2の同一・入れ子の名前空間・appDir の検査をすり抜け、`forClass()` の一致が1つに決まる前提(§3.5)も崩れる。キャッチアップの初期化からの boot も、経路ごとに条件を分けず同じく禁止する。正しい構成では boot の中から boot する必要は無い(テーマは functions.php、プラグインはプラグインのファイルで、それぞれ独立に boot する)。進行中の印(`self::$booting`)は boot の終わりに finally で必ず外すため、失敗した boot の後でも次の boot はこの検査に掛からない。
-- 例外発生時、レジストリには残らない。手順8のレジストリ登録は手順1〜7aがすべて成功してから行い、その後の手順8の boot 時の初期化(§7)か手順8aのキャッチアップ(§3.3)で例外が起きれば、レジストリから取り除いてから例外を投げ直す。
+- **boot の途中から別の Kernel を boot することはできない(再入の禁止)。** logChannels(手順3)・拡張の `register()`(手順7)・本番の遅延bootのキャッチアップで動く初期化(手順8a)の中から `Kernel::boot()` を呼ぶと、内側の boot は `KernelException`(進行中の名前空間と、新しく boot しようとした名前空間を含む)になり、外側の boot もその例外で失敗する(レジストリには何も残らない)。理由: 手順8より前の logChannels・拡張の `register()` の時点では外側の Kernel はまだレジストリに無いため、再入を許すと手順1・2の同一・入れ子の名前空間・appDir の検査をすり抜け、`forClass()` の一致が1つに決まる前提(§3.5)も崩れる。キャッチアップの初期化からの boot も、経路ごとに条件を分けず同じく禁止する。正しい構成では boot の中から boot する必要は無い(テーマは functions.php、プラグインはプラグインのファイルで、それぞれ独立に boot する)。進行中の印(`self::$booting`)は boot の終わりに finally で必ず外すため、失敗した boot の後でも次の boot はこの検査に掛からない。
+- 例外発生時、レジストリには残らない。手順8のレジストリ登録は手順1〜7がすべて成功してから行い、その後の手順8の boot 時の初期化(§7)か手順8aのキャッチアップ(§3.3)で例外が起きれば、レジストリから取り除いてから例外を投げ直す。
 - debug の遅延boot(§3.3)の検査は、手順5 `scheduleAll` の最初、どのフックの登録(`#[Action]`/`#[Filter]` の `add_filter` を含む)よりも先に行う。そのため遅延bootの例外では、フックは1つも登録されず、初期化も実行されない。
 - 手順5で、探索結果ファイルの属性を復元できない場合(`DiscoveryException`)も、どのフックの登録よりも先に例外になる。
-- 本番の遅延bootのキャッチアップ(§3.3)で初期化が例外(設定の誤り。§7)を投げた場合は、それまでに登録したフックと実行済みの初期化が残る。設定の誤りは直すまで起動できない構成のバグであり、これは許容する。手順6 `registerLifecycleHooks`・手順7 `registerActionRouter` はフック登録のみで例外を投げない。手順7aの拡張の `register()` が投げた例外も同じく設定の誤りとしてそのまま伝わり、それまでに登録したフックは残る。
+- 本番の遅延bootのキャッチアップ(§3.3)で初期化が例外(設定の誤り。§7)を投げた場合は、それまでに登録したフックと実行済みの初期化が残る。設定の誤りは直すまで起動できない構成のバグであり、これは許容する。手順6 `registerLifecycleHooks`・手順6a `TempFileGc::register` はフック登録のみで例外を投げない。手順7の拡張の `register()` が投げた例外も同じく設定の誤りとしてそのまま伝わり、それまでに登録したフックは残る。
 
 #### 3.2 複数Kernel共存時の独立性(テーマ+プラグイン併用)
 
@@ -440,7 +435,7 @@ boot(config):
 `scheduleAll()` は、どのフックを登録するよりも先に、各 (フック名, priority) グループ(コンポーネントの初期化のグループと、MetaSchema の WordPress への登録(`init` 20))について、そのフックが発火済みかを WordPress のグローバル `$wp_actions` で検査する。`$wp_actions` にキーがある場合(=boot が遅すぎてそのフックが既に発火済み):
 
 - `config.debug === true`: `KernelException("Kernel::boot() was called after the '{hook}' hook had fired. Boot from the top level of functions.php or the plugin main file.")` を投げる。発火済みのグループが複数あるときは、下記の順で最初のグループのフック名を示す。`#[Action]`/`#[Filter]` の `add_filter` を含め、どのフックも登録せず、どのランナーも実行しない。
-- `config.debug === false`(本番): その Kernel のログ(`Kernel::logger()->error()`)に同内容を記録した上で、**当該グループのランナーを即時実行する(キャッチアップ)**。キャッチアップは、コアのフックの登録(手順5〜7)、拡張の登録(手順7a)、Kernel のレジストリ(`self::$kernels`)への登録(手順8)の後に実行する(手順8a)。拡張が Container に入れるサービスを、キャッチアップの初期化でも、init 未発火の通常の boot と同じく使えるようにするためである。レジストリに先に登録するのは、キャッチアップで動くアプリのコード(コンポーネントの初期化、`register()` を上書きした `#[AsHook]` 等)が、`Kernel::forClass()` や `Log` の静的な呼び出し(`Kernel::forFile()`)でこの Kernel を引けるようにするためである。キャッチアップの途中で例外が起きたら、レジストリからこの Kernel を取り除いてから例外を投げ直す(boot は例外になり、起動していない Kernel はレジストリに残らない。§3.1)。debug の遅延bootは従来どおり、何も登録しないまま例外にする(下記)。サイト全体の機能停止より縮退動作を優先する。キャッチアップは発火済みフックのグループのみで、未発火フックのグループは通常通り `add_action` される(未発火のグループの実行順は WordPress が priority で決める)。
+- `config.debug === false`(本番): その Kernel のログ(`Kernel::logger()->error()`)に同内容を記録した上で、**当該グループのランナーを即時実行する(キャッチアップ)**。キャッチアップは、コアのフックの登録(手順5〜6a)、拡張の登録(手順7)、Kernel のレジストリ(`self::$kernels`)への登録(手順8)の後に実行する(手順8a)。拡張が Container に入れるサービスを、キャッチアップの初期化でも、init 未発火の通常の boot と同じく使えるようにするためである。レジストリに先に登録するのは、キャッチアップで動くアプリのコード(コンポーネントの初期化、`register()` を上書きした `#[AsHook]` 等)が、`Kernel::forClass()` や `Log` の静的な呼び出し(`Kernel::forFile()`)でこの Kernel を引けるようにするためである。キャッチアップの途中で例外が起きたら、レジストリからこの Kernel を取り除いてから例外を投げ直す(boot は例外になり、起動していない Kernel はレジストリに残らない。§3.1)。debug の遅延bootは従来どおり、何も登録しないまま例外にする(下記)。サイト全体の機能停止より縮退動作を優先する。キャッチアップは発火済みフックのグループのみで、未発火フックのグループは通常通り `add_action` される(未発火のグループの実行順は WordPress が priority で決める)。
 
 キャッチアップの順序は、**WordPress でフックが最初に発火した順**、同じフックの中では **priority の昇順**とする(同じ (フック, priority) のグループは1つにまとめてあるため、この2つで順序が決まる)。プラグインの遅延 boot では `plugins_loaded` のグループが `init` のグループより先に動く。最初に発火した順は `$wp_actions` のキーの並びから取る。`do_action()` / `do_action_ref_array()` はフックが初めて発火したときに `$wp_actions` へキーを足し、2回目以降は値(発火回数)を増やすだけなので、キーの並びが最初に発火した順になる(WP 7.0 の wp-includes/plugin.php の `do_action()`・`do_action_ref_array()`。PHP の配列は挿入順を保つ)。`$wp_actions` が配列でなければ発火済みのフックが分からないため、`KernelException` を投げる。
 
@@ -497,22 +492,12 @@ wp tmswp discover [--check]
 
 マイグレーション系コマンド(`wp tmswp migrate` 等)は Model 文書が同じ `tmswp` トップレベル名前空間配下に定義する。
 
-#### 3.7 ActionRouter の生成・登録(テーマ形態のテンプレート前処理)
+#### 3.7 テンプレート前処理とテンプレート階層
 
-boot 手順7。**Theme コンテキストかつ `config.actions === true`(既定)のときのみ** `TMSWP\Core\View\ActionRouter` を生成し、`template_include`(priority 100)へ `dispatch` を登録する。
+Kernel はテンプレート階層とテンプレートの選択に介入しない。boot は `template_include`・`template_redirect` 等のテンプレートのフックに何も登録しない(原則1)。
 
-```
-registerActionRouter():
-  if config.context !== KernelContext::Theme: return     // プラグイン形態では生成しない(下記)
-  if config.actions !== true: return                      // KernelConfig::theme(actions: false) で無効化
-  router = new \TMSWP\Core\View\ActionRouter()            // ステートレス。Discoveryには関与しない
-  add_filter('template_include', [router, 'dispatch'], 100, 1)
-```
-
-- **ActionRouter は Discovery の発見対象ではない。** `ComponentAttributeInterface` を実装する属性を持たず、`app/` の走査・探索結果ファイル・初期化タイミング表のいずれにも現れない。テーマルート直下の `actions/` ディレクトリに置かれた**ファイルの存在**だけで動作する(完全オプトイン: `actions/` を1つも置かないテーマも全機能が動く)。boot が生成・登録するのは `dispatch` フィルタ1本のみで、この登録自体は `actions/` ディレクトリの有無に依存しない(ディレクトリ探索は dispatch 発火時に行う)。
-- **プラグイン形態では ActionRouter を生成しない。** プラグインはトップレベルテンプレートを供給する機構を持たないため `template_include` への介入が意味を持たない。プラグイン側のテンプレート前処理に相当するロジックは `#[AsHook]` クラスの `#[Action]`/`#[Filter]` メソッド(§5)へ書く。
-- `actions/` ディレクトリ名は **`'actions'` 固定**(テーマルート直下。リネーム不可)。配置決定木・静的検査・rules/ が無設定で同一前提を共有するための決定的規約である。
-- dispatch の正準手順(子→親テーマ解決、static クロージャ内 include、戻り値契約 `array`→View変数バッグ / `ActionRouter::notFound()`→404強制 / `null`→no-op、`$template` の無加工返却原則)・`actions` ファイル規約・`View` 変数バッグ・グローバルヘルパ `tms_var()` は View/Support/Log 文書が定義する。本文書が確定するのは「いつ・どの形態で生成し、どのフックへ登録するか」のみである。
+- テーマ形態のテンプレート単位の前処理(表示する値の用意・フォームの駆動・PRG リダイレクト)は、テンプレートの先頭で app 層の前処理クラスを明示的に呼んで行う(`$vm = ContactPage::handle();`。DR-19)。前処理クラスはコンポーネント属性を持たず、Discovery の発見対象・探索結果ファイル・初期化タイミング表のいずれにも現れない。前処理クラスの規約は 07-support §1A が定義する。
+- プラグイン形態はトップレベルのテンプレートを供給しないため、前処理クラスを使わない。テンプレートを持たない文脈(ショートコード等)の前処理は `#[AsHook]` クラスの `#[Action]`/`#[Filter]` メソッド(§5)へ書く(05-form §5)。
 
 #### 3.8 psr/container・psr/log の非互換の検出
 
@@ -562,8 +547,8 @@ interface ExtensionInterface
 }
 ```
 
-- boot の手順7a で、`extensions` に渡した順に1回ずつ `register($kernel)` を呼ぶ。本番の遅延bootのキャッチアップ(手順8a)より前なので、拡張が Container に入れたサービスはキャッチアップの初期化でも使える。
-- 拡張の `register()` は、Kernel の既定のメタ・オプションのストレージ(Container の `MetaStorageInterface`・`OptionStorageInterface` の id)を別の実装に差し替える唯一の場所でもある(04-meta-options §4.16。テストでメモリの実装に差し替える用途)。boot は手順7bでこの2つの id を解決して固定するため、boot の後の差し替えは Container が `ContainerException` にする。プラグインの有効化のサンドボックス(`WP_SANDBOX_SCRAPING`。§1)では、コンポーネントの初期化と同じく呼ばない。`register()` の中から別の Kernel を boot すると `KernelException` になる(boot の再入の禁止。§3.1)。
+- boot の手順7 で、`extensions` に渡した順に1回ずつ `register($kernel)` を呼ぶ。本番の遅延bootのキャッチアップ(手順8a)より前なので、拡張が Container に入れたサービスはキャッチアップの初期化でも使える。
+- 拡張の `register()` は、Kernel の既定のメタ・オプションのストレージ(Container の `MetaStorageInterface`・`OptionStorageInterface` の id)を別の実装に差し替える唯一の場所でもある(04-meta-options §4.16。テストでメモリの実装に差し替える用途)。boot は手順7aでこの2つの id を解決して固定するため、boot の後の差し替えは Container が `ContainerException` にする。プラグインの有効化のサンドボックス(`WP_SANDBOX_SCRAPING`。§1)では、コンポーネントの初期化と同じく呼ばない。`register()` の中から別の Kernel を boot すると `KernelException` になる(boot の再入の禁止。§3.1)。
 - 拡張は、受け取った Kernel の debug に従い(`WP_DEBUG` を直接見ない)、ログは受け取った Kernel の `logger()` に記録する(07-support §5.1)。拡張のクラスは先に読み込まれた tmswp/* の1組が全 Kernel で共有されるため、プロセス全体の static な状態に Kernel ごとの設定を持たない。
 - 同じ Kernel に同じクラスの拡張を2回登録すると、`KernelConfig` の生成時に例外になる(§2 手順6)。テーマとプラグインが、それぞれの Kernel に同じクラスの拡張を登録するのは正当である。
 
@@ -852,7 +837,7 @@ discover():
 
 ### 役割
 
-Discovery が「何を拾うか」、Kernel が「いつ・どう初期化するか」を属性自身に宣言させる契約。コア6属性(`AsPostType` / `AsTaxonomy` / `AsUserRole` / `AsModel` / `AsHook` / `AsOptionGroup`)に加え、拡張パッケージ(例: tmswp/settings-page)が独自属性を追加する際もこの契約を実装するだけでよく、Kernel側の改修や登録テーブルを必要としない。なおテーマ形態のテンプレート前処理(`actions/{テンプレート相対パス}.php` 規約)は属性ベースではなく `ActionRouter` がファイル存在で駆動するため、本契約・Discovery とは無関係である(§3.7)。
+Discovery が「何を拾うか」、Kernel が「いつ・どう初期化するか」を属性自身に宣言させる契約。コア6属性(`AsPostType` / `AsTaxonomy` / `AsUserRole` / `AsModel` / `AsHook` / `AsOptionGroup`)に加え、拡張パッケージ(例: tmswp/settings-page)が独自属性を追加する際もこの契約を実装するだけでよく、Kernel側の改修や登録テーブルを必要としない。なおテーマ形態のテンプレート前処理は、テンプレートの先頭で app 層の前処理クラスを明示的に呼ぶ方式であり、本契約・Discovery とは無関係である(§3.7)。
 
 ### シグネチャ
 
@@ -1173,12 +1158,11 @@ write(result):
 | `#[AsPostType]` | `init` | `init` | 10 | register_post_type(Post文書)。メタスキーマの登録は boot 時の初期化で行う(下記) |
 | `#[AsUserRole]` | `init` | `init` | 11 | ロール定義の登録。DB書込(add_role)はUserRole層が差分検出して冪等に行い、宣言とDBの差分(表示名・宣言に無いcap)は Kernel のロガーに warning で通知する(User文書) |
 
-メソッドレベル `#[Action]` / `#[Filter]`(Discovery が hookMethods として収集。§4・§5)と ActionRouter(テンプレート前処理。Discovery 非関与)はこの属性スケジューリング表の外にあり、boot 時に直接フック登録される(下表)。
+メソッドレベル `#[Action]` / `#[Filter]`(Discovery が hookMethods として収集。§4・§5)はこの属性スケジューリング表の外にあり、boot 時に直接フック登録される(下表)。
 
 | 機構 | フック | priority | 形態・発火条件 | 内容(概要。詳細は各文書) |
 |---|---|---|---|---|
 | `#[Action]` / `#[Filter]` メソッド | 属性が宣言した各フック | 属性宣言値(既定 10) | 両形態。boot手順5(scheduleAll)で登録、宣言フック発火時に実行 | `add_filter($hook, クロージャ, $priority, $kind->registeredArgs($acceptedArgs))` を直接登録(`#[Filter]` は最低 1。§5)。クロージャは発火時に `container->get($class)` してメソッドを呼ぶため、**本番(debug=false)の boot では、Hookクラスはフック発火まで未ロード(遅延)**(debug の boot は走査(§4)でクラスを読み込む)。acceptedArgs はメソッド宣言引数数から自動導出(§4・§5) |
-| `ActionRouter` | `template_include` | 100 | テーマ形態のみ・フロント本描画リクエストのみ(REST/admin-ajax/管理画面/WP-CLIでは未発火) | 確定済み `$template` に対応する `actions/{テンプレート相対パス}.php` を子→親テーマの順に探索し、存在すれば static クロージャで include(可視変数=$wp_queryのみ)。戻り値契約 `array`→View変数バッグ / `ActionRouter::notFound()`→404強制 / `null`→no-op。`$template` は常に無加工で返す(404強制時のみ `get_404_template()` 差し替え)。Discovery非関与・ファイル存在で完全オプトイン(§3.7。実行機構は View/Support/Log 文書) |
 
 MetaSchema の WordPress への登録(`MetaSchemaRegistry::registerAll()`。`register_post_meta`・`register_term_meta`・`register_meta('user', ...)`)は、コンポーネントではないが、Kernel が `init` 20 のグループとして同じ規則(遅延bootの検査とキャッチアップ。§3.3)で登録する。
 
@@ -1189,7 +1173,6 @@ MetaSchema の WordPress への登録(`MetaSchemaRegistry::registerAll()`。`reg
 - **Taxonomy(9) を PostType(10) より先に登録する(確定判断)。** 根拠: `register_post_type()` の `taxonomies` 引数は内部で `register_taxonomy_for_object_type()` を呼ぶが、これは**未登録のタクソノミー名に対して false を返して黙って失敗する**。逆方向(`register_taxonomy()` の `$object_type` に未登録のCPT名を渡す)は文字列として保持され後から解決されるため問題ない。したがって「Taxonomy先・PostType後」が唯一安全な順序である。WPコアの `create_initial_post_types` / `create_initial_taxonomies` は init 0 で動くため、5/9/10 はいずれもコア登録より後になる。
 - `#[AsModel]` のスキーマ適用(dbDelta)契機は (a) `tmswp/activated` アクション(§3.4) (b) `admin_init` での版数比較 (c) WP-CLI、であり Model 文書の Migrator が定義する。本表の plugins_loaded(1) は「`InquiryModel::query()` が呼べるようにレジストリへ載せる」だけの軽量処理である。
 - `#[MetaSchema]` / `#[UseMetaStorage]` / `#[WithMetaRevisions]` / `#[OptionSchema]` は独立コンポーネントではなく、親コンポーネントの Initializer が処理する(前の3つはエンティティの Initializer の boot 時の初期化、`#[OptionSchema]` は `#[AsOptionGroup]` の Initializer の初期化)。Discovery の発見対象にはならない(`ComponentAttributeInterface` を実装しない)。
-- `ActionRouter`(テンプレート前処理)は属性スケジューリング(`scheduleAll()`)の対象ではなく、boot 手順7(§3.7)で `add_filter('template_include', [$router, 'dispatch'], 100, 1)` として直接登録される。`template_include` はフィルタ(`$template` を受け取り返す)であり、しかもフロントの本描画リクエストでのみ発火する(REST/admin-ajax/管理画面/WP-CLI では発火しない)。`dispatch` は `$template` を無加工で返す(404強制時のみ WP標準の `get_404_template()` 相当へ差し替える)。`actions/` ファイルの探索・include はこのフィルタ発火時(=本描画直前)に行われ、即時同期初期化の禁止に整合する。dispatch の正準手順は View/Support/Log 文書が定義する。
 - AsHook(0。`register()` 例外手段)と AsModel(1) を別priorityに分離しているのは依存関係のためではなく、決定的順序を priority レベルで固定するためである。Hookクラスのコンストラクタでモデルのインスタンスが必要な場合も、モデルは静的ファサード(`InquiryModel::query()`)であり実際のレジストリ参照はクエリ実行時まで遅延するため問題にならない。
 
 ### scheduleAll() のアルゴリズム
@@ -1846,7 +1829,7 @@ final class ContainerTest extends TestCase
 - [ ] 前提の確認: `rewrite_rules` が空のとき、WordPress が `wp_loaded` より前に作り直したルールを保存せず、`wp_loaded` での作り直しを登録する
 - [ ] 通常のリクエストで Kernel が DB のクエリを増やさない(boot と、通常のリクエストで発火するフックに Kernel が登録したコールバックの実行の前後で `$wpdb->num_queries` が変わらない)
 - [ ] 発火済みフックに対する遅延bootが、debug=true のときに `KernelException`、本番相当でログ+キャッチアップ実行になる。debug=true の例外の後に `$wp_filter` への登録が増えていない(コンポーネントと `#[Action]`/`#[Filter]` メソッドの両方を持つ Kernel で確かめる)
-- [ ] テーマ形態の boot で `template_include`(priority 100)へ `ActionRouter::dispatch` が1本登録される。`KernelConfig::theme(actions: false)` では登録されない。プラグイン形態(`KernelConfig::plugin()`)では `actions` が false に正規化され ActionRouter は生成されない
+- [ ] テーマ形態・プラグイン形態の boot が `template_include` にコールバックを登録しない(テンプレート階層に介入しない。§3.7)
 - [ ] コミット済みの fixture のテーマ・プラグインの探索結果ファイルが、走査結果と一致する(統合テストと `composer discover:check`。10-quality §5)
 
 ## 品質

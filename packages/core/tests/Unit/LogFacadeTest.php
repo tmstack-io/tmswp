@@ -129,7 +129,6 @@ final class LogFacadeTest extends UnitTestCase
             \dirname(__DIR__, 2) . '/languages',
             'Example\Tests\LogFacadeVendorTheme' . uniqid(),
             true,
-            false,
             logChannels: static fn(): array => ['test' => new LogChannel($themeLogger)],
         ));
         $plugin = $this->bootKernel($this->createTempDirectory('log-vendor-plugin'), 'VendorPlugin');
@@ -223,7 +222,6 @@ final class LogFacadeTest extends UnitTestCase
             $root . '/app',
             'Example\Tests\LogFacade' . $name . uniqid(),
             true,
-            false,
             logChannels: static fn(): array => ['test' => new LogChannel($logger)],
         ));
 

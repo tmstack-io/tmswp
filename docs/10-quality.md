@@ -34,7 +34,6 @@ tests/bootstrap-unit.php
 tests/bootstrap-integration.php
 tests/wp-tests-config.php
 bin/coverage-check.php
-starters/theme/phpstan-actions.neon … actions/ 規約検査用(level 0、§3A)
 .github/workflows/qa.yml
 .github/workflows/split.yml
 packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestCase)
@@ -238,25 +237,6 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 
 wp-env 利用時は `node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/themes/<theme> wp tmswp acf sync` の形で実行する(wp-env はプロジェクトの package.json で版を固定して導入する。1.1 補足)。monorepo ルートには `acf:sync` を置かない(acf-json はアプリ資産であり FW リポジトリには存在しないため)。acf-bridge 自身のジェネレータ検証は `packages/acf-bridge/tests/` のフィクスチャ acf-json に対するユニット/統合テストで行う。
 
-### 1.3 `tms:check` スクリプト
-
-`tms:check` は `actions/` 規約(DR-19)の静的検査(§3A)を実行するスクリプトで、**テーマ形態のアプリ側 composer.json に定義し `qa` ゲートに含める**。検査は 2 系統からなる: (1) `actions/` 専用の PHPStan 設定 `phpstan-actions.neon`(level 0・規約検査のみ)による FW 同梱カスタムルール検査(output / set_404)、(2) `tmswp/core` 同梱の軽量スクリプト `bin/tms-check`(WP 非依存)による孤児検査。`actions/` はアプリ資産であり monorepo ルートには存在しないため、ルートの `qa` には置かない(コアでは検査ロジック自体を RuleTestCase と fixture で検証する。§3A)。
-
-スターター(starters/theme)の composer.json scripts に追加する定義:
-
-```json
-{
-    "scripts": {
-        "tms:check": [
-            "phpstan analyse -c phpstan-actions.neon",
-            "tms-check actions ."
-        ]
-    }
-}
-```
-
-`tms-check` は `tmswp/core` の `bin` 経由で `vendor/bin/tms-check` として解決され、PHPStan 側も含め Docker・wp-env 不要で実行できる。プラグイン形態は `actions/` 規約を持たないため定義しない(§3A.3)。
-
 ---
 
 ## 2. PHPStan 設定
@@ -289,7 +269,6 @@ parameters:
         - packages/core/src
         - packages/core/phpstan/src
         - packages/core/tests
-        - packages/core/bin
         - packages/thumbnail/src
         - packages/thumbnail/tests
         - packages/settings-page/src
@@ -469,89 +448,12 @@ return (new Config())
 
 ---
 
-## 3A. actions/ 静的検査(PHPStan カスタムルール + bin/tms-check)
+## 3A. テンプレート前処理の検査
 
-`actions/` 規約(DR-19。テンプレート前処理を「ページテンプレートと同名の `actions/{相対パス}.php` ファイル」へ分離する仕組み。正準仕様は 07 文書)を、軽量な静的検査で守る。`actions/` ファイルは本則の PHPStan(level max・型検査)にも php-cs-fixer の Finder にも含まれない WP グローバル文脈コードであり、型解析・スタイル検査では捕捉できない誤用がある。これを次の 2 系統で補う:
+テンプレート前処理(DR-19。正準仕様は 07 文書 §1A)は、テンプレートの先頭で呼ぶ app 層の前処理クラスに書く。前処理クラスは `app/Page/` に置くため、アプリ側の本則の PHPStan(`paths: [app]`・level max)と php-cs-fixer(`app/` の Finder)の対象になり、テンプレートが読む値の型は前処理クラスのプロパティの型で検査される。前処理のための専用の検査設定・スクリプトは持たない。
 
-| 検査 | check-id | 実現方式 |
-|---|---|---|
-| 出力禁止 | `output` | FW 同梱 PHPStan 拡張のカスタムルール `NoOutputRule`(§3A.1) |
-| `set_404()` 直呼び禁止 | `set_404` | 同カスタムルール `NoSet404Rule`(§3A.1) |
-| 孤児 actions | `orphan` | `bin/tms-check`(WP 非依存の軽量スクリプト。§3A.2) |
-
-単一ファイル内の構文ノード照合で判定できる 2 検査は PHPStan カスタムルールとして実装し(文字列リテラル・コメント・ヒアドキュメント内の出現を誤検出しないことはパーサ = AST が構造的に保証する。静的検査エンジンを PHPStan 1 本に統一)、ディレクトリ走査とテンプレート照合を要する孤児検査のみ、Docker 不要で単体実行できるスクリプトとして残す。
-
-### 3A.1 PHPStan カスタムルール(output / set_404)
-
-- ルールクラスは `tmswp/core` 同梱の `TMSWP\Core\PHPStan\Actions\NoOutputRule` / `TMSWP\Core\PHPStan\Actions\NoSet404Rule`(名前空間は §2.2 項 3 と同じ。検査仕様の正準は本節)。
-- **`packages/core/phpstan/extension.neon` には登録しない**(extension-installer で自動有効化されると `actions/` 以外のコードにも適用されてしまうため)。アプリ側の `actions/` 専用設定 `phpstan-actions.neon` で明示登録する。
-- スターター(starters/theme)に置く `phpstan-actions.neon`(完全版):
-
-```neon
-parameters:
-    # 型検査は課さない(規約検査のみ)。WordPress 標準のテーマ構築手法を
-    # 壊さないという絶対原則(要件 3)に基づき actions/ には level 0 を適用する
-    level: 0
-    paths:
-        - actions
-
-rules:
-    - TMSWP\Core\PHPStan\Actions\NoOutputRule
-    - TMSWP\Core\PHPStan\Actions\NoSet404Rule
-```
-
-検査仕様:
-
-1. **出力ノード(check-id: `output`、`NoOutputRule`)**
-   `actions/` はデータ準備専用で出力を持たない。次の AST ノードを検出したら違反とする:
-   - `echo` / `print` / `exit` / `die`(`exit`/`die` は後述の例外あり)
-   - `<?=`(echo タグ)、インライン HTML(`?>` の外側に出た生テキスト。ただしファイル先頭の BOM・空白のみは除外)
-   - `printf` / `vprintf` / `print_r($x, false)` 等の出力系関数呼び出し(関数名は出力系の固定リストで照合)
-   `exit`/`die` の例外: **直前の兄弟ステートメント**が `wp_safe_redirect( ... );` の関数呼び出し文である場合のみ、その直後の `exit`/`die` を許可する(AST の兄弟ノード参照で判定。フォーム送信後の PRG。07 文書のリダイレクト規約)。それ以外の `exit`/`die` は違反。
-
-2. **`$wp_query->set_404()` 直呼び(check-id: `set_404`、`NoSet404Rule`)**
-   404 は必ず `return \TMSWP\Core\View\ActionRouter::notFound();` で表明する(07 文書)。変数 `$wp_query` に対する `set_404` メソッド呼び出しノードを検出したら違反。
-
-- パースエラーの報告は PHPStan の標準機能に委ねる(専用の検査 ID は持たない)。
-- ルールの検証は FW 同梱 PHPStan 拡張と同じ RuleTestCase 基盤(04 文書のテスト方式)を再利用し、健全な actions・各違反を含む actions の fixture で違反メッセージを固定する。
-
-### 3A.2 bin/tms-check(孤児検査)
-
-- `bin/tms-check` は **tmswp/core に同梱**する素の PHP スクリプト(`packages/core/bin/tms-check`)。配布時はアプリの `vendor/tmswp/core/bin/tms-check` に置かれる。
-- **WP 非依存・コア autoload 非依存**で動く。標準ファイル関数のみを使い、WordPress 関数も Composer オートローダも require しない(`php bin/tms-check <dir>` 単体で動く)。PHP コードのパースは行わない(構文に依存する検査は §3A.1 のカスタムルールへ移行済み)。これにより Docker なしで常時実行できることを保証する。
-- 引数:
-
-```
-php bin/tms-check <actions-dir> [<template-root> ...]
-```
-
-  - `<actions-dir>`: 検査対象の `actions/` ディレクトリ(再帰走査)。
-  - `<template-root>`(任意・複数可): 孤児判定でテンプレートの存在を照合する基準ディレクトリ(通常はテーマルート。省略時は `<actions-dir>` の親ディレクトリを基準にする)。
-- 検査(check-id: `orphan`): `actions/` 配下の各 `.php` の `<actions-dir>` からの相対パスを取り、`<template-root>` のいずれかに **同じ相対パスのテンプレートが存在するか**を照合する(例: `actions/page-contact.php` ↔ `<template-root>/page-contact.php`、`actions/single/product.php` ↔ `<template-root>/single/product.php`)。対応テンプレートが 1 つも無ければ違反(実行されない死にファイル)。
-- 終了コード: 違反 0 件で `0`、1 件以上で `1`、引数不正・対象ディレクトリ不在で `2`。違反は `<ファイル>:<行>: <検査ID> <メッセージ>` 形式で STDERR に出力する(`orphan` はファイル単位の違反のため行番号は `1` を用いる)。違反は全件を集約して報告する(最初の 1 件で打ち切らない)。
-- 実装の骨子: (a) 引数解析、(b) `<actions-dir>` の `*.php` 再帰列挙(`RecursiveDirectoryIterator`)、(c) 相対パス照合、(d) 違反集約と STDERR 出力 + 終了コード決定。
-
-### 3A.3 composer スクリプトへの組込み
-
-`actions/` 検査は **アプリ(スターター/利用側プロジェクト)の `composer qa` ゲートに組込む**(`actions/` はアプリ資産でありコア monorepo には存在しないため、コアルートの `qa` には含めない)。`tms:check` の名称と `qa` 内のゲート位置は従来どおり維持し、2 系統を束ねる。
-
-スターター(starters/theme)の composer.json scripts に追加する定義(§7 のアプリ側 QA 最小要件に対応):
-
-```json
-{
-    "scripts": {
-        "tms:check": [
-            "phpstan analyse -c phpstan-actions.neon",
-            "tms-check actions ."
-        ],
-        "qa": ["@lint", "@analyse", "@tms:check", "@test"]
-    }
-}
-```
-
-- `tms-check` はコアの composer.json の `bin` に登録し(`"bin": ["bin/tms-check"]`)、アプリ側 `vendor/bin/tms-check` から呼べるようにする。
-- プラグイン形態は `actions/` 規約を持たないため `tms:check` を定義しない(§7 項 5)。
-- コア monorepo の qa には組込まないが、検査ロジック自体はコアで検証する: ルール 2 本は RuleTestCase(§3A.1)で、`packages/core/bin/tms-check` は `phpstan.neon.dist` の `paths`(`bin` を含む)での静的解析と `packages/core/tests/Unit/` の fixture(健全な actions・孤児 actions)で検査結果(終了コード・違反メッセージ)を固定する。
+- テンプレートファイル自体は php-cs-fixer / PHPStan(型検査)の対象に含めない(§3.2・§7 項 4。要件 3)。
+- rules/page.md の前処理クラスのコード例は、rules/ のコード例の抽出・検査(`php tools/extract-rules-code.php && php tools/verify-rules-code.php`。`App\` のクラスは PHPStan max)で確かめる。
 
 ---
 
@@ -595,8 +497,8 @@ tests/
     ├── themes/tmswp-fixture-theme/        # Kernel 名前空間 TmswpFixtureTheme
     │   ├── style.css / functions.php      # functions.php の直下で Kernel::boot()
     │   ├── tmswp-discovery.php            # 探索結果ファイル(composer discover:build で生成してコミット)
-    │   ├── index.php / contact.php        # template_include の確認用テンプレート
-    │   ├── actions/ / parts/              # ActionRouter・Template の確認用
+    │   ├── index.php                      # テーマのテンプレート
+    │   ├── parts/                         # Template の確認用
     │   └── app/                           # Hook・Post・Tax・User・Option・Model・Acf 等
     └── plugins/tmswp-fixture-plugin/      # Kernel 名前空間 TmswpFixturePlugin
         ├── tmswp-fixture-plugin.php       # 本体ファイルの直下で Kernel::boot()
@@ -1379,8 +1281,8 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 1. スターターの composer.json は `require-dev` に `phpstan/phpstan`、`szepeviktor/phpstan-wordpress`、`phpstan/extension-installer`、`friendsofphp/php-cs-fixer` を含み、`lint` / `fix` / `analyse` / `qa` スクリプトを monorepo ルートと**同名・同義**で定義する(AI が同じコマンド体系で作業できること)。
 2. `phpstan/extension-installer` により `tmswp/core` 同梱の PHPStan 拡張(2.2 項 4)が**設定なしで自動有効化**されること。スターターの phpstan.neon は `level: max` + `paths: [app]` を既定とする。
 3. アプリの `app/Acf/*Fields.php`(`@generated`、DR-06)は解析対象に**含める**(生成コードも型検査を通す。CI でのドリフト検知は acf-bridge 文書の管轄)。
-4. テーマテンプレート(`*.php` のうち WP テンプレート階層ファイルと `template-parts/`)は php-cs-fixer / PHPStan(型検査)の対象に含めない(要件 3 の絶対原則)。`actions/` 配下も php-cs-fixer と本則の PHPStan(`phpstan.neon` の level max)の対象には含めず、専用設定 `phpstan-actions.neon`(level 0。型検査は課さず規約検査のみのため要件 3 に抵触しない)と `bin/tms-check`(孤児検査)で検査する(§3A)。
-5. テーマ形態のスターターの `composer qa` は `lint` → `analyse` → `tms:check`(= `phpstan analyse -c phpstan-actions.neon` → `tms-check actions .`)→ `test` の順とし、`tms:check` を必須ゲートに含める(§3A)。`tms-check` は `tmswp/core` の `bin` 経由で `vendor/bin/tms-check` として解決される。プラグイン形態は `actions/` 規約を持たないため `tms:check` を含めない(§3A.3・11 文書の plugin 版差分)。
+4. テーマテンプレート(`*.php` のうち WP テンプレート階層ファイルと `template-parts/`)は php-cs-fixer / PHPStan(型検査)の対象に含めない(要件 3 の絶対原則)。テンプレートの前処理クラス(`app/Page/`)は `app/` の一部として解析対象に含める(§3A)。
+5. スターターの `composer qa` は `lint` → `analyse` → `test` の順とする。
 
 ---
 

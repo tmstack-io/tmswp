@@ -104,7 +104,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 │   │   │   ├── Model/                    # Model.php, TableDefinition.php, QueryBuilder.php,
 │   │   │   │                             #   Migrator.php, Connection.php
 │   │   │   ├── Log/                      # Log.php, SimpleLogger.php, LoggerRegistry.php
-│   │   │   ├── View/                     # Template.php, ActionRouter.php, View.php, NotFound.php
+│   │   │   ├── View/                     # Template.php, TemplateLocator.php
 │   │   │   ├── Support/                  # Arr.php, Str.php, Html.php
 │   │   │   ├── Hook/                     # Hook.php
 │   │   │   ├── Exception/                # TMSWP\Core\Exception\ 配下(各文書が定義する例外を収載)
@@ -156,7 +156,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
         ├── plugin.php                    # create-project 後にリネームする本体ファイル
         ├── AGENTS.md
         ├── app/
-        ├── templates/                    # View::part のプラグイン同梱 fallback 置き場
+        ├── templates/                    # Template::part のプラグイン同梱 fallback 置き場
         └── languages/
 ```
 
@@ -181,7 +181,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 
 | composer 名 | 名前空間ルート | type | 責務 | runtime 依存(php 以外) |
 |---|---|---|---|---|
-| `tmswp/core` | `TMSWP\Core\` | library | Kernel/DI コンテナ/Attribute 探索、PostType・Taxonomy・UserRole 宣言、meta/option 宣言層、Form+バリデーション、Model(独自テーブル)、Log(PSR-3)、View::part 相当のテンプレートヘルパ、Support(Arr/Str/Html) | `psr/log ^3.0`, `psr/container ^2.0` |
+| `tmswp/core` | `TMSWP\Core\` | library | Kernel/DI コンテナ/Attribute 探索、PostType・Taxonomy・UserRole 宣言、meta/option 宣言層、Form+バリデーション、Model(独自テーブル)、Log(PSR-3)、Template::part 相当のテンプレートヘルパ、Support(Arr/Str/Html) | `psr/log ^3.0`, `psr/container ^2.0` |
 | `tmswp/thumbnail` | `TMSWP\Thumbnail\` | library | 署名付き URL + `WP_Image_Editor` による動的サムネイル(timthumb 全面置換) | `tmswp/core ^X.Y`, `ext-gd *` |
 | `tmswp/settings-page` | `TMSWP\SettingsPage\` | library | 管理画面設定ページ生成(コアの Form 層ベース、nonce 自動) | `tmswp/core ^X.Y` |
 | `tmswp/acf-bridge` | `TMSWP\AcfBridge\` | library | acf-json を真実源とした型付きアクセサ生成(`app/Acf/*Fields.php`)、`AcfMetaStorage`、CI ドリフト検知 | `tmswp/core ^X.Y`(ACF 本体は実行時検出) |
@@ -476,7 +476,7 @@ CI は PHP 8.3 / 8.5 でテストし、PHPStan は 8.3〜8.5 を解析範囲と�
 対応範囲は WordPress 7.0 以上(DR-02)。FW が使う WP API はすべて 7.0 より前に導入済みであり(§5.3)、7.0 を下限とすれば引数互換の心配なく使える。導入が比較的新しく、FW の機能が前提とする API は次の 3 つ:
 
 1. `register_post_meta()` の `revisions_enabled` 引数(**6.4**)— `#[WithMetaRevisions]`(プレビュー時メタ保存)はリビジョンへのメタ保存機構の上に実装する。
-2. `wp_trigger_error()`(**6.4**)— Log(SimpleLogger)がファイルの書き込み・ローテーションに失敗したときの初回の通知(07-support)、Migrator の `admin_init` での移行失敗の開発時の通知(06-model)、View・ActionRouter の開発時の警告(07-support)に使用。`WP_DEBUG` が偽なら WordPress は何も出さない。Discovery の探索失敗と Container の循環依存は通知ではなく、`DiscoveryException`・`CircularDependencyException` として投げる(02-kernel)。
+2. `wp_trigger_error()`(**6.4**)— Log(SimpleLogger)がファイルの書き込み・ローテーションに失敗したときの初回の通知(07-support)、Migrator の `admin_init` での移行失敗の開発時の通知(06-model)に使用。`WP_DEBUG` が偽なら WordPress は何も出さない。Discovery の探索失敗と Container の循環依存は通知ではなく、`DiscoveryException`・`CircularDependencyException` として投げる(02-kernel)。
 3. `wp_admin_notice()`(**6.4**)— Migrator の移行失敗通知、acf-bridge のドリフト検知通知等の管理画面表示に使用。
 
 ### 5.3 WP API 下限棚卸し表
@@ -486,7 +486,7 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 | FW 機能(担当文書) | WP API / 引数 | 導入 WP | 用途・備考 |
 |---|---|---|---|
 | Kernel | `add_action` / `add_filter` | 1.2 / 0.71 | フック整合ブート(DR-04) |
-| Log / Migrator / View | `wp_trigger_error()` | **6.4 ★** | Log の書き込み・ローテーションの失敗の初回の通知、Migrator(`admin_init`)の移行失敗と View・ActionRouter の開発時の警告 |
+| Log / Migrator | `wp_trigger_error()` | **6.4 ★** | Log の書き込み・ローテーションの失敗の初回の通知、Migrator(`admin_init`)の移行失敗の開発時の通知 |
 | Kernel / Migrator / acf-bridge | `wp_admin_notice()` | **6.4 ★** | 管理画面通知の標準 API |
 | Kernel(プラグインモード) | `register_activation_hook()` | 2.0 | 有効化時マイグレーション契機(DR-08) |
 | PostType | `register_post_type()` の `show_in_rest` | 4.7(REST コントローラは 5.0) | Gutenberg 対応 CPT |
@@ -546,12 +546,11 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 
 | ヘルパ | 委譲先 | 提供パッケージ | シグネチャ定義文書 |
 |---|---|---|---|
-| `tms_var()` | `TMSWP\Core\View\View::get()` | tmswp/core | View 設計書(DR-19) |
 | `tms_log()` | `TMSWP\Core\Log\Log` ファサード(チャンネル取得) | tmswp/core | Log 設計書 |
 | `tms_thumb()` | `TMSWP\Thumbnail\`(署名付き URL 生成) | tmswp/thumbnail | thumbnail 設計書 |
 
 - 旧 iwf2b のヘルパは `iwf_dump` / `iwf_log` / `iwf_thumb` の 3 つだった。`iwf_dump`(Debug)は DR-16 で廃止。`iwf_log` → `tms_log`、`iwf_thumb` → `tms_thumb` が後継に当たる(API 互換はない)。
-- 上記 3 つの正確なシグネチャ(引数・戻り値型)は各定義文書が確定する。本書はヘルパ名と委譲先のみを予約する。`tms_var()` はテンプレート前処理(DR-19)で actions ファイルが用意した変数を取得するためのヘルパで、`View::get()` への 1 メソッド委譲(意味論は 07-support.md)。
+- 上記 2 つの正確なシグネチャ(引数・戻り値型)は各定義文書が確定する。本書はヘルパ名と委譲先のみを予約する。
 - 利用側プロジェクト(app/)が独自のグローバルヘルパを定義する場合は `tms_` を**使ってはならない**(プロジェクト固有接頭辞を使う)。rules/ に明記する。
 
 ---
@@ -663,12 +662,12 @@ my-theme/
 │   │   └── SiteOption.php     # #[AsOptionGroup] backed enum(use OptionAccess)
 │   ├── Form/
 │   │   └── ContactForm.php    # Form 定義
+│   ├── Page/
+│   │   └── ContactPage.php    # page-contact.php の前処理クラス(テンプレートの先頭で handle() を呼ぶ。DR-19)
 │   ├── Model/
 │   │   └── InquiryModel.php   # #[AsModel] 独自テーブル
 │   └── Acf/                   # acf-bridge 生成物(@generated。手編集禁止)
 │       └── ProductFields.php
-├── actions/                   # 【任意】テンプレート同名前処理(DR-19。ActionRouter が探索)
-│   └── page-contact.php       # page-contact.php のデータ準備。return array → tms_var() で取得
 ├── acf-json/                  # ACF 使用時(acf-json が真実源。DR-06)
 ├── languages/                 # テーマ自身のテキストドメイン用
 ├── parts/                     # get_template_part() 用パーツ(WP 標準機能のまま)
@@ -690,6 +689,7 @@ my-theme/
 | `app/User/` | ユーザーロール定義 `<Name>Role.php` | `#[AsUserRole]` + `User\UserRole` |
 | `app/Option/` | オプショングループ定義(backed enum) | `#[AsOptionGroup]` + `Option\OptionAccess`(trait を enum で use) |
 | `app/Form/` | フォーム定義 `<Name>Form.php` | `Form\Form` |
+| `app/Page/` | テンプレートの前処理クラス `<Name>Page.php`(DR-19) | —(属性・基底クラスなし) |
 | `app/Model/` | 独自テーブル `<Name>Model.php` | `#[AsModel]` + `Model\Model` |
 | `app/Acf/` | acf-bridge コードジェネレータの生成物(`@generated`、手編集・手作成禁止) | — |
 | `app/SettingsPage/` | 設定ページ定義(tmswp/settings-page 導入時) | settings-page 設計書 |
@@ -700,7 +700,7 @@ my-theme/
 - **ディレクトリ名は人間と AI のための規約であり、Kernel の探索はディレクトリ名に依存しない**(DR-04: 種別判定は Attribute のみで行う)。`app/Post/` 以外に置いた `#[AsPostType]` クラスも動作するが、rules/ では上表の配置を必須スタイルとして指示する。
 - クラス名サフィックス(`*Post` / `*Tax` / `*Role` / `*Form` / `*Model` / `*Hook`)は旧 iwf2b 全 15 案件で定着していた命名をそのまま規約化したもの。PSR-4 のためファイル名=クラス名(大文字小文字含め完全一致)。
 - `app/` 直下にクラスを直置きしない(旧案件の `app/Hook.php` 直置きスタイルは廃止し、必ず `app/Hook/SiteHook.php` 形式にする)。
-- **テンプレート前処理は `app/` ではなくテーマルート直下の `actions/` に置く**(DR-19)。テンプレート同名の素の PHP ファイル(クラスではない)で、対応するページテンプレートのデータ準備のみを担う。属性も基底クラスも持たず、`ActionRouter` がファイル存在で駆動する(Discovery 非関与)。ディレクトリ名 `actions` は固定(リネーム不可)。意味論・dispatch 正準仕様・`tms_var()` は 07-support.md が定義する。
+- **テンプレート前処理は `app/Page/` の前処理クラスに書き、テンプレートの先頭で `handle()` を明示的に呼ぶ**(DR-19)。テンプレート1つにつき1クラスで、テンプレートが使う値を readonly のプロパティで持つ DTO を返す。属性も基底クラスも持たず、Discovery は関与しない。規約は 07-support.md §1A が定義する。
 
 ### 8.4 プラグインの標準レイアウトと composer.json
 
@@ -712,7 +712,7 @@ my-plugin/
 ├── vendor/                    # git 管理外
 ├── AGENTS.md
 ├── app/                       # §8.3 と同一規約
-├── templates/                 # View::part のプラグイン同梱 fallback(テーマ側で上書き可能。View 設計書)
+├── templates/                 # Template::part のプラグイン同梱 fallback(テーマ側で上書き可能。View 設計書)
 ├── languages/                 # プラグイン自身のテキストドメイン用
 ├── uninstall.php              # 独自テーブル削除等(Model 設計書の Migrator 連携)
 └── readme.txt                 # WordPress.org 配布時のみ

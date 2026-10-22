@@ -142,7 +142,6 @@ final class ThumbnailTest extends UnitTestCase
             \dirname(__DIR__, 2) . '/languages',
             'Example\Tests\ThumbnailKernel' . uniqid(),
             true,
-            false,
             logChannels: static fn(): array => ['default' => new LogChannel($logger)],
         ));
 

@@ -85,6 +85,6 @@ final class PsrInterfaceCheckTest extends UnitTestCase
         $appDir = $this->createTempDirectory('psr-' . strtolower($name)) . '/app';
         mkdir($appDir);
 
-        return KernelConfig::theme($appDir, 'Example\Tests\Psr' . $name . uniqid(), true, false);
+        return KernelConfig::theme($appDir, 'Example\Tests\Psr' . $name . uniqid(), true);
     }
 }

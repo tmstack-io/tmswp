@@ -397,7 +397,7 @@ PHP);
         $appDir = $this->createTempDirectory('non-debug-broken-app');
         $this->writePhpFile($appDir, 'Missing.php', "<?php\n\nnamespace {$namespace};\n\nfinal class Other\n{\n}\n");
         $this->registerAppAutoloader($namespace, $appDir);
-        $config = KernelConfig::theme($appDir, $namespace, false, false);
+        $config = KernelConfig::theme($appDir, $namespace, false);
 
         $this->expectException(DiscoveryException::class);
         $this->expectExceptionMessage("is expected to define class {$namespace}\\Missing");
@@ -1013,7 +1013,7 @@ spl_autoload_register(static function (string $class) use ($root, $namespace): v
     }
 });
 
-$config = KernelConfig::theme($root . '/app', $namespace, true, false);
+$config = KernelConfig::theme($root . '/app', $namespace, true);
 
 try {
     echo (new DiscoveryFile($config))->render((new Discovery($config, new DiscoveryFile($config)))->scan());
@@ -1306,7 +1306,7 @@ PHP;
 
     private function scan(string $namespace, string $appDir): DiscoveryResult
     {
-        $config = KernelConfig::theme($appDir, $namespace, true, false);
+        $config = KernelConfig::theme($appDir, $namespace, true);
 
         return (new Discovery($config, new DiscoveryFile($config)))->scan();
     }

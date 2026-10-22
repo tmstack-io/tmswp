@@ -24,7 +24,6 @@ use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Option\OptionRepositoryFactory;
 use TMSWP\Core\Option\OptionStorageInterface;
 use TMSWP\Core\Option\WpOptionStorage;
-use TMSWP\Core\View\ActionRouter;
 use TMSWP\Core\View\Template;
 use WP_CLI;
 
@@ -161,7 +160,6 @@ final class Kernel
             $kernel->registerLifecycleHooks();
             $kernel->registerModelMigrator();
             TempFileGc::register($kernel);
-            $kernel->registerActionRouter();
             self::registerTextdomainLoader();
             // 拡張が Container に入れるサービスを、キャッチアップの初期化でも使えるよう、キャッチアップより先に登録する
             $kernel->registerExtensions();
@@ -779,16 +777,6 @@ final class Kernel
         return $this->config->context === KernelContext::Plugin
             && \defined('WP_SANDBOX_SCRAPING')
             && WP_SANDBOX_SCRAPING === true;
-    }
-
-    private function registerActionRouter(): void
-    {
-        if ($this->config->context !== KernelContext::Theme || !$this->config->actions) {
-            return;
-        }
-
-        $router = new ActionRouter();
-        add_filter('template_include', [$router, 'dispatch'], ActionRouter::PRIORITY, 1);
     }
 
     private function registerTemplateFallback(): void

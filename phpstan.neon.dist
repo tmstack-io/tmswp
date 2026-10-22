@@ -17,7 +17,6 @@ parameters:
     - packages/core/src
     - packages/core/phpstan/src
     - packages/core/tests
-    - packages/core/bin
     - packages/thumbnail/src
     - packages/thumbnail/tests
     - packages/settings-page/src

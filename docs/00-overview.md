@@ -142,7 +142,7 @@ tmswp/core は WordPress コアと PSR インターフェース(psr/log ^3、psr
 | DR-16 | 廃止 | View 乗っ取り機構、Html 流暢ビルダ、Http、Debug(iwf_dump)、CF7/Yoast 連携、AbstractCsvImport の echo HTML ログ、旧 Form/FormChoice/FormRendererCollection | 全文書 |
 | DR-17 | i18n | テキストドメイン=`tmswp`。ソース文字列は英語で書き、日本語は同梱翻訳ファイルで提供する。翻訳ファイルは WP-CLI で生成する(`composer i18n:build` が wp-env の cli コンテナで `wp i18n make-pot` → `update-po` → `make-mo` → `make-php` を実行)。ja の `.po` は手で管理し、生成した `.pot`・`.mo`・`.l10n.php`(WordPress の `WP_Translation_File_PHP` の形式)とともにコミットする。ロードコードは `load_textdomain()` に `.mo` のパスを渡すだけで、下限の WP 7.0 を含む全対応版で WordPress が同名の `.l10n.php` を優先して読む(仕様は `01-architecture.md` §7)。CPT/Tax ラベル自動生成は ja/en テンプレートを内蔵し、`KernelConfig` の `labelLanguage`(Kernel ごとの既定。デフォルト en)か定義側の `labelLanguage()` で切替(日本語サイトでは Kernel の既定を Ja にする) | 03 |
 | DR-18 | ストレージ差し替え | 旧FWで機能していなかった ACF 差し替えフィルタの教訓: null センチネル全廃。MetaStorageInterface は has()/get() 分離。ストレージ差し替えはグローバルフィルタでなくエンティティ単位の明示オプトイン(`#[UseMetaStorage]`) | 04, 09 |
-| DR-19 | テンプレート前処理 | テンプレート単位の前処理は、テンプレート同名ファイル規約 actions/{テンプレート相対パス}.php で行う(クラス形式のコントローラは持たない)。template_include(priority 100)でstaticクロージャinclude(可視変数=$wp_queryのみ)、戻り値契約 array→View変数バッグ / ActionRouter::notFound()→404 / null→no-op。$templateは常に無加工(404強制時のみWP標準のget_404_template()差し替え)。actions/common.phpは持たない(共通ロジックはapp/Hookまたはパーツ内モデルヘルパ直読み)。テーマ形態専用。型はテンプレート側@var注釈規約+未定義キーWP_DEBUG警告+静的検査(出力検査・set_404検査=FW同梱PHPStan拡張のカスタムルール、孤児actions検査=bin/tms-check軽量スクリプト)で担保 | 07 |
+| DR-19 | テンプレート前処理 | テンプレート単位の前処理(表示する値の用意・フォームの駆動・PRGリダイレクト)は、テンプレートの先頭で型付きの前処理クラスを明示的に呼んで行う(`$vm = ContactPage::handle();`)。前処理クラスはapp層の`app/Page/`に置く`final`クラスで、`public static function handle(): self`が、テンプレートで使う値をreadonlyのプロパティで持つDTOとして自身を返す。テンプレートは先頭(`get_header()`の前)で1回だけ呼び、パーツへは`$args`で渡す。値の型はDTOのプロパティの型でPHPStanが担保する。FWは前処理のための機構を持たず、テンプレート階層とテンプレートの選択に介入しない(原則1)。テンプレートを持たない文脈(プラグインのショートコード等)の前処理はフックで行う | 07 |
 | DR-20 | CSVインポート | CSV インポート基盤は公式拡張に収載しない。列定義・検証・保存先といったデータ投入の仕様は案件固有性が高く、FW 側で汎用基盤として抽象化する価値が薄いため、必要な案件が app 側で実装する(WP-CLI コマンド+ league/csv 等の直接利用) | 08 |
 
 ---
@@ -181,7 +181,7 @@ tmswp/
 | Form | `Form\Form`, `Form\FormDefinition`, `Form\FormResult`, `Form\FormStep`(enum: Input/Confirm/Complete), `Form\Field`, `Form\FieldView`, `Form\FormHtml`(純関数レンダラ), `Form\Validator`, `Form\ValidationContext`, `Form\ConfirmToken`, `Form\UploadedFile`, `Form\TempFileStore`, `Form\Rule\RuleInterface` ほか Rule 群 | 05 |
 | Model | `Model\Model`(基底), `Model\TableDefinition`, `Model\QueryBuilder`, `Model\Migrator`, `Model\Connection`(wpdb ラッパ) | 06 |
 | Log | `Log\Log`(ファサード), `Log\SimpleLogger`, `Log\LoggerRegistry` | 07 |
-| View | `View\Template`(part()/render()), `View\ActionRouter`(template_include ディスパッチャ), `View\View`(actions→テンプレート変数バッグ), `View\NotFound`(404シグナル) | 07(ActionRouter のboot時生成・登録は02) |
+| View | `View\Template`(part()/render()) | 07 |
 | Support | `Support\Arr`, `Support\Str`, `Support\Html` | 07 |
 | Hook | `Hook\Hook`(薄い基底: app 側が WP フック登録をまとめる置き場), `Hook\HookInitializer` | 02 |
 | Exception | `Exception\` 配下(全例外の名前空間) | 各文書 |
@@ -293,7 +293,7 @@ InquiryModel::query()->where('email', $email)->orderByDesc('id')->limit(10)->get
 | 04 | `04-meta-options.md` | MetaSchema / MetaValueType / MetaBag / MetaSchemaRegistry / MetaStorageInterface / `#[WithMetaRevisions]`、オプショングループ(backed enum + OptionAccess trait)/ OptionRepository、PHPStan 型ナローイング拡張 | DR-05, 18 | 00, 02, 03 |
 | 05 | `05-form.md` | Form ライフサイクル、FormDefinition / Field / Rule 群、確認画面(ConfirmToken / HMAC)、UploadedFile / TempFileStore、FormHtml 純関数レンダラ | DR-07 | 00, 02 |
 | 06 | `06-model.md` | Model / TableDefinition / QueryBuilder / Migrator / Connection(マイグレーション契機、prepare 必須化、DTO ハイドレーションオプション) | DR-08 | 00, 02 |
-| 07 | `07-support.md` | View\Template(part/render、プラグイン同梱 fallback)、ActionRouter / View 変数バッグ(actions 規約・dispatch 正準仕様)、Support\Arr / Str / Html、Log(PSR-3 v3 自前実装)の合冊 | DR-14, 16, 19 | 00, 02 |
+| 07 | `07-support.md` | View\Template(part/render、プラグイン同梱 fallback)、テンプレート前処理の明示呼び出し、Support\Arr / Str / Html、Log(PSR-3 v3 自前実装)の合冊 | DR-14, 16, 19 | 00, 02 |
 | 08 | `08-extensions.md` | tmswp/thumbnail(署名付き URL 仕様含む)/ settings-page / ja-toolkit(日本語サイト対応のオプトインモジュール群)の3拡張 | DR-10, 15, 20 | 00, 01, 02, 05(settings-page が Form 層に依存) |
 | 09 | `09-acf-bridge.md` | acf-json 真実源、コードジェネレータ、AcfMetaStorage、CI ドリフト検知、重複キーエラー | DR-06, 18 | 00, 02, 04 |
 | 10 | `10-quality.md` | PHPStan / php-cs-fixer / PHPUnit 2層 / wp-env / GitHub Actions / composer スクリプト体系 | DR-12 | 00, 01 |
@@ -343,9 +343,7 @@ InquiryModel::query()->where('email', $email)->orderByDesc('id')->limit(10)->get
 | **QueryBuilder** | Model 層の流暢クエリビルダ。生成 SQL は必ず `wpdb->prepare` を通す。 |
 | **Migrator** | TableDefinition から dbDelta ベースで自動マイグレーションを行う機構。契機は有効化フック+バージョン比較+WP-CLI(毎リクエスト実行はしない)。 |
 | **Template(View)** | `View\Template` の part()/render()。WP テンプレート階層を一切変更しない薄い読込ヘルパで、プラグイン同梱テンプレートへの fallback を持つ。 |
-| **ActionRouter** | `View\ActionRouter`(final)。テーマ形態のテンプレート前処理ディスパッチャ。`Kernel::boot()` が `template_include`(priority 100)へ `dispatch` を登録する(DR-19)。確定済みテンプレートに対応する `actions/{テンプレート相対パス}.php` を子→親テーマの順に探索し、存在すれば static クロージャで include(可視変数=$wp_query のみ)。戻り値契約: `array`→View 変数バッグ / `ActionRouter::notFound()`→404強制 / `null`→no-op。`$template` は常に無加工で返す(404強制時のみ WP標準の `get_404_template()` 差し替え)。テンプレート乗っ取り・exit・グローバル変数展開は行わない(原則1)。フロントの本描画リクエストでのみ動作。旧 iwf2b の actions/ 規約の直接踏襲。 |
-| **View(変数バッグ)** | `View\View`(final)。actions ファイル→ページテンプレート間の変数バッグ。actions が `return [...]`(array)した値を保持し、テンプレート側は `tms_var('key')` / `View::get('key')` で型付き取得する。`set()` はマージ(全置換でない)、未定義キーかつデフォルト未指定は WP_DEBUG 時のみ警告。パーツ(get_template_part)からの読み出しは禁止(追跡経路が2本になる)。`View\NotFound` は `ActionRouter::notFound()` 経由でのみ生成される空の404シグナル値。 |
-| **actions 規約** | テーマルート直下 `actions/`(名前固定・リネーム不可)に置く、テンプレート同名のデータ準備ファイル群(`actions/page-contact.php` 等)。役割はデータ準備のみで、出力・フック登録・`$wp_query->set_404()` 直呼びは禁止(WP_DEBUG 検知 + 静的検査: 出力・set_404 は FW 同梱 PHPStan 拡張のカスタムルール、孤児 actions 検査は `bin/tms-check` 軽量スクリプト)。404 は必ず `return \TMSWP\Core\View\ActionRouter::notFound()` で表明。フォーム駆動・PRG リダイレクト(wp_safe_redirect + exit)は許可。`actions/common.php`(全テンプレート共通)は持たない(共通ロジックは `app/Hook` クラスまたはパーツ内のモデルヘルパ直読みへ)。旧 iwf2b の15案件中3案件で定型化していた規約の踏襲。 |
+| **テンプレートの前処理クラス** | テンプレートが使う値の用意・フォームの駆動・PRG リダイレクトを担う app 層のクラス(`app/Page/` に置く `final` クラス。例: `App\Page\ContactPage`)。`public static function handle(): self` が、テンプレートで使う値を readonly のプロパティで持つ DTO として自身を返す。テンプレートの先頭(`get_header()` の前)で `$vm = ContactPage::handle();` と1回だけ明示的に呼び、パーツへは `$args` で渡す。FW の基底クラス・属性・Discovery は関与しない(DR-19)。 |
 | **ja-toolkit** | 日本語サイト向け公式拡張(tmswp/ja-toolkit)。日本語スラッグ・全角スペース検索正規化・wptexturize 無効化をオプトインモジュールとして提供。WP クリーンアップは FW コードでは提供せず rules/hooks.md のレシピで行う。コアは一切のクリーンアップを行わない。 |
 | **スターター(starter)** | `composer create-project` で生成する雛形(starter-theme / starter-plugin)。ブート定型・app/ スケルトン・QA 設定・AGENTS.md を同梱する。 |
 | **AGENTS.md / rules/** | AI エージェント向けの機械可読規約。AGENTS.md が FW 全体規約(命名・初期化タイミング・禁止事項)、rules/ が機能別レシピ(CPT 追加・フォーム作成・独自テーブル等)を持つ(DR-13)。 |

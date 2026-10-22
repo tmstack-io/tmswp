@@ -2279,7 +2279,6 @@ final class FormRuntimeTest extends UnitTestCase
             $root . '/app',
             'Example\Tests\FormRuntime' . uniqid(),
             $debug,
-            false,
             logChannels: static fn(): array => ['test' => new LogChannel($logger)],
         );
         // 本番の boot は探索結果ファイルだけを読む(コンポーネントの無い app)

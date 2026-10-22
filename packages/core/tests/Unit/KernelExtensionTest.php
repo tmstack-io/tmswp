@@ -48,7 +48,7 @@ final class KernelExtensionTest extends UnitTestCase
         $first = new RecordingExtension();
         $second = new KernelExtensionTestOrderedExtension();
 
-        $kernel = self::boot(KernelConfig::theme($this->appDir('extension-order'), 'Example\Tests\ExtensionOrder' . uniqid(), false, false, extensions: [$first, $second]));
+        $kernel = self::boot(KernelConfig::theme($this->appDir('extension-order'), 'Example\Tests\ExtensionOrder' . uniqid(), false, extensions: [$first, $second]));
 
         self::assertSame([['kernel' => $kernel, 'debug' => false]], $first->registrations);
         self::assertSame([$kernel], $second->kernels);
@@ -62,8 +62,8 @@ final class KernelExtensionTest extends UnitTestCase
         $production = new RecordingExtension();
         $debug = new RecordingExtension();
 
-        self::boot(KernelConfig::theme($this->appDir('extension-production'), 'Example\Tests\ExtensionProduction' . uniqid(), false, false, extensions: [$production]));
-        self::boot(KernelConfig::theme($this->appDir('extension-debug'), 'Example\Tests\ExtensionDebug' . uniqid(), true, false, extensions: [$debug]));
+        self::boot(KernelConfig::theme($this->appDir('extension-production'), 'Example\Tests\ExtensionProduction' . uniqid(), false, extensions: [$production]));
+        self::boot(KernelConfig::theme($this->appDir('extension-debug'), 'Example\Tests\ExtensionDebug' . uniqid(), true, extensions: [$debug]));
 
         self::assertFalse($production->registrations[0]['debug']);
         self::assertTrue($debug->registrations[0]['debug']);
@@ -78,7 +78,7 @@ final class KernelExtensionTest extends UnitTestCase
         Functions\when('TMSWP\Core\Kernel\register_activation_hook')->justReturn(null);
         Functions\when('TMSWP\Core\Kernel\register_deactivation_hook')->justReturn(null);
 
-        $themeKernel = self::boot(KernelConfig::theme($this->appDir('extension-theme'), 'Example\Tests\ExtensionTheme' . uniqid(), false, false, extensions: [$theme]));
+        $themeKernel = self::boot(KernelConfig::theme($this->appDir('extension-theme'), 'Example\Tests\ExtensionTheme' . uniqid(), false, extensions: [$theme]));
         $pluginKernel = self::boot(KernelConfig::plugin($pluginFile, $this->appDir('extension-plugin'), 'Example\Tests\ExtensionPlugin' . uniqid(), false, extensions: [$plugin]));
 
         self::assertSame([$themeKernel], array_column($theme->registrations, 'kernel'));
@@ -89,7 +89,7 @@ final class KernelExtensionTest extends UnitTestCase
     {
         foreach ([true, false] as $debug) {
             try {
-                KernelConfig::theme($this->appDir('extension-duplicate'), 'Example\Tests\ExtensionDuplicate', $debug, false, extensions: [new RecordingExtension(), new RecordingExtension()]);
+                KernelConfig::theme($this->appDir('extension-duplicate'), 'Example\Tests\ExtensionDuplicate', $debug, extensions: [new RecordingExtension(), new RecordingExtension()]);
                 self::fail('KernelException was not thrown');
             } catch (KernelException $exception) {
                 self::assertSame('extension ' . RecordingExtension::class . ' is registered more than once in the same kernel', $exception->getMessage());
@@ -116,7 +116,7 @@ final class KernelExtensionTest extends UnitTestCase
     public function testDeclaredLogChannelsAreTheKernelRegistry(): void
     {
         $logger = new RecordingLogger();
-        $kernel = self::boot(KernelConfig::theme($this->appDir('log-channels'), 'Example\Tests\LogChannels' . uniqid(), false, false, logChannels: static fn(): array => ['audit' => new LogChannel($logger)]));
+        $kernel = self::boot(KernelConfig::theme($this->appDir('log-channels'), 'Example\Tests\LogChannels' . uniqid(), false, logChannels: static fn(): array => ['audit' => new LogChannel($logger)]));
 
         $kernel->logger()->info('recorded');
 
@@ -137,7 +137,7 @@ final class KernelExtensionTest extends UnitTestCase
     public function testInvalidLogChannelsAreRejectedAtBoot(Closure $logChannels, string $message): void
     {
         // クロージャの戻り値の型は PHP では検査されないため、boot が戻り値を検証する
-        $config = KernelConfig::theme($this->appDir('invalid-log-channels'), 'Example\Tests\InvalidLogChannels' . uniqid(), false, false, logChannels: $logChannels);
+        $config = KernelConfig::theme($this->appDir('invalid-log-channels'), 'Example\Tests\InvalidLogChannels' . uniqid(), false, logChannels: $logChannels);
 
         (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
 

@@ -17,14 +17,13 @@ final class KernelConfigTest extends UnitTestCase
     {
         $appDir = $this->createTempDirectory('theme-app');
 
-        $config = KernelConfig::theme($appDir, '\\Example\\Theme\\', true, false);
+        $config = KernelConfig::theme($appDir, '\\Example\\Theme\\', true);
 
         self::assertSame(KernelContext::Theme, $config->context);
         self::assertSame(realpath($appDir), $config->appDir);
         self::assertSame('Example\\Theme', $config->appNamespace);
         self::assertNull($config->pluginFile);
         self::assertTrue($config->debug);
-        self::assertFalse($config->actions);
     }
 
     public function testPluginConfigRequiresExistingPluginFile(): void
@@ -38,7 +37,6 @@ final class KernelConfigTest extends UnitTestCase
         self::assertSame(realpath($pluginFile), $config->pluginFile);
         self::assertSame(realpath($appDir), $config->appDir);
         self::assertFalse($config->debug);
-        self::assertFalse($config->actions);
     }
 
     public function testDiscoveryFileIsPlacedNextToAppDirectory(): void
@@ -46,7 +44,7 @@ final class KernelConfigTest extends UnitTestCase
         $root = $this->createTempDirectory('discovery-file-root');
         self::assertTrue(mkdir($root . '/app'));
 
-        $config = KernelConfig::theme($root . '/app/', 'Example\\Theme', false, false);
+        $config = KernelConfig::theme($root . '/app/', 'Example\\Theme', false);
 
         self::assertSame(realpath($root) . '/tmswp-discovery.php', $config->discoveryFile());
     }

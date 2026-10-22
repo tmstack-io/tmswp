@@ -5,20 +5,21 @@
 
 declare(strict_types=1);
 
-use App\Form\ContactForm;
 use App\Option\SiteOption;
+use App\Page\ContactPage;
 use App\Post\ProductPost;
 use TMSWP\Core\Form\Form;
 use TMSWP\Core\Form\FormAction;
 use TMSWP\Core\Form\FormStep;
 
-$form = ContactForm::create();
-$result = $form->handle();
+// 出力の前(get_header()より前)に1回だけ呼ぶ
+$vm = ContactPage::handle();
+$form = $vm->form;
 
 get_header();
 ?>
 <main class="site-main">
-    <h1><?php echo esc_html((string) tms_var('title', get_the_title())); ?></h1>
+    <h1><?php echo esc_html(get_the_title()); ?></h1>
     <p>通知先: <?php echo esc_html(SiteOption::contactEmail()); ?></p>
     <p>製品一覧: <a href="<?php echo esc_url((string) ProductPost::archiveUrl()); ?>">アーカイブへ</a></p>
 
@@ -26,9 +27,9 @@ get_header();
         <p class="form-error"><?php echo esc_html($error); ?></p>
     <?php endforeach; ?>
 
-    <?php if ($result->step === FormStep::Complete) : ?>
+    <?php if ($vm->result->step === FormStep::Complete) : ?>
         <p class="notice">お問い合わせを受け付けました。</p>
-    <?php elseif ($result->step === FormStep::Confirm) : ?>
+    <?php elseif ($vm->result->step === FormStep::Confirm) : ?>
         <?php echo $form->open(['class' => 'contact-form']); ?>
         <dl class="confirm-list">
             <?php foreach (['customer_name', 'email', 'message', 'attachment'] as $fieldName) : ?>

@@ -46,7 +46,6 @@ use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
 use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\Core\Tests\Support\WpdbTestDouble;
-use TMSWP\Core\View\ActionRouter;
 use TypeError;
 
 final class KernelTest extends UnitTestCase
@@ -76,7 +75,7 @@ final class KernelTest extends UnitTestCase
         parent::tearDown();
     }
 
-    public function testThemeBootRegistersLifecycleHooksAndActionRouter(): void
+    public function testThemeBootRegistersLifecycleHooksAndLeavesTemplateIncludeUntouched(): void
     {
         $appDir = $this->createTempDirectory('kernel-app');
         $namespace = 'Example\\Tests\\KernelApp' . uniqid();
@@ -86,27 +85,13 @@ final class KernelTest extends UnitTestCase
         Actions\expectAdded('switch_theme')->once()->with(Mockery::type(Closure::class), 10, 0);
         Actions\expectAdded('tmswp/activated')->once()->with(Mockery::type(Closure::class), 10, 1);
         Actions\expectAdded('admin_init')->once()->with(Mockery::type(Closure::class), 5, 0);
-        Filters\expectAdded('template_include')->once()->with(
-            Mockery::on(static fn(mixed $callback): bool => self::isActionRouterCallback($callback)),
-            ActionRouter::PRIORITY,
-            1,
-        );
+        // テンプレート階層には介入しない(テンプレートの前処理はテンプレートの先頭で明示的に呼ぶ)
+        Filters\expectAdded('template_include')->never();
 
-        $kernel = Kernel::boot(KernelConfig::theme($appDir, $namespace, true, true));
+        $kernel = Kernel::boot(KernelConfig::theme($appDir, $namespace, true));
 
         self::assertSame($kernel, Kernel::get($namespace));
         self::assertSame([], $kernel->components());
-    }
-
-    public function testThemeBootCanDisableActionRouter(): void
-    {
-        $appDir = $this->createTempDirectory('kernel-no-actions-app');
-        $namespace = 'Example\\Tests\\KernelNoActionsApp' . uniqid();
-
-        Filters\expectAdded('template_include')->never();
-        Actions\expectAdded('init')->once()->with(Mockery::type(Closure::class), 1, 0);
-
-        Kernel::boot(KernelConfig::theme($appDir, $namespace, true, false));
     }
 
     public function testTextdomainLoaderLoadsCoreMoFileForDeterminedLocale(): void
@@ -120,7 +105,7 @@ final class KernelTest extends UnitTestCase
                 $loader = $callback;
             });
 
-        Kernel::boot(KernelConfig::theme($appDir, $namespace, true, false));
+        Kernel::boot(KernelConfig::theme($appDir, $namespace, true));
 
         self::assertInstanceOf(Closure::class, $loader);
 
@@ -138,7 +123,7 @@ final class KernelTest extends UnitTestCase
         $appDir = $this->createTempDirectory('discovery-file-kernel-app');
         $namespace = 'Example\\Tests\\DiscoveryFileKernelApp' . uniqid();
         $fileOnlyClass = $namespace . '\\Hooks\\FileOnlyHook';
-        $config = KernelConfig::theme($appDir, $namespace, false, false);
+        $config = KernelConfig::theme($appDir, $namespace, false);
 
         // 走査すれば見つかる app/ のクラスと、探索結果ファイルにだけ書いたクラスを用意し、ファイルの方が使われることを示す
         $this->writeFile($appDir . '/Hooks/ScannedHook.php', $this->hookClass($namespace, 'ScannedHook', 'tmswp_scanned_hook'));
@@ -163,7 +148,7 @@ final class KernelTest extends UnitTestCase
     {
         $appDir = $this->createTempDirectory('missing-discovery-file-app');
         $namespace = 'Example\\Tests\\MissingDiscoveryFileApp' . uniqid();
-        $config = KernelConfig::theme($appDir, $namespace, false, false);
+        $config = KernelConfig::theme($appDir, $namespace, false);
 
         try {
             Kernel::boot($config);
@@ -180,7 +165,7 @@ final class KernelTest extends UnitTestCase
     {
         $appDir = $this->createTempDirectory('debug-scan-kernel-app');
         $namespace = 'Example\\Tests\\DebugScanKernelApp' . uniqid();
-        $config = KernelConfig::theme($appDir, $namespace, true, false);
+        $config = KernelConfig::theme($appDir, $namespace, true);
         $this->writeFile($appDir . '/Hooks/ScannedHook.php', $this->hookClass($namespace, 'ScannedHook', 'tmswp_debug_scanned_hook'));
         (new DiscoveryFile($config))->write(new DiscoveryResult(
             [],
@@ -230,7 +215,7 @@ PHP);
         Actions\expectAdded('init')->never();
 
         try {
-            Kernel::boot(KernelConfig::theme($appDir, $namespace, true, false));
+            Kernel::boot(KernelConfig::theme($appDir, $namespace, true));
             self::fail('DiscoveryException was not thrown');
         } catch (DiscoveryException $exception) {
             self::assertStringContainsString("{$namespace}\\Hooks\\ZuluHook", $exception->getMessage());
@@ -246,8 +231,8 @@ PHP);
         $root = $this->createTempDirectory('shared-discovery-file-root');
         $this->writeFile($root . '/app-a/.keep', '');
         $this->writeFile($root . '/app-b/.keep', '');
-        $first = KernelConfig::theme($root . '/app-a', 'Example\\Tests\\SharedDiscoveryA' . uniqid(), false, false);
-        $second = KernelConfig::theme($root . '/app-b', 'Example\\Tests\\SharedDiscoveryB' . uniqid(), false, false);
+        $first = KernelConfig::theme($root . '/app-a', 'Example\\Tests\\SharedDiscoveryA' . uniqid(), false);
+        $second = KernelConfig::theme($root . '/app-b', 'Example\\Tests\\SharedDiscoveryB' . uniqid(), false);
         $firstFile = new DiscoveryFile($first);
         $firstFile->write(new DiscoveryResult([], []));
         $contents = file_get_contents($first->discoveryFile());
@@ -335,11 +320,11 @@ PHP);
     public function testSecondBootOfSameNamespaceIsRejected(): void
     {
         $namespace = 'Example\Tests\DoubleBootApp' . uniqid();
-        $first = Kernel::boot(KernelConfig::theme($this->createTempDirectory('double-boot-first'), $namespace, true, false));
+        $first = Kernel::boot(KernelConfig::theme($this->createTempDirectory('double-boot-first'), $namespace, true));
 
         foreach ([true, false] as $debug) {
             try {
-                Kernel::boot(KernelConfig::theme($this->createTempDirectory('double-boot-second'), $namespace, $debug, false));
+                Kernel::boot(KernelConfig::theme($this->createTempDirectory('double-boot-second'), $namespace, $debug));
                 self::fail('KernelException was not thrown');
             } catch (KernelException $exception) {
                 self::assertSame("TMSWP kernel for namespace '{$namespace}' is already booted", $exception->getMessage());
@@ -377,7 +362,7 @@ PHP);
             [$appNamespace, $appDir] = $kernel;
             $this->writeFile("{$root}/{$appDir}/.keep", '');
 
-            return KernelConfig::theme("{$root}/{$appDir}", str_replace('{NS}', $namespace, $appNamespace), false, false);
+            return KernelConfig::theme("{$root}/{$appDir}", str_replace('{NS}', $namespace, $appNamespace), false);
         }, [$first, $second]);
         (new DiscoveryFile($firstConfig))->write(new DiscoveryResult([], []));
         $contents = file_get_contents($firstConfig->discoveryFile());
@@ -407,8 +392,8 @@ PHP);
     {
         $base = 'Example\Tests\ForClass' . uniqid();
         // 探索結果ファイルを共有しないよう、それぞれのルートの下に appDir を置く
-        $theme = Kernel::boot(KernelConfig::theme($this->createAppDirectory('for-class-theme'), $base . '\App', true, false));
-        $plugin = Kernel::boot(KernelConfig::theme($this->createAppDirectory('for-class-plugin'), $base . '\Shop', true, false));
+        $theme = Kernel::boot(KernelConfig::theme($this->createAppDirectory('for-class-theme'), $base . '\App', true));
+        $plugin = Kernel::boot(KernelConfig::theme($this->createAppDirectory('for-class-plugin'), $base . '\Shop', true));
 
         self::assertSame($theme, Kernel::forClass($base . '\App\Post\ProductPost'));
         self::assertSame($plugin, Kernel::forClass($base . '\Shop\Hook\CartHook'));
@@ -426,7 +411,7 @@ PHP);
     public function testForClassRejectsClassOutsideBootedKernels(string $class): void
     {
         $base = 'Example\Tests\ForClassMissing' . uniqid();
-        Kernel::boot(KernelConfig::theme($this->createTempDirectory('for-class-missing'), $base . '\App', true, false));
+        Kernel::boot(KernelConfig::theme($this->createTempDirectory('for-class-missing'), $base . '\App', true));
         $class = str_replace('{BASE}', $base, $class);
 
         $this->expectException(KernelException::class);
@@ -437,7 +422,7 @@ PHP);
 
     public function testResetAllowsBootingSameNamespaceAgain(): void
     {
-        $config = KernelConfig::theme($this->createTempDirectory('reset-app'), 'Example\Tests\ResetApp' . uniqid(), true, false);
+        $config = KernelConfig::theme($this->createTempDirectory('reset-app'), 'Example\Tests\ResetApp' . uniqid(), true);
         $first = Kernel::boot($config);
 
         Kernel::reset();
@@ -452,8 +437,8 @@ PHP);
     public function testBootFromExtensionRegisterIsRejected(): void
     {
         $namespace = 'Example\Tests\ReentrantExtension' . uniqid();
-        $inner = KernelConfig::theme($this->createAppDirectory('reentrant-extension-inner'), $namespace . '\Sub', true, false);
-        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-extension-outer'), $namespace, true, false, extensions: [new KernelTestBootingExtension($inner)]);
+        $inner = KernelConfig::theme($this->createAppDirectory('reentrant-extension-inner'), $namespace . '\Sub', true);
+        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-extension-outer'), $namespace, true, extensions: [new KernelTestBootingExtension($inner)]);
 
         // 外側の Kernel はまだレジストリに無いため、再入を禁止しなければ入れ子の名前空間の検査をすり抜ける
         $this->assertReentrantBootIsRejected($outer, $inner);
@@ -462,8 +447,8 @@ PHP);
     public function testBootOfParentNamespaceFromLogChannelsIsRejected(): void
     {
         $namespace = 'Example\Tests\ReentrantParent' . uniqid();
-        $inner = KernelConfig::theme($this->createAppDirectory('reentrant-parent-inner'), $namespace, true, false);
-        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-parent-outer'), $namespace . '\Sub', true, false, logChannels: self::bootingLogChannels($inner));
+        $inner = KernelConfig::theme($this->createAppDirectory('reentrant-parent-inner'), $namespace, true);
+        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-parent-outer'), $namespace . '\Sub', true, logChannels: self::bootingLogChannels($inner));
 
         $this->assertReentrantBootIsRejected($outer, $inner);
     }
@@ -471,8 +456,8 @@ PHP);
     public function testBootOfSameNamespaceFromLogChannelsIsRejected(): void
     {
         $namespace = 'Example\Tests\ReentrantSame' . uniqid();
-        $inner = KernelConfig::theme($this->createAppDirectory('reentrant-same-inner'), $namespace, true, false);
-        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-same-outer'), $namespace, true, false, logChannels: self::bootingLogChannels($inner));
+        $inner = KernelConfig::theme($this->createAppDirectory('reentrant-same-inner'), $namespace, true);
+        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-same-outer'), $namespace, true, logChannels: self::bootingLogChannels($inner));
 
         $this->assertReentrantBootIsRejected($outer, $inner);
     }
@@ -480,11 +465,11 @@ PHP);
     public function testBootFromProductionCatchUpInitializerIsRejected(): void
     {
         $namespace = 'Example\Tests\ReentrantCatchUp' . uniqid();
-        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-catch-up-outer'), $namespace, false, false, logChannels: self::recordTo(new KernelTestLogger()));
+        $outer = KernelConfig::theme($this->createAppDirectory('reentrant-catch-up-outer'), $namespace, false, logChannels: self::recordTo(new KernelTestLogger()));
         (new DiscoveryFile($outer))->write(new DiscoveryResult([
             new DiscoveredComponent($namespace . '\Booting', KernelTestCatchUpAttribute::class, ['hook' => 'init', 'priority' => 10, 'initializer' => KernelTestBootingInitializer::class]),
         ], []));
-        KernelTestBootingInitializer::$config = KernelConfig::theme($this->createAppDirectory('reentrant-catch-up-inner'), $namespace . '\Sub', true, false);
+        KernelTestBootingInitializer::$config = KernelConfig::theme($this->createAppDirectory('reentrant-catch-up-inner'), $namespace . '\Sub', true);
         // init は発火済み。init 10 の初期化は、外側の Kernel をレジストリに登録した後のキャッチアップで動く
         $GLOBALS['wp_actions'] = ['init' => 1];
 
@@ -502,7 +487,7 @@ PHP);
         $sandboxed = Kernel::boot(KernelConfig::plugin($pluginFile, $this->createAppDirectory('sandbox-reentry-plugin'), 'Example\Tests\SandboxReentryPlugin' . uniqid(), true));
 
         // サンドボックスの boot は途中で return するが、boot の進行中の印は外れている
-        $theme = Kernel::boot(KernelConfig::theme($this->createAppDirectory('sandbox-reentry-theme'), 'Example\Tests\SandboxReentryTheme' . uniqid(), true, false));
+        $theme = Kernel::boot(KernelConfig::theme($this->createAppDirectory('sandbox-reentry-theme'), 'Example\Tests\SandboxReentryTheme' . uniqid(), true));
 
         self::assertSame([$sandboxed->config()->appNamespace => $sandboxed, $theme->config()->appNamespace => $theme], Kernel::all());
     }
@@ -532,7 +517,7 @@ PHP);
     #[DataProvider('unrestorableAttributes')]
     public function testUnrestorableAttributeFailsBootInProduction(string $attributeClass, array $arguments, string $message, ?string $previous, ?string $attributeSource): void
     {
-        $config = KernelConfig::theme($this->createTempDirectory('unrestorable-attribute-app'), 'Example\Tests\UnrestorableAttributeApp' . uniqid(), false, false);
+        $config = KernelConfig::theme($this->createTempDirectory('unrestorable-attribute-app'), 'Example\Tests\UnrestorableAttributeApp' . uniqid(), false);
         $attributeNamespace = 'Example\Tests\UnrestorableAttribute' . uniqid();
         $attributeClass = str_replace('{NS}', $attributeNamespace, $attributeClass);
         $message = str_replace('{NS}', $attributeNamespace, $message);
@@ -568,7 +553,7 @@ PHP);
      */
     public function testBootRegistersEntityMetaSchemasWithoutRegisteringThemWithWordPress(): void
     {
-        $config = KernelConfig::theme($this->createTempDirectory('boot-meta-app'), 'Example\Tests\BootMetaApp' . uniqid(), false, false);
+        $config = KernelConfig::theme($this->createTempDirectory('boot-meta-app'), 'Example\Tests\BootMetaApp' . uniqid(), false);
         (new DiscoveryFile($config))->write(new DiscoveryResult([
             new DiscoveredComponent(KernelTestMetaPost::class, AsPostType::class, []),
         ], []));
@@ -591,7 +576,7 @@ PHP);
 
     public function testDeferOutsideCatchUpIsAddAction(): void
     {
-        $kernel = Kernel::boot(KernelConfig::theme($this->createAppDirectory('defer-app'), 'Example\Tests\DeferApp' . uniqid(), true, false));
+        $kernel = Kernel::boot(KernelConfig::theme($this->createAppDirectory('defer-app'), 'Example\Tests\DeferApp' . uniqid(), true));
         $callback = static function (): void {};
         // キャッチアップ中でなければ、発火済みのフックへの予約も add_action() と同じ
         $GLOBALS['wp_actions'] = ['plugins_loaded' => 1];
@@ -610,7 +595,7 @@ PHP);
     public function testDeferDuringCatchUpRunsAtFiredOrderAndPriorityAmongRemainingGroups(): void
     {
         $logger = new KernelTestLogger();
-        $config = KernelConfig::theme($this->createTempDirectory('defer-catch-up-app'), 'Example\Tests\DeferCatchUpApp' . uniqid(), false, false, logChannels: self::recordTo($logger));
+        $config = KernelConfig::theme($this->createTempDirectory('defer-catch-up-app'), 'Example\Tests\DeferCatchUpApp' . uniqid(), false, logChannels: self::recordTo($logger));
         $namespace = $config->appNamespace;
         $attribute = KernelTestCatchUpAttribute::class;
         (new DiscoveryFile($config))->write(new DiscoveryResult([
@@ -647,7 +632,7 @@ PHP);
      */
     public function testLateBootCatchUpRunsMetaSchemaRegistrationAfterInitNineAndTen(): void
     {
-        $config = KernelConfig::theme($this->createTempDirectory('catch-up-meta-app'), 'Example\Tests\CatchUpMetaApp' . uniqid(), false, false, logChannels: self::recordTo(new KernelTestLogger()));
+        $config = KernelConfig::theme($this->createTempDirectory('catch-up-meta-app'), 'Example\Tests\CatchUpMetaApp' . uniqid(), false, logChannels: self::recordTo(new KernelTestLogger()));
         $namespace = $config->appNamespace;
         $attribute = KernelTestCatchUpAttribute::class;
         (new DiscoveryFile($config))->write(new DiscoveryResult([
@@ -702,7 +687,7 @@ final class NeedsValueHook extends Hook
 PHP);
         $logger = new KernelTestLogger();
         $this->autoloaders[] = $this->registerAppAutoloader($namespace, $appDir);
-        $filter = $this->bootAndCaptureHookCallback(KernelConfig::theme($appDir, $namespace, true, false, logChannels: self::recordTo($logger)), 'tmswp_unresolvable_debug_filter', 1);
+        $filter = $this->bootAndCaptureHookCallback(KernelConfig::theme($appDir, $namespace, true, logChannels: self::recordTo($logger)), 'tmswp_unresolvable_debug_filter', 1);
 
         try {
             $filter('original');
@@ -733,7 +718,6 @@ PHP);
                 $this->createTempDirectory('old-wp-app'),
                 'Example\Tests\OldWordPressApp' . uniqid(),
                 $debug,
-                false,
             );
 
             try {
@@ -766,7 +750,7 @@ PHP);
         $GLOBALS['wp_version'] = $version;
         $namespace = 'Example\Tests\SupportedWordPressApp' . uniqid();
 
-        Kernel::boot(KernelConfig::theme($this->createTempDirectory('supported-wp-app'), $namespace, true, false));
+        Kernel::boot(KernelConfig::theme($this->createTempDirectory('supported-wp-app'), $namespace, true));
 
         self::assertArrayHasKey($namespace, Kernel::all());
     }
@@ -778,7 +762,7 @@ PHP);
         $this->expectException(KernelException::class);
         $this->expectExceptionMessage('cannot determine the WordPress version');
 
-        Kernel::boot(KernelConfig::theme($this->createTempDirectory('unknown-wp-app'), 'Example\Tests\UnknownWordPressApp' . uniqid(), true, false));
+        Kernel::boot(KernelConfig::theme($this->createTempDirectory('unknown-wp-app'), 'Example\Tests\UnknownWordPressApp' . uniqid(), true));
     }
 
     public function testThemeActivationAndDeactivationOnlyDeleteRewriteRules(): void
@@ -796,7 +780,7 @@ PHP);
                 $deactivate = $callback;
             });
 
-        $kernel = Kernel::boot(KernelConfig::theme($this->createTempDirectory('theme-lifecycle-app'), $namespace, true, false));
+        $kernel = Kernel::boot(KernelConfig::theme($this->createTempDirectory('theme-lifecycle-app'), $namespace, true));
 
         $this->assertLifecycleCallbacksOnlyDeleteRewriteRules($kernel, $activate, $deactivate);
     }
@@ -834,7 +818,7 @@ PHP);
         Functions\expect('get_option')->never();
         Functions\expect('add_option')->never();
 
-        Kernel::boot(KernelConfig::theme($this->createTempDirectory('no-rewrite-check-app'), 'Example\Tests\NoRewriteCheckApp' . uniqid(), true, false));
+        Kernel::boot(KernelConfig::theme($this->createTempDirectory('no-rewrite-check-app'), 'Example\Tests\NoRewriteCheckApp' . uniqid(), true));
 
         sort($priorities);
         self::assertSame([1, 20], $priorities);
@@ -922,7 +906,7 @@ PHP);
         $autoload = $this->registerAppAutoloader($namespace, $appDir);
 
         try {
-            $filter = $this->bootAndCaptureHookCallback(KernelConfig::theme($appDir, $namespace, true, false, logChannels: self::recordTo($logger)), 'tmswp_failing_debug_filter', 1);
+            $filter = $this->bootAndCaptureHookCallback(KernelConfig::theme($appDir, $namespace, true, logChannels: self::recordTo($logger)), 'tmswp_failing_debug_filter', 1);
 
             try {
                 $filter('original');
@@ -942,7 +926,7 @@ PHP);
         $logger = new KernelTestLogger();
         $appDir = $this->createTempDirectory('stale-hook-app');
         $namespace = 'Example\Tests\StaleHookApp' . uniqid();
-        $config = KernelConfig::theme($appDir, $namespace, false, false, logChannels: self::recordTo($logger));
+        $config = KernelConfig::theme($appDir, $namespace, false, logChannels: self::recordTo($logger));
 
         // 探索結果ファイルが古く、削除済みのクラスを指している
         (new DiscoveryFile($config))->write(new DiscoveryResult([], [
@@ -959,7 +943,7 @@ PHP);
         $logger = new KernelTestLogger();
         $appDir = $this->createTempDirectory('catch-up-app');
         $namespace = 'Example\Tests\CatchUpApp' . uniqid();
-        $config = KernelConfig::theme($appDir, $namespace, false, false, logChannels: self::recordTo($logger));
+        $config = KernelConfig::theme($appDir, $namespace, false, logChannels: self::recordTo($logger));
         $attribute = KernelTestCatchUpAttribute::class;
 
         // コンポーネントは FQCN の順に並ぶ。フック名の辞書順(init < plugins_loaded)とも priority の順とも違う順にしておく
@@ -1019,7 +1003,7 @@ PHP);
         Actions\expectAdded('plugins_loaded')->never();
 
         try {
-            Kernel::boot(KernelConfig::theme($appDir, $namespace, true, false));
+            Kernel::boot(KernelConfig::theme($appDir, $namespace, true));
             self::fail('KernelException was not thrown');
         } catch (KernelException $exception) {
             self::assertStringContainsString("after the 'plugins_loaded' hook had fired", $exception->getMessage());
@@ -1036,7 +1020,7 @@ PHP);
     {
         $appDir = $this->createTempDirectory('invalid-post-type-app');
         $namespace = 'Example\Tests\InvalidPostTypeApp' . uniqid();
-        $config = KernelConfig::theme($appDir, $namespace, false, false);
+        $config = KernelConfig::theme($appDir, $namespace, false);
         // PostType を継承しないクラスに #[AsPostType] が付いている(探索結果ファイルが古い等の設定の誤り)。
         // メタスキーマの登録(boot 時の初期化)で検出し、init を待たずに boot が失敗する
         (new DiscoveryFile($config))->write(new DiscoveryResult([
@@ -1057,7 +1041,7 @@ PHP);
     {
         $appDir = $this->createTempDirectory('invalid-initializer-app');
         $namespace = 'Example\Tests\InvalidInitializerApp' . uniqid();
-        $config = KernelConfig::theme($appDir, $namespace, false, false);
+        $config = KernelConfig::theme($appDir, $namespace, false);
         (new DiscoveryFile($config))->write(new DiscoveryResult([
             new DiscoveredComponent($namespace . '\Component', KernelTestCatchUpAttribute::class, [
                 'hook' => 'tmswp_invalid_initializer',
@@ -1085,7 +1069,7 @@ PHP);
         $logger = new KernelTestLogger();
         $appDir = $this->createTempDirectory('failing-catch-up-app');
         $namespace = 'Example\Tests\FailingCatchUpApp' . uniqid();
-        $config = KernelConfig::theme($appDir, $namespace, false, false, logChannels: self::recordTo($logger));
+        $config = KernelConfig::theme($appDir, $namespace, false, logChannels: self::recordTo($logger));
         // アダプタ先の builtin の投稿タイプが無い(register() が投げる設定の誤り)
         (new DiscoveryFile($config))->write(new DiscoveryResult([
             new DiscoveredComponent(KernelTestMissingBuiltinPost::class, AsPostType::class, []),
@@ -1132,7 +1116,7 @@ final class LateLogHook extends Hook
     }
 }
 PHP);
-        $config = KernelConfig::theme($appDir, $namespace, false, false, logChannels: self::recordTo($logger));
+        $config = KernelConfig::theme($appDir, $namespace, false, logChannels: self::recordTo($logger));
         (new DiscoveryFile($config))->write(new DiscoveryResult([
             new DiscoveredComponent($namespace . '\Hook\LateLogHook', AsHook::class, []),
         ], []));
@@ -1157,7 +1141,7 @@ PHP);
     {
         $appDir = $this->createTempDirectory('failed-catch-up-registration-app');
         $namespace = 'Example\Tests\FailedCatchUpRegistrationApp' . uniqid();
-        $config = KernelConfig::theme($appDir, $namespace, false, false, logChannels: self::recordTo(new KernelTestLogger()));
+        $config = KernelConfig::theme($appDir, $namespace, false, logChannels: self::recordTo(new KernelTestLogger()));
         (new DiscoveryFile($config))->write(new DiscoveryResult([
             new DiscoveredComponent($namespace . '\Failing', KernelTestCatchUpAttribute::class, ['hook' => 'init', 'priority' => 10, 'initializer' => KernelTestRegisteredThenFailingInitializer::class]),
         ], []));
@@ -1239,7 +1223,7 @@ PHP);
             self::fail("ディレクトリを作成できません: {$appDir}");
         }
 
-        return KernelConfig::theme($appDir, $namespace, $debug, false, extensions: [new KernelTestServiceExtension()], logChannels: self::recordTo(new KernelTestLogger()));
+        return KernelConfig::theme($appDir, $namespace, $debug, extensions: [new KernelTestServiceExtension()], logChannels: self::recordTo(new KernelTestLogger()));
     }
 
     /**
@@ -1262,7 +1246,7 @@ PHP);
         self::assertSame([], Kernel::all());
 
         $GLOBALS['wp_actions'] = [];
-        $kernel = Kernel::boot(KernelConfig::theme($this->createAppDirectory('reentrant-reboot'), $outer->appNamespace, true, false));
+        $kernel = Kernel::boot(KernelConfig::theme($this->createAppDirectory('reentrant-reboot'), $outer->appNamespace, true));
 
         self::assertSame([$outer->appNamespace => $kernel], Kernel::all());
     }
@@ -1304,7 +1288,7 @@ PHP);
      */
     private function bootWithFileOnlyHookMethod(string $hook, string $method, int $acceptedArgs, HookMethodKind $kind, int $registeredArgs, KernelTestLogger $logger = new KernelTestLogger()): Closure
     {
-        $config = KernelConfig::theme($this->createTempDirectory('hook-method-app'), 'Example\Tests\HookMethodApp' . uniqid(), false, false, logChannels: self::recordTo($logger));
+        $config = KernelConfig::theme($this->createTempDirectory('hook-method-app'), 'Example\Tests\HookMethodApp' . uniqid(), false, logChannels: self::recordTo($logger));
         (new DiscoveryFile($config))->write(new DiscoveryResult([], [
             new DiscoveredHookMethod(KernelTestHookProbe::class, $method, $hook, 10, $acceptedArgs, $kind),
         ]));
@@ -1355,19 +1339,6 @@ final class {$class}
 {
 }
 PHP;
-    }
-
-    private static function isActionRouterCallback(mixed $callback): bool
-    {
-        if (!\is_array($callback) || \count($callback) !== 2) {
-            return false;
-        }
-
-        if (!$callback[0] instanceof ActionRouter) {
-            return false;
-        }
-
-        return $callback[1] === 'dispatch';
     }
 
     private function hookClass(string $namespace, string $class, string $hook): string

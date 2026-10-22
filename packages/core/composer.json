@@ -28,9 +28,6 @@
       "TMSWP\\Core\\Tests\\": "tests/"
     }
   },
-  "bin": [
-    "bin/tms-check"
-  ],
   "extra": {
     "phpstan": {
       "includes": [

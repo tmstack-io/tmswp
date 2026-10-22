@@ -40,7 +40,6 @@ use TMSWP\Core\Tests\Support\RecordingExtension;
 use TMSWP\Core\Tests\Support\RecordingInitializer;
 use TMSWP\Core\Tests\Support\RecordingLogger;
 use TMSWP\Core\Tests\Support\UsesTempDirectories;
-use TMSWP\Core\View\ActionRouter;
 use WP_Hook;
 use WP_Rewrite;
 
@@ -925,33 +924,18 @@ PHP;
     }
 
     /**
-     * テーマ形態の Kernel は template_include(priority 100)に ActionRouter::dispatch を1本登録する。
-     * `actions: false` のテーマ形態と、プラグイン形態(actions は false に正規化される)の Kernel は登録しない。
+     * テーマ形態・プラグイン形態の Kernel は、template_include にコールバックを登録しない(テンプレート階層に介入しない)。
      */
-    public function testOnlyThemeKernelsWithActionsRegisterTheActionRouter(): void
+    public function testKernelsDoNotHookTemplateInclude(): void
     {
-        // fixture のテーマ(actions の既定は true)の Kernel が、WordPress の読み込みで1本登録している
-        self::assertTrue(self::themeKernel()->config()->actions);
-        self::assertSame([['priority' => 100, 'acceptedArgs' => 1]], self::actionRouterCallbacks());
+        $before = self::templateIncludeCallbacks();
 
-        $withoutActions = $this->productionThemeConfig('WithoutActions');
-        $plugin = $this->productionPluginConfig('PluginActionRouter');
-        self::assertFalse($withoutActions->actions);
-        self::assertFalse($plugin->actions);
-
-        foreach ([$withoutActions, $plugin] as $config) {
+        foreach ([$this->productionThemeConfig('TemplateIncludeTheme'), $this->productionPluginConfig('TemplateIncludePlugin')] as $config) {
             (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
             $this->bootBeforeInit($config);
 
-            self::assertCount(1, self::actionRouterCallbacks(), $config->appNamespace);
+            self::assertSame($before, self::templateIncludeCallbacks(), $config->appNamespace);
         }
-
-        // 比べ方の確認: actions: true のテーマ形態の Kernel は1本足す
-        $withActions = $this->productionThemeConfig('WithActions', actions: true);
-        (new DiscoveryFile($withActions))->write(new DiscoveryResult([], []));
-        $this->bootBeforeInit($withActions);
-
-        self::assertCount(2, self::actionRouterCallbacks());
     }
 
     public function testFixtureKernelsAreBootedInDebugModeByWordPressLoading(): void
@@ -1195,28 +1179,21 @@ PHP);
     }
 
     /**
-     * template_include に登録された ActionRouter::dispatch のコールバックを返す。
+     * template_include に登録されたコールバックを返す。
      *
-     * @return list<array{priority: int, acceptedArgs: int}>
+     * @return list<mixed>
      */
-    private static function actionRouterCallbacks(): array
+    private static function templateIncludeCallbacks(): array
     {
-        $routers = [];
+        $functions = [];
 
         foreach (self::registeredCallbacks() as $callback) {
-            $function = $callback['function'];
-
-            if (
-                $callback['hook'] === 'template_include'
-                && \is_array($function)
-                && ($function[0] ?? null) instanceof ActionRouter
-                && ($function[1] ?? null) === 'dispatch'
-            ) {
-                $routers[] = ['priority' => $callback['priority'], 'acceptedArgs' => $callback['acceptedArgs']];
+            if ($callback['hook'] === 'template_include') {
+                $functions[] = $callback['function'];
             }
         }
 
-        return $routers;
+        return $functions;
     }
 
     /**
@@ -1345,12 +1322,12 @@ PHP);
      * 本番相当(debug=false)のテーマ形態の構成を、一時ディレクトリのテーマで作る。テーマ切替のフックに登録される
      * コールバックは、テストライブラリが tear_down でフックごと元に戻す。
      */
-    private function productionThemeConfig(string $name, LabelLanguage $labelLanguage = LabelLanguage::En, bool $actions = false): KernelConfig
+    private function productionThemeConfig(string $name, LabelLanguage $labelLanguage = LabelLanguage::En): KernelConfig
     {
         $root = $this->createTempDirectory('integration-' . strtolower($name));
         self::assertTrue(mkdir($root . '/app'));
 
-        return KernelConfig::theme($root . '/app', 'TmswpIntegration' . $name . uniqid(), false, $actions, logChannels: $this->recordLogs(), labelLanguage: $labelLanguage);
+        return KernelConfig::theme($root . '/app', 'TmswpIntegration' . $name . uniqid(), false, logChannels: $this->recordLogs(), labelLanguage: $labelLanguage);
     }
 
     private function pluginDiscoveryFile(): DiscoveryFile

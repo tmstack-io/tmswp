@@ -162,7 +162,7 @@ final class KernelStorageTest extends UnitTestCase
     {
         $appDir = $this->createTempDirectory('kernel-storage') . '/app';
         self::assertTrue(mkdir($appDir));
-        $config = KernelConfig::theme($appDir, self::APP_NAMESPACE, false, false, extensions: $extensions);
+        $config = KernelConfig::theme($appDir, self::APP_NAMESPACE, false, extensions: $extensions);
         $namespace = self::APP_NAMESPACE;
         (new DiscoveryFile($config))->write(new DiscoveryResult($components ? [
             new DiscoveredComponent("{$namespace}\\ExplicitPost", AsPostType::class, []),

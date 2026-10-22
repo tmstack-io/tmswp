@@ -4,38 +4,21 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Integration;
 
+use TMSWP\Core\Form\Form;
+use TMSWP\Core\Form\FormDefinition;
+use TMSWP\Core\Form\Rule\Required;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
 use TMSWP\Core\View\Template;
-use TMSWP\Core\View\View;
-use WP_Query;
 
 final class ViewIntegrationTest extends IntegrationTestCase
 {
-    public function tear_down(): void
+    public function testThemePartRendersFormPassedThroughArgs(): void
     {
-        View::reset();
+        $form = new Form(FormDefinition::create('contact')->text('name', 'お名前', [new Required()]));
 
-        parent::tear_down();
-    }
-
-    public function testThemeBootDispatchesActionsOnTemplateInclude(): void
-    {
-        $GLOBALS['wp_query'] = new WP_Query();
-        $template = get_stylesheet_directory() . '/index.php';
-
-        self::assertSame($template, apply_filters('template_include', $template));
-        self::assertSame('from action', View::get('message'));
-    }
-
-    public function testThemeActionCanCreateAndRenderForm(): void
-    {
-        $GLOBALS['wp_query'] = new WP_Query();
-        $template = get_stylesheet_directory() . '/contact.php';
-
-        self::assertSame($template, apply_filters('template_include', $template));
         self::assertStringContainsString(
             'name="name"',
-            Template::render('parts/contact-form', ['form' => View::get('contactForm')]),
+            Template::render('parts/contact-form', ['form' => $form]),
         );
     }
 

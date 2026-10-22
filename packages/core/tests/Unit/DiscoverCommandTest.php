@@ -156,7 +156,7 @@ PHP);
         $root = $this->createTempDirectory('discover-command-' . strtolower($suffix));
         self::assertTrue(mkdir($root . '/app'));
         $namespace = 'Example\\Tests\\DiscoverCommand' . $suffix . uniqid();
-        $config = KernelConfig::theme($root . '/app', $namespace, $debug, false);
+        $config = KernelConfig::theme($root . '/app', $namespace, $debug);
         $this->writeHookClass($config, 'ProbeHook', 'tmswp_probe_hook_' . strtolower($suffix));
 
         spl_autoload_register(static function (string $class) use ($namespace, $root): void {

@@ -262,7 +262,7 @@ PHP;
             self::assertTrue(mkdir($root . '/app'));
         }
 
-        return KernelConfig::theme($root . '/app', 'Example\\DiscoveryFile', false, false);
+        return KernelConfig::theme($root . '/app', 'Example\\DiscoveryFile', false);
     }
 
     private function discoveryResult(): DiscoveryResult

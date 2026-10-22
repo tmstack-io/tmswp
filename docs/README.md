@@ -31,7 +31,7 @@
 | 04 | [`04-meta-options.md`](./04-meta-options.md) | MetaSchema / MetaBag / MetaSchemaRegistry / MetaStorageInterface(has/get 分離)/ `#[WithMetaRevisions]`、OptionGroup / OptionRepository、PHPStan 型ナローイング拡張 | DR-05, 18 | 00, 02, 03 |
 | 05 | [`05-form.md`](./05-form.md) | Form ライフサイクル(バインド/CSRF/検証/状態遷移)、FormDefinition / Field / Rule 群、確認画面(ConfirmToken / HMAC)、UploadedFile / TempFileStore、FormHtml 純関数レンダラ | DR-07 | 00, 02 |
 | 06 | [`06-model.md`](./06-model.md) | Model / TableDefinition / QueryBuilder(常時 `wpdb->prepare`)/ Migrator / Connection(マイグレーション契機、DTO ハイドレーションオプション) | DR-08 | 00, 02 |
-| 07 | [`07-support.md`](./07-support.md) | View\Template(part/render、プラグイン同梱 fallback)、ActionRouter / View 変数バッグ(actions 規約・dispatch 正準仕様・tms_var)、Support\Arr/Str/Html、Log(PSR-3 v3 自前実装) | DR-14, 16, 19 | 00, 02 |
+| 07 | [`07-support.md`](./07-support.md) | View\Template(part/render、プラグイン同梱 fallback)、テンプレート前処理の明示呼び出し、Support\Arr/Str/Html、Log(PSR-3 v3 自前実装) | DR-14, 16, 19 | 00, 02 |
 | 08 | [`08-extensions.md`](./08-extensions.md) | 拡張 3 パッケージ: thumbnail(署名付き URL)/ settings-page / ja-toolkit(日本語サイト対応のオプトインモジュール) | DR-10, 15, 20 | 00, 01, 02, 05(settings-page) |
 | 09 | [`09-acf-bridge.md`](./09-acf-bridge.md) | acf-json 真実源、コードジェネレータ、AcfMetaStorage、CI ドリフト検知、重複キーエラー | DR-06, 18 | 00, 02, 04 |
 | 10 | [`10-quality.md`](./10-quality.md) | PHPStan / php-cs-fixer / PHPUnit 2 層 / wp-env / GitHub Actions / composer スクリプト体系 | DR-12 | 00, 01 |
@@ -45,14 +45,14 @@
 - **02(Kernel)が全機能文書の土台**。03〜06 のコンポーネント(エンティティ・メタ・フォーム・Model)はすべて 02 の Discovery / Container / Attribute 機構に登録される側であり、`ComponentAttributeInterface` 契約と初期化タイミング表は 02 が一元的に確定する。
 - **04(Meta)と 09(acf-bridge)は DR-18 のコントラクト**(`MetaStorageInterface` の has()/get() 分離、`#[UseMetaStorage]`)で結合する。インターフェース定義は 04 が持ち、09 はその実装者。09 が 04 の API を変更することはできない。
 - **08 の settings-page は 05(Form)のクライアント**。Form 層の公開 API のみを使う。
-- **07 の ActionRouter / actions 規約は旧 iwf2b の `actions/` 規約の直接踏襲**(DR-19)。ActionRouter の boot 時生成・`template_include` 登録は 02、dispatch 正準仕様・actions ファイル規約・View 変数バッグの意味論は 07 が定義する(2 文書で役割分担)。
+- **テンプレート前処理は、テンプレートの先頭で app 層の前処理クラスを明示的に呼ぶ**(DR-19)。前処理クラスの規約は 07、Kernel がテンプレート階層に介入しないこと(テンプレートのフックに何も登録しない)は 02 が定義する(2 文書で役割分担)。
 - **11(AI 資料)は全文書の写像、12(ロードマップ)は全文書を版ごとの実装順序へ写像したもの**であり、終盤に読む。
 
 ## 推奨読書順
 
 1. **まず `00-overview.md` を全文読む**。これで設計原則・DR・正準用語・全体像が頭に入る。
 2. **`01-architecture.md`**(器の形)→ **`02-kernel.md`**(心臓部)。この 2 文書が他のすべての前提になる。
-3. **機能文書を 03 → 04 → 05 → 06 → 07 の順**で読む(エンティティ → メタ/オプション → フォーム → Model → Support/View/actions 規約)。
+3. **機能文書を 03 → 04 → 05 → 06 → 07 の順**で読む(エンティティ → メタ/オプション → フォーム → Model → Support/View/テンプレート前処理)。
 4. **拡張文書 08 → 09**(コアに含めない付帯機能・ACF 統合)。
 5. **品質・AI 資料 10 → 11**。
 6. **最後に `12-implementation-plan.md`** を読み、どの版でどのタスクを行うかを把握する。

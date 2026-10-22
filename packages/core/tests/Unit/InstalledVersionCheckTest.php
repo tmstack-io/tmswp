@@ -82,7 +82,7 @@ final class InstalledVersionCheckTest extends UnitTestCase
 
     public function testBootPassesWithTheInstalledPackagesOfThisRepository(): void
     {
-        $kernel = Kernel::boot(KernelConfig::theme($this->appDir('version-match'), 'Example\Tests\VersionMatch' . uniqid(), true, false));
+        $kernel = Kernel::boot(KernelConfig::theme($this->appDir('version-match'), 'Example\Tests\VersionMatch' . uniqid(), true));
 
         self::assertSame($kernel, Kernel::get($kernel->config()->appNamespace));
     }
@@ -98,7 +98,7 @@ final class InstalledVersionCheckTest extends UnitTestCase
         $namespace = 'Example\Tests\VersionMismatch' . uniqid();
 
         try {
-            Kernel::boot(KernelConfig::theme($this->appDir('version-mismatch'), $namespace, false, false));
+            Kernel::boot(KernelConfig::theme($this->appDir('version-mismatch'), $namespace, false));
             self::fail('KernelException was not thrown');
         } catch (KernelException $exception) {
             self::assertStringContainsString('do not match the loaded core ' . Kernel::VERSION . ": 0.1.0 at {$vendor}/composer/../tmswp/core", $exception->getMessage());

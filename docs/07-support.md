@@ -2,18 +2,19 @@
 
 ## 目的
 
-TMSWP コアのうち、テンプレート読み込みヘルパ(`View\Template`)、actions ディスパッチャ(`View\ActionRouter` / `View\View` / `View\NotFound` / `tms_var()` ヘルパ)、汎用ユーティリティ(`Support\Arr` / `Support\Str` / `Support\Html`)、ロギング基盤(`Log\Log` / `Log\LoggerRegistry` / `Log\SimpleLogger` / `tms_log()` ヘルパ)の完全仕様を定義する。
+TMSWP コアのうち、テンプレート読み込みヘルパ(`View\Template`)、テンプレート前処理の明示呼び出しの規約、汎用ユーティリティ(`Support\Arr` / `Support\Str` / `Support\Html`)、ロギング基盤(`Log\Log` / `Log\LoggerRegistry` / `Log\SimpleLogger` / `tms_log()` ヘルパ)の完全仕様を定義する。
 
 本章のコンポーネントは「WordPress 標準のテーマ構築手法を一切壊さない」絶対原則(要件3)の最前線である。テンプレート層には特殊処理を持ち込まず、`get_template_part()` と同型の発想・WP 5.5+ の `$args` 受け渡し互換の発想だけで構成する。
 
 ## スコープ(対象パッケージ)
 
 - `packages/core` (tmswp/core) のうち以下の名前空間:
-  - `TMSWP\Core\View\` … `Template`, `TemplateLocator`, `ActionRouter`, `View`, `NotFound`
+  - `TMSWP\Core\View\` … `Template`, `TemplateLocator`
   - `TMSWP\Core\Support\` … `Arr`, `Str`, `Html`
   - `TMSWP\Core\Log\` … `Log`, `LoggerRegistry`, `LogChannel`, `ScopedLog`, `SimpleLogger`
   - `TMSWP\Core\Exception\` のうち本章が定義する例外: `TemplateNotFoundException`, `InvalidTemplateSlugException`, `UnknownLogChannelException`, `InvalidArgumentException`
-  - グローバルヘルパ: `tms_var()`, `tms_log()` (`packages/core/src/functions.php`)
+  - グローバルヘルパ: `tms_log()` (`packages/core/src/functions.php`)
+  - テンプレート前処理の明示呼び出しの規約(app 層の前処理クラス。FW のクラスは持たない。§1A)
 
 ランタイム依存は `psr/log ^3` のみ(DR-14)。`Support\Arr` / `Support\Str` の大部分と `Log` のディスパッチロジックは WP 非依存の純 PHP とし、WP 関数呼び出し(`esc_attr` / `wp_date` / `wp_mkdir_p` / `get_stylesheet_directory` 等)は本章で明示する箇所に限定する。
 
@@ -200,326 +201,96 @@ return (string) ob_get_clean();
 
 ---
 
-## 1A. View\ActionRouter — actions ディスパッチャ
+## 1A. テンプレート前処理の明示呼び出し
 
 ### 1A.1 役割
 
-WP のテンプレート階層が確定したあと、本描画が始まる前に、**テンプレートと同名の `actions/{テンプレート相対パス}.php` ファイル**でテンプレート単位のデータ準備(クエリ取得・フォーム駆動・404 判定)を行う規約を、**WP 標準テンプレートフローを一切壊さずに**提供するディスパッチャ。旧 iwf2b の `actions/{テンプレート名}.php` 規約(T04・T05・T06 で15案件中に定型化)を直接踏襲し、旧機構の4つの問題(テンプレート階層複製・`$GLOBALS` 展開・`exit` バイパス・`load_global`)を排した形である(DR-19)。
+テンプレート単位の前処理(表示する値の用意・フォームの駆動・PRG リダイレクト)は、テンプレートの先頭で型付きの前処理クラスを明示的に呼んで行う(DR-19)。前処理クラスは app 層のクラスであり、FW は前処理のための基底クラス・属性・フック登録・値の受け渡しの機構を持たない。テンプレートの選択は WordPress 標準のテンプレート階層のままで、Kernel は `template_include` 等のテンプレートのフックに何も登録しない(02-kernel §3.7、原則1)。
 
-旧機構は `template_include`(priority 100)を乗っ取り、`load_global()` で `$wp_query->query_vars` をグローバル展開し、action ファイルを include し、`exit` で WP 標準ローダをバイパスしていた(DR-10/DR-16 で廃止確定)。`ActionRouter` はその4重の WP 標準破壊を排しつつ、「テンプレートからロジックを分離する」価値だけを残す。データの受け渡しは `extract()` でなく `View` 変数バッグ(§1B)経由とする。
+- どのテンプレートで何が実行されるかを、テンプレートのファイルだけで追える。フックでテンプレートを判定して前処理を実行しない。
+- テンプレートが使う値の型は、前処理クラスのプロパティの型で PHPStan が検査する。テンプレートで `@var` を書いて型を補わない。
 
-**やらないこと(絶対原則の担保)**: `template_include` が受け取ったテンプレートの **差し替え・加工**(常に無加工で返す。404 強制時のみ WP 標準の `get_404_template()` へ差し替える)、`exit` による標準ローダのバイパス(actions が行う `exit` は `wp_safe_redirect` 直後の出力前リダイレクトのみ)、グローバル変数の展開・注入、`extract()`、独自テンプレート解決。`actions/` を1つも置かないテーマも完全に動作する(完全オプトイン)。
-
-`actions/` ディレクトリは**テーマルート直下の `'actions'` 固定**(リネーム不可)。配置決定木・静的検査(`bin/tms-check`)・rules/ が無設定で同一前提を共有するための決定的規約である。
-
-### 1A.2 生成と Kernel 統合(テーマ形態専用)
-
-`ActionRouter` は **Kernel がテーマ形態でブートしたとき**(`KernelConfig::theme(...)`、かつ後述 `actions: true` のとき)に生成され、`template_include` フィルタ(priority 100)へ `dispatch` を登録する(Kernel 文書 §3.7)。`#[AsHook]` のような属性探索は使わない(actions はクラスでなくファイル規約であるため、Discovery の収集対象ではない)。
-
-```
-ActionRouter の生成・登録(Kernel boot 手順):
-  if config.context !== KernelContext::Theme: return   // プラグイン形態では生成しない(下記)
-  if config.actions !== true:        return            // KernelConfig::theme(actions: false) で無効化
-  router = new ActionRouter()
-  add_filter('template_include', [router, 'dispatch'], 100, 1)
-```
-
-- **`KernelConfig` の新パラメータ `actions: bool = true`**。テーマで actions 規約を使わない・別機構を使う場合は `KernelConfig::theme(actions: false)` で `ActionRouter` の生成自体を抑止できる。
-- **priority 100** は「他プラグインの template フィルタ適用後の確定パスを見る」のに十分であり、9999 のような極端値による無用な順位競争を避ける。
-- **プラグイン形態では `ActionRouter` を生成しない。** プラグインはトップレベルテンプレートを供給する機構を持たないため `template_include` への介入が意味を持たない。プラグイン側のテンプレート前処理に相当するロジックは `#[AsHook]` クラスへ書く。
-
-### 1A.3 クラスシグネチャ
+### 1A.2 前処理クラスの規約
 
 ```php
 <?php
 
 declare(strict_types=1);
 
-namespace TMSWP\Core\View;
+namespace App\Page;
 
-/**
- * actions ディスパッチャ。テンプレートと同名の actions/ ファイルを template_include で起動し、
- * 戻り値契約(array / NotFound / null)に従って View へ変数を積む。
- * Kernel がテーマ形態のとき生成し、template_include(priority 100)へ dispatch を登録する。
- */
-final class ActionRouter
+use App\Form\ContactForm;
+use TMSWP\Core\Form\Form;
+use TMSWP\Core\Form\FormResult;
+use TMSWP\Core\Form\FormStep;
+
+/** page-contact.php の前処理: お問い合わせフォームを駆動し、テンプレートが使う値を返す */
+final readonly class ContactPage
 {
-    /**
-     * actions ディレクトリ名は 'actions' 固定(リネーム不可)。
-     * 配置決定木・rules/ 文書・bin/tms-check が無設定で同じ前提を共有するための決定的規約。
-     */
-    private const ACTIONS_DIR = 'actions';
+    private function __construct(
+        public Form $form,
+        public FormResult $result,
+    ) {}
 
-    /** 他プラグインの template フィルタ適用後の「確定パス」を見るための優先度(§1A.2) */
-    public const PRIORITY = 100;
+    public static function handle(): self
+    {
+        $form = ContactForm::create();
+        $result = $form->handle();
 
-    public function __construct() {}
+        if ($result->step === FormStep::Complete) {
+            wp_safe_redirect(home_url('/contact/thanks/'), 303);
+            exit;   // 00-overview.md 原則1の例外(PRGのリダイレクト直後)
+        }
 
-    /**
-     * actions ファイルから 404 を強制するためのシグナル値を返す。
-     * actions ファイルでは return \TMSWP\Core\View\ActionRouter::notFound(); と書く。
-     */
-    public static function notFound(): NotFound;
-
-    /**
-     * 確定したテンプレートパスに対応する actions ファイルを実行する。
-     *
-     * template_include の先行フィルタ(priority 100 より前)は false / null 等の
-     * 非文字列を返し得る(コアは if ($template) で受けるだけ)ため、string 型宣言にせず
-     * mixed 受け + 内部正規化とする。
-     *
-     * @param mixed $template 先行フィルタの戻り値(コア契約上は非文字列もあり得る)。
-     * @return mixed 原則そのまま返す(404 強制時のみ 404 テンプレートに差し替え)。
-     */
-    public function dispatch(mixed $template): mixed;
+        return new self($form, $result);
+    }
 }
 ```
 
-### 1A.4 dispatch の正準手順(確定)
-
-`template_include($template)` フィルタが発火したときの正準手順:
-
-```
-dispatch(mixed $template): mixed
-  1. is_string($template) でない・空文字なら $template を素通しで返す
-     (先行フィルタは false/null 等の非文字列を返し得るため mixed 受け+内部正規化)
-  2. 確定テンプレートがテーマルート配下かを判定し、相対パスを得る:
-       array_unique([get_stylesheet_directory(), get_template_directory()]) を子→親の順に走査し、
-       str_starts_with($template, $root . '/') なら relative = substr($template, strlen($root) + 1)。
-     どのテーマルート配下でもない(プラグイン由来等のテンプレート)は $template を素通しで返す
-  3. {テーマルート}/actions/{relative} を子テーマ→親テーマの順に file_exists 探索し、
-     最初に存在したものを採用する。無ければ $template を素通しで返す
-     (完全オプトイン: actions を1つも置かないテーマも完全動作)
-  4. static クロージャ内で include する(可視変数は $wp_query のみに固定):
-       // ファイルパスは func_get_arg() 経由で渡し、actions スコープに変数として漏らさない
-       // (Template::includeIsolated(§1.5)と同一イディオム)
-       $result = (static function (\WP_Query $wp_query) {
-           return include func_get_arg(1);
-       })($GLOBALS['wp_query'], $action);
-     → $this や Router 内部変数への偶発アクセス・上書きを構造的に遮断し、
-        actions から見える変数が本当に $wp_query のみになる
-  5. WP_DEBUG かつ !is_admin() のとき、使用 actions ファイルパスを wp_footer で
-     HTML コメント出力する(子テーマ解決の無音スキップ調査用):
-       printf("\n<!-- tms:action %s -->\n", esc_html(str_replace(ABSPATH, '', $action)));
-  6. 戻り値契約(下記 §1A.5)で分岐:
-       array            → View::set($result)(マージ)
-       NotFound         → 404 強制(下記 §1A.6)し、404 テンプレートを返す
-       null / int(1)    → no-op(int(1) は return 省略時の include 戻り値)
-       それ以外         → WP_DEBUG 時のみ wp_trigger_error(E_USER_WARNING)で警告
-  7. 404 強制でない全経路で $template を常に無加工で返す
-     (WP 標準テンプレート解決を一切変更しない=絶対原則)
-```
-
-`int(1)` の特例: `include` は戻り値の `return` を省略したファイルに対し `int(1)` を返す。これを「`return` を書かない no-op」として許容するため、戻り値契約警告から除外する。
-
-### 1A.5 戻り値契約(actions ファイルの return)
-
-| actions の return | ActionRouter の挙動 |
+| 項目 | 規約 |
 |---|---|
-| `array`(連想配列) | `View::set($result)` でマージ。テンプレート側は `tms_var('key')` / `View::get('key')` で読む |
-| `\TMSWP\Core\View\ActionRouter::notFound()` | 404 を強制(§1A.6)。404 テンプレートへ差し替えて返す |
-| `null`(明示)/ `return` 省略(`int(1)`) | no-op。`$template` を無加工で返す(データ準備不要・副作用のみの actions) |
-| 上記以外(string・object 等) | WP_DEBUG 時のみ `wp_trigger_error(E_USER_WARNING)` で「戻り値は array / ActionRouter::notFound() / null のみ」と警告。`$template` は無加工で返す |
+| 置き場 | テーマの `app/Page/<Name>Page.php`。テンプレート1つにつき1クラス。前処理の要らないテンプレートには作らない |
+| クラス | `final` で、コンストラクタは `private`。テンプレートが使う値を readonly のプロパティで宣言する(`final readonly class`、または `final class` と `public readonly` のプロパティ) |
+| 入口 | `public static function handle(): self`。前処理を行い、用意した値を `new self(...)` で返す |
+| 入力 | WordPress がテンプレートを選んだ時点のメインクエリ(`get_queried_object()` 等)とリクエスト。表示する投稿を別の投稿に差し替えない |
+| 出力 | 戻り値の DTO だけ。`echo` 等の出力・グローバル変数への代入をしない |
+| リダイレクト | PRG の `wp_safe_redirect()` の直後に限り `exit` してよい(00-overview 原則1の例外) |
+| 404 | 前処理で `$wp_query->set_404()` を呼んで 404 に切り替えない。テンプレートの選択後では、ステータス行とテンプレートが食い違う。404 かどうかは WordPress のメインクエリに任せる |
+| エラー | 想定外のテンプレートから呼ばれた等の呼び出しの誤りは例外にする。データが無いこと(関連記事が0件等)はエラーにせず、空の値を DTO に入れる(00-overview §5.6) |
 
-### 1A.6 404 強制の手順(確定)
+### 1A.3 テンプレートからの呼び出し
 
-`actions` が `ActionRouter::notFound()` を返したとき:
-
-```
-404 強制:
-  1. $GLOBALS['wp_query']->set_404();
-  2. headers_sent() が false のとき(=まだ出力開始前):
-       status_header(404); nocache_headers();
-     headers_sent() が true(出力開始済み)のとき:
-       WP_DEBUG なら wp_trigger_error(__METHOD__,
-         '出力開始後のため 404 ステータス行を上書きできません。先行プラグインの出力タイミングを確認してください。',
-         E_USER_WARNING) で可視化する
-       (status_header()/nocache_headers() は内部で headers_sent() を確認し送信済みなら黙って no-op するため、
-        失敗を不可視にしないためのガード)
-  3. $template404 = get_404_template();
-     return $template404 !== '' ? $template404 : get_index_template();
-     // 404.php 不在テーマでは get_404_template() が '' を返し、template-loader.php は
-     // 空文字を include しないため白画面になる。get_index_template() へフォールバックして防止する
-```
-
-`wp_trigger_error()` は WP 6.4+ の標準 API(`_doing_it_wrong()` の後継。`E_USER_WARNING` を発する)を用いる。
-
-### 1A.7 エッジケースとエラー時挙動(確定)
-
-| 状況 | 挙動 |
-|---|---|
-| 非文字列の `$template`(先行フィルタが `false`/`null` 等) | 素通し。`dispatch` は関与しない(手順1) |
-| テーマ外テンプレート(プラグイン由来等、テーマルート配下でない) | 素通し。テーマ形態 Router はテーマ配下の確定テンプレートのみ担当(手順2) |
-| `actions/` ファイルが無い | 素通し。完全オプトイン(手順3) |
-| 子テーマと親テーマの双方に同名 `actions` ファイル | 子テーマ優先(子→親の順で最初に存在したものを採用。手順3)。WP_DEBUG 時は採用ファイルを `wp_footer` の HTML コメントで可視化(手順5) |
-| `actions` が `array` を返す | `View::set()` でマージ。複数 actions(本ディスパッチは1テンプレ1ファイルだが)・複数キーが暗黙に潰し合わない |
-| `actions` が `return` を省略(副作用のみ) | `int(1)` を no-op として許容。`$template` 無加工 |
-| `actions` が string 等を返す | WP_DEBUG 時のみ警告。`$template` 無加工(本番は黙って無視) |
-| `actions` が `ActionRouter::notFound()` を返す | 404 強制(§1A.6)。`get_404_template()`(不在時 `get_index_template()`)を返す |
-| 404 強制時に `headers_sent()` が true | `set_404()` は行うが status_header/nocache_headers は no-op。WP_DEBUG 時のみ `wp_trigger_error` で可視化(§1A.6) |
-| `actions` 内で `wp_safe_redirect()+exit` | 許可。`template_include` は出力開始前のため安全(フォーム駆動の PRG リダイレクト等) |
-| `actions` 内で `echo` 等の出力・フック登録・`$wp_query->set_404()` 直呼び | 規約違反。WP_DEBUG 検知+`bin/tms-check` 静的検査で検出(§1C・10-quality.md)。404 は必ず `ActionRouter::notFound()` で表明する |
-| プラグイン形態の Kernel | `ActionRouter` を生成しない(§1A.2)。テンプレート前処理に相当するロジックは `#[AsHook]` へ |
-
----
-
-## 1B. View\View — View 変数バッグ
-
-### 1B.1 役割
-
-`actions` → ページテンプレート間の**専用データチャネル**。変数の保持のみを責務とし、ビューユーティリティ(文字列加工・HTML 生成)は一切持たない(それらは `Support\Str` / `Support\Html`)。`ActionRouter::dispatch` が actions の戻り値 `array` を `set()` でマージし、テンプレートが `get()`(またはヘルパ `tms_var()`)で読む。
-
-### 1B.2 クラスシグネチャ
+テンプレートの先頭、`get_header()` より前で1回だけ呼び、以降は戻り値のプロパティを読む。出力の前のため、リダイレクトとページキャッシュからの除外のヘッダ(05-form)が効く。
 
 ```php
 <?php
+/* Template Name: お問い合わせ */
 
 declare(strict_types=1);
 
-namespace TMSWP\Core\View;
+use App\Page\ContactPage;
 
-/**
- * actions → ページテンプレート間の View 変数バッグ。変数の保持のみを責務とし、
- * 加工・出力機能は持たない。ActionRouter が set()、テンプレートが get()/tms_var() で読む。
- */
-final class View
-{
-    /** @var array<string, mixed> */
-    private static array $vars = [];
+$vm = ContactPage::handle();   // 出力の前に1回だけ呼ぶ
 
-    /** 静的ユーティリティのためインスタンス化禁止 */
-    private function __construct() {}
-
-    /**
-     * View 変数を登録する(既存キーとマージ。全置換ではない)。
-     * 複数の書き込み元が暗黙に潰し合わないことを保証する。
-     *
-     * @param array<string, mixed> $vars
-     */
-    public static function set(array $vars): void;
-
-    /**
-     * View 変数を取得する。
-     * 未定義キーをデフォルト指定なし($default === null)で読むと WP_DEBUG 時のみ
-     * wp_trigger_error(E_USER_WARNING)で警告する(View 変数タイポの黙殺防止。
-     * 書き込み側の戻り値契約警告と対になる読み出し側の検査)。
-     * 意図的なデフォルト指定(View::get('x', []) 等)は警告しない。
-     *
-     * @param mixed $default 未定義時のデフォルト値。
-     */
-    public static function get(string $key, mixed $default = null): mixed;
-
-    /** 変数が定義済みかを返す(値が null でも存在すれば true)。 */
-    public static function has(string $key): bool;
-
-    /** @internal テスト用。変数バッグを空にする。 */
-    public static function reset(): void;
-}
+get_header();
+// 以降は $vm->form / $vm->result を読む
 ```
 
-### 1B.3 get() の未定義キー警告(確定)
-
-```
-get(string $key, mixed $default = null): mixed
-  if !array_key_exists($key, self::$vars):
-      if $default === null && WP_DEBUG:
-          wp_trigger_error(__METHOD__,
-              "未定義の View 変数 '{$key}' を参照しました。actions 側の return キーを確認してください。",
-              E_USER_WARNING)
-      return $default
-  return self::$vars[$key]
-```
-
-- 省略可能な変数は `View::get('key', $default)` とデフォルトを明示する規約(警告しない)。
-- `wp_trigger_error()` は WP 6.4+ の標準 API を用いる(`_doing_it_wrong()` の後継)。
-- これは**読み出し側のタイポ検出**であり、PHPStan max 方針(型の緩さの緩和策、§1D)の一部である。
-
-### 1B.4 データフローの二層規約(DR-9 相当)
+### 1A.4 データフローの二層規約
 
 | 層 | 経路 | 機構 |
 |---|---|---|
-| 第一層 | actions → ページテンプレート | `View`(`return array` → `tms_var()` / `View::get()`) |
-| 第二層 | ページテンプレート → パーツ | WP 標準の `get_template_part($slug, null, $args)` + `wp_parse_args` 受け口 |
+| 第一層 | 前処理クラス → ページテンプレート | `handle()` が返す DTO(`$vm`)の型付きのプロパティ |
+| 第二層 | ページテンプレート → パーツ | `Template::part($slug, $args)`(§1)か WP 標準の `get_template_part($slug, null, $args)` |
 
 **禁止事項(追跡経路を1本に保つための規約)**:
 
-- **パーツから `View::get()` / `tms_var()` を読むことは禁止**。追跡経路が2本(View 経由とパーツ引数経由)になり規約が崩れる。パーツが必要とする値は、ページテンプレートが `get_template_part()` の `$args` で明示的に渡し、パーツは冒頭で `wp_parse_args($args, [...])` のデフォルト付き受け口を宣言する。
+- **パーツから `handle()` を呼ぶことは禁止**。フォームの駆動やリダイレクトの副作用があり、追跡経路も2本になる。パーツが必要とする値は、ページテンプレートが `$args` で明示的に渡し、パーツは冒頭で受け口を宣言する(`@var array{...} $args` か `wp_parse_args($args, [...])` のデフォルト付き受け口)。
 - **パーツ内ループ変数に `$post` を使うことは禁止**。`load_template()` が `global $post` 等を展開するため、パーツのローカルで `$post` を上書きすると展開された global を壊す事故になる(独自名のループ変数を使う)。
 
-役割の整理: `View` クラス(本節)=第一層の変数バッグ(actions → ページテンプレート)、`Template::part()`(§1 の薄いテンプレートヘルパ)=第二層のパーツ描画(ページテンプレート → パーツ、`get_template_part` 同型)であり、両者は別物である。第二層は WP 標準の `get_template_part()` か `Template::part()` のいずれを使ってもよいが、いずれも値は `$args` で明示的に渡し、`View::get()`/`tms_var()` をパーツから読まない。
+### 1A.5 テンプレートを持たない文脈
 
----
-
-## 1C. View\NotFound — 404 シグナル値
-
-意味を持たない空のマーカークラス。`ActionRouter::notFound()` 経由でのみ生成し、actions が 404 を要求したことを表明するシグナル値として使う。
-
-```php
-<?php
-
-declare(strict_types=1);
-
-namespace TMSWP\Core\View;
-
-/**
- * actions ファイルが 404 を要求したことを示すシグナル値。
- * ActionRouter::notFound() 経由でのみ生成する。
- */
-final class NotFound {}
-```
-
-actions では `$wp_query->set_404()` を直呼びせず、必ず `return \TMSWP\Core\View\ActionRouter::notFound();` で 404 を表明する(直呼びは `bin/tms-check` 静的検査+WP_DEBUG 検知で禁止。§1A.7・10-quality.md)。`ActionRouter::dispatch` がこのシグナル値を受け取って §1A.6 の 404 手順(`set_404` + ステータス行差し替え + 404 テンプレートフォールバック)を一括で行う。
-
----
-
-## 1D. actions ファイルの規約と型の担保
-
-### 1D.1 actions ファイルの規約
-
-- **役割はデータ準備のみ**。`echo` 等の出力・フック登録・`$wp_query->set_404()` 直呼びは禁止(WP_DEBUG 検知+`bin/tms-check` 静的検査)。
-- **戻り値はテンプレートで使う値を連想配列リテラルで `return` する**(`return ['posts' => $posts, 'form' => $form];` 等)。`compact()` は使わない: `extract()` 禁止と対称の規約であり、変数名の文字列契約を排して `'form' =>` と `tms_var('form')` が grep で1対1に対応し、PHPStan の array shape 推論も効く(リネーム安全・静的解析可能)。
-- **404 は必ず** `return \TMSWP\Core\View\ActionRouter::notFound();` で表明する。
-- **フォーム駆動・リダイレクト**(`wp_safe_redirect()` + `exit`)は許可(`template_include` は出力開始前)。
-- ファイル冒頭の docblock に `@var \WP_Query $wp_query` を書く規約(可視変数 `$wp_query` の型を明示)。
-- ファイルパスはテンプレートの**テーマ相対パスをミラー**する(例: `single-event.php` → `actions/single-event.php`、`parts/...` ではなくトップレベルテンプレート)。
-
-### 1D.2 型の緩さの緩和策(PHPStan max 方針との整合)
-
-actions/テンプレート/パーツは PHP ファイル include 規約であるため、変数の型がコードから追えない弱点がある。これを次の3点で担保する(クラスの `public readonly` プロパティ型に相当する型保証を、ファイル規約のまま得るための策)。
-
-1. **テンプレート側の `@var` 注釈規約**: `View::get()` / `tms_var()` の戻り値は `mixed` であるため、テンプレートでは `/** @var \App\Form\ContactForm $form */` 形式の `@var` 注釈を書く規約を rules/ に明記する。
-2. **`View::get` の未定義キー WP_DEBUG 警告**(§1B.3): 読み出し側のキー名タイポを実行時に検出する。
-3. **軽量静的検査 `bin/tms-check`**(コア同梱・WP 非依存の素の PHP スクリプト)を `composer qa` へ組み込む。検査項目は次の3つ(検査仕様の正準定義は 10-quality.md):
-   - (1) `actions/` 配下の `echo` / `print` 等の出力トークン
-   - (2) 孤児 actions(対応する同名テンプレートが存在しない=テンプレート改名後に残った、無音で実行されなくなるファイル)
-   - (3) `$wp_query->set_404()` 直呼び
-
-### 1D.3 グローバルヘルパ tms_var()
-
-`packages/core/src/functions.php`(composer.json の `autoload.files` で読み込み。ファイル全体は §5.6)の `tms_var()`:
-
-```php
-/**
- * View 変数バッグの値を取得する。View::get() への委譲。
- *
- * テンプレートでは @var 注釈で型を明示する:
- *   $form = tms_var('form');           // actions が return ['form' => $form] で用意した値
- *   $related = tms_var('related', []); // 省略可能な変数は既定値を明示する(未定義の警告を出さない)
- *
- * @param string $key actions ファイルが返した配列のキー
- * @param mixed $default キーが無いときに返す値
- *
- * @return mixed キーの値。キーが無ければ $default
- */
-function tms_var(string $key, mixed $default = null): mixed
-{
-    return View::get($key, $default);
-}
-```
-
-- `function_exists` ガードで囲まずに定義する(理由は §5.6)。
-- `tms_` 接頭辞ヘルパ予約表(00-overview.md / AGENTS.md)に `tms_var` を追加する。
-- 第二層(パーツ)からは呼ばない(§1B.4 の禁止事項)。
+プラグインはトップレベルのテンプレートを供給しないため、前処理クラスを使わない。プラグインのショートコード等、テンプレートの外でフォームを駆動する必要がある場合は、出力の前のフックで行う(05-form §5)。フックは `#[AsHook]` クラスの `#[Action]` メソッドで登録する(02-kernel §5)。
 
 ---
 
@@ -1140,24 +911,6 @@ declare(strict_types=1);
 
 use TMSWP\Core\Log\Log;
 use TMSWP\Core\Log\LoggerRegistry;
-use TMSWP\Core\View\View;
-
-/**
- * View 変数バッグの値を取得する。View::get() への委譲。
- *
- * テンプレートでは @var 注釈で型を明示する:
- *   $form = tms_var('form');           // actions が return ['form' => $form] で用意した値
- *   $related = tms_var('related', []); // 省略可能な変数は既定値を明示する(未定義の警告を出さない)
- *
- * @param string $key actions ファイルが返した配列のキー
- * @param mixed $default キーが無いときに返す値
- *
- * @return mixed キーの値。キーが無ければ $default
- */
-function tms_var(string $key, mixed $default = null): mixed
-{
-    return View::get($key, $default);
-}
 
 /**
  * 呼び出したファイルの Kernel のログのレジストリを取得する。Log::registry() への委譲。
@@ -1276,34 +1029,46 @@ if (Template::exists('parts/campaign-banner')) {
 }
 ```
 
-## actions/ によるテンプレート前処理(T04 の actions/ 相当)
+## テンプレート前処理の明示呼び出し(T04 の前処理の相当)
 
-旧 T04 は `actions/tmpl-contact.php`(問い合わせ固定ページ)でロジックを分離し、フォームの3画面遷移を駆動していた。新 FW は**テンプレート同名の `actions/{相対パス}.php` ファイル**で同等を表現する。テンプレート側はデータの読み出しを `tms_var()` で行う以外、素の WP テンプレートのままである。
+旧 T04 は問い合わせ固定ページのテンプレートからロジックを分離し、フォームの3画面遷移を駆動していた。新 FW はテンプレートの先頭で型付きの前処理クラスを明示的に呼んで同等を表現する(§1A)。テンプレートは前処理クラスが返した値を読む以外、素の WP テンプレートのままである。
 
-### A. 関連記事の準備(actions/single-event.php — ファイル全文)
+### A. 関連記事の準備(app/Page/EventSinglePage.php)
 
 ```php
 <?php
-/**
- * single-event.php の前処理: 関連イベント3件を準備する。
- * 戻り値契約: array を返すと View にマージされる。
- *
- * @var \WP_Query $wp_query メインクエリ(読み取り専用として扱う)
- */
 
 declare(strict_types=1);
 
+namespace App\Page;
+
 use App\Post\EventPost;
+use LogicException;
+use WP_Post;
 
-$related = EventPost::get_posts([
-    'posts_per_page' => 3,
-    'post__not_in'   => [get_the_ID()],
-]);
+/** single-event.php の前処理: 関連イベント3件を用意する */
+final readonly class EventSinglePage
+{
+    /** @param list<WP_Post> $related */
+    private function __construct(
+        public array $related,
+    ) {}
 
-return ['related' => $related];
+    public static function handle(): self
+    {
+        $queried = get_queried_object();
+        $event = $queried instanceof WP_Post ? EventPost::get($queried) : null;
+
+        if ($event === null) {
+            throw new LogicException('EventSinglePage::handle() must be called from the event single template.');
+        }
+
+        return new self(EventPost::query()->idNotIn($event->ID)->limit(3)->get());
+    }
+}
 ```
 
-テンプレートは素の WP テンプレートのまま、`tms_var()` で読む。`single-event.php`:
+テンプレートは先頭で前処理クラスを呼び、戻り値のプロパティを読む。`single-event.php`:
 
 ```php
 <?php
@@ -1311,8 +1076,10 @@ return ['related' => $related];
 
 declare(strict_types=1);
 
-/** @var list<\WP_Post> $related */
-$related = tms_var('related', []); // actions/single-event.php が用意(省略可能なのでデフォルト明示)
+use App\Page\EventSinglePage;
+use TMSWP\Core\View\Template;
+
+$vm = EventSinglePage::handle();   // 出力の前に1回だけ呼ぶ
 
 get_header();
 ?>
@@ -1323,127 +1090,32 @@ get_header();
     <?php endwhile; ?>
 </main>
 <?php
-// 第二層: パーツへは get_template_part の $args で明示的に渡す(View::get/tms_var はパーツから読まない)
-get_template_part('parts/event-related', null, ['related' => $related]);
+// 第二層: パーツへは $args で明示的に渡す(パーツから handle() を呼ばない)
+Template::part('parts/event-related', ['related' => $vm->related]);
 get_footer();
 ```
 
-パーツは冒頭で `wp_parse_args` のデフォルト付き受け口を宣言する。`parts/event-related.php`:
+パーツは冒頭で `$args` の受け口を宣言する。`parts/event-related.php`:
 
 ```php
 <?php
 /**
  * 関連イベント一覧パーツ。
- * @var array $args get_template_part() の第3引数
+ * @var array{related: list<\WP_Post>} $args
  */
 
 declare(strict_types=1);
-
-// パーツは必ず冒頭でデフォルト付きの受け口を宣言する。tms_var() は使わない(§1B.4)。
-['related' => $related] = wp_parse_args($args, ['related' => []]);
 ?>
-<?php foreach ($related as $event) : // ループ変数に $post は使わない(load_template の global 展開上書き事故防止) ?>
+<?php foreach ($args['related'] as $event) : // ループ変数に $post は使わない(load_template の global 展開上書き事故防止) ?>
     <a href="<?= esc_url((string) get_permalink($event)) ?>"><?= esc_html(get_the_title($event)) ?></a>
 <?php endforeach; ?>
 ```
 
-### B. フォーム3画面遷移(actions/page-contact.php — 正準形)
+### B. フォーム3画面遷移
 
-旧 T04 の `actions/tmpl-contact.php` 相当。フォーム駆動とリダイレクト(PRG)を actions で行う。`template_include` は出力開始前のため `wp_safe_redirect()+exit` が安全に使える。`actions/page-contact.php`:
+フォームの駆動と PRG リダイレクトも、前処理クラスの `handle()` で行う(§1A.2 の `ContactPage`)。テンプレートを含む完全な形は 05-form.md の利用例 §2A が定義する。
 
-```php
-<?php
-/**
- * page-contact.php の前処理: お問い合わせフォームを駆動する。
- *
- * @var \WP_Query $wp_query
- */
-
-declare(strict_types=1);
-
-use App\Form\ContactForm;
-use TMSWP\Core\Form\FormStep;
-
-$form   = ContactForm::create();
-$result = $form->handle();   // バインド+CSRF+検証+状態遷移(フォーム文書 §handle)
-
-// 完了時はサンクスページへリダイレクト(PRG)。template_include は出力開始前のため exit は安全
-if ($result->step === FormStep::Complete) {
-    wp_safe_redirect(home_url('/contact/thanks/'));
-    exit;
-}
-
-return ['form' => $form, 'result' => $result];
-```
-
-テンプレートは素の WP 固定ページテンプレートのまま、`tms_var()` で `Form` / `FormResult` を読む。`page-contact.php`:
-
-```php
-<?php
-/* Template Name: お問い合わせ — 通常の WP ページテンプレート。FW は階層を一切変更しない */
-
-declare(strict_types=1);
-
-use TMSWP\Core\Form\FormStep;
-
-/** @var \App\Form\ContactForm $form */
-$form = tms_var('form');
-/** @var \TMSWP\Core\Form\FormResult $result */
-$result = tms_var('result');
-
-get_header();
-?>
-<?php if ($result->step === FormStep::Confirm) : ?>
-    <?= $form->open() ?>
-    <dl>
-        <?php foreach ($form->fields() as $view) : ?>
-            <dt><?= $view->label() ?></dt><dd><?= $view->display() ?></dd>
-        <?php endforeach; ?>
-    </dl>
-    <button type="submit" name="_step" value="back">入力に戻る</button>
-    <button type="submit" name="_step" value="submit">送信する</button>
-    <?= $form->close() ?>
-<?php else : ?>
-    <?= $form->open(['class' => 'contact-form']) ?>
-    <?= $form->field('name')->input(['class' => 'w-full']) ?>
-    <?= $form->field('name')->errors() ?>
-    <?= $form->field('email')->input(['type' => 'email']) ?>
-    <?= $form->field('email')->errors() ?>
-    <!-- ...他フィールド。HTML 構造はテンプレートの自由 -->
-    <button type="submit" name="_step" value="confirm">入力内容を確認する</button>
-    <?= $form->close() ?>
-<?php endif; ?>
-<?php get_footer(); ?>
-```
-
-### C. 404 強制(actions/page-campaign.php)
-
-スラッグからエンティティを解決し、見つからなければ 404 を強制する。`$wp_query->set_404()` は直呼びせず、必ず `ActionRouter::notFound()` を返す。
-
-```php
-<?php
-/**
- * キャンペーン詳細ページの前処理: スラッグからキャンペーンを解決する。
- * 見つからなければ 404 を強制する。
- *
- * @var \WP_Query $wp_query
- */
-
-declare(strict_types=1);
-
-use App\Post\CampaignPost;
-use TMSWP\Core\View\ActionRouter;
-
-$campaign = CampaignPost::get_post(['name' => get_query_var('campaign_slug')]);
-
-if (!$campaign) {
-    return ActionRouter::notFound(); // set_404 + ステータス行 + 404.php(不在時 index.php)へ差し替え
-}
-
-return ['campaign' => $campaign];
-```
-
-要点: いずれの例もテンプレートには `template_include` 介入・`exit`・`extract()`・グローバル変数展開が一切なく、WP 標準テンプレート階層のままである。ロジックは同名 `actions/` ファイルに分離され、データは `View` 変数バッグ(`return array` → `tms_var()`)経由で型注釈つきに渡る(旧 `load_global()` + `extract()` の暗黙渡しを廃止)。`actions/common.php`(全テンプレート共通)はサポートしない(Keel 準拠。グローバルナビ用タームの取得等の共通ロジックは `app/Hook` クラス、またはパーツ内のモデルヘルパ直読みへ置く)。
+要点: いずれの例もテンプレートには `template_include` 介入・`extract()`・グローバル変数展開が一切なく、WP 標準テンプレート階層のままである。ロジックは前処理クラスに分離され、値は DTO の型付きのプロパティで渡る(旧 `load_global()` + `extract()` の暗黙渡しは持たない)。全テンプレートに共通する前処理は持たない(グローバルナビ用タームの取得等の共通ロジックは `app/Hook` クラス、またはパーツ内のモデルヘルパ直読みへ置く)。
 
 ## ロギング
 
@@ -1502,8 +1174,8 @@ $lead    = Str::excerpt(get_the_content(), 120);
 
 # 旧 iwf2b からの設計根拠(簡潔に)
 
-- **View / ActionRouter**: 旧 `Iwf2b\View` は `template_include` priority 100 での乗っ取り+`load_global()`(`$wp_query->query_vars` の全グローバル展開)+`extract()`+`exit` という4重の WP 標準破壊を抱えていた(DR-10/DR-16 で廃止確定)。実利用52参照のうちテンプレート分割の本質的価値は `View::element()`(T11 等のパーシャル描画)とテンプレート前処理(`actions/` 規約)であり、前者は WP 5.5+ の `get_template_part($slug, $name, $args)` と同型の `Template::part($slug, $args)`(§1)として、後者は `ActionRouter` + `View` 変数バッグ(§1A・§1B)として再設計した。
-- **ActionRouter(actions/ 規約)**: 旧 `actions/{テンプレート名}.php` 規約(T04・T05・T06 で15案件中に定型化)は、テンプレートからロジックを分離する現場価値が高い一方、その実現手段が上記 View 乗っ取り機構そのものであり、4つの問題(テンプレート階層複製・`$GLOBALS` 展開・`exit` バイパス・`load_global`)を抱えていた。本層はこの価値(ロジック分離)だけを残し害を全廃する: `template_include`(priority 100)を購読するが `$template` を**常に無加工で返す**(404 強制時のみ WP 標準の `get_404_template()` へ差し替える)ため WP 標準解決を一切変更せず、actions が見える変数は `$wp_query` のみ(static クロージャ+`func_get_arg()` include。`Template::includeIsolated` と同一イディオム)、データは `return array` → `View` 変数バッグ → `tms_var()` の追跡可能な経路で渡す(`extract()`/`load_global()` 廃止)。actions の戻り値の正準形は明示的な連想配列リテラルとし `compact()` を使わない(`extract()` 禁止との対称性)。404 は `ActionRouter::notFound()` で表明し `set_404()` 直呼びを禁ずる。クラス形式のコントローラ(属性付きの基底クラス)ではなくテンプレート同名ファイルの規約とするのは、(1) 旧 iwf2b の現場規約が**テンプレート同名ファイル**であり15案件の定着パターンを直接踏襲する方が学習コストが低い、(2) 属性探索・Initializer・Runner・専用例外という機構がファイル include 規約に対して過大、の2点による(DR-19)。型の担保は `public readonly` プロパティの代わりに、テンプレート側 `@var` 注釈規約+`View::get` 未定義キー警告+`bin/tms-check` 静的検査(§1D)で行う。`actions/common.php`(全テンプレート共通)はサポートしない(共通ロジックは `app/Hook` クラスまたはパーツ内モデルヘルパ直読みへ)。
+- **View**: 旧 `Iwf2b\View` は `template_include` priority 100 での乗っ取り+`load_global()`(`$wp_query->query_vars` の全グローバル展開)+`extract()`+`exit` という4重の WP 標準破壊を抱えていた(DR-10/DR-16 で廃止確定)。実利用52参照のうちテンプレート分割の本質的価値は `View::element()`(T11 等のパーシャル描画)とテンプレート前処理(旧 `actions/` 規約)であり、前者は WP 5.5+ の `get_template_part($slug, $name, $args)` と同型の `Template::part($slug, $args)`(§1)として、後者はテンプレートの先頭で前処理クラスを明示的に呼ぶ規約(§1A)として再設計した。
+- **テンプレート前処理(旧 `actions/` 規約)**: 旧 `actions/{テンプレート名}.php` 規約(T04・T05・T06 で15案件中に定型化)は、テンプレートからロジックを分離する現場価値が高い一方、その実現手段が上記 View 乗っ取り機構そのものであり、4つの問題(テンプレート階層複製・`$GLOBALS` 展開・`exit` バイパス・`load_global`)を抱えていた。本設計はこの価値(ロジック分離)だけを残し、テンプレートの先頭で型付きの前処理クラス(`$vm = ContactPage::handle();`)を明示的に呼ぶ形にした。理由は次の3つである: (1) 前処理の呼び出しがテンプレートに書かれるため、どのテンプレートで何が動くかをテンプレートのファイルだけで追える、(2) 値が DTO の型付きのプロパティで渡るため、テンプレートが読む値の型を PHPStan max で検査できる、(3) FW がテンプレートのフックに介入する機構を持たずに済み、WP 標準のテンプレート解決を一切変更しない(原則1)。全テンプレート共通の前処理は持たない(共通ロジックは `app/Hook` クラスまたはパーツ内モデルヘルパ直読みへ)。
 - **Arr**: 実利用は `get`(21箇所)のドット記法アクセスが中核。deep merge 系(`merge`/`merge_intersect_key` 9箇所)は旧 FW の「options 連想配列」文化の産物であり、新 FW では named arguments + readonly 定義オブジェクト(`PostTypeDefinition` 等)が代替するため収載しない。
 - **Str**: 旧 `Text` の実利用 4 メソッド+FW 内部で必要な命名変換のみ。`auto_link` は WP 標準 `make_clickable()`、`short_hash` は利用側の `hash_hmac` 直接利用(thumbnail 拡張)で代替。`truncate` は WP 依存(タグ除去)が混入していたため、純関数 `truncate` と WP 境界 `excerpt` に分離した。`replace` は旧 `Text::replace` の `$bounds` パラメータ(`%key%` 既定+区切り文字切替)を持たず、`{key}` 構文+`strtr()` 単一パスに固定する(§3.2A。FW 内のプレースホルダ構文を1種類に統一し、再置換バグを構造的に排除する)。
 - **Html**: 旧流暢ビルダ(`__call`/`__get`/ノードコレクション約185行)は全プロジェクト参照ゼロの完全デッドコード(DR-16 で廃止確定)。実利用は `Html::tag()` 経由の属性レンダリングのみで、その実体だった `HtmlTag::parse_attrs` を純関数 `attributes()` として再定義。standalone 属性のホワイトリスト方式は HTML の進化に追随できないため bool 値駆動に変更した。
@@ -1525,19 +1197,9 @@ $lead    = Str::excerpt(get_the_content(), 120);
 - [ ] 同一 slug の2回目以降の解決がキャッシュから返る(`is_file` 呼び出し回数のテスト)
 - [ ] プラグインの `templates/` 配下テンプレートがテーマ同名ファイルで上書きできる(統合テスト)
 
-**View\ActionRouter / View\View / View\NotFound**
-- [ ] `actions/page-contact.php` が `page-contact.php` 解決時の `template_include`(priority 100)で1回 include され、`return array` が `View::set()` でマージされる(統合テスト)
-- [ ] `dispatch` が**常に元の `$template` を無加工で返す**(array/null/不正戻り値いずれでも。404 強制時のみ `get_404_template()` へ差し替え。`grep`+統合テストで確認)
-- [ ] 非文字列の `$template`(先行フィルタが `false`/`null`)・テーマ外テンプレート・`actions/` ファイル不在のいずれも素通しされる(完全オプトイン)
-- [ ] 子テーマ→親テーマの順で同名 `actions` を解決し、子テーマ優先で採用する(統合テスト)
-- [ ] actions が `ActionRouter::notFound()` を返すと `set_404()` + `status_header(404)` + `nocache_headers()` が実行され、`get_404_template()`(404.php 不在テーマでは `get_index_template()`)が返る
-- [ ] `headers_sent()` が true のとき status_header は no-op となり、WP_DEBUG 時に `wp_trigger_error` で可視化される
-- [ ] actions 内で見える変数が `$wp_query` のみであり、ファイルパス変数も含めて `$this`/Router 内部へアクセスできない(static クロージャ+`func_get_arg()` include(§1A.4 手順4。`Template::includeIsolated` と同一イディオム)をコードレビュー+静的解析で確認)
-- [ ] actions 内の `wp_safe_redirect()+exit` が機能する(出力開始前であることを統合テストで確認)
-- [ ] `View::set()` がマージ(全置換でない)であり、`View::get()` が未定義キー+デフォルト未指定時に WP_DEBUG で `wp_trigger_error(E_USER_WARNING)` を発する(意図的デフォルト指定時は警告しない)
-- [ ] `tms_var('key')` が `View::get('key')` へ1メソッド委譲する。`tms_var('key', $default)` でデフォルト指定できる
-- [ ] プラグイン形態の Kernel では `ActionRouter` が生成されない(テーマ形態のみ。`KernelConfig::theme(actions: false)` で抑止できる)
-- [ ] `bin/tms-check` が actions/ 配下の `echo`/`print`・孤児 actions・`$wp_query->set_404()` 直呼びを検出する(検査仕様は 10-quality.md)
+**テンプレート前処理**
+- [ ] テーマ形態・プラグイン形態の Kernel が `template_include` にコールバックを登録しない(統合テスト。02-kernel §3.7)
+- [ ] rules/page.md の前処理クラスとテンプレートの例が、rules/ のコード例の抽出・検査(前処理クラスは PHPStan max)を通る
 
 **Support**
 - [ ] `Arr::get/has/set` のドット記法がネスト3段・数値文字列キー・非配列中間ノードのケースを含むデータプロバイダで仕様どおり動作する
@@ -1581,9 +1243,8 @@ composer test      # PHPUnit 11: ユニット(Arr/Str/Html/Log ディスパッ�
                    #             統合(Template 解決順/SimpleLogger 実書き込み = wp-env + WordPress のテストライブラリ)
 composer qa        # 上記すべて
 grep -rn "extract(" packages/core/src/            # ヒット 0 件であること
-grep -rn "compact(" packages/core/src/            # ヒット 0 件であること(actions の正準形は明示的配列リテラル。§1D.1)
-grep -rn "template_include" packages/core/src/    # ActionRouter(actions ディスパッチ・$template 無加工返却)以外でヒット 0 件
+grep -rn "compact(" packages/core/src/            # ヒット 0 件であること
+grep -rn "template_include" packages/core/src/    # ヒット 0 件であること(テンプレート階層に介入しない。§1A)
 grep -rn "template_redirect" packages/core/src/   # ヒット 0 件であること(乗っ取りなし)
 grep -rn "__callStatic\|function __call(" packages/core/src/View packages/core/src/Support packages/core/src/Log  # 0 件
-composer qa        # bin/tms-check(actions の echo/孤児/set_404 直呼び検査)を含む
 ```

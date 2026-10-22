@@ -1316,7 +1316,7 @@ WordPress なしのユニットテストでアプリのコードを確かめる�
 
 - 既定のストレージは interface を登録先とする。Kernel は Container を作るときに `MetaStorageInterface::class` に `WpMetaStorage::class`、`OptionStorageInterface::class` に `WpOptionStorage::class` を登録する(02-kernel §3 手順3)。`#[UseMetaStorage]` の無いエンティティのメタ(4.9・4.10)と、`#[AsOptionGroup]` で `storage` を指定しないグループ(4.12・4.15)は、この id から解決する。Container から取り出す素のオプション名の保存先(4.15)も同じ。
 - 登録の方法は1つだけ: `KernelConfig` の `extensions` に渡した拡張の `register()`(02-kernel §3.10)の中で、`$kernel->container()->set(MetaStorageInterface::class, ...)`・`set(OptionStorageInterface::class, ...)` で別の実装を登録する。新しい公開 API は持たない。
-- Kernel は、拡張の登録の後、boot 時の初期化(エンティティのメタスキーマの登録)とキャッチアップより前に、2つの id を解決して固定する(02-kernel §3 手順7b)。
+- Kernel は、拡張の登録の後、boot 時の初期化(エンティティのメタスキーマの登録)とキャッチアップより前に、2つの id を解決して固定する(02-kernel §3 手順7a)。
 - interface を実装しないものの登録は fail-fast にする。インスタンスとクラス名は登録の時点で、factory(Closure)は boot の中の解決の時点で、Container が `ContainerException` にし、boot は失敗する(02-kernel §8)。
 - boot の後の差し替えは受け付けない。解決済みの id への `set()`・`alias()` は、Container が `ContainerException` にする。
 - 差し替えに使うメモリの実装は FW に含めない。実装の例は rules/meta.md・options.md の「テスト」に置き、アプリの tests/ に書く。src/ は本番で読み込まれるコードだけを置き、テストのための公開 API を増やさないためである。FW 自身のテストの同じ実装(tests/Support)は、`MetaStorageInterface` の契約テストのうちデータベースに依存しない部分(`MetaStorageContract`)を満たす。

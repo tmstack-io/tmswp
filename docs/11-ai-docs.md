@@ -80,7 +80,7 @@ tmswp/ (monorepo)
 │           ├── acf.md
 │           ├── form.md
 │           ├── form-mail.md
-│           ├── actions.md
+│           ├── page.md
 │           ├── model.md
 │           ├── options.md
 │           ├── hooks.md
@@ -260,7 +260,7 @@ composer fix                # コードスタイル自動修正
 | ACFでフィールドを管理する(acf-json運用) | vendor/tmswp/core/rules/acf.md |
 | フォーム(問い合わせ・申込み等)を実装する | vendor/tmswp/core/rules/form.md |
 | フォームの完了処理でメールを送る | vendor/tmswp/core/rules/form-mail.md |
-| テンプレートの前処理(データ取得・フォーム駆動)を分離する | vendor/tmswp/core/rules/actions.md |
+| テンプレートの前処理(データ取得・フォーム駆動)を書く | vendor/tmswp/core/rules/page.md |
 | 独自DBテーブルを作って読み書きする | vendor/tmswp/core/rules/model.md |
 | サイト設定値(オプション)を定義する | vendor/tmswp/core/rules/options.md |
 | add_action/add_filter をまとめて登録する | vendor/tmswp/core/rules/hooks.md |
@@ -274,7 +274,6 @@ composer fix                # コードスタイル自動修正
 ├── style.css            # テーマヘッダ
 ├── functions.php        # FWブートのみ。ロジックを書かない
 ├── index.php ほか       # WordPress標準のテンプレート階層(通常のWPテーマと完全に同じ)
-├── actions/             # テンプレート前処理ファイル。ページテンプレートと同名(rules/actions.md)
 ├── parts/               # テンプレートパーツ(Template::part()/get_template_part()の読込先)
 ├── app/                 # PHPクラスはすべてここ(名前空間 App\、PSR-4)
 │   ├── Post/            # 投稿タイプ定義(App\Post\*Post)
@@ -283,6 +282,7 @@ composer fix                # コードスタイル自動修正
 │   ├── Form/            # フォーム定義(App\Form\*Form)
 │   ├── Model/           # 独自テーブル(App\Model\*Model)
 │   ├── Option/          # オプション定義(App\Option\*Option。backed enum)
+│   ├── Page/            # テンプレートの前処理クラス(App\Page\*Page)
 │   └── Hook/            # フック集約(App\Hook\*Hook)
 ├── tests/               # ユニットテスト
 ├── composer.json
@@ -295,12 +295,12 @@ composer fix                # コードスタイル自動修正
 書こうとしているコードがどこに属するかは、次の1問で決まる。
 
 - **特定のページテンプレートの「表示前」処理**(そのテンプレートでだけ必要なデータ取得・整形・フォーム送信処理)なら
-  → `actions/{テンプレート相対パス}.php`(ページテンプレートと同名のファイル。例: `page-contact.php` → `actions/page-contact.php`)。
-  WordPressがテンプレートを決めた直後に1回だけ実行され、`return` した配列がテンプレートで `tms_var()` から読める(rules/actions.md)。
+  → `app/Page/<Name>Page.php` の前処理クラス。テンプレートの先頭(`get_header()` の前)で `$vm = <Name>Page::handle();` と1回だけ呼び、
+  返された値(`public readonly` のプロパティ)をテンプレートで読む(rules/page.md)。
 - **それ以外のロジック**(投稿タイプ・タクソノミー・メタ・フォーム定義・独自テーブル・オプション・WPフック)は
   すべて `app/` 配下の `final class`(下表)。リクエスト種別を問わず動くフック処理は `app/Hook/`(rules/hooks.md)。
 
-`actions/` はクラスではなくデータ準備専用のPHPファイルである(Attributeも継承も不要)。出力(echo)・フック登録・`$wp_query->set_404()` の直呼びは禁止(rules/actions.md。出力・`set_404()` 直呼びはFW同梱のPHPStanルール、孤児actionsは `bin/tms-check` が `composer qa` 内で機械検査する)。全テンプレート共通の前処理用ファイル(`actions/common.php` 等)は持たない。共通ロジックは `app/Hook/` か、パーツ内でモデルのアクセサを直接読む形にする。
+前処理クラスはAttributeも継承も不要な `final class` で、テンプレートが使う値を型付きのプロパティで返す。出力(echo)・`$wp_query->set_404()` の直呼びはしない(rules/page.md)。全テンプレート共通の前処理は持たない。共通ロジックは `app/Hook/` か、パーツ内でモデルのアクセサを直接読む形にする。
 
 ## クラス追加の基本手順(全機能共通)
 
@@ -316,9 +316,8 @@ composer fix                # コードスタイル自動修正
 ## 必須コマンド
 
 ```bash
-composer qa        # lint + analyse + tms:check + test。タスク完了前に必ず通すこと
+composer qa        # lint + analyse + test。タスク完了前に必ず通すこと
 composer analyse   # PHPStan level max(app/ が対象)
-composer tms:check # actions/ 規約検査(FW同梱PHPStanルール + bin/tms-check)
 composer fix       # コードスタイル自動修正
 composer test      # ユニットテスト
 ```
@@ -375,7 +374,7 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所のみ差
 
 3. 「テンプレートパーツ」関連の記述: テーマの `parts/` ではなく「`templates/` がプラグイン同梱フォールバック。テーマ側に同名ファイルがあればテーマが優先される(rules/view.md参照)」と差し替え。
 4. 「禁止事項」3項のテンプレート階層の説明は維持(プラグインでも `template_include` 乗っ取り禁止)。加えて「有効化フックで必要な処理(Modelのマイグレーション)はFWが自動配線するため、`register_activation_hook` を直接書かない(rules/model.md参照)」を追記。
-5. **`actions/` 規約はプラグインでは使わない**。プラグインはトップレベルのテンプレート供給機構を持たず ActionRouter が生成されないため、タスク対応表の「テンプレートの前処理」行・「ロジックの置き場(配置決定木)」節・プロジェクト構成ツリーの `actions/` を削除する。「必須コマンド」節からも `composer tms:check`(actions/ 規約検査)の行を削除し、`composer qa` の説明を「lint + analyse + test」とする。テンプレート単位の前処理に相当する処理が必要なら `app/Hook/` の `#[AsHook]` クラス(rules/hooks.md)で行う。
+5. **テンプレートの前処理クラスはプラグインでは使わない**。プラグインはトップレベルのテンプレートを供給しないため、タスク対応表の「テンプレートの前処理」行・「ロジックの置き場(配置決定木)」節の前処理クラスの項・プロジェクト構成ツリーの `Page/` を削除する。テンプレートの外で前処理が必要なら `app/Hook/` の `#[AsHook]` クラス(rules/hooks.md)で行う。
 6. テキストドメイン: 「プラグイン本体ヘッダのText Domainを使う」。
 
 ---
@@ -395,7 +394,7 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所のみ差
 | acf.md | acf-json運用+型付きアクセサ生成 | 09-acf-bridge |
 | form.md | フォーム実装(3画面+メール) | 05-form |
 | form-mail.md | フォームの完了処理のメール送信(ヘッダインジェクション対策・自動返信・失敗時のログ) | 05-form |
-| actions.md | テンプレート前処理(テンプレート同名 actions/ ファイル規約) | 07-support |
+| page.md | テンプレート前処理(テンプレートの先頭で呼ぶ前処理クラス) | 07-support |
 | model.md | 独自テーブル | 06-model |
 | options.md | サイト設定値 | 04-meta-options |
 | hooks.md | WPフック登録の置き場 | 02-kernel |
@@ -452,8 +451,6 @@ starters/theme/
 ├── index.php                 # §8.5(最小のWP標準ループ)
 ├── header.php                # 最小(<!DOCTYPE html>〜wp_head〜<body>)
 ├── footer.php                # 最小(wp_footer〜</html>)
-├── actions/             # テンプレート前処理ファイルの置き場(rules/actions.md)
-│   └── .gitkeep
 ├── parts/
 │   └── .gitkeep
 ├── assets/
@@ -475,12 +472,11 @@ starters/theme/
 │   └── setup.php             # §10.2(post-create-project-cmd。実行後に自己削除)
 ├── phpunit.xml.dist          # §8.6
 ├── phpstan.neon              # §8.6
-├── phpstan-actions.neon      # §8.6(actions/ 規約検査用。level 0・規約ルールのみ)
 ├── .php-cs-fixer.dist.php    # §8.6
 └── .gitignore                # §8.6
 ```
 
-方針: スケルトンの `app/` は **動くサンプル1つ(ThemeSetupHook)+空ディレクトリ構造** とする。サンプルCPT等は置かない(消す手間と「消し忘れた雛形CPTが本番に出る」事故を避ける。AIはrules/のコード例から生成する)。`actions/` はテーマ直下の空ディレクトリ(`.gitkeep` のみ)とし、テンプレート前処理が必要になったときにrules/actions.mdに従って同名ファイルを追加する(完全オプトイン。空のままでもテーマは完全動作する)。
+方針: スケルトンの `app/` は **動くサンプル1つ(ThemeSetupHook)+空ディレクトリ構造** とする。サンプルCPT等は置かない(消す手間と「消し忘れた雛形CPTが本番に出る」事故を避ける。AIはrules/のコード例から生成する)。
 
 ### 8.2 composer.json(全文)
 
@@ -516,15 +512,10 @@ starters/theme/
         "lint": "php-cs-fixer fix --dry-run --diff",
         "fix": "php-cs-fixer fix",
         "analyse": "phpstan analyse",
-        "tms:check": [
-            "phpstan analyse -c phpstan-actions.neon",
-            "@php vendor/tmswp/core/bin/tms-check actions"
-        ],
         "test": "phpunit",
         "qa": [
             "@lint",
             "@analyse",
-            "@tms:check",
             "@test"
         ],
         "post-create-project-cmd": "@php bin/setup.php"
@@ -542,7 +533,6 @@ starters/theme/
 - `phpstan/extension-installer` がPHPStan拡張(szepeviktor/phpstan-wordpress と tmswp/core 同梱拡張)を自動登録する(10-quality.md §7 項目2)。`allow-plugins` を事前記載しているため、create-project後の `composer install` は承認プロンプトなしで完了する。
 - バージョン制約(`^0.1` 等)はリリース時の実バージョンに合わせて更新する。
 - 統合テスト(`test:integration`)はスターターには含めない(利用側プロジェクトのテストはユニット層のみを既定とする。必要なプロジェクトはコアのwp-env構成を参考に追加する)。したがってスターターの `test` はユニット層のみを指す(コアmonorepoとの範囲差はAGENTS.mdに注記済み。§2参照)。
-- `tms:check` は actions/ 規約検査の合成スクリプト(出力・`set_404()` 直呼び検査=FW同梱PHPStanルールを `phpstan-actions.neon` で適用、孤児actions検査=コア同梱 `bin/tms-check`。正準仕様は10-quality.md §3A)。
 
 ### 8.3 style.css(全文)
 
@@ -619,15 +609,6 @@ parameters:
 
 - `includes` の手動列挙は不要。PHPStan拡張(szepeviktor/phpstan-wordpress、およびFW同梱の `#[MetaSchema]`/`#[OptionSchema]` 型ナローイング拡張=DR-05)は、§8.2 require-devの `phpstan/extension-installer` が設定なしで自動登録する(10-quality.md §7 項目2の確定方式。vendor配下の拡張パスをスターター側が知る必要がなく、コア側の配置変更にも自動追従する)。
 - 解析対象は `app/` のみ。テンプレートファイル(WPグローバル文脈)は対象外とする。
-
-`phpstan-actions.neon`(actions/ 規約検査用の軽量構成。`composer tms:check` から使う):
-
-- level 0(型検査なし・規約検査のみ)、paths は `actions` のみ。FW同梱の規約ルール
-  `NoOutputRule`(出力構文の検出)/ `NoSet404Rule`(`set_404()` 直呼びの検出)を適用する。
-- 完全版の内容(ルール登録のinclude形)は10-quality.md §3Aの正準を転記する。この2ルールはコア同梱の
-  extension.neonに意図的に含まれない(extension-installerで全コードへ自動適用されるのを避けるため。10-quality.md §3A)
-  ので、この設定ファイルでのみ明示登録する。actions/ は通常の `phpstan.neon`
-  (level max)の対象には含めない(規約検査のみを課し型検査は課さない。上記「解析対象は `app/` のみ」の方針と整合)。
 
 `.php-cs-fixer.dist.php`:
 
@@ -761,7 +742,7 @@ starters/plugin/
 ### 9.2 composer.json(theme版との差分)
 
 - `"name": "tmswp/starter-plugin"`、`"description": "Starter plugin for TMStack WordPress Framework."`
-- scripts: プラグインは `actions/` 規約を使わない(§5.2)ため、`tms:check` を定義せず、`qa` は `["@lint", "@analyse", "@test"]` とする。`phpstan-actions.neon` も同梱しない。
+- scripts: `qa` はtheme版と同じく `["@lint", "@analyse", "@test"]` とする。
 - autoloadは `PluginApp\` / `PluginApp\Tests\` を `app/` / `tests/` へ割り当てる。テーマスターターの `App\` とは分け、同一WordPress上でテーマとプラグインを併用できるようにする。
 - それ以外(require / config)はtheme版(§8.2)と同一。
 
@@ -960,7 +941,7 @@ fwrite(STDOUT, "\n  Project initialized: {$name} ({$slug})\n\n"
 ### 12.1 成果物の存在と形式
 
 - [ ] monorepoルートに `AGENTS.md`(§4の内容)が存在し、`CLAUDE.md` はmonorepo・スターターのどこにも存在しない。
-- [ ] `packages/core/rules/` に13ファイル(post-type/taxonomy/user-role/meta/acf/form/form-mail/actions/model/options/hooks/view/extensions)が存在し、composer配布物に含まれる(`composer archive` の内容で確認)。
+- [ ] `packages/core/rules/` に13ファイル(post-type/taxonomy/user-role/meta/acf/form/form-mail/page/model/options/hooks/view/extensions)が存在し、composer配布物に含まれる(`composer archive` の内容で確認)。
 - [ ] 各レシピが共通フォーマット(§6.2: 手順/完全な実装例/してはいけないこと/確認方法)を満たす。
 - [ ] `starters/theme` / `starters/plugin` が§8/§9のツリーどおりに存在する。
 - [ ] スターター直下に `README.md`(§8.7)が存在し、セットアップ手順・create-project例・AGENTS.md/rules/への導線を含む(規約本文の転載はないこと)。
