@@ -11,6 +11,8 @@ use DateTimeZone;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use ReflectionMethod;
+use Stringable;
 use TMSWP\Core\Attribute\AsModel;
 use TMSWP\Core\Exception\HydrationException;
 use TMSWP\Core\Exception\InvalidQueryException;
@@ -186,7 +188,7 @@ SQL, $definition->toSql($connection));
         self::assertSame(1, TestContactModel::insert(['email' => 'a@example.test', 'active' => true]));
         self::assertSame([
             'table' => 'wp_contacts',
-            'data' => ['email' => 'a@example.test', 'active' => true],
+            'data' => ['email' => 'a@example.test', 'active' => 1],
             'format' => ['%s', '%d'],
         ], $wpdb->insertCalls()[0]);
 
@@ -271,6 +273,309 @@ SQL, $definition->toSql($connection));
         self::assertCount(2, $wpdb->insertCalls());
     }
 
+    public function testConnectionWritesNormalizeValuesByR3(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $connection = new Connection($wpdb);
+        $createdAt = new DateTimeImmutable('2026-06-13 09:10:11', new DateTimeZone('Asia/Tokyo'));
+
+        $connection->insert('contacts', [
+            'email' => new TestEmail('a@example.test'),
+            'active' => true,
+            'created_at' => $createdAt,
+            'status' => TestStatus::Published,
+            'priority' => TestPriority::High,
+            'deleted_at' => null,
+        ]);
+        $connection->update('contacts', ['status' => TestStatus::Draft, 'deleted_at' => null], ['created_at' => $createdAt, 'priority' => TestPriority::High]);
+        $connection->delete('contacts', ['status' => TestStatus::Draft, 'deleted_at' => null]);
+
+        self::assertSame([
+            'table' => 'wp_contacts',
+            'data' => [
+                'email' => 'a@example.test',
+                'active' => 1,
+                'created_at' => '2026-06-13 09:10:11',
+                'status' => 'published',
+                'priority' => 2,
+                'deleted_at' => null,
+            ],
+            'format' => ['%s', '%d', '%s', '%s', '%d', '%s'],
+        ], $wpdb->insertCalls()[0]);
+        self::assertSame([
+            'table' => 'wp_contacts',
+            'data' => ['status' => 'draft', 'deleted_at' => null],
+            'where' => ['created_at' => '2026-06-13 09:10:11', 'priority' => 2],
+            'format' => ['%s', '%s'],
+            'where_format' => ['%s', '%d'],
+        ], $wpdb->updateCalls()[0]);
+        self::assertSame([
+            'table' => 'wp_contacts',
+            'where' => ['status' => 'draft', 'deleted_at' => null],
+            'where_format' => ['%s', '%s'],
+        ], $wpdb->deleteCalls()[0]);
+    }
+
+    /**
+     * @param Closure(Connection): int $write
+     */
+    #[DataProvider('writesWithNonBareTableName')]
+    public function testConnectionWritesAcceptOnlyBareTableNames(Closure $write): void
+    {
+        $wpdb = WpdbTestDouble::create();
+
+        try {
+            $write(new Connection($wpdb));
+            self::fail('ベア名でないテーブル名が InvalidQueryException になっていません。');
+        } catch (InvalidQueryException $exception) {
+            self::assertSame('invalid bare table name: Wp_contacts', $exception->getMessage());
+        }
+
+        self::assertSame([], $wpdb->insertCalls());
+        self::assertSame([], $wpdb->updateCalls());
+        self::assertSame([], $wpdb->deleteCalls());
+    }
+
+    /**
+     * @return iterable<string, array{Closure(Connection): int}>
+     */
+    public static function writesWithNonBareTableName(): iterable
+    {
+        yield 'insert' => [static fn(Connection $connection): int => $connection->insert('Wp_contacts', ['email' => 'a@example.test'])];
+        yield 'update' => [static fn(Connection $connection): int => $connection->update('Wp_contacts', ['email' => 'a@example.test'], ['id' => 10])];
+        yield 'delete' => [static fn(Connection $connection): int => $connection->delete('Wp_contacts', ['id' => 10])];
+    }
+
+    public function testConnectionPrepareTurnsEscapedPercentIntoLiteralWithoutBindings(): void
+    {
+        $connection = new Connection(WpdbTestDouble::create());
+
+        self::assertSame('SELECT id % 2 FROM wp_contacts', $connection->prepare('SELECT id %% 2 FROM wp_contacts'));
+        self::assertSame(
+            'SELECT id % 2 AS odd FROM wp_contacts',
+            (new QueryBuilder($connection, 'contacts'))->selectRaw('id %% 2 AS odd')->toSql(),
+        );
+    }
+
+    /**
+     * @param list<mixed> $bindings
+     */
+    #[DataProvider('invalidPlaceholderSql')]
+    public function testConnectionPrepareRejectsUnsupportedPercentSequences(string $sql, array $bindings, string $expectedMessage): void
+    {
+        $connection = new Connection(WpdbTestDouble::create());
+
+        $this->expectException(InvalidQueryException::class);
+        $this->expectExceptionMessage($expectedMessage);
+
+        $connection->prepare($sql, $bindings);
+    }
+
+    /**
+     * @return iterable<string, array{string, list<mixed>, string}>
+     */
+    public static function invalidPlaceholderSql(): iterable
+    {
+        yield 'placeholder right after an escaped percent' => [
+            'SELECT id FROM wp_contacts WHERE email LIKE %%%s',
+            [],
+            'a placeholder must not directly follow %%',
+        ];
+        yield 'numbered placeholder' => [
+            'SELECT id FROM wp_contacts WHERE email = %1$s',
+            ['a@example.test'],
+            "unsupported percent sequence '%1'",
+        ];
+        yield 'uppercase float placeholder' => [
+            'SELECT id FROM wp_contacts WHERE score = %F',
+            [1.5],
+            "unsupported percent sequence '%F'",
+        ];
+        yield 'unescaped literal percent' => [
+            'SELECT DATE_FORMAT(created_at, %Y) FROM wp_contacts',
+            [],
+            "unsupported percent sequence '%Y'",
+        ];
+        yield 'trailing percent' => [
+            'SELECT id % FROM wp_contacts',
+            [],
+            "unsupported percent sequence '% '",
+        ];
+    }
+
+    public function testQueryBuilderUpdateAssignsNull(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+
+        $affected = (new QueryBuilder(new Connection($wpdb), 'contacts'))
+            ->where('id', 10)
+            ->update(['deleted_at' => null, 'email' => 'a@example.test']);
+
+        self::assertSame(1, $affected);
+        self::assertSame("UPDATE wp_contacts SET deleted_at = NULL, email = 'a@example.test' WHERE id = 10", $wpdb->queries()[0]);
+    }
+
+    // Connection::select()/selectRow() が wpdb の ARRAY_A 定数を参照するため、定数を分離プロセス内でだけ定義する。
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testValueAndPluckKeepExistingSelectClause(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        $wpdb = WpdbTestDouble::create();
+        $connection = new Connection($wpdb);
+
+        $wpdb->queueRow(['next_id' => '11']);
+        $nextId = (new QueryBuilder($connection, 'contacts'))
+            ->selectRaw('MAX(id) + %d AS next_id', [1])
+            ->value('next_id');
+
+        self::assertSame('11', $nextId);
+        self::assertSame('SELECT MAX(id) + 1 AS next_id FROM wp_contacts LIMIT 1', $wpdb->queries()[0]);
+
+        $wpdb->queueResultSet([
+            ['status' => 'draft', 'total' => '2'],
+            ['status' => 'published', 'total' => '5'],
+        ]);
+        $totals = (new QueryBuilder($connection, 'contacts'))
+            ->alias('c')
+            ->select('c.status')
+            ->selectRaw('COUNT(*) AS total')
+            ->where('c.active', true)
+            ->groupBy('c.status')
+            ->pluck('total', 'c.status');
+
+        self::assertSame(['draft' => '2', 'published' => '5'], $totals);
+        self::assertSame('SELECT c.status, COUNT(*) AS total FROM wp_contacts AS c WHERE c.active = 1 GROUP BY c.status', $wpdb->queries()[1]);
+    }
+
+    // Connection::select()/selectRow() が wpdb の ARRAY_A 定数を参照するため、定数を分離プロセス内でだけ定義する。
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testValueAndPluckRejectMissingResultColumns(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        $wpdb = WpdbTestDouble::create();
+        $connection = new Connection($wpdb);
+        $thrown = [];
+
+        $wpdb->queueRow(['total' => '3']);
+        $wpdb->queueResultSet([['total' => '3']]);
+        $wpdb->queueResultSet([['email' => 'a@example.test']]);
+        $wpdb->queueResultSet([['email' => 'a@example.test', 'id' => null]]);
+        $cases = [
+            'value の列が結果に無い' => static fn(): mixed => (new QueryBuilder($connection, 'contacts'))->selectRaw('COUNT(*) AS total')->value('email'),
+            'pluck の値の列が結果に無い' => static fn(): mixed => (new QueryBuilder($connection, 'contacts'))->selectRaw('COUNT(*) AS total')->pluck('email'),
+            'pluck のキーの列が結果に無い' => static fn(): mixed => (new QueryBuilder($connection, 'contacts'))->select('email')->pluck('email', 'id'),
+            'pluck のキーが NULL' => static fn(): mixed => (new QueryBuilder($connection, 'contacts'))->pluck('email', 'id'),
+        ];
+
+        foreach ($cases as $label => $case) {
+            try {
+                $case();
+                $thrown[$label] = null;
+            } catch (QueryException $exception) {
+                $thrown[$label] = $exception::class;
+            }
+        }
+
+        self::assertSame(array_fill_keys(array_keys($cases), QueryException::class), $thrown);
+    }
+
+    public function testCountDiscardsOrderLimitAndOffset(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $connection = new Connection($wpdb);
+
+        $wpdb->queueVar('3');
+        $grouped = (new QueryBuilder($connection, 'contacts'))
+            ->where('active', true)
+            ->groupBy('status')
+            ->orderByDesc('status')
+            ->limit(10)
+            ->offset(20)
+            ->count();
+
+        $wpdb->queueVar('7');
+        $offsetOnly = (new QueryBuilder($connection, 'contacts'))->orderBy('id')->offset(5)->count();
+
+        self::assertSame(3, $grouped);
+        self::assertSame(7, $offsetOnly);
+        self::assertSame([
+            'SELECT COUNT(*) FROM (SELECT 1 FROM wp_contacts WHERE active = 1 GROUP BY status) AS tmswp_count',
+            'SELECT COUNT(*) FROM wp_contacts',
+        ], $wpdb->queries());
+    }
+
+    public function testWhereInRejectsNonListValues(): void
+    {
+        $this->expectException(InvalidQueryException::class);
+        $this->expectExceptionMessage('whereIn values must be a list');
+
+        // list でない配列は PHPStan が呼び出し側で弾くため、静的解析を通らないアプリのコードを再現するリフレクションで渡す
+        (new ReflectionMethod(QueryBuilder::class, 'whereIn'))
+            ->invoke(new QueryBuilder(new Connection(WpdbTestDouble::create()), 'contacts'), 'id', ['first' => 1, 'second' => 2]);
+    }
+
+    public function testJoinRejectsNonBareTableNameWithPrefix(): void
+    {
+        $this->expectException(InvalidQueryException::class);
+        $this->expectExceptionMessage('invalid bare table name: Users');
+
+        (new QueryBuilder(new Connection(WpdbTestDouble::create()), 'contacts'))->innerJoin('Users AS u', 'u.ID', '=', 'contacts.user_id');
+    }
+
+    public function testWhereGroupRejectsAlias(): void
+    {
+        $this->expectException(InvalidQueryException::class);
+        $this->expectExceptionMessage('where group can contain only where clauses');
+
+        (new QueryBuilder(new Connection(WpdbTestDouble::create()), 'contacts'))
+            ->where(static fn(QueryBuilder $group): QueryBuilder => $group->alias('c')->where('c.id', 1));
+    }
+
+    // Connection::select()/selectRow() が wpdb の ARRAY_A 定数を参照するため、定数を分離プロセス内でだけ定義する。
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testHydrationUsesConstructorDefaultForMissingColumn(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        $wpdb = WpdbTestDouble::create();
+        $wpdb->queueResultSet([['id' => '10']]);
+
+        $rows = (new QueryBuilder(new Connection($wpdb), 'contacts'))->as(TestNoteRow::class)->get();
+
+        self::assertEquals([new TestNoteRow(10, 'unset')], $rows);
+    }
+
+    // Connection::select()/selectRow() が wpdb の ARRAY_A 定数を参照するため、定数を分離プロセス内でだけ定義する。
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testHydrationCastsStringValueForIntBackedEnum(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        $wpdb = WpdbTestDouble::create();
+        $wpdb->queueResultSet([['id' => '10', 'priority' => '2']]);
+
+        $rows = (new QueryBuilder(new Connection($wpdb), 'contacts'))->as(TestPriorityRow::class)->get();
+
+        self::assertEquals([new TestPriorityRow(10, TestPriority::High)], $rows);
+    }
+
+    // Connection::select()/selectRow() が wpdb の ARRAY_A 定数を参照するため、定数を分離プロセス内でだけ定義する。
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testHydrationRejectsIntegersOutsidePhpRange(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        $wpdb = WpdbTestDouble::create();
+        $wpdb->queueResultSet([['id' => '9223372036854775808', 'note' => 'big']]);
+
+        $this->expectException(HydrationException::class);
+        $this->expectExceptionMessage("integer out of range for 'id'");
+
+        (new QueryBuilder(new Connection($wpdb), 'contacts'))->as(TestNoteRow::class)->get();
+    }
+
     public function testMigratorRegistersModelsAndBuildsDryRunPlan(): void
     {
         Functions\when('get_option')->justReturn(false);
@@ -304,6 +609,40 @@ enum TestStatus: string
 {
     case Draft = 'draft';
     case Published = 'published';
+}
+
+enum TestPriority: int
+{
+    case Low = 1;
+    case High = 2;
+}
+
+final readonly class TestEmail implements Stringable
+{
+    public function __construct(
+        private string $address,
+    ) {}
+
+    public function __toString(): string
+    {
+        return $this->address;
+    }
+}
+
+final readonly class TestPriorityRow
+{
+    public function __construct(
+        public int $id,
+        public TestPriority $priority,
+    ) {}
+}
+
+final readonly class TestNoteRow
+{
+    public function __construct(
+        public int $id,
+        public string $note = 'unset',
+    ) {}
 }
 
 final readonly class TestContactRow

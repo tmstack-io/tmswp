@@ -79,8 +79,8 @@ SQLに埋め込まれる識別子(テーブル名・カラム名・エイリア�
 `whereRaw` / `orWhereRaw` / `selectRaw` / `innerJoinRaw` / `leftJoinRaw` に渡すSQL断片は以下を満たさなければならない。規約1〜3はランタイム検査であり違反は`InvalidQueryException`、規約4はPHPStanによる静的検査である。これにより「値の直接埋め込み」が構造的に不可能になる。
 
 1. 文字 `'` `"` `` ` `` `;` のいずれも含まないこと(リテラル値・識別子クォート・複文の全面禁止)。値は必ずプレースホルダで渡す。断片内に直接書く識別子はコンパイル時定数に限り(規約4)、動的に決まる識別子は`%i`プレースホルダ+`$bindings`経由とする。
-2. 断片内のプレースホルダ個数と`$bindings`の要素数が一致すること。プレースホルダの抽出は `/(?<!%)%(?:\d+\$)?[dfsi]/` で行う(`%i`はWP 6.2+の識別子プレースホルダ。下限WP 7.0のため常に利用可)。
-3. リテラルの`%`(例: `DATE_FORMAT`の書式)は`%%`とエスケープして書くこと(最終的に`wpdb->prepare`を通過するため)。この規約はrules/にも記載する。
+2. 断片内のプレースホルダ個数と`$bindings`の要素数が一致すること。`%`は直後の1文字と組にして左から読み、`%d`・`%f`・`%s`・`%i`をプレースホルダ、`%%`をリテラルの`%`とする(`%i`はWP 6.2+の識別子プレースホルダ。下限WP 7.0のため常に利用可)。それ以外の`%`の並び(番号付きの`%1$s`、書式付きの`%5s`、大文字の`%F`、単独の`%`等)と、`%%`の直後に続くプレースホルダ(`%%%s`)は`InvalidQueryException`。番号付きを受け付けないのは、QueryBuilderが断片ごとの`$bindings`を1つのリストにつなぐため、番号が別の断片の値を指すからである。`%%%s`を受け付けないのは、`wpdb->prepare`がこの`%s`を引用符で囲まずに埋め込むからである。検査は`Connection::prepare()`が行う(§1)。
+3. リテラルの`%`(例: 剰余演算子の`id %% 2`)は`%%`とエスケープして書くこと。`Connection::prepare()`が`%`に戻す(§1)。この規約はrules/にも記載する。
 4. **raw断片はコンパイル時定数文字列であること(`@param literal-string`による静的強制)**: raw断片の文字列にPHP変数・ユーザ入力を連結してはならない(例: `->whereRaw("{$userColumn} = %s", [$v])` は禁止)。識別子を動的に与える必要がある場合は`%i`プレースホルダ+`$bindings`経由を必須とする(例: `->whereRaw('%i = %s', [$column, $value])`)。本規約は、raw断片を受ける引数 — `whereRaw()`/`orWhereRaw()`の`$sql`、`selectRaw()`の`$expression`、`innerJoinRaw()`/`leftJoinRaw()`の`$on` — に`@param literal-string`を宣言することで、`composer analyse`(PHPStan level max、DR-12)が機械検査する(`innerJoinRaw`/`leftJoinRaw`の`$table`は別途R1検証されるベア名のため対象外)。PHPStanのliteral-string型はリテラル同士の連結・`sprintf`(リテラル書式)の結果も追跡するため、PHP変数を連結した断片はlevel maxで静的解析エラーになる(Doctrine DBAL等で確立した手法)。
    - **効力範囲**: literal-stringが機械保証するのはraw断片の**非動的起源**(PHP変数・ユーザ入力の連結禁止=本規約の主目的)であり、開発者が手書きした定数述語の妥当性(例: `1=1 OR ...`のような恒真条件)までは保証しない。その層は規約1のクォート文字検査とコードレビューで担保する。本規約はrules/にも引き続き記載する(PHPStanを実行しない環境では機械的強制が及ばないため)。
 
@@ -99,7 +99,7 @@ SQLに埋め込まれる識別子(テーブル名・カラム名・エイリア�
 | `\Stringable` | `%s` | `(string)`キャスト |
 | `\DateTimeInterface` | `%s` | `->format('Y-m-d H:i:s')`(タイムゾーン変換は行わない。サイトTZへの正規化は呼び出し側責務) |
 | `\BackedEnum` | backing typeに従い`%d`/`%s` | `->value` |
-| `null` | — | 文脈依存(`= null`→`IS NULL`変換、IN句内は`InvalidQueryException`) |
+| `null` | — | 文脈依存(比較の`= null`→`IS NULL`変換、代入(`insert`の値・`update`のSET句)はSQLの`NULL`、IN句内は`InvalidQueryException`) |
 | `array` | — | `InvalidQueryException`(`whereIn`を使うこと) |
 | その他のオブジェクト | — | `InvalidQueryException` |
 
@@ -163,10 +163,11 @@ final class Connection
     public function charsetCollate(): string;
 
     /**
-     * prepare適用。$bindingsが空の場合はSQLにプレースホルダが無いことを検証し
-     * (R2の抽出正規表現で走査、存在すればInvalidQueryException)、$sqlをそのまま返す。
-     * 非空の場合はプレースホルダ数と要素数の一致を検証してから
-     * $this->wpdb->prepare($sql, ...$bindings) を返す。
+     * prepare適用。R2規約2の読み方で`%`の並びを検証してプレースホルダを数え、
+     * 個数と$bindingsの要素数の一致を検証する(違反はInvalidQueryException)。
+     * $bindingsが空の場合はwpdb->prepareを通さず、`%%`を`%`に戻したSQLを返す。
+     * 非空の場合は各要素をR3写像の前処理で正規化して $this->wpdb->prepare($sql, ...$bindings) を返す。
+     * @param list<mixed> $bindings
      */
     public function prepare(string $sql, array $bindings = []): string;
 
@@ -186,21 +187,28 @@ final class Connection
     public function execute(string $sql, array $bindings = []): int;
 
     /**
-     * 1行INSERT。$dataはカラム名(R1検証)=>値。R3写像でformatを導出し
+     * 1行INSERT。$tableはベアテーブル名(R1検証。prefixはConnectionが付ける)。
+     * $dataはカラム名(R1検証)=>値。各値をR3写像の前処理で正規化し、R3写像でformatを導出して
      * $wpdb->insert()へ委譲。null値はwpdb仕様によりSQL NULLとして挿入される。
      * 失敗時QueryException。戻り値は$wpdb->insert_id。
      */
     public function insert(string $table, array $data): int;
 
-    /** UPDATE。$whereは等値条件のみ(null値はIS NULL)。影響行数を返す。失敗時QueryException */
+    /** UPDATE。$tableと$dataはinsert()と同じ(null値はSQL NULLを代入)。$whereは等値条件のみ(null値はIS NULL)。影響行数を返す。失敗時QueryException */
     public function update(string $table, array $data, array $where): int;
 
-    /** DELETE。$whereは等値条件のみ。影響行数を返す。失敗時QueryException */
+    /** DELETE。$tableはinsert()と同じ。$whereは等値条件のみ(null値はIS NULL)。影響行数を返す。失敗時QueryException */
     public function delete(string $table, array $where): int;
 
     public function insertId(): int;
 
     public function lastError(): string;
+
+    /** R3写像のプレースホルダ(%d/%f/%s)。写像できない値(null・配列・その他のオブジェクト)はInvalidQueryException。QueryBuilderも使う */
+    public static function placeholderFor(mixed $value): string;
+
+    /** R3写像の前処理を適用した値。写像できない値はInvalidQueryException */
+    public static function normalizeValue(mixed $value): int|float|string;
 }
 ```
 
@@ -208,13 +216,14 @@ final class Connection
 
 - `tableName()`: ベアテーブル名をR1で検証し、`$wpdb->prefix . $bareName`を返す(マルチサイトは対象外。00-overview §2.2)。
 - `select`系: 内部は`prepare()`を通した後、`$wpdb->get_results($sql, ARRAY_A)` / `get_row` / `get_var` / `get_col`へ委譲。実行後に`$wpdb->last_error`が非空なら`QueryException`。
-- `insert/update/delete`: format配列はR3写像から導出して`$wpdb->insert/update/delete`に渡す。`$where`に配列値が含まれる場合は`InvalidQueryException`(IN条件は`QueryBuilder`を使う)。
+- `insert/update/delete`: `$table`は常にベアテーブル名として`tableName()`で解決する。prefix付きのフルテーブル名は受け付けない(R1のベア名に合わなければ`InvalidQueryException`、合えばprefixが二重に付く)。prefixの無いテーブルへの書き込みは`execute()`を使う。
+- `insert/update/delete`: `$data`と`$where`の値はR3写像の前処理(`normalizeValue()`)で正規化し、format配列はR3写像(`placeholderFor()`)から導出して`$wpdb->insert/update/delete`に渡す。null値は正規化せずにそのまま渡し、wpdbが`$data`ではSQLの`NULL`、`$where`では`IS NULL`にする。`$where`に配列値が含まれる場合は`InvalidQueryException`(IN条件は`QueryBuilder`を使う)。
 - wpdbの戻り値は数値もstringで返るが、Connectionはこの段階では変換しない(型の正規化はDTOハイドレーションの責務)。
 
 #### エッジケース
 
-- `prepare()`にプレースホルダ数≠bindings数 → `InvalidQueryException`(wpdbのnotice発生前に検出)。
-- `insert()`に空配列 → `InvalidQueryException`。AUTO_INCREMENTのみの行を作る場合は`Model::insert([])`を使う(後述。Connectionレベルでは`execute('INSERT INTO ... () VALUES ()')`で表現される)。
+- `prepare()`にプレースホルダ数≠bindings数、またはR2規約2が受け付けない`%`の並び → `InvalidQueryException`(wpdbのnotice発生前に検出)。
+- `insert()`に空配列、`update()`に空の`$data`または`$where`、`delete()`に空の`$where` → `InvalidQueryException`。AUTO_INCREMENTのみの行を作る場合は`Model::insert([])`を使う(後述。Connectionレベルでは`execute('INSERT INTO ... () VALUES ()')`で表現される)。
 
 ---
 
@@ -635,7 +644,10 @@ final class QueryBuilder
     /** whereと同形態。直前条件にORで連結 */
     public function orWhere(string|\Closure $column, mixed $operator = null, mixed $value = null): self;
 
-    /** IN句。$valuesの各要素はR3写像対象(null・配列が含まれたらInvalidQueryException) */
+    /**
+     * IN句。$valuesはlist(list以外はInvalidQueryException)。各要素はR3写像対象(null・配列が含まれたらInvalidQueryException)
+     * @param list<mixed> $values
+     */
     public function whereIn(string $column, array $values): self;
 
     public function whereNotIn(string $column, array $values): self;
@@ -663,7 +675,8 @@ final class QueryBuilder
     /**
      * 単純等値結合。$tableは「ベア名」または「ベア名 AS 別名」。
      * $prefix: trueなら$tableにサイトprefixを付加(WPコアテーブル・他Modelのテーブルを
-     * ベア名で参照できる)。falseで完全名をそのまま使用。
+     * ベア名で参照できる)。このときテーブル名がR1のベア名に合わなければInvalidQueryException
+     * (大文字を小文字に変換しない)。falseで完全名をそのまま使用。
      * $left/$rightは修飾識別子、$operatorは = != <> > >= < <= のみ。
      */
     public function innerJoin(string $table, string $left, string $operator, string $right, bool $prefix = true): self;
@@ -716,23 +729,27 @@ final class QueryBuilder
 
     /**
      * 単一カラムの値リスト。$keyColumn指定時はそれをキーにした連想配列
-     * (キー重複時は後勝ち)。
+     * (キー重複時は後勝ち)。キーの値がintまたはstringでなければ(NULLを含む)QueryException。
      * @return array<int|string, mixed>
      */
     public function pluck(string $column, ?string $keyColumn = null): array;
 
+    // value()/pluck()のSELECT句: select()/selectRaw()が未指定なら、指定カラム($keyColumnを含む)だけを
+    // SELECT句にする。指定済みならSELECT句とそのbindingsを保ったまま実行する(集計の別名や自己結合の
+    // 別名をそのまま取り出せる)。
     // value()/pluck()のカラム照合: 結果行のキー(=SELECT句の別名または非修飾カラム名)と
     // 照合する。修飾識別子(t.col)が渡された場合はドット以降のカラム名で照合する。
+    // 返った行に照合するキーが無ければQueryException(SELECT句に含めていないカラムの指定)。
     // JOINで同名カラムが衝突する場合はselect()で別名を明示すること(rules/に記載)。
 
-    /** COUNT(*)。select/orderBy/limit/offsetは無視。groupBy指定時はサブクエリで件数化 */
+    /** COUNT(*)。select/orderBy/limit/offsetは捨てる。groupBy指定時はサブクエリで件数化 */
     public function count(): int;
 
     /** SELECT 1 ... LIMIT 1 の存在判定 */
     public function exists(): bool;
 
     /**
-     * UPDATE実行。$valuesはカラム=>値(R3写像)。
+     * UPDATE実行。$valuesはカラム=>値(R3写像。null値は{col} = NULLを代入)。
      * 制約: JOINとの併用不可・WHERE必須(違反はInvalidQueryException)。影響行数を返す。
      */
     public function update(array $values): int;
@@ -753,7 +770,7 @@ final class QueryBuilder
 - 引数2個: `where($column, $value)`。`$value === null`なら`{col} IS NULL`にコンパイル。それ以外はR3写像で`{col} = {placeholder}`。
 - 引数3個: 演算子を大文字正規化し許可リストと照合。`=`+null→`IS NULL`、`!=`/`<>`+null→`IS NOT NULL`。それ以外の演算子+null、および値が配列の場合は`InvalidQueryException`。
 
-**グループ(Closure)**: 子の`QueryBuilder`(同一Connection・同一テーブル)を生成してClosureに渡す。コンパイル時、子のwhere断片を`( ... )`で括って親に連結し、子のbindingsを親に連結する。子でwhere系以外(`select`/`join`/`orderBy`/`limit`等)が呼ばれていた場合は親のビルド時に`InvalidQueryException`。これが旧`__OR__`/`__AND__`再帰ネストの後継である。
+**グループ(Closure)**: 子の`QueryBuilder`(同一Connection・同一テーブル)を生成してClosureに渡す。Closureの実行後、子のwhere断片を`( ... )`で括って親に連結し、子のbindingsを親に連結する。子でwhere系以外(`select`/`selectRaw`/`alias`/`join`/`groupBy`/`orderBy`/`limit`/`offset`)が呼ばれていた場合は、そのグループを追加する`where()`/`orWhere()`の呼び出しで`InvalidQueryException`。
 
 **条件はメソッド呼び出し時に即コンパイル**する(`['AND', 'email = %s']` + bindings `['a@b.c']`の形で蓄積)。遅延コンパイルは行わない。仕様が単純になり、`toSql()`が常に現状態を反映する。
 
@@ -761,7 +778,7 @@ final class QueryBuilder
 
 **SELECT文の組み立て手順**(`get()`/`first()`/`value()`/`pluck()`/`exists()`/`count()`共通):
 
-1. SELECT句: `$selects`が空なら`*`。
+1. SELECT句: `$selects`が空なら`*`(`value()`/`pluck()`は指定カラム。シグネチャのコメント参照)。
 2. FROM句: `{$connection->tableName($table)}`+(alias指定時)` AS {alias}`。
 3. JOIN句: 蓄積順に連結。
 4. WHERE句: 先頭断片の論理演算子を捨て、以降を` AND `/` OR `で連結。
@@ -771,9 +788,9 @@ final class QueryBuilder
 
 **first()**: `limit(1)`を適用(既存のlimit指定は1で上書き)して`get()`し先頭を返す。
 
-**count()**: ビルダを複製し、select/orderBy/limit/offsetを破棄。`$groups`が空なら`SELECT COUNT(*)`に、非空なら`SELECT COUNT(*) FROM (SELECT 1 {from以降 group byまで}) AS tmswp_count`にコンパイルし、`(int) Connection::selectVar()`を返す。
+**count()**: select/selectRaw(とそのbindings)・orderBy・limit・offsetを捨てて組み立てる。`$groups`が空なら`SELECT COUNT(*) {from以降 whereまで}`に、非空なら`SELECT COUNT(*) FROM (SELECT 1 {from以降 group byまで}) AS tmswp_count`にコンパイルする(サブクエリにもORDER BY・LIMIT・OFFSETを含めない。ページ送りの総件数に使える)。offsetを捨てるため、`limit()`なしで`offset()`を指定したビルダでも例外にしない。`Connection::selectVar()`の値が整数を表さなければ`QueryException`、表せばintにして返す。
 
-**update()/delete()の組み立て**: `UPDATE {full} SET {col} = {ph}, ... WHERE ...` / `DELETE FROM {full} WHERE ...`。bindingsはSET句→WHERE句の順。alias・JOIN・groupBy・orderBy・limitが設定されていたら`InvalidQueryException`(最小限仕様)。「本当に全行を対象にしたい」場合のみ`whereRaw('1 = 1')`を書く規約とし、rules/に記載する。
+**update()/delete()の組み立て**: `UPDATE {full} SET {col} = {ph}, ... WHERE ...` / `DELETE FROM {full} WHERE ...`。null値は`{col} = NULL`とし、bindingsに積まない。bindingsはSET句→WHERE句の順。alias・JOIN・groupBy・orderBy・limitが設定されていたら`InvalidQueryException`(最小限仕様)。「本当に全行を対象にしたい」場合のみ`whereRaw('1 = 1')`を書く規約とし、rules/に記載する。
 
 **ハイドレーション**: 実行結果(連想配列リスト)を行クラスへ変換する。
 
@@ -787,10 +804,12 @@ final class QueryBuilder
 2. 各コンストラクタ引数について行カラムを解決する: (a) 引数名と完全一致するカラム、なければ (b) snake_case変換名(`preg_replace('/(?<=[a-z0-9])([A-Z])/', '_$1', $name)`を小文字化。例: `createdAt`→`created_at`)。
 3. どちらにも該当なし: デフォルト値があればそれを使用、なければ`HydrationException`(引数名・クラス名・利用可能カラム一覧をメッセージに含める)。
 4. 型強制(宣言型ベース。DB値はstring|nullで来る前提):
-   - `int`/`float`/`string` → 各キャスト。
-   - `bool` → `(bool)(int)` 変換(`'0'`→false、`'1'`→true)。
+   - `int` → 整数表記の文字列(`/\A(0|-?[1-9][0-9]*)\z/`)をintに変換(intの値はそのまま)。それ以外の値と、PHPのintの範囲を超える値(bigint unsignedの上半分等)は`HydrationException`。
+   - `float` → 数値の文字列(`is_numeric()`)とintをfloatに変換(floatの値はそのまま)。それ以外は`HydrationException`。
+   - `string` → 文字列のまま。文字列以外は`HydrationException`。
+   - `bool` → `'0'`・`0`→false、`'1'`・`1`→true(boolの値はそのまま)。それ以外は`HydrationException`。
    - `\DateTimeImmutable`または`\DateTimeInterface` → `\DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $value, wp_timezone())` の厳密書式パース。書式はdatetime/timestampカラムへの書き込み書式`'Y-m-d H:i:s'`(R3参照)と整合させ、先頭の`!`で未指定フィールド(マイクロ秒)を0に確定させる。戻り値が`false`、または`\DateTimeImmutable::getLastErrors()`が配列を返し`warning_count`/`error_count`のいずれかが0でない場合は`HydrationException`(PHP 8.2+ではエラー・警告なしのとき`getLastErrors()`は`false`を返す)。`new \DateTimeImmutable($value)`による相対書式(`'tomorrow'`・`'+1 day'`等)・`'@unixtime'`・任意文字列の暗黙解釈は行わない。
-   - `\BackedEnum`サブクラス → backing typeにキャストして`::from()`。`ValueError`は`HydrationException`に変換。
+   - `\BackedEnum`サブクラス → backing typeに変換して`::from()`(intのenumは上記`int`の規則で変換する)。変換できない値と`ValueError`は`HydrationException`。
    - `array` → `json_decode($value, true, 512, JSON_THROW_ON_ERROR)`。失敗は`HydrationException`(`json()`カラム用)。
    - nullable型(`?T`)+DB値null → null。非nullable型+null → `HydrationException`。
    - `mixed`/型宣言なし → 生値のまま。
@@ -802,7 +821,7 @@ PHPStan向けに`as()`/`get()`/`first()`へ`@template T of object` / `@param cla
 
 #### エッジケース
 
-- `offset()`のみ指定してビルド → `InvalidQueryException`(旧FWはMySQL構文エラーになるSQLを生成していた。設計根拠参照)。
+- `offset()`のみ指定してビルド → `InvalidQueryException`(`count()`を除く)。
 - `ORDER BY RAND()`等の方向指定は非対応と確定する。`$direction`は`SortOrder` enumのため、不正な方向指定は型レベルで表現不能(静的解析・IDEが検出)。乱択は`pluck`後にPHP側で行う。
 - 同一ビルダで終端メソッドを複数回呼ぶことは許可(ビルダ状態は終端呼び出しで変化しない。`first()`のlimit上書きはクローン上で行う)。
 

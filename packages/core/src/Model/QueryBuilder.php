@@ -10,6 +10,7 @@ use DateTimeImmutable;
 use DateTimeInterface;
 use JsonException;
 use ReflectionClass;
+use ReflectionEnum;
 use ReflectionNamedType;
 use ReflectionParameter;
 use TMSWP\Core\Exception\HydrationException;
@@ -277,10 +278,20 @@ final class QueryBuilder
         return $clone->get()[0] ?? null;
     }
 
+    /**
+     * 先頭行の指定カラムの値。SELECT 句が未指定ならそのカラムだけを選び、指定済みなら SELECT 句を保って
+     * 結果のキーと照合する。結果が0行なら null、行に照合するキーが無ければ QueryException。
+     */
     public function value(string $column): mixed
     {
+        $key = $this->resultKey($column);
         $clone = clone $this;
-        $clone->select($column)->limit(1);
+
+        if ($clone->selects === []) {
+            $clone->select($column);
+        }
+
+        $clone->limit(1);
         $query = $clone->buildSelect();
         $row = $this->connection->selectRow($query->sql, $query->bindings);
 
@@ -288,12 +299,16 @@ final class QueryBuilder
             return null;
         }
 
-        $key = $this->resultKey($column);
-
-        return \array_key_exists($key, $row) ? $row[$key] : null;
+        return $this->resultColumn($row, $key);
     }
 
-    /** @return array<int|string, mixed> */
+    /**
+     * 単一カラムの値のリスト。$keyColumn を指定すると、その値をキーにする(キーの重複は後勝ち)。
+     * SELECT 句の扱いは value() と同じ。行に照合するキーが無い場合と、キーの値が int・string でない場合は
+     * QueryException。
+     *
+     * @return array<int|string, mixed>
+     */
     public function pluck(string $column, ?string $keyColumn = null): array
     {
         $valueKey = $this->resultKey($column);
@@ -301,25 +316,29 @@ final class QueryBuilder
         $values = [];
 
         $clone = clone $this;
-        $clone->select(...($keyColumn === null ? [$column] : [$column, $keyColumn]));
+
+        if ($clone->selects === []) {
+            $clone->select(...($keyColumn === null ? [$column] : [$column, $keyColumn]));
+        }
+
         $query = $clone->buildSelect();
 
         foreach ($this->connection->select($query->sql, $query->bindings) as $row) {
-            if (!\array_key_exists($valueKey, $row)) {
-                continue;
-            }
+            $value = $this->resultColumn($row, $valueKey);
 
-            if ($keyKey !== null && \array_key_exists($keyKey, $row)) {
-                $key = $row[$keyKey];
-
-                if (\is_int($key) || \is_string($key)) {
-                    $values[$key] = $row[$valueKey];
-                }
+            if ($keyKey === null) {
+                $values[] = $value;
 
                 continue;
             }
 
-            $values[] = $row[$valueKey];
+            $key = $this->resultColumn($row, $keyKey);
+
+            if (!\is_int($key) && !\is_string($key)) {
+                throw new QueryException("pluck key column '{$keyKey}' must be an integer or a string, " . get_debug_type($key) . ' given');
+            }
+
+            $values[$key] = $value;
         }
 
         return $values;
@@ -327,7 +346,7 @@ final class QueryBuilder
 
     public function count(): int
     {
-        $query = $this->groups === [] ? $this->buildSelect('COUNT(*)', forCount: true) : $this->buildGroupedCount();
+        $query = $this->buildCount();
         $value = $this->connection->selectVar($query->sql, $query->bindings);
 
         if (\is_int($value)) {
@@ -343,7 +362,7 @@ final class QueryBuilder
 
     public function exists(): bool
     {
-        $query = $this->buildSelect('1', limit: 1);
+        $query = $this->buildSelect('1', 1);
 
         return $this->connection->selectVar($query->sql, $query->bindings) !== null;
     }
@@ -357,6 +376,13 @@ final class QueryBuilder
 
         foreach ($values as $column => $value) {
             Identifier::simple($column);
+
+            if ($value === null) {
+                $assignments[] = $column . ' = NULL';
+
+                continue;
+            }
+
             $assignments[] = $column . ' = ' . Connection::placeholderFor($value);
             $bindings[] = $value;
         }
@@ -444,7 +470,7 @@ final class QueryBuilder
         $child = new self($this->connection, $this->table, $this->rowClass);
         $group($child);
 
-        if ($child->selects !== [] || $child->joins !== [] || $child->groups !== [] || $child->orders !== [] || $child->limitValue !== null || $child->offsetValue !== null) {
+        if ($child->selects !== [] || $child->fromAlias !== null || $child->joins !== [] || $child->groups !== [] || $child->orders !== [] || $child->limitValue !== null || $child->offsetValue !== null) {
             throw new InvalidQueryException('where group can contain only where clauses');
         }
 
@@ -457,6 +483,10 @@ final class QueryBuilder
     private function whereInClause(string $boolean, string $column, array $values, bool $not): self
     {
         $column = Identifier::qualified($column);
+
+        if (!array_is_list($values)) {
+            throw new InvalidQueryException('whereIn values must be a list');
+        }
 
         if ($values === []) {
             return $this->pushWhere($boolean, $not ? '1 = 1' : '0 = 1');
@@ -497,7 +527,7 @@ final class QueryBuilder
         $name = $matches[1];
         $alias = $matches[2] ?? null;
 
-        return [$prefix ? $this->connection->tableName(strtolower($name)) : Identifier::table($name), $alias];
+        return [$prefix ? $this->connection->tableName($name) : Identifier::table($name), $alias];
     }
 
     private function operator(string $operator): string
@@ -550,13 +580,62 @@ final class QueryBuilder
         return [implode('', $parts), $this->whereBindings];
     }
 
-    private function buildSelect(?string $selectOverride = null, bool $forCount = false, ?int $limit = null): SqlQuery
+    /**
+     * ORDER BY・LIMIT・OFFSET までの SELECT 文。$selectOverride を渡すと SELECT 句とその値を置き換え、
+     * $limitOverride を渡すと limit() の値を置き換える。
+     */
+    private function buildSelect(?string $selectOverride = null, ?int $limitOverride = null): SqlQuery
     {
-        if ($this->offsetValue !== null && $this->limitValue === null && $limit === null) {
+        $limit = $limitOverride ?? $this->limitValue;
+
+        if ($this->offsetValue !== null && $limit === null) {
             throw new InvalidQueryException('offset requires limit');
         }
 
-        $selects = $selectOverride ?? ($this->selects === [] ? '*' : implode(', ', $this->selects));
+        $query = $selectOverride === null
+            ? $this->buildSelectBody($this->selects === [] ? '*' : implode(', ', $this->selects), $this->selectBindings)
+            : $this->buildSelectBody($selectOverride, []);
+        $sql = $query->sql;
+        $bindings = $query->bindings;
+
+        if ($this->orders !== []) {
+            $sql .= ' ORDER BY ' . implode(', ', $this->orders);
+        }
+
+        if ($limit !== null) {
+            $sql .= ' LIMIT %d';
+            $bindings[] = $limit;
+        }
+
+        if ($this->offsetValue !== null) {
+            $sql .= ' OFFSET %d';
+            $bindings[] = $this->offsetValue;
+        }
+
+        return new SqlQuery($sql, $bindings);
+    }
+
+    /**
+     * 件数の SELECT 文。SELECT 句・ORDER BY・LIMIT・OFFSET を捨てる。GROUP BY があればグループの数を数える。
+     */
+    private function buildCount(): SqlQuery
+    {
+        if ($this->groups === []) {
+            return $this->buildSelectBody('COUNT(*)', []);
+        }
+
+        $inner = $this->buildSelectBody('1', []);
+
+        return new SqlQuery('SELECT COUNT(*) FROM (' . $inner->sql . ') AS tmswp_count', $inner->bindings);
+    }
+
+    /**
+     * SELECT 句から GROUP BY までの SELECT 文。
+     *
+     * @param list<mixed> $selectBindings
+     */
+    private function buildSelectBody(string $selects, array $selectBindings): SqlQuery
+    {
         $sql = 'SELECT ' . $selects . ' FROM ' . $this->connection->tableName($this->table);
 
         if ($this->fromAlias !== null) {
@@ -567,7 +646,7 @@ final class QueryBuilder
             $sql .= ' ' . implode(' ', $this->joins);
         }
 
-        $bindings = [...($selectOverride === null ? $this->selectBindings : []), ...$this->joinBindings];
+        $bindings = [...$selectBindings, ...$this->joinBindings];
 
         if ($this->wheres !== []) {
             [$whereSql, $whereBindings] = $this->compileWhere();
@@ -575,34 +654,11 @@ final class QueryBuilder
             array_push($bindings, ...$whereBindings);
         }
 
-        if (!$forCount && $this->groups !== []) {
+        if ($this->groups !== []) {
             $sql .= ' GROUP BY ' . implode(', ', $this->groups);
         }
 
-        if (!$forCount && $this->orders !== []) {
-            $sql .= ' ORDER BY ' . implode(', ', $this->orders);
-        }
-
-        $limitValue = $limit ?? $this->limitValue;
-
-        if (!$forCount && $limitValue !== null) {
-            $sql .= ' LIMIT %d';
-            $bindings[] = $limitValue;
-        }
-
-        if (!$forCount && $this->offsetValue !== null) {
-            $sql .= ' OFFSET %d';
-            $bindings[] = $this->offsetValue;
-        }
-
         return new SqlQuery($sql, $bindings);
-    }
-
-    private function buildGroupedCount(): SqlQuery
-    {
-        $inner = $this->buildSelect('1', forCount: false);
-
-        return new SqlQuery('SELECT COUNT(*) FROM (' . $inner->sql . ') AS tmswp_count', $inner->bindings);
     }
 
     /** @param array<string, mixed> $values */
@@ -651,7 +707,11 @@ final class QueryBuilder
         $key = \array_key_exists($name, $row) ? $name : $this->snake($name);
 
         if (!\array_key_exists($key, $row)) {
-            throw new HydrationException("missing column '{$name}' for row class '{$this->rowClass}'");
+            if ($parameter->isDefaultValueAvailable()) {
+                return $parameter->getDefaultValue();
+            }
+
+            throw new HydrationException("missing column '{$name}' for row class '{$this->rowClass}'; available columns: " . implode(', ', array_keys($row)));
         }
 
         return $this->coerce($row[$key], $parameter);
@@ -696,12 +756,13 @@ final class QueryBuilder
         }
 
         if (is_subclass_of($name, BackedEnum::class)) {
-            if (!\is_int($value) && !\is_string($value)) {
-                throw new HydrationException("invalid enum value type for '{$parameter->getName()}'");
-            }
+            // DB の値は string で届くため、int を値に持つ enum では int に変換してから from() に渡す
+            $backingValue = (string) (new ReflectionEnum($name))->getBackingType() === 'int'
+                ? $this->coerceInt($value, $parameter->getName())
+                : $this->coerceString($value, $parameter->getName());
 
             try {
-                return $name::from($value);
+                return $name::from($backingValue);
             } catch (ValueError $exception) {
                 throw new HydrationException("invalid enum value for '{$parameter->getName()}'", previous: $exception);
             }
@@ -716,8 +777,15 @@ final class QueryBuilder
             return $value;
         }
 
-        if (\is_string($value) && preg_match('/\A-?(0|[1-9][0-9]*)\z/', $value) === 1) {
-            return (int) $value;
+        if (\is_string($value) && preg_match('/\A(0|-?[1-9][0-9]*)\z/', $value) === 1) {
+            $integer = (int) $value;
+
+            // PHP の int の範囲を超える値(bigint unsigned の上半分等)は、(int) で上限に丸められるため拒否する
+            if ((string) $integer !== $value) {
+                throw new HydrationException("integer out of range for '{$parameter}'");
+            }
+
+            return $integer;
         }
 
         throw new HydrationException("invalid integer for '{$parameter}'");
@@ -809,8 +877,22 @@ final class QueryBuilder
         return strtolower($snake);
     }
 
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function resultColumn(array $row, string $key): mixed
+    {
+        if (!\array_key_exists($key, $row)) {
+            throw new QueryException("result row has no column '{$key}'; available columns: " . implode(', ', array_keys($row)));
+        }
+
+        return $row[$key];
+    }
+
     private function resultKey(string $column): string
     {
+        Identifier::selectable($column);
+
         if (preg_match('/\s+(?i:AS)\s+([A-Za-z_][A-Za-z0-9_]*)\z/', $column, $matches) === 1) {
             return $matches[1];
         }
