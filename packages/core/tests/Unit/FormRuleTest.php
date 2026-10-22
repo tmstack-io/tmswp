@@ -271,6 +271,29 @@ final class FormRuleTest extends UnitTestCase
     }
 
     /**
+     * Email は Url と違い、国際化ドメイン名を punycode に変換しない(docs/05 §同梱ルール一覧)。そのため、国際化ドメイン名と
+     * ローカル部の非 ASCII は不合格になり、punycode の形のドメインは合格する。
+     *
+     * @return iterable<array{string, bool}>
+     */
+    public static function internationalizedEmailAddresses(): iterable
+    {
+        return [
+            ['user@例え.jp', false],
+            ['ユーザー@example.jp', false],
+            ['user@xn--r8jz45g.jp', true],
+        ];
+    }
+
+    #[DataProvider('internationalizedEmailAddresses')]
+    public function testEmailDoesNotConvertInternationalizedDomainNames(string $address, bool $valid): void
+    {
+        $definition = FormDefinition::create('form')->text('email', 'Email', [new Email()]);
+
+        self::assertSame($valid ? [] : ['email' => ['Please enter a valid email address for Email.']], (new Validator())->validate($definition, ['email' => $address]));
+    }
+
+    /**
      * 旧 ExactLengthRuleTest の境界値(ASCII とマルチバイトの10文字)。ExactLength は同梱しない(docs/05 §同梱ルール一覧)
      * ため、同じ長さの MinLength と MaxLength の組で確かめる。
      *
