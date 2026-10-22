@@ -32,7 +32,7 @@ TMSWP コアのうち、テンプレート読み込みヘルパ(`View\Template`)
 
 ### 1.1 役割
 
-`get_template_part()` の発想をそのままに、(1) プラグイン同梱テンプレートへのフォールバック、(2) `$args` 連想配列の明示受け渡し(`extract()` 禁止)、(3) 文字列キャプチャ(`render()`)、の3点だけを足した薄いヘルパ。
+`get_template_part()` の発想をそのままに、(1) プラグイン同梱テンプレートへのフォールバック、(2) `$args` 連想配列の明示受け渡し(`extract()` 禁止)、(3) 文字列キャプチャ(`render()`)、の3点だけを足した薄いヘルパ。`get_template_part()` と同じフック(`get_template_part_{$slug}` と `get_template_part`)を同じ引数・順序で発火するため、これらのフックに登録した処理は `Template::part()` でも動く(§1.5)。
 
 **やらないこと(絶対原則の担保)**: `template_include` への介入、`exit`、グローバル変数の展開・注入、テンプレート階層の変更、独自テンプレート構文。テーマのテンプレートファイルは WP 標準のまま書ける。`Template` を一切使わないテーマ・プラグインも完全に動作する(オプトイン機能)。
 
@@ -45,6 +45,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\View;
 
+use TMSWP\Core\Exception\InvalidTemplateSlugException;
 use TMSWP\Core\Exception\TemplateNotFoundException;
 
 /**
@@ -59,11 +60,12 @@ final class Template
     private function __construct() {}
 
     /**
-     * テンプレートパーシャルを解決して出力する。
+     * slug を検証し、get_template_part 系のフックを発火してから、テンプレートを解決して出力する(§1.5)。
      *
      * @param string               $slug 拡張子なしの相対パス(例: 'parts/card')
      * @param array<string, mixed> $args テンプレート内で $args として参照できる変数
-     * @throws TemplateNotFoundException 解決失敗時
+     * @throws InvalidTemplateSlugException slug が §1.4 の形式違反のとき(フックは発火しない)
+     * @throws TemplateNotFoundException 解決失敗時(フックの発火の後に解決し、見つからなければ投げる)
      */
     public static function part(string $slug, array $args = []): void;
 
@@ -96,6 +98,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\View;
 
+use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\InvalidTemplateSlugException;
 
 /**
@@ -110,16 +113,21 @@ final class TemplateLocator
     /** @var array<string, string|null> slug => 解決済み絶対パス(null=未発見)のキャッシュ */
     private array $resolved = [];
 
-    public function __construct() {}
-
     /**
-     * フォールバックディレクトリを末尾に追加する(プラグインの Kernel ブートが呼ぶ)。
-     * 同一パス(正規化後)の重複登録は無視。ディレクトリ非実在は登録時には検査しない。
+     * フォールバックディレクトリを末尾に追加し、解決キャッシュを破棄する(プラグインの Kernel ブートが呼ぶ)。
+     * 末尾の `/`・`\` を除いて比較し、同一パスの重複登録は無視する。ディレクトリ非実在は登録時には検査しない。
+     * @throws InvalidArgumentException 末尾の `/`・`\` を除いた結果が空文字になるパス(`''`・`'/'` 等)のとき
      */
     public function addFallbackDir(string $dir): void;
 
     /** @return list<string> 登録済みフォールバックディレクトリ(登録順) */
     public function fallbackDirs(): array;
+
+    /**
+     * slug が §1.4 の形式の規則に合うかを確かめる(Template::part() がフックの発火の前に呼ぶ)。
+     * @throws InvalidTemplateSlugException slug が §1.4 の形式違反のとき
+     */
+    public function assertSlug(string $slug): void;
 
     /**
      * slug を絶対パスへ解決する。未発見なら null。
@@ -131,6 +139,13 @@ final class TemplateLocator
 
     /** 解決キャッシュを破棄する(テスト・テーマ切替時用) */
     public function flush(): void;
+
+    /**
+     * §1.3 のステップ 3〜5 の候補パスを探索順に返す(TemplateNotFoundException のメッセージに使う)。
+     * @return list<string>
+     * @throws InvalidTemplateSlugException slug が §1.4 の形式違反のとき
+     */
+    public function candidatePaths(string $slug): array;
 }
 ```
 
@@ -161,16 +176,33 @@ final class TemplateLocator
 
 `Template::part()`:
 
-1. `self::locator()->locate($slug)` で解決。null なら **常に** `TemplateNotFoundException` を投げる(本番でも握り潰さない。失敗の明示は DR-04 と同じ思想)。例外メッセージには slug と探索した全候補パスを含める。
-2. 解決したファイルを **隔離スコープ** で include する。テンプレートから見える変数は `$args` のみ。`$this` は束縛しない。擬似コード:
+1. `self::locator()->assertSlug($slug)` で slug を検証する。§1.4 の形式違反なら `InvalidTemplateSlugException` を投げる(不正な slug からフックの名前を作らないため、フックは発火しない)。この時点ではテンプレートを解決しない。
+2. WordPress 7.0 の `get_template_part()` と同じフックを、同じ引数・順序で発火する。`Template::part()` は `$name` を持たないため、`get_template_part($slug, null, $args)` と同じ引数になる。
+
+   | 順 | フック | 引数 |
+   |---|---|---|
+   | 1 | `get_template_part_{$slug}` | `$slug`, `null`(`$name`), `$args` |
+   | 2 | `get_template_part` | `$slug`, `''`(`$name` を文字列にしたもの), `["{$slug}.php"]`(`$templates`), `$args` |
+
+   `get_template_part()` と同じく、フックはテンプレートの解決の前に発火する。フックのコールバックが用意したテンプレートも、3 の解決で見つかる。ただし、同じ slug をそれより前に解決して未発見だった場合(`exists()` 等)は、§1.3 のキャッシュの null が返る。`load_template()` を通さないため、`load_template()` が発火する `wp_before_load_template` / `wp_after_load_template` は発火しない。
+3. `self::locator()->locate($slug)` で解決する(§1.3)。
+4. 3 の結果が null なら **常に** `TemplateNotFoundException` を投げる(本番でも握り潰さない。失敗の明示は DR-04 と同じ思想)。例外メッセージには slug と探索した全候補パスを含める。
+5. 解決したファイルを **隔離スコープ** で include する。include するクロージャはどのクラスのスコープにも束縛せず(`Closure::bind($closure, null, null)`)、テンプレートは `Template` の private なプロパティ・メソッドに触れられない。`$this` も束縛しない。テンプレートから見える変数は `$args` のみ。擬似コード:
 
 ```php
-private static function includeIsolated(string $file, array $args): void
+private static function includeFile(string $file, array $args): void
 {
-    // $file は func_get_arg() 経由で渡し、テンプレートスコープに変数として漏らさない
-    (static function (array $args): void {
-        include func_get_arg(1);
-    })($args, $file);
+    $include = Closure::bind(
+        static function (array $args): void {
+            // $args には [パス, 引数] が来る。分割代入で $args を引数に置き換え、
+            // 代入式の値(元の配列)の [0] からパスを取り出す。パスを変数に置かない
+            include ([, $args] = $args)[0];
+        },
+        null,   // $this を束縛しない
+        null,   // クラスのスコープに束縛しない
+    );
+
+    $include([$file, $args]);
 }
 ```
 
