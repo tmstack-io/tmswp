@@ -193,7 +193,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 
 ### 3.2 依存ポリシー(規範)
 
-1. **コアの runtime 依存は `psr/log ^3` と `psr/container ^2` のみ**。これ以外の require 追加(symfony/*、illuminate/*、polyfill 類を含む)は禁止。PHP 拡張も require しない(`ext-json` は PHP 8.0+ で常時有効のため宣言不要。`ext-mbstring` は `suggest` に記載し、`Support\Str` のマルチバイト処理が必要とする旨を明示する。WordPress 実行環境では mbstring はホスティング標準であり、これを事実上のプラットフォーム前提とする)。
+1. **コアの runtime 依存は `psr/log ^3` と `psr/container ^2` のみ**。これ以外の require 追加(symfony/*、illuminate/*、polyfill 類を含む)は禁止。PHP 拡張も require しない(`ext-json` は PHP 8.0+ で常時有効のため宣言不要。`ext-mbstring` は `suggest` に記載し、`Support\Str` のマルチバイト処理が必要とする旨を明示する。WordPress 実行環境では mbstring はホスティング標準であり、これを事実上のプラットフォーム前提とする。`ext-intl` も `suggest` に記載し、Form の `Url` ルールが国際化ドメイン名の変換(`idn_to_ascii()`)に使う旨を明示する。ext-intl が無い環境では `Url` のコンストラクタが `FormConfigException` を投げる)。
 2. **拡張パッケージは各自 runtime 依存を持ってよい**。ただし次の条件を満たすこと:
    - 依存追加は当該拡張の設計書に「何を・なぜ」を記録する(本表の更新を伴う)。
    - WordPress プラグイン同梱で衝突しやすいライブラリ(グローバル関数を定義するもの、メジャーバージョンが乱立しているもの)を避ける。
@@ -240,6 +240,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
         "psr/container": "^2.0"
     },
     "suggest": {
+        "ext-intl": "Required by TMSWP\\Core\\Form\\Rule\\Url to validate internationalized domain names",
         "ext-mbstring": "Required for multibyte string handling in TMSWP\\Core\\Support\\Str",
         "tmswp/thumbnail": "Signed dynamic thumbnail URLs",
         "tmswp/acf-bridge": "Typed accessors generated from acf-json"

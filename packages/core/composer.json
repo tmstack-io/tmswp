@@ -9,6 +9,7 @@
     "psr/log": "^3.0"
   },
   "suggest": {
+    "ext-intl": "Required by TMSWP\\Core\\Form\\Rule\\Url to validate internationalized domain names",
     "ext-mbstring": "Required for multibyte string handling in TMSWP\\Core\\Support\\Str",
     "tmswp/acf-bridge": "Typed accessors generated from acf-json",
     "tmswp/thumbnail": "Signed dynamic thumbnail URLs"
