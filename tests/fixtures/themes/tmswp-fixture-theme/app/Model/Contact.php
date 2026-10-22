@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace TmswpFixtureTheme\Model;
 
-use DateTimeImmutable;
 use TMSWP\Core\Attribute\AsModel;
 use TMSWP\Core\Model\Model;
 use TMSWP\Core\Model\TableDefinition;
@@ -15,16 +14,6 @@ use TMSWP\Core\Model\TableDefinition;
 #[AsModel]
 final class Contact extends Model
 {
-    /** @param array<mixed> $meta */
-    public function __construct(
-        public int $id,
-        public string $email,
-        public bool $active,
-        public array $meta,
-        public DateTimeImmutable $createdAt,
-        public ContactStatus $status,
-    ) {}
-
     public static function table(): TableDefinition
     {
         return TableDefinition::create('tmswp_fixture_contacts')

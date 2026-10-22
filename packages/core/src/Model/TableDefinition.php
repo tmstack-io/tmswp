@@ -165,8 +165,13 @@ final class TableDefinition
         return $this;
     }
 
+    /** charset() の後に呼ぶ。charset を指定しない collation は、CREATE TABLE に出せないため宣言の時点で拒否する。 */
     public function collation(string $collation): self
     {
+        if ($this->charset === null) {
+            throw new SchemaException("collation requires charset to be declared first: {$collation}");
+        }
+
         $this->collation = $this->charsetIdentifier($collation);
 
         return $this;

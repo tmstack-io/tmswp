@@ -11,6 +11,16 @@ services:
         class: TMSWP\Core\PHPStan\OptionGroupGetterReturnTypeExtension
         tags:
             - phpstan.broker.dynamicMethodReturnTypeExtension
+    -
+        class: TMSWP\Core\PHPStan\ModelRowTypeResolver
+    -
+        class: TMSWP\Core\PHPStan\QueryBuilderRowReturnTypeExtension
+        tags:
+            - phpstan.broker.dynamicMethodReturnTypeExtension
+    -
+        class: TMSWP\Core\PHPStan\ModelFindReturnTypeExtension
+        tags:
+            - phpstan.broker.dynamicStaticMethodReturnTypeExtension
 
 rules:
     - TMSWP\Core\PHPStan\KernelResetMethodCallableOutsideTestRule

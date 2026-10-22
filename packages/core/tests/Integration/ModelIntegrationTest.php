@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Integration;
 
 use ReflectionProperty;
+use stdClass;
 use TMSWP\Core\Model\Connection;
 use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Model\Model;
@@ -58,9 +59,11 @@ final class ModelIntegrationTest extends IntegrationTestCase
         $found = $contact::find($id);
         self::assertIsObject($found);
         self::assertSame('first@example.test', $this->objectProperty($found, 'email'));
-        self::assertSame(['tags' => ['news']], $this->objectProperty($found, 'meta'));
+        // rowClass() を上書きしない Model の行は stdClass で、値は DB 由来の文字列のまま
+        self::assertInstanceOf(stdClass::class, $found);
+        self::assertSame('{"tags":["news"]}', $this->objectProperty($found, 'meta'));
 
-        self::assertSame(1, $contact::update($id, ['email' => 'updated@example.test']));
+        self::assertSame(1, $contact::update(['email' => 'updated@example.test'], $id));
         $updated = $contact::find($id);
         self::assertIsObject($updated);
         self::assertSame('updated@example.test', $this->objectProperty($updated, 'email'));

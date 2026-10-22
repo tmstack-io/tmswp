@@ -16,10 +16,6 @@ use TMSWP\Core\Tests\Support\RecordedComponent;
 #[RecordedComponent(AsModel::class)]
 final class SpiedModel extends Model
 {
-    public function __construct(
-        public int $id,
-    ) {}
-
     public static function table(): TableDefinition
     {
         return TableDefinition::create('tmswp_fixture_spied')->id();

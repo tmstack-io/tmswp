@@ -51,13 +51,22 @@ final class QueryBuilder
 
     private ?int $offsetValue = null;
 
-    /** @param class-string|null $rowClass */
+    /** @var class-string|null */
+    private ?string $rowClass;
+
+    /**
+     * @param class-string|null $rowClass
+     *
+     * @throws HydrationException $rowClass が存在しないクラスの場合
+     * @throws InvalidQueryException $rowClass が Model のサブクラスの場合(as() と同じ検査)
+     */
     public function __construct(
         private readonly Connection $connection,
         private readonly string $table,
-        private ?string $rowClass = null,
+        ?string $rowClass = null,
     ) {
         Identifier::bareTable($table);
+        $this->rowClass = $rowClass === null ? null : self::rowClassOrFail($rowClass);
     }
 
     public function alias(string $alias): self
@@ -244,14 +253,15 @@ final class QueryBuilder
         return $this;
     }
 
-    /** @param class-string<object> $class */
+    /**
+     * @param class-string<object> $class
+     *
+     * @throws HydrationException $class が存在しないクラスの場合
+     * @throws InvalidQueryException $class が Model のサブクラスの場合(Model は行を表さない)
+     */
     public function as(string $class): self
     {
-        if (!class_exists($class)) {
-            throw new HydrationException("row class not found: {$class}");
-        }
-
-        $this->rowClass = $class;
+        $this->rowClass = self::rowClassOrFail($class);
 
         return $this;
     }
@@ -454,6 +464,26 @@ final class QueryBuilder
         }
 
         return $this->pushWhere($boolean, "{$column} {$operator} " . Connection::placeholderFor($value), [$value]);
+    }
+
+    /**
+     * 行クラスの検査。行クラスを受け取る入口(コンストラクタと as())はすべてこれを通す。
+     *
+     * @param class-string $class
+     *
+     * @return class-string
+     */
+    private static function rowClassOrFail(string $class): string
+    {
+        if (!class_exists($class)) {
+            throw new HydrationException("row class not found: {$class}");
+        }
+
+        if (is_a($class, Model::class, true)) {
+            throw new InvalidQueryException("row class must not be a Model; declare a separate row class: {$class}");
+        }
+
+        return $class;
     }
 
     /** @param list<mixed> $bindings */

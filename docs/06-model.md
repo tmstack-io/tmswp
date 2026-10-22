@@ -250,12 +250,16 @@ final class TableDefinition
     /** @var list<string> 宣言済みカラム名(重複検出用) */
     private array $columnNames = [];
 
-    /** @var list<string> PRIMARY KEY / KEY / UNIQUE KEY 行 */
-    private array $keyLines = [];
+    /** @var array<string, string> カラム名 => 型名(インデックス可否の判定用) */
+    private array $columnTypes = [];
+
+    /** @var list<array{type: 'KEY'|'UNIQUE KEY', name: string, columns: list<string>}> 宣言順 */
+    private array $indexes = [];
+
+    /** @var list<string>|null 主キーのカラム(未定義はnull) */
+    private ?array $primaryColumns = null;
 
     private ?string $primaryKeyColumn = null;
-
-    private bool $hasPrimaryKey = false;
 
     private ?string $charset = null;
 
@@ -318,6 +322,7 @@ final class TableDefinition
 
     public function charset(string $charset): self;
 
+    /** charset()の後に呼ぶ。charset未指定で呼ぶとSchemaException */
     public function collation(string $collation): self;
 
     // ---- 読み出し ----
@@ -327,6 +332,22 @@ final class TableDefinition
 
     /** 単一カラム主キー名。複合主キー・未定義時はnull */
     public function primaryKey(): ?string;
+
+    // ---- Migratorが残差分の検査に使う読み出し ----
+
+    /** @return list<string> 宣言順のカラム名 */
+    public function columns(): array;
+
+    /** @return list<string> 主キーのカラム。未定義はSchemaException */
+    public function primaryColumns(): array;
+
+    /** @return list<array{type: 'KEY'|'UNIQUE KEY', name: string, columns: list<string>}> */
+    public function indexes(): array;
+
+    public function hasColumn(string $name): bool;
+
+    /** 型名(例: 'varchar(191)')。未宣言のカラムはSchemaException */
+    public function columnType(string $name): string;
 
     /** dbDelta互換CREATE TABLE文(後述の生成仕様) */
     public function toSql(Connection $connection): string;
@@ -374,7 +395,7 @@ dbDeltaのパーサ要件を生成側で全て満たす。**実装はこの手�
    - カラム名・テーブル名にバッククォート・アポストロフィを付けない。
    - 型名はすべて小文字、`NOT NULL`/`DEFAULT`/`AUTO_INCREMENT`等のキーワードは大文字。
    - 長さ指定可能な型には必ず長さを明記する(`int(11)`等)。
-5. charset句: `charset()`/`collation()`が未指定なら`$connection->charsetCollate()`をそのまま使用。指定時は`DEFAULT CHARACTER SET {charset}`+(collation指定時)` COLLATE {collation}`を合成(値は`/^[A-Za-z0-9_]+$/`で検証)。
+5. charset句: `charset()`が未指定なら`$connection->charsetCollate()`をそのまま使用。指定時は`DEFAULT CHARACTER SET {charset}`+(collation指定時)` COLLATE {collation}`を合成(値は`/^[A-Za-z0-9_]+$/`で検証)。charsetを指定しないcollationは宣言時に拒否する(エッジケース参照)。
 6. 最終形:
 
 ```
@@ -391,6 +412,8 @@ CREATE TABLE {full_table_name} (
 - `index()`/`unique()`/`primary()`に未宣言カラム名 → `SchemaException`(`rawColumn`で宣言したカラムは`$name`が登録されるため参照可)。
 - `id()`と`primary()`の併用 → `SchemaException`。
 - `text`/`json`(longtext)カラムへの`index()` → `SchemaException`(プレフィックスインデックスは非対応。必要なら`rawColumn`+明示キーではなく`string`への変更を促すメッセージ)。
+- カラム名・インデックス名(`id()`の`$name`、`rawColumn()`、`index()`/`unique()`の`$name`を含む)にSQLの予約語(`order`・`key`・`group`・`desc`・`range`等。大文字小文字不問) → 宣言時に`SchemaException`。生成するSQLは識別子をクォートしない(dbDeltaの要件)ため、予約語はCREATE TABLEやクエリの実行時に構文エラーになる。予約語の集合は、MySQL 8.0の予約語(`information_schema.KEYWORDS`の`RESERVED = 1`)と、MariaDB(10.11・12.3)でクォートせずにカラム名に使えない語の和集合とする(`Identifier`が保持する)。ベアテーブル名はprefixが付くため対象外。
+- `charset()`より前、または`charset()`なしでの`collation()` → 宣言時に`SchemaException`(charset句はcharsetの指定時にだけcollationを出力するため、collationだけの指定は反映できない)。
 
 ---
 
@@ -398,7 +421,7 @@ CREATE TABLE {full_table_name} (
 
 #### 役割
 
-1テーブル=1クラスの抽象基底。サブクラスは`table()`でスキーマを宣言するだけでよい。テンプレート・アプリコードから使う静的ファサード(DR-09の二層構成のファサード側)であり、内部はすべて`Connection`/`QueryBuilder`へ委譲する。旧`AbstractSingleton`継承は廃止。インスタンス化は不要であり、コンストラクタは持たない(状態を持たない)。
+1テーブル=1クラスの抽象基底。サブクラスは`table()`でスキーマを宣言するだけでよい。テンプレート・アプリコードから使う静的ファサード(DR-09の二層構成のファサード側)であり、内部はすべて`Connection`/`QueryBuilder`へ委譲する。旧`AbstractSingleton`継承は廃止。Modelは状態を持たず、行の入れ物にもならない。行は`stdClass`か、`rowClass()`/`QueryBuilder::as()`で指定した別のDTOクラスで受け取る。
 
 #### シグネチャ
 
@@ -411,11 +434,14 @@ namespace TMSWP\Core\Model;
 
 abstract class Model
 {
-    /** 全Model共通のテスト用差し替えConnection(useConnection()で設定) */
+    /** useConnection()で指定した、全Model共通のConnection */
     private static ?Connection $sharedConnection = null;
 
-    /** @var array<class-string, TableDefinition> table()結果のクラス別キャッシュ */
+    /** @var array<class-string<Model>, TableDefinition> table()結果のクラス別キャッシュ */
     private static array $definitionCache = [];
+
+    /** 引数のないfinalのコンストラクタ。サブクラスはコンストラクタを宣言できない */
+    final public function __construct() {}
 
     /** サブクラスが実装するスキーマ宣言。冪等・副作用なしであること */
     abstract public static function table(): TableDefinition;
@@ -448,6 +474,7 @@ abstract class Model
      * INSERT。$dataはカラム名=>値(R3写像)。戻り値はinsert_id。
      * $dataが空配列の場合は 'INSERT INTO {t} () VALUES ()' を発行する
      * (AUTO_INCREMENT IDの採番のみ行うテーブル向け)。失敗時QueryException。
+     * @param array<string, mixed> $data
      */
     final public static function insert(array $data): int;
 
@@ -455,34 +482,43 @@ abstract class Model
      * UPDATE。$whereがintなら主キー等値条件。配列なら等値条件マップ
      * (値null→IS NULL。配列値はInvalidQueryException、IN条件はquery()を使う)。
      * 戻り値は影響行数。$whereが空配列ならInvalidQueryException(全行更新事故防止)。
+     * @param array<string, mixed> $data
+     * @param array<string, mixed>|int $where
      */
     final public static function update(array $data, array|int $where): int;
 
-    /** DELETE。$whereの解釈・制約はupdate()と同一。戻り値は影響行数 */
+    /**
+     * DELETE。$whereの解釈・制約はupdate()と同一。戻り値は影響行数
+     * @param array<string, mixed>|int $where
+     */
     final public static function delete(array|int $where): int;
 
     /**
      * 件数取得のショートカット。$whereは等値条件マップ
      * (値が配列ならIN句、nullならIS NULL)。空配列で全件数。
+     * @param array<string, mixed> $where
      */
     final public static function count(array $where = []): int;
 
     /** 解決済みConnection(解決順序は振る舞い仕様参照) */
     final public static function connection(): Connection;
 
-    /** テスト用シーム。null指定で解除。プロダクションコードでの使用はrules/で禁止 */
+    /** 全Model共通のConnectionを指定する。null指定で解除。Kernelの外とユニットテストで使う */
     final public static function useConnection(?Connection $connection): void;
 }
 ```
 
 #### 振る舞い仕様
 
-- **Connection解決順序**(`connection()`): (1) `useConnection()`で設定された`$sharedConnection`、(2) Kernelがbootしていれば`Kernel::container()->get(Connection::class)`、(3) `Connection::fromGlobal()`。この順で最初に得られたものを返す。これによりWP非依存のユニットテスト(Brain Monkey + wpdbフェイク)が`useConnection()`だけで成立する。
+- **Connection解決順序**(`connection()`): (1) `useConnection()`で設定された`$sharedConnection`、(2) Modelクラスが属するKernel(`Kernel::forClass(static::class)`)のContainerの`Connection`。どちらも得られない(`useConnection()`が未指定で、どのKernelにも属さない)場合は`KernelException`を投げる。Kernelの外(プラグインの`uninstall.php`等)では`Model::useConnection(Connection::fromGlobal())`で接続先を明示する。WP非依存のユニットテスト(Brain Monkey + wpdbフェイク)も`useConnection()`だけで成立する。
+- `useConnection()`は呼び出したクラスに関係なく全Modelに効く(`InquiryModel::useConnection($c)`も`Model::useConnection($c)`と同じ)。テストはtearDownで`Model::useConnection(null)`を呼んで解除する。
 - `table()`の結果は`$definitionCache[static::class]`にキャッシュする(1リクエスト中の再構築防止)。`table()`は同一内容を返す純粋関数として実装する規約(rules/に記載)。
-- `query()`は`new QueryBuilder(static::connection(), static::bareTableName(), static::rowClass())`を返す。毎回新規インスタンス(ビルダはミュータブルなので共有しない)。
+- `query()`は`new QueryBuilder(static::connection(), static::bareTableName())`を返し、`rowClass()`が非nullなら`as(static::rowClass())`を適用する。毎回新規インスタンス(ビルダはミュータブルなので共有しない)。
 - `find()`は`static::query()->where(static::primaryKey(), $id)->first()`と等価。
-- `count()`の条件展開: 文字列キー必須(整数キーが含まれたら`InvalidQueryException`。旧FWの「整数キー=生SQL断片」仕様は**廃止**)。値が配列→`whereIn`、null→`whereNull`、それ以外→`where(key, value)`。
-- すべての公開メソッドは`final`。サブクラスが拡張するのは`table()`/`rowClass()`と、自前で追加する業務メソッド(`InquiryModel::recentByEmail()`等)のみ。
+- `update()`/`delete()`/`count()`の条件マップは文字列キー必須(整数キーが含まれたら`InvalidQueryException`。旧FWの「整数キー=生SQL断片」仕様は採らない)。`update()`/`delete()`は値null→`whereNull`、それ以外→`where(key, value)`(配列値は`where()`が`InvalidQueryException`にする)。`count()`は値が配列→`whereIn`(listでなければ`InvalidQueryException`)、null→`whereNull`、それ以外→`where(key, value)`。
+- 行用のコンストラクタの禁止: Modelのコンストラクタは引数のない`final`であり、サブクラスは行の値を受けるコンストラクタを宣言できない(宣言するとクラスの読み込み時にPHPの致命的エラー)。`rowClass()`がModelのサブクラスを返すと、`query()`(と、それを使う`find()`/`update()`/`delete()`/`count()`)が適用する`as()`が`InvalidQueryException`を投げる(§4の`as()`)。`private`にしないのは、Discoveryが`#[AsModel]`のクラスにインスタンス化できること(抽象クラスでないこと)を求めるため。
+- すべての公開メソッドは`final`(`table()`/`rowClass()`を除く)。サブクラスが拡張するのは`table()`/`rowClass()`と、自前で追加する業務メソッド(`InquiryModel::recentByEmail()`等)のみ。
+- `rowClass()`を上書きするときは`@return class-string<Row>`を宣言する。FW同梱のPHPStan拡張がこの宣言型から`find()`等の戻り値型を絞り込む(§4末尾)。
 
 #### エッジケース
 
@@ -606,7 +642,8 @@ final class QueryBuilder
 
     /**
      * @param string $table ベアテーブル名
-     * @param class-string|null $rowClass 既定ハイドレーション先(Model::rowClass()由来)
+     * @param class-string|null $rowClass 既定ハイドレーション先。as()と同じ検査を行う
+     *        (存在しないクラスはHydrationException、ModelのサブクラスはInvalidQueryException)
      */
     public function __construct(
         private readonly Connection $connection,
@@ -712,8 +749,8 @@ final class QueryBuilder
 
     /**
      * 結果行のDTOクラスを指定(Model::rowClass()より優先)。
-     * @template T of object
-     * @param class-string<T> $class
+     * 存在しないクラスはHydrationException、Modelのサブクラスは(Modelは行を表さないため)InvalidQueryException。
+     * @param class-string<object> $class
      */
     public function as(string $class): self;
 
@@ -817,7 +854,7 @@ final class QueryBuilder
 5. 行に存在するがコンストラクタ引数にないカラムは無視する。
 6. `new $class(...$args)`で生成(named argumentsではなく解決済み位置引数)。
 
-PHPStan向けに`as()`/`get()`/`first()`へ`@template T of object` / `@param class-string<T>` / `@return list<T>` / `@return T|null`のジェネリクスdocblockを付与する(`as()`は`self`を返すため完全な型伝搬はFW同梱のPHPStan拡張(DR-05のMetaBag拡張と同梱)で`as()`呼び出し以降の`get()`戻り値をナローイングする)。
+PHPStanでは、FW同梱のPHPStan拡張(DR-05のMetaBag拡張と同梱。`packages/core/phpstan/extension.neon`)が行の型を絞り込む。`get()`は`list<Row>`、`first()`と`Model::find()`は`Row|null`になる。QueryBuilderは可変で`as()`が自身を書き換えて返すため、ほかの変数が参照しうるビルダは、チェーンの途中のコールバック等から行クラスを書き換えられる。そこで絞り込みは、起点が新しく作られたビルダ(`Model::query()`か`new QueryBuilder(...)`)である1つのメソッドチェーンの中に限る。Rowは次の順に決める。(1) チェーンの最後の`as()`の引数の型(`class-string<Row>`)。(2) `as()`が無く、起点が`Model::query()`なら、そのModelの`rowClass()`の宣言型(`find()`は呼び出し先のModel)。上書きしていなければ`stdClass`、`@return class-string<Row>`ならRow、`@return class-string<Row>|null`ならRow|stdClass。次の場合は絞り込まず、宣言型(`list<object>`/`object|null`)のままとする: 起点が変数・プロパティ・引数・ほかのメソッドの戻り値のチェーン(`as()`があっても)、`as()`の無い`new QueryBuilder(...)`のチェーン、`rowClass()`の宣言型から行のクラスが定まらない場合(上書きしたが`@return class-string<Row>`を宣言していない等)、`as()`の無いチェーンや`find()`をfinalでないModelクラスの中で`static::`/`self::`経由で呼ぶ場合(サブクラスが`rowClass()`を上書きしうるため)。
 
 #### エッジケース
 
@@ -1285,8 +1322,9 @@ $rows = InquiryModel::query()
     ->get();   // list<InquiryRow>(id:int / createdAt:DateTimeImmutable に型強制済み)
 
 // モデル既定にする場合は rowClass() をオーバーライド
+// /** @return class-string<InquiryRow> */
 // public static function rowClass(): ?string { return InquiryRow::class; }
-// → InquiryModel::find($id) も InquiryRow を返す
+// → InquiryModel::find($id) も InquiryRow を返す(PHPStan拡張が戻り値型を InquiryRow|null に絞る。§4末尾)
 ```
 
 ### 例5: LIKE検索とテストでの差し替え

@@ -11,11 +11,14 @@ use DateTimeZone;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use ReflectionClass;
 use ReflectionMethod;
+use stdClass;
 use Stringable;
 use TMSWP\Core\Attribute\AsModel;
 use TMSWP\Core\Exception\HydrationException;
 use TMSWP\Core\Exception\InvalidQueryException;
+use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Exception\MigrationException;
 use TMSWP\Core\Exception\QueryException;
 use TMSWP\Core\Exception\SchemaException;
@@ -33,8 +36,7 @@ final class ModelLayerTest extends UnitTestCase
 {
     protected function tearDown(): void
     {
-        TestContactModel::resetConnections();
-        TestCounterModel::resetConnections();
+        Model::useConnection(null);
         parent::tearDown();
     }
 
@@ -131,7 +133,6 @@ SQL, $definition->toSql($connection));
 
         self::assertCount(1, $rows);
         $row = $rows[0];
-        self::assertInstanceOf(TestContactRow::class, $row);
         self::assertSame(10, $row->id);
         self::assertTrue($row->active);
         self::assertSame(['tags' => ['news']], $row->meta);
@@ -182,8 +183,7 @@ SQL, $definition->toSql($connection));
 
         $wpdb = WpdbTestDouble::create();
         $connection = new Connection($wpdb);
-        TestContactModel::useConnection($connection);
-        TestCounterModel::useConnection($connection);
+        Model::useConnection($connection);
 
         self::assertSame(1, TestContactModel::insert(['email' => 'a@example.test', 'active' => true]));
         self::assertSame([
@@ -207,7 +207,7 @@ SQL, $definition->toSql($connection));
 
         self::assertInstanceOf(TestContactRow::class, $found);
         self::assertSame('b@example.test', $found->email);
-        self::assertSame(1, TestContactModel::update(10, ['email' => 'c@example.test']));
+        self::assertSame(1, TestContactModel::update(['email' => 'c@example.test'], 10));
         self::assertSame(1, TestContactModel::delete(10));
         self::assertSame('UPDATE wp_contacts SET email = \'c@example.test\' WHERE id = 10', $wpdb->queries()[2]);
         self::assertSame('DELETE FROM wp_contacts WHERE id = 10', $wpdb->queries()[3]);
@@ -603,6 +603,296 @@ SQL, $definition->toSql($connection));
     {
         self::assertSame(ModelInitializer::class, (new AsModel())->initializerClass());
     }
+
+    /** rowClass() を上書きしない Model の find() は、行を stdClass で返す(値は DB 由来の文字列のまま)。 */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testFindReturnsStdClassRowWhenRowClassIsNotOverridden(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        $wpdb = WpdbTestDouble::create();
+        Model::useConnection(new Connection($wpdb));
+
+        $wpdb->queueResultSet([['id' => '7', 'email' => 'plain@example.test', 'deleted_at' => null]]);
+        $found = TestPlainModel::find(7);
+
+        self::assertNull(TestPlainModel::rowClass());
+        self::assertInstanceOf(stdClass::class, $found);
+        self::assertEquals((object) ['id' => '7', 'email' => 'plain@example.test', 'deleted_at' => null], $found);
+        self::assertSame('SELECT * FROM wp_plain_rows WHERE id = 7 LIMIT 1', $wpdb->queries()[0]);
+    }
+
+    /** Model は行の入れ物にならない。コンストラクタは引数の無い final で、サブクラスはコンストラクタを宣言できない。 */
+    public function testModelConstructorIsFinalWithoutParameters(): void
+    {
+        $constructor = (new ReflectionClass(Model::class))->getConstructor();
+
+        self::assertInstanceOf(ReflectionMethod::class, $constructor);
+        self::assertSame(Model::class, $constructor->getDeclaringClass()->getName());
+        self::assertTrue($constructor->isFinal());
+        self::assertSame(0, $constructor->getNumberOfParameters());
+    }
+
+    /** rowClass() が Model のサブクラスを返すと、query() が as() と同じ例外にする。 */
+    public function testQueryRejectsModelClassAsRowClass(): void
+    {
+        Model::useConnection(new Connection(WpdbTestDouble::create()));
+
+        $this->expectException(InvalidQueryException::class);
+        $this->expectExceptionMessage('row class must not be a Model');
+        TestSelfRowModel::query();
+    }
+
+    /** コンストラクタの行クラスの指定も、as() と同じく Model のサブクラスを拒否する。 */
+    public function testConstructorRejectsModelClassAsRowClass(): void
+    {
+        $this->expectException(InvalidQueryException::class);
+        $this->expectExceptionMessage('row class must not be a Model');
+        new QueryBuilder(new Connection(WpdbTestDouble::create()), 'plain_rows', TestPlainModel::class);
+    }
+
+    /** コンストラクタの行クラスの指定も、as() と同じく存在しないクラスを拒否する。 */
+    public function testConstructorRejectsMissingRowClass(): void
+    {
+        $this->expectException(HydrationException::class);
+        $this->expectExceptionMessage('row class not found');
+
+        // 存在しないクラス名は PHPStan が呼び出し側で弾くため、静的解析を通らないアプリのコードを再現するリフレクションで渡す
+        (new ReflectionClass(QueryBuilder::class))->newInstance(new Connection(WpdbTestDouble::create()), 'plain_rows', 'TMSWP\\Core\\Tests\\Unit\\MissingRow');
+    }
+
+    /** as() に Model のサブクラスを渡すと例外にする(カラムを無視した空の Model を返さない)。 */
+    public function testAsRejectsModelClassAsRowClass(): void
+    {
+        $this->expectException(InvalidQueryException::class);
+        $this->expectExceptionMessage('row class must not be a Model');
+        (new QueryBuilder(new Connection(WpdbTestDouble::create()), 'plain_rows'))->as(TestPlainModel::class);
+    }
+
+    /** @return iterable<string, array{string, list<string>}> */
+    public static function modelSignatures(): iterable
+    {
+        yield 'table' => ['table', []];
+        yield 'rowClass' => ['rowClass', []];
+        yield 'tableName' => ['tableName', []];
+        yield 'bareTableName' => ['bareTableName', []];
+        yield 'primaryKey' => ['primaryKey', []];
+        yield 'query' => ['query', []];
+        yield 'find' => ['find', ['int $id']];
+        yield 'insert' => ['insert', ['array $data']];
+        yield 'update' => ['update', ['array $data', 'array|int $where']];
+        yield 'delete' => ['delete', ['array|int $where']];
+        yield 'count' => ['count', ['array $where = []']];
+        yield 'connection' => ['connection', []];
+        yield 'useConnection' => ['useConnection', ['?TMSWP\Core\Model\Connection $connection']];
+    }
+
+    /**
+     * Model の公開メソッドの引数が docs/06 §3 のシグネチャどおりである。
+     *
+     * @param list<string> $expected
+     */
+    #[DataProvider('modelSignatures')]
+    public function testModelPublicSignaturesMatchDesign(string $method, array $expected): void
+    {
+        $parameters = [];
+
+        foreach ((new ReflectionMethod(Model::class, $method))->getParameters() as $parameter) {
+            $parameters[] = (string) $parameter->getType() . ' $' . $parameter->getName()
+                . ($parameter->isDefaultValueAvailable() ? ' = ' . var_export($parameter->getDefaultValue(), true) : '');
+        }
+
+        self::assertSame($expected, str_replace('array (' . "\n" . ')', '[]', $parameters));
+    }
+
+    public function testModelPublicMethodsAreExactlyTheDesignedOnes(): void
+    {
+        $methods = [];
+
+        foreach ((new ReflectionClass(Model::class))->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            $methods[] = $method->getName();
+        }
+
+        sort($methods);
+
+        self::assertSame(
+            ['__construct', 'bareTableName', 'connection', 'count', 'delete', 'find', 'insert', 'primaryKey', 'query', 'rowClass', 'table', 'tableName', 'update', 'useConnection'],
+            $methods,
+        );
+    }
+
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testUpdateAndDeleteTakePrimaryKeyOrEqualityMap(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        $wpdb = WpdbTestDouble::create();
+        Model::useConnection(new Connection($wpdb));
+
+        self::assertSame(1, TestPlainModel::update(['email' => 'new@example.test'], 7));
+        self::assertSame(1, TestPlainModel::update(['deleted_at' => null], ['email' => 'old@example.test', 'deleted_at' => null]));
+        self::assertSame(1, TestPlainModel::delete(7));
+        self::assertSame(1, TestPlainModel::delete(['email' => 'old@example.test']));
+
+        self::assertSame([
+            "UPDATE wp_plain_rows SET email = 'new@example.test' WHERE id = 7",
+            "UPDATE wp_plain_rows SET deleted_at = NULL WHERE email = 'old@example.test' AND deleted_at IS NULL",
+            'DELETE FROM wp_plain_rows WHERE id = 7',
+            "DELETE FROM wp_plain_rows WHERE email = 'old@example.test'",
+        ], $wpdb->queries());
+    }
+
+    /** @return iterable<string, array{Closure(): mixed, string}> */
+    public static function invalidWhereMaps(): iterable
+    {
+        yield 'update with empty map' => [static fn(): int => TestPlainModel::update(['email' => 'x'], []), 'where map must not be empty'];
+        yield 'delete with empty map' => [static fn(): int => TestPlainModel::delete([]), 'where map must not be empty'];
+        // 整数のキーは PHPStan が呼び出し側で弾くため、静的解析を通らないアプリのコードを再現するリフレクションで渡す
+        yield 'update with integer key' => [static fn(): mixed => (new ReflectionMethod(TestPlainModel::class, 'update'))->invoke(null, ['email' => 'x'], ['id = 1']), 'where map keys must be column names'];
+        yield 'delete with array value' => [static fn(): int => TestPlainModel::delete(['id' => [1, 2]]), 'where value must not be array'];
+        yield 'count with integer key' => [static fn(): mixed => (new ReflectionMethod(TestPlainModel::class, 'count'))->invoke(null, ['id = 1']), 'where map keys must be column names'];
+    }
+
+    /** @param Closure(): mixed $call */
+    #[DataProvider('invalidWhereMaps')]
+    public function testWhereMapRejectsEmptyIntegerKeysAndArraysForWrites(Closure $call, string $expectedMessage): void
+    {
+        Model::useConnection(new Connection(WpdbTestDouble::create()));
+
+        $this->expectException(InvalidQueryException::class);
+        $this->expectExceptionMessage($expectedMessage);
+        $call();
+    }
+
+    public function testCountBuildsEqualityInAndNullConditions(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        Model::useConnection(new Connection($wpdb));
+        $wpdb->queueVar('3');
+        $wpdb->queueVar('9');
+
+        self::assertSame(3, TestPlainModel::count(['email' => ['a@example.test', 'b@example.test'], 'deleted_at' => null, 'id' => 5]));
+        self::assertSame(9, TestPlainModel::count());
+        self::assertSame([
+            "SELECT COUNT(*) FROM wp_plain_rows WHERE email IN ('a@example.test', 'b@example.test') AND deleted_at IS NULL AND id = 5",
+            'SELECT COUNT(*) FROM wp_plain_rows',
+        ], $wpdb->queries());
+    }
+
+    /** useConnection() は全 Model に共通で効き、null で解除する。 */
+    public function testUseConnectionAppliesToEveryModelAndNullClearsIt(): void
+    {
+        $connection = new Connection(WpdbTestDouble::create());
+        TestPlainModel::useConnection($connection);
+
+        self::assertSame($connection, Model::connection());
+        self::assertSame($connection, TestPlainModel::connection());
+        self::assertSame($connection, TestCounterModel::connection());
+
+        Model::useConnection(null);
+
+        $this->expectException(KernelException::class);
+        TestPlainModel::connection();
+    }
+
+    /** どの Kernel にも属さない Model は、グローバルの $wpdb があっても fromGlobal() に切り替えず例外にする。 */
+    public function testConnectionOfModelOutsideAnyKernelThrowsInsteadOfUsingGlobalWpdb(): void
+    {
+        $previous = $GLOBALS['wpdb'] ?? null;
+        $GLOBALS['wpdb'] = WpdbTestDouble::create();
+
+        try {
+            $this->expectException(KernelException::class);
+            $this->expectExceptionMessage('Model::useConnection()');
+            TestPlainModel::connection();
+        } finally {
+            $GLOBALS['wpdb'] = $previous;
+        }
+    }
+
+    public function testTableDefinitionIsBuiltOncePerModelClass(): void
+    {
+        TestCountingTableModel::$tableCalls = 0;
+
+        self::assertSame('counted', TestCountingTableModel::bareTableName());
+        self::assertSame('id', TestCountingTableModel::primaryKey());
+        self::assertSame('counted', TestCountingTableModel::bareTableName());
+        self::assertSame(1, TestCountingTableModel::$tableCalls);
+    }
+
+    /** @return iterable<string, array{Closure(TableDefinition): TableDefinition}> */
+    public static function reservedWordDeclarations(): iterable
+    {
+        yield 'column order' => [static fn(TableDefinition $table): TableDefinition => $table->int('order')];
+        yield 'column KEY (upper case)' => [static fn(TableDefinition $table): TableDefinition => $table->string('KEY')];
+        yield 'column group' => [static fn(TableDefinition $table): TableDefinition => $table->text('group')];
+        yield 'column desc' => [static fn(TableDefinition $table): TableDefinition => $table->bool('desc')];
+        yield 'column range' => [static fn(TableDefinition $table): TableDefinition => $table->datetime('range')];
+        yield 'column offset (MariaDB)' => [static fn(TableDefinition $table): TableDefinition => $table->bigint('offset')];
+        yield 'column rank (MySQL)' => [static fn(TableDefinition $table): TableDefinition => $table->rawColumn('rank', 'int(11) NOT NULL')];
+        yield 'id column' => [static fn(TableDefinition $table): TableDefinition => TableDefinition::create('reserved_rows')->id('select')];
+        yield 'index name' => [static fn(TableDefinition $table): TableDefinition => $table->string('code')->index('code', 'index')];
+        yield 'unique name' => [static fn(TableDefinition $table): TableDefinition => $table->string('code')->unique('code', 'unique')];
+    }
+
+    /** @param Closure(TableDefinition): TableDefinition $declare */
+    #[DataProvider('reservedWordDeclarations')]
+    public function testTableDefinitionRejectsReservedWordsAtDeclaration(Closure $declare): void
+    {
+        $this->expectException(SchemaException::class);
+        $this->expectExceptionMessage('reserved word');
+        $declare(TableDefinition::create('reserved_rows')->id());
+    }
+
+    public function testTableDefinitionAcceptsNonReservedKeywordsAsColumnNames(): void
+    {
+        $definition = TableDefinition::create('keyword_rows')->id()->string('status')->string('name')->datetime('date');
+
+        self::assertSame(['id', 'status', 'name', 'date'], $definition->columns());
+    }
+
+    public function testTableDefinitionRejectsCollationWithoutCharsetAtDeclaration(): void
+    {
+        $this->expectException(SchemaException::class);
+        $this->expectExceptionMessage('collation requires charset');
+        TableDefinition::create('collated_rows')->id()->collation('utf8mb4_unicode_ci');
+    }
+}
+
+final class TestPlainModel extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return TableDefinition::create('plain_rows')
+            ->id()
+            ->string('email')
+            ->datetime('deleted_at', nullable: true);
+    }
+}
+
+final class TestSelfRowModel extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return TableDefinition::create('self_rows')->id();
+    }
+
+    public static function rowClass(): string
+    {
+        return self::class;
+    }
+}
+
+final class TestCountingTableModel extends Model
+{
+    public static int $tableCalls = 0;
+
+    public static function table(): TableDefinition
+    {
+        ++self::$tableCalls;
+
+        return TableDefinition::create('counted')->id();
+    }
 }
 
 enum TestStatus: string
@@ -674,6 +964,7 @@ final class TestContactModel extends Model
             ->unique('email', 'email_unique');
     }
 
+    /** @return class-string<TestContactRow> */
     public static function rowClass(): string
     {
         return TestContactRow::class;
