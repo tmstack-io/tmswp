@@ -1738,7 +1738,7 @@ final class ContactForm
     /** @param array<string, mixed> $values メール送信の実装は rules/form-mail.md のレシピを参照 */
     private static function sendMail(array $values, Form $form): void
     {
-        // wp_mail() による自動返信+管理者通知。Log::channel('mail') へ成否を記録。
+        // wp_mail() による自動返信+管理者通知。Log::scope('mail') へ成否を記録。
     }
 }
 ```

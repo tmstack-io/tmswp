@@ -52,6 +52,25 @@ final class KanaTextFieldTest extends UnitTestCase
         self::assertSame('タロウ', $result->values['kana_name']);
     }
 
+    public function testKatakanaFieldConvertsHiraganaInputToKatakanaBeforeValidation(): void
+    {
+        $definition = FormDefinition::create('kana')
+            ->add(KanaTextField::create('kana_name', 'Name in katakana', KanaType::Katakana, maxLength: 20));
+        $form = new Form($definition);
+
+        // 入力値の日本語はテストの対象そのもの(片仮名の項目に、ひらがなで入力された値)
+        $result = $form->handle(new FormRequest('POST', [
+            Form::FIELD_FORM_ID => 'kana',
+            Form::FIELD_NONCE => 'nonce',
+            Form::FIELD_STEP => 'submit',
+            Form::FIELD_SUBMIT_TOKEN => SubmitToken::issue('kana'),
+            'kana_name' => ' たろう ',
+        ]));
+
+        self::assertSame(FormStep::Complete, $result->step);
+        self::assertSame('タロウ', $result->values['kana_name']);
+    }
+
     public function testHiraganaFieldConvertsBeforeValidation(): void
     {
         $definition = FormDefinition::create('kana')

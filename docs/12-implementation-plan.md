@@ -646,6 +646,7 @@ v0.2.0
   - ActionRouter・View 変数バッグ・`tms_var`・NoOutputRule・NoSet404Rule・tms-check とそのテスト・設定・文書が無い。
   - DR-19 と View 関連の記述(docs/00 の DR-19・モジュール表・用語集、docs/02・07・10)を明示呼び出し方式に置き換え、`WP_DEBUG` の直接参照を残さない(判定は登録元 Kernel の `KernelConfig::$debug`)。
   - テンプレートの先頭で型付きクラスを呼び readonly DTO を受け取る方式のレシピが rules/ にあり、抽出・検査を通る。sample-site の page-contact.php がこの方式になっている。
+  - packages/core/rules/actions.md が、旧来の `actions/<template>.php` と `tms_var()` の方式を説明しておらず、明示呼び出し方式(§1.10)と食い違わない(v0.4.0 の時点では、actions.md が旧来の方式のままで、v0.4.0 の rules/form.md・form-mail.md と docs/05 の明示呼び出し方式と食い違う)。
 - 検証コマンド: `grep -rnE "ActionRouter|tms_var|tms-check|NoOutputRule|NoSet404Rule|phpstan-actions" packages starters examples docs`(0 件)、`composer analyse`、`composer test:unit`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`
 
 #### v0.5.0-T2: Connection と QueryBuilder の不具合修正
@@ -667,13 +668,14 @@ v0.2.0
 
 #### v0.5.0-T4: Migrator の作り直し
 
-- 対象ファイル領域: packages/core/src/Model/{Migrator,MigrationResult,MigrationStatus,MigrateCommand}.php、packages/core/src/Kernel/Kernel.php(Migrator の配線)、packages/core/tests/Integration/ModelIntegrationTest.php(Migrator 部分)、packages/core/tests/Unit/KernelStorageTest.php(`$wpdb` の無い boot)、docs/06 §5・§7(Kernel 統合契約の `listen()` の呼び出し)、docs/02(マイグレーションの契機)
+- 対象ファイル領域: packages/core/src/Model/{Migrator,MigrationResult,MigrationStatus,MigrateCommand}.php、packages/core/src/Kernel/Kernel.php(Migrator の配線と、フックのメソッドの失敗のログ)、packages/core/tests/Integration/ModelIntegrationTest.php(Migrator 部分)、packages/core/tests/Unit/KernelStorageTest.php(`$wpdb` の無い boot)、packages/core/tests/Unit/KernelTest.php(フックのメソッドの失敗のログ)、docs/06 §5・§7(Kernel 統合契約の `listen()` の呼び出し)、docs/02(マイグレーションの契機)
 - 完了条件:
   - `wp tmswp migrate` で適用し、dbDelta の後に `lastError()` と残った差分を確認し、失敗した場合はハッシュを更新しない。
   - テーブル定義のハッシュが DB と食い違うと、権限のある管理者に `admin_notices` で通知する。起動時・admin_init・ajax・cron で自動適用しない(§1.5)。
   - `action` が enum で、シグネチャと出力が docs/06 どおり。
   - docs/06 §5・§7 の `listen()` のシグネチャと呼び出しの記述が実装と一致している(v0.2.0 の時点では、文書が `listen(bool $isTheme, ?string $pluginFile = null)`、実装が `listen(Kernel $kernel)`)。
   - Migrator が `WP_DEBUG` を直接参照せず、`listen()` に渡した Kernel の `KernelConfig::$debug` で判定する(§1.7)。対象: packages/core/src/Model/Migrator.php の 161 行(v0.2.0 の時点の行)。
+  - Kernel がフックのメソッドの例外を本番で記録するとき、ログの文脈に例外のオブジェクト・メッセージ・トレースを入れず、v0.4.0 の Form と同じく、例外のクラス名と例外が投げられた場所(ファイル:行)だけを入れる(previous はクラス名だけ)。フックのメソッドはアプリのコードで、例外のメッセージに利用者の入力値や秘密が入りうるためである。対象: packages/core/src/Kernel/Kernel.php の 613〜618 行(`'exception' => $exception`。v0.4.0 の時点の行)。
   - WordPress なしのユニットテストで Kernel を boot するときに、グローバルの `$wpdb` を要さない。v0.3.0 の時点では、boot の中の Migrator の配線(Kernel.php の `registerModelMigrator()`)が `Connection::fromGlobal()` を解決するため、アプリのユニットテストは `$wpdb` の代役を置く必要がある(rules/meta.md・options.md の「テスト」の例)。`$wp_version`(WordPress 7.0 未満の拒否)と `$wp_actions`(発火済みのフックの判定)は boot の仕様として残す。
 - 検証コマンド: `composer test:integration`、`node node_modules/@wordpress/env/bin/wp-env run cli wp tmswp migrate`、`composer test:unit`
 
@@ -830,6 +832,8 @@ v0.2.0、v0.4.0、v0.6.0
 - 完了条件:
   - 権限の無いユーザーで管理画面が落ちない(統合テスト)。FW が外枠(open・_step・submit・close)とエラー通知を出し、docs/08 §2.3 の例が実在の API で動く。
   - persist がスキーマの型で検証・キャストし、不一致は例外。gettext のソース文字列が英語で ja 訳があり、`wp_die()` が 403 で返る。
+  - `OptionFormBridge::applyDefaults()` が、option の値を Form のフィールドの既定値の形(文字列。multiple の項目は文字列の list)に変換してから `Form::applyDefaults()` に渡し、int・bool の option を結んだ設定ページが例外にならない(統合テスト)。v0.4.0 で `Form::applyDefaults()` は、`handle()` の後の呼び出し(`LogicException`)、フォームに無い項目(`UnknownFieldException`)、文字列以外の値とファイルの項目(`FormConfigException`)を例外にした。v0.4.0 の時点では、`OptionFormBridge::applyDefaults()` が `OptionRepository::get()` の mixed をそのまま渡すため、int・bool の option を結ぶと `FormConfigException` になる(persist の向きのキャストは前の条件)。
+  - docs/08 §2 の例が、v0.4.0 の Form の API の名前だけを使う(v0.4.0 の時点では、テンプレートの例に `renderHiddenFields()` が残っている)。
   - `KernelConfig` 経由の登録になり、`definition()` の評価が init 以降。debug による分岐が登録した Kernel の debug に従う(§1.7)。
   - 拡張の内部のログは、静的な `Log` ではなく、登録した Kernel のロガー(`$kernel->logger()`)に記録する(§1.8)。対象: packages/settings-page/src/OptionFormBridge.php の 36・41・65・70 行(`Log::debug`。v0.2.0-T6 の時点の行)。docs/08 の 555 行(v0.2.0-T6 の時点の行)を、Kernel のロガーへの記録の説明に揃える。
   - 保存後の `wp_safe_redirect()` 直後の `exit` が、`00-overview.md` 原則1の例外の範囲に限られている。
@@ -846,6 +850,7 @@ v0.2.0、v0.4.0、v0.6.0
   - `KernelConfig` 経由の登録になり、制約(外部ストレージ非対応等)が docs/08 に書かれている(§1.3)。
   - 拡張の内部のログは、静的な `Log` ではなく、登録した Kernel のロガー(`$kernel->logger()`)に記録する(§1.8)。対象: packages/thumbnail/src/Thumbnail.php の 44 行(`Log::warning`)、packages/thumbnail/src/RestController.php の 150・158・167 行(`Log::error`)(v0.2.0-T6 の時点の行)。packages/thumbnail/tests/Unit/ThumbnailTest.php の暫定の Kernel の起動(`bootKernelContainingThumbnail()`。packages/thumbnail をルートにして静的な `Log` を記録させる形)をやめる。docs/08 の 145・195・861 行(v0.2.0-T6 の時点の行)を、Kernel のロガーへの記録の説明に揃える。
   - `tms_thumb` を `function_exists` で囲んで定義しておらず、同名の関数が先に定義されている場合に黙ってそちらが使われない(明示エラーになる)。
+  - ログの文脈に例外のオブジェクト・メッセージ・トレースを入れず、v0.4.0 の Form と同じく、例外のクラス名と例外が投げられた場所(ファイル:行)だけを入れる(previous はクラス名だけ)。利用者の入力値や秘密が本番のログに出るのを防ぐためである。対象: packages/thumbnail/src/Thumbnail.php の 44 行(`['exception' => $exception]`。v0.4.0 の時点の行)。
   - CLI(packages/thumbnail/src/Cli/ThumbCommand.php)が、WP-CLI の API を `['WP_CLI', ...]` の callable を組み立てて呼ばず、core の DiscoverCommand・MigrateCommand と同じく `WP_CLI::` で直接呼ぶ(v0.3.0 の時点では、callable を組み立てて呼んでいる)。
 - 検証コマンド: `composer test:unit`、`composer test:integration`(実画像の生成)
 
@@ -949,6 +954,7 @@ v0.2.0〜v0.7.0
 - 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.github/workflows/split.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、package.json・package-lock.json(@wordpress/env の版と、npm のインストールスクリプトの扱い)、docs/10 §1.1(package.json の写しの版)・§4.8(カバレッジゲート)・§5(ワークフローの完全版)、docs/01 §4.4(ワークフロー)
 - 完了条件:
   - rules の検査が全パッケージの rules/ を対象にし、docs/11 §6.3 どおりの検証をする。sample-site と starters の `composer qa` が CI にある。
+  - tools/extract-rules-code.php が、namespace 付きのコード例のクラス名を `final readonly class`・`readonly class` の宣言からも取り出す(v0.4.0 の時点では、クラス名の正規表現が `final class`・`class`・`enum` だけに一致し、`final readonly class` のコード例は「クラス名がありません」の例外になる。v0.4.0 の rules/form-mail.md は `final class` と `public readonly` のプロパティで回避している)。
   - unit と integration の合算カバレッジが、5 パッケージ全体に加えてパッケージ別にも判定され(パッケージ別の基準値はこの版で決める)、docs/10 §4.8 がその方式に改訂されている。php-cs-fixer の設定が docs/10 §3.2・§7 項目4 どおり。
   - qa.yml と split.yml の外部アクションが Node.js 24 で動く版になり(CI に Node.js 20 の非推奨の警告が出ない)、SHA で固定されている(docs/10 §5.3)。外部アクションの実行時に出る Node.js の非推奨の警告(DEP0040 の `punycode`、DEP0169 の `url.parse()`。v0.2.0 の時点では、actions/setup-node・actions/cache・actions/upload-artifact・ramsey/composer-install の実行時に全ジョブで出ている)が、更新後の版で出ないことを確かめる。最新の版でも出る場合は、そのアクションと版を受け入れ記録に書く。
   - CI の `npm ci` の警告を解消する。v0.2.0 の時点では、`npm ci` を実行するジョブ(Integration の 4 セルと Coverage)で、`npm warn deprecated` の @octokit/webhooks-types@7.6.1・glob@10.5.0 と、fs-ext-extra-prebuilt@2.2.7 のインストールスクリプトが allowScripts で許可されていないという `npm warn install-scripts` が出ている(いずれも @wordpress/env 11.17.0 の依存)。@wordpress/env の更新か、インストールスクリプトの扱いの決定で解消し、最新の版でも出る警告は、そのパッケージと版を受け入れ記録に書く。全ジョブの runner の版が固定され、`ubuntu-latest` を使っていない。docs/10 §5 と docs/01 §4.4 のワークフローの完全版が実ファイルと一致する。

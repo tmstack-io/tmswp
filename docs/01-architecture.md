@@ -499,11 +499,18 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 | Meta | `show_in_rest` の `schema`(array/object 型) | 5.3 | 複合型メタの REST スキーマ |
 | Meta / `#[WithMetaRevisions]` | `register_post_meta()` の `revisions_enabled` | **6.4 ★** | プレビュー・リビジョンへのメタ保存 |
 | Meta(保存タイミング) | `wp_after_insert_post` フック | 5.6 | メタ確定後の後処理フック |
-| Form | `wp_create_nonce` / `wp_verify_nonce` / `wp_nonce_field` | 2.0.4 | CSRF 自動埋込み・自動検証(DR-07) |
-| Form / ConfirmToken | `wp_salt()` | 2.5 | HMAC 署名鍵の導出 |
+| Form | `wp_create_nonce` / `wp_verify_nonce` | 2.0.3 | CSRF 自動埋込み・自動検証(DR-07) |
+| Form / TokenSigner | `wp_salt()` | 2.5 | 確認トークン・送信トークンの HMAC 署名鍵の導出 |
 | Form | `wp_unslash()` | 3.6 | リクエスト値の正規化 |
-| Form / TempFileStore | `wp_get_upload_dir()` | 4.5 | 一時保管ディレクトリの解決 |
-| Form / UploadedFile | `wp_handle_upload()` | 2.0 | アップロード受理 |
+| Form | `nocache_headers()` | 2.0 | フォームのあるページをページキャッシュから外す(`DONOTCACHEPAGE` の定義と併用) |
+| Form / JtiStore | `$wpdb->prepare()` の `%i` プレースホルダ | **6.2 ★** | 送信トークンの jti を options テーブルに `INSERT IGNORE` で原子的に記録する(`add_option()` は読み取りと挿入が非アトミックなため使わない) |
+| Form / TempFileStore | `wp_upload_dir()` | 2.0 | 一時保管ディレクトリの解決 |
+| Form / TempFileStore | `sanitize_file_name()` | 2.1 | 保管するファイルのクライアント名の無害化 |
+| Form / TempFileGc | `wp_schedule_event()` / `wp_clear_scheduled_hook()` の `$wp_error` 引数 | 5.7 | 期限切れの一時ファイルを WP-Cron で掃除する。スケジュールと解除の失敗を `WP_Error` で受けて例外にする |
+| Form / StoredFile | `wp_unique_filename()` | 2.5 | `moveTo()` の移動先のファイル名の衝突回避 |
+| Form / StoredFile | `media_handle_sideload()` | 2.6 | `toAttachment()` の添付ファイル化 |
+| Form / FileExtension | `wp_check_filetype_and_ext()` | 3.0 | アップロードされたファイルの中身と拡張子の照合 |
+| Form / MaxFileSize | `size_format()` | 2.3 | エラーメッセージの上限サイズの表示 |
 | Model / QueryBuilder | `$wpdb->prepare()` の `%i` プレースホルダ | **6.2 ★** | テーブル名・カラム名の識別子エスケープ。旧 FW の生 SQL 連結(SQL インジェクション源)の根治に必須 |
 | Model / Migrator | `dbDelta()` | 1.5 | スキーマ宣言からの自動マイグレーション |
 | Model / Connection | `$wpdb` 各メソッド | 0.71〜 | 全クエリが prepare 経由(DR-08) |
