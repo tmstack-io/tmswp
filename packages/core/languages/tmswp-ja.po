@@ -116,7 +116,7 @@ msgstr "{label}は{extensions}形式のファイルを指定してください�
 msgid "{label} must be {size} or smaller."
 msgstr "{label}のファイルサイズは{size}以下にしてください。"
 
-#: Form/Rule/Url.php:38
+#: Form/Rule/Url.php:58
 msgid "Please enter a valid URL for {label}."
 msgstr "{label}はURLの形式で入力してください。"
 

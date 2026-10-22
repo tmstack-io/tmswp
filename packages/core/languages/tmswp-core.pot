@@ -103,7 +103,7 @@ msgstr ""
 msgid "{label} must match {otherLabel}."
 msgstr ""
 
-#: Form/Rule/Url.php:38
+#: Form/Rule/Url.php:58
 msgid "Please enter a valid URL for {label}."
 msgstr ""
 
