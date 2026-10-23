@@ -4,16 +4,19 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Unit;
 
+use BackedEnum;
 use Brain\Monkey\Functions;
 use Closure;
 use DateTimeImmutable;
 use DateTimeInterface;
 use DateTimeZone;
+use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use ReflectionMethod;
 use ReflectionNamedType;
+use ReflectionProperty;
 use Throwable;
 use TMSWP\Core\Exception\HydrationException;
 use TMSWP\Core\Exception\InvalidQueryException;
@@ -31,6 +34,12 @@ use TMSWP\Core\Tests\Support\WpdbTestDouble;
  */
 final class QueryBuilderAcceptanceTest extends UnitTestCase
 {
+    /** 後ろの引数の型(LATE_ENUM)がテストの途中まで定義されない行クラス(tests/fixtures/model/late-enum-row.php) */
+    private const LATE_ENUM_ROW = 'TMSWP\\Core\\Tests\\Fixtures\\Model\\LateEnumRow';
+
+    /** LATE_ENUM_ROWの変換の後に読み込むenum(tests/fixtures/model/late-enum.php) */
+    private const LATE_ENUM = 'TMSWP\\Core\\Tests\\Fixtures\\Model\\LateEnum';
+
     /** whereIn()の空配列は恒偽の0 = 1、whereNotIn()の空配列は恒真の1 = 1になる。 */
     public function testEmptyWhereInIsAlwaysFalseAndEmptyWhereNotInIsAlwaysTrue(): void
     {
@@ -335,6 +344,158 @@ final class QueryBuilderAcceptanceTest extends UnitTestCase
             new QueryBuilderAcceptanceTypedRow(1, 0.5, true, QueryBuilderAcceptanceState::Open, ['a' => 1], 'label', null),
             self::hydrate(QueryBuilderAcceptanceTypedRow::class, self::typedRow([])),
         );
+    }
+
+    /**
+     * DTOへの変換は、行クラスのコンストラクタの引数の情報とenumのbacking typeをクラスごとに1回だけReflectionで求め、
+     * 行ごと・クエリごとに求め直さない(監査A4-L07)。キャッシュの中身は外から見えないため、privateのキャッシュを読み、
+     * 2回目のクエリの後も1回目に求めた同じ情報(同じReflectionのオブジェクト)のままであることで確かめる。
+     */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testDtoHydrationReflectsEachRowClassOnlyOnce(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        $cache = new ReflectionProperty(QueryBuilder::class, 'rowConstructors');
+        $enumCache = new ReflectionProperty(QueryBuilder::class, 'enumBackingTypes');
+        $rows = [
+            self::typedRow([]),
+            self::typedRow(['id' => '2', 'ratio' => '1.25', 'active' => '0', 'state' => 'closed', 'meta' => '[]', 'note' => 'n']),
+            self::typedRow(['id' => '3', 'label' => 'third']),
+        ];
+        $expected = [
+            new QueryBuilderAcceptanceTypedRow(1, 0.5, true, QueryBuilderAcceptanceState::Open, ['a' => 1], 'label', null),
+            new QueryBuilderAcceptanceTypedRow(2, 1.25, false, QueryBuilderAcceptanceState::Closed, [], 'label', 'n'),
+            new QueryBuilderAcceptanceTypedRow(3, 0.5, true, QueryBuilderAcceptanceState::Open, ['a' => 1], 'third', null),
+        ];
+        $wpdb = WpdbTestDouble::create();
+        $wpdb->queueResultSet($rows);
+        $wpdb->queueResultSet($rows);
+        $query = (new QueryBuilder(new Connection($wpdb), 'contacts'))->as(QueryBuilderAcceptanceTypedRow::class);
+
+        self::assertSame([], $cache->getValue());
+        self::assertSame([], $enumCache->getValue());
+        self::assertEquals($expected, $query->get());
+
+        $first = $cache->getValue();
+        self::assertIsArray($first);
+        self::assertSame([QueryBuilderAcceptanceTypedRow::class], array_keys($first));
+        self::assertSame([QueryBuilderAcceptanceState::class => 'string'], $enumCache->getValue());
+
+        self::assertEquals($expected, $query->get());
+        self::assertSame($first, $cache->getValue());
+        self::assertSame([QueryBuilderAcceptanceState::class => 'string'], $enumCache->getValue());
+    }
+
+    /**
+     * 引数の型がenumかどうかは、その引数の値を変換するときに求める。行クラスを初めて変換した時点でenumがまだ
+     * 読み込まれていなくても(nullと既定値の行だけを変換した場合)、後で読み込まれたenumの値を変換できる。
+     */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testDtoEnumLoadedAfterEarlierRowsIsConverted(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        // LateEnumRowを読み込む。引数の型のLateEnumは読み込まない
+        $row = self::requireFixtureClass(__DIR__ . '/../fixtures/model/late-enum-row.php', self::LATE_ENUM_ROW);
+        self::assertFalse(enum_exists(self::LATE_ENUM, false));
+
+        self::assertSame([$row, 1, null], self::lateEnumRowValues(self::hydrate($row, ['id' => '1', 'state' => null])));
+        self::assertSame([$row, 2, null], self::lateEnumRowValues(self::hydrate($row, ['id' => '2'])));
+
+        require_once __DIR__ . '/../fixtures/model/late-enum.php';
+
+        self::assertSame(
+            [$row, 3, [self::LATE_ENUM, 'open']],
+            self::lateEnumRowValues(self::hydrate($row, ['id' => '3', 'state' => 'open'])),
+        );
+    }
+
+    /**
+     * 引数の型のクラスは、その引数の値を変換するときにだけ読み込む。前の引数の変換が失敗した場合と、後ろの引数がnullか
+     * 既定値の場合は、後ろの引数の型のクラスをautoloadしない。読み込みを求められると例外を投げるautoloaderで確かめる。
+     */
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testDtoHydrationLoadsParameterTypeOnlyWhenConvertingItsValue(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        // LateEnumRowを読み込む。引数の型のLateEnumは読み込まない
+        $row = self::requireFixtureClass(__DIR__ . '/../fixtures/model/late-enum-row.php', self::LATE_ENUM_ROW);
+        $requested = [];
+        $loader = static function (string $class) use (&$requested): void {
+            if ($class === self::LATE_ENUM) {
+                $requested[] = $class;
+
+                throw new LogicException('autoloader was asked for ' . $class);
+            }
+        };
+        $cases = [
+            '前の引数の列が無い' => ['state' => null],
+            '前の引数を変換できない' => ['id' => 'bad', 'state' => null],
+            '後ろの引数がnull' => ['id' => '7', 'state' => null],
+            '後ろの引数が既定値' => ['id' => '7'],
+            '後ろの引数を変換する' => ['id' => '7', 'state' => 'open'],
+        ];
+        $outcomes = [];
+        $requestedBeforeConvertingState = null;
+        spl_autoload_register($loader);
+
+        try {
+            foreach ($cases as $label => $values) {
+                if ($label === '後ろの引数を変換する') {
+                    $requestedBeforeConvertingState = $requested;
+                }
+
+                try {
+                    $outcomes[$label] = self::lateEnumRowValues(self::hydrate($row, $values));
+                } catch (Throwable $exception) {
+                    $outcomes[$label] = [$exception::class, $exception->getMessage()];
+                }
+            }
+        } finally {
+            spl_autoload_unregister($loader);
+        }
+
+        self::assertSame([], $requestedBeforeConvertingState);
+        // 後ろの引数の値を変換するときは型のクラスを読み込む(上の観測でautoloaderが働いていることの確認)
+        self::assertSame([self::LATE_ENUM], $requested);
+        self::assertSame([
+            '前の引数の列が無い' => [HydrationException::class, "missing column 'id' for row class '{$row}'; available columns: state"],
+            '前の引数を変換できない' => [HydrationException::class, "invalid integer for 'id'"],
+            '後ろの引数がnull' => [$row, 7, null],
+            '後ろの引数が既定値' => [$row, 7, null],
+            '後ろの引数を変換する' => [LogicException::class, 'autoloader was asked for ' . self::LATE_ENUM],
+        ], $outcomes);
+    }
+
+    /**
+     * fixtureのファイルを読み込み、そこで定義したクラスの名前を返す。
+     *
+     * @return class-string
+     */
+    private static function requireFixtureClass(string $file, string $class): string
+    {
+        require_once $file;
+
+        if (!class_exists($class, false)) {
+            self::fail("fixtureのクラスが見つかりません: {$class}");
+        }
+
+        return $class;
+    }
+
+    /**
+     * LateEnumRowの、クラス名・idの値・stateの値(enumならクラス名とbacking value)。
+     *
+     * @return list<mixed>
+     */
+    private static function lateEnumRowValues(object $row): array
+    {
+        $values = get_object_vars($row);
+        $state = $values['state'] ?? null;
+
+        return [$row::class, $values['id'] ?? null, $state instanceof BackedEnum ? [$state::class, $state->value] : $state];
     }
 
     private static function query(): QueryBuilder

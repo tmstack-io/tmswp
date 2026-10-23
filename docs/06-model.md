@@ -872,7 +872,7 @@ final class QueryBuilder
 
 **DTOハイドレーション規則(確定)**:
 
-1. 対象クラスのコンストラクタをReflectionで取得。コンストラクタが存在しpublicでない場合は`HydrationException`。コンストラクタなしのクラスは全カラムを動的プロパティ代入せず`HydrationException`(constructor promotion前提の設計)。
+1. 対象クラスのコンストラクタをReflectionで取得。コンストラクタが存在しpublicでない場合は`HydrationException`。コンストラクタなしのクラスは全カラムを動的プロパティ代入せず`HydrationException`(constructor promotion前提の設計)。コンストラクタの引数の情報(名前・列名・型・既定値の有無)は行クラスごとに1回だけ求めてプロセス内にキャッシュし、行ごとに求め直さない(既定値そのものは使うたびに得る)。このとき引数の型のクラスは読み込まない。型がbacked enumかどうかは、その引数の値を下記4で変換するときに初めて調べ、enumであればbacking typeをenumのクラスごとにキャッシュする(enumでないという結果は、後からクラスが読み込まれうるためキャッシュしない)。
 2. 各コンストラクタ引数について行カラムを解決する: (a) 引数名と完全一致するカラム、なければ (b) snake_case変換名(`preg_replace('/(?<=[a-z0-9])([A-Z])/', '_$1', $name)`を小文字化。例: `createdAt`→`created_at`)。
 3. どちらにも該当なし: デフォルト値があればそれを使用、なければ`HydrationException`(引数名・クラス名・利用可能カラム一覧をメッセージに含める)。
 4. 型強制(宣言型ベース。DB値はstring|nullで来る前提):

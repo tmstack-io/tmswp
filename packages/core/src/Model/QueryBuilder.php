@@ -13,14 +13,40 @@ use ReflectionClass;
 use ReflectionEnum;
 use ReflectionNamedType;
 use ReflectionParameter;
+use ReflectionType;
 use TMSWP\Core\Exception\HydrationException;
 use TMSWP\Core\Exception\InvalidQueryException;
 use TMSWP\Core\Exception\QueryException;
 use TMSWP\Core\Query\SortOrder;
 use ValueError;
 
+/**
+ * @phpstan-type RowParameter array{
+ *     name: string,
+ *     column: string,
+ *     parameter: ReflectionParameter,
+ *     type: ReflectionType|null,
+ *     hasDefault: bool,
+ * }
+ */
 final class QueryBuilder
 {
+    /**
+     * 行クラスのコンストラクタの引数の情報の、クラス別キャッシュ。クラスの定義だけで決まる不変の情報なので、
+     * 行ごと・クエリごとにReflectionで求め直さない。引数の型のクラスは読み込まず、enumかどうかは変換の位置で求める。
+     *
+     * @var array<class-string, array{class: ReflectionClass<object>, parameters: list<RowParameter>}>
+     */
+    private static array $rowConstructors = [];
+
+    /**
+     * 変換に使ったbacked enumのbacking type('int'か'string')の、enumのクラス別キャッシュ。enumであると分かったクラス
+     * だけを入れる(enumでないという結果は、後からクラスが読み込まれうるため入れない)。
+     *
+     * @var array<class-string<BackedEnum>, string>
+     */
+    private static array $enumBackingTypes = [];
+
     /** @var list<string> */
     private array $selects = [];
 
@@ -714,31 +740,66 @@ final class QueryBuilder
             return (object) $row;
         }
 
-        $class = new ReflectionClass($this->rowClass);
-        $constructor = $class->getConstructor();
-
-        if ($constructor === null || !$constructor->isPublic()) {
-            throw new HydrationException("row class '{$this->rowClass}' requires a public constructor");
-        }
-
+        $constructor = self::rowConstructor($this->rowClass);
         $arguments = [];
 
-        foreach ($constructor->getParameters() as $parameter) {
+        foreach ($constructor['parameters'] as $parameter) {
             $arguments[] = $this->resolveParameter($parameter, $row);
         }
 
-        return $class->newInstanceArgs($arguments);
+        return $constructor['class']->newInstanceArgs($arguments);
     }
 
-    /** @param array<string, mixed> $row */
-    private function resolveParameter(ReflectionParameter $parameter, array $row): mixed
+    /**
+     * 行クラスとそのコンストラクタの引数の情報。クラスごとに1回だけReflectionで求め、2回目からはキャッシュを返す。
+     * 既定値そのものは持たず、使うたびにReflectionParameterから得る(new式の既定値を行の間で共有しないため)。
+     *
+     * @param class-string $class
+     *
+     * @throws HydrationException コンストラクタが無いかpublicでない場合
+     *
+     * @return array{class: ReflectionClass<object>, parameters: list<RowParameter>}
+     */
+    private static function rowConstructor(string $class): array
     {
-        $name = $parameter->getName();
-        $key = \array_key_exists($name, $row) ? $name : $this->snake($name);
+        if (isset(self::$rowConstructors[$class])) {
+            return self::$rowConstructors[$class];
+        }
+
+        $reflection = new ReflectionClass($class);
+        $constructor = $reflection->getConstructor();
+
+        if ($constructor === null || !$constructor->isPublic()) {
+            throw new HydrationException("row class '{$class}' requires a public constructor");
+        }
+
+        $parameters = [];
+
+        foreach ($constructor->getParameters() as $parameter) {
+            $parameters[] = [
+                'name' => $parameter->getName(),
+                'column' => self::snake($parameter->getName()),
+                'parameter' => $parameter,
+                'type' => $parameter->getType(),
+                'hasDefault' => $parameter->isDefaultValueAvailable(),
+            ];
+        }
+
+        return self::$rowConstructors[$class] = ['class' => $reflection, 'parameters' => $parameters];
+    }
+
+    /**
+     * @param RowParameter $parameter
+     * @param array<string, mixed> $row
+     */
+    private function resolveParameter(array $parameter, array $row): mixed
+    {
+        $name = $parameter['name'];
+        $key = \array_key_exists($name, $row) ? $name : $parameter['column'];
 
         if (!\array_key_exists($key, $row)) {
-            if ($parameter->isDefaultValueAvailable()) {
-                return $parameter->getDefaultValue();
+            if ($parameter['hasDefault']) {
+                return $parameter['parameter']->getDefaultValue();
             }
 
             throw new HydrationException("missing column '{$name}' for row class '{$this->rowClass}'; available columns: " . implode(', ', array_keys($row)));
@@ -747,16 +808,18 @@ final class QueryBuilder
         return $this->coerce($row[$key], $parameter);
     }
 
-    private function coerce(mixed $value, ReflectionParameter $parameter): mixed
+    /** @param RowParameter $parameter */
+    private function coerce(mixed $value, array $parameter): mixed
     {
-        $type = $parameter->getType();
+        $type = $parameter['type'];
+        $parameterName = $parameter['name'];
 
         if (!$type instanceof ReflectionNamedType) {
             if ($type === null) {
                 return $value;
             }
 
-            throw new HydrationException("unsupported parameter type for '{$parameter->getName()}'");
+            throw new HydrationException("unsupported parameter type for '{$parameterName}'");
         }
 
         if ($value === null) {
@@ -764,41 +827,51 @@ final class QueryBuilder
                 return null;
             }
 
-            throw new HydrationException("non-nullable parameter '{$parameter->getName()}' received null");
+            throw new HydrationException("non-nullable parameter '{$parameterName}' received null");
         }
 
         $name = $type->getName();
 
         if ($type->isBuiltin()) {
             return match ($name) {
-                'int' => $this->coerceInt($value, $parameter->getName()),
-                'float' => $this->coerceFloat($value, $parameter->getName()),
-                'string' => $this->coerceString($value, $parameter->getName()),
-                'bool' => $this->coerceBool($value, $parameter->getName()),
-                'array' => $this->decodeJson($this->coerceString($value, $parameter->getName()), $parameter->getName()),
+                'int' => $this->coerceInt($value, $parameterName),
+                'float' => $this->coerceFloat($value, $parameterName),
+                'string' => $this->coerceString($value, $parameterName),
+                'bool' => $this->coerceBool($value, $parameterName),
+                'array' => $this->decodeJson($this->coerceString($value, $parameterName), $parameterName),
                 'mixed' => $value,
                 default => throw new HydrationException("unsupported parameter type '{$name}'"),
             };
         }
 
         if ($name === DateTimeImmutable::class || $name === DateTimeInterface::class) {
-            return $this->dateTime($this->coerceString($value, $parameter->getName()), $parameter->getName());
+            return $this->dateTime($this->coerceString($value, $parameterName), $parameterName);
         }
 
         if (is_subclass_of($name, BackedEnum::class)) {
             // DB の値は string で届くため、int を値に持つ enum では int に変換してから from() に渡す
-            $backingValue = (string) (new ReflectionEnum($name))->getBackingType() === 'int'
-                ? $this->coerceInt($value, $parameter->getName())
-                : $this->coerceString($value, $parameter->getName());
+            $backingValue = self::enumBackingType($name) === 'int'
+                ? $this->coerceInt($value, $parameterName)
+                : $this->coerceString($value, $parameterName);
 
             try {
                 return $name::from($backingValue);
             } catch (ValueError $exception) {
-                throw new HydrationException("invalid enum value for '{$parameter->getName()}'", previous: $exception);
+                throw new HydrationException("invalid enum value for '{$parameterName}'", previous: $exception);
             }
         }
 
         throw new HydrationException("unsupported parameter class '{$name}'");
+    }
+
+    /**
+     * backed enumのbacking type('int'か'string')。enumのクラスごとに1回だけReflectionで求める。
+     *
+     * @param class-string<BackedEnum> $enum
+     */
+    private static function enumBackingType(string $enum): string
+    {
+        return self::$enumBackingTypes[$enum] ??= (string) (new ReflectionEnum($enum))->getBackingType();
     }
 
     private function coerceInt(mixed $value, string $parameter): int
@@ -901,7 +974,7 @@ final class QueryBuilder
         return $date;
     }
 
-    private function snake(string $name): string
+    private static function snake(string $name): string
     {
         $snake = preg_replace('/(?<=[a-z0-9])([A-Z])/', '_$1', $name);
 
