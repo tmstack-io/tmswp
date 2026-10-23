@@ -953,7 +953,7 @@ v0.2.0〜v0.7.0
 
 #### v0.8.0-T6: 開発基盤の残り
 
-- 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.github/workflows/split.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、package.json・package-lock.json(@wordpress/env の版と、npm のインストールスクリプトの扱い)、docs/10 §1.1(package.json の写しの版)・§4.8(カバレッジゲート)・§5(ワークフローの完全版)、docs/01 §4.4(ワークフロー)、packages/core/src/Kernel/DiscoverCommand.php(照合したKernelの数)、tests/fixtures/_wp-cli.php(`theme_roots`に左右されないfixtureの読み込み)
+- 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.github/workflows/split.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、package.json・package-lock.json(@wordpress/env の版と、npm のインストールスクリプトの扱い)、docs/10 §1.1(package.json の写しの版)・§4.8(カバレッジゲート)・§5(ワークフローの完全版)、docs/01 §4.4(ワークフロー)、packages/core/src/Kernel/DiscoverCommand.php(照合したKernelの数)、tests/fixtures/_wp-cli.php(`theme_roots`に左右されないfixtureの読み込み)、tools/(PHPStanのワーカーごとのメモリの最大量を測る手順。新設)、docs/10 §2.2(計測の手順と上限の扱い)、composer.json(`analyse`)・phpstan.neon.dist(上限を超えそうな場合の解析の分割)
 - 完了条件:
   - rules の検査が全パッケージの rules/ を対象にし、docs/11 §6.3 どおりの検証をする。sample-site と starters の `composer qa` が CI にある。
   - tools/extract-rules-code.php が、namespace 付きのコード例のクラス名を `final readonly class`・`readonly class` の宣言からも取り出す(v0.4.0 の時点では、クラス名の正規表現が `final class`・`class`・`enum` だけに一致し、`final readonly class` のコード例は「クラス名がありません」の例外になる。v0.4.0 の rules/form-mail.md は `final class` と `public readonly` のプロパティで回避している)。
@@ -961,6 +961,7 @@ v0.2.0〜v0.7.0
   - qa.yml と split.yml の外部アクションが Node.js 24 で動く版になり(CI に Node.js 20 の非推奨の警告が出ない)、SHA で固定されている(docs/10 §5.3)。外部アクションの実行時に出る Node.js の非推奨の警告(DEP0040 の `punycode`、DEP0169 の `url.parse()`。v0.2.0 の時点では、actions/setup-node・actions/cache・actions/upload-artifact・ramsey/composer-install の実行時に全ジョブで出ている)が、更新後の版で出ないことを確かめる。最新の版でも出る場合は、そのアクションと版を受け入れ記録に書く。
   - CI の `npm ci` の警告を解消する。v0.2.0 の時点では、`npm ci` を実行するジョブ(Integration の 4 セルと Coverage)で、`npm warn deprecated` の @octokit/webhooks-types@7.6.1・glob@10.5.0 と、fs-ext-extra-prebuilt@2.2.7 のインストールスクリプトが allowScripts で許可されていないという `npm warn install-scripts` が出ている(いずれも @wordpress/env 11.17.0 の依存)。@wordpress/env の更新か、インストールスクリプトの扱いの決定で解消し、最新の版でも出る警告は、そのパッケージと版を受け入れ記録に書く。全ジョブの runner の版が固定され、`ubuntu-latest` を使っていない。docs/10 §5 と docs/01 §4.4 のワークフローの完全版が実ファイルと一致する。
   - `composer discover:check`が、開発用サイトのsite transient `theme_roots`の状態に左右されず、照合したKernelの数(fixtureのテーマとプラグインの2つ)を確かめる。v0.5.0の時点では、fixtureのテーマの置き場(tests/fixtures/themes)を含まない`theme_roots`が開発用サイトに残っていると、fixtureのテーマが見つからずテーマのKernelが起動しないため、2つのKernelのうちプラグインの1つだけを照合して成功する(照合したKernelの数を確かめていない)。このtransientは、`--require=tests/fixtures/_wp-cli.php`の無いWP-CLIの実行や、開発用サイトへの通常のリクエストの後に、fixtureのテーマの置き場を含まない形で作られうる。
+  - PHPStanのワーカーごとのメモリの最大量を測る手順を用意し、各版の受け入れ記録でその値と`composer analyse`の`--memory-limit`に対する余裕を記録する。上限を超えそうなら、解析の分割などで対処する。v0.5.0の時点では、ワーカーのメモリの最大量はCIと同じ4ワーカー・キャッシュなしで約1040MiB(1GiBを超える)で、当時の上限の1G(1024MiB)に達してCIのStatic Analysisが失敗したため、上限を2Gにした。packages/core/tests/Integration/とpackages/core/tests/Support/が入るジョブのワーカーが最も重い。
 - 検証コマンド: `composer lint`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`、`composer test:coverage`、`grep -n "ubuntu-latest" .github/workflows/*.yml`(0 件)
 
 #### v0.8.0-T7: rules・AGENTS.md・README の全面整備

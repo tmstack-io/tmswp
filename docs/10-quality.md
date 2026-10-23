@@ -143,7 +143,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
     "scripts": {
         "lint": "php-cs-fixer fix --dry-run --diff --show-progress=none",
         "fix": "php-cs-fixer fix",
-        "analyse": "phpstan analyse -c phpstan.neon.dist --memory-limit=1G",
+        "analyse": "phpstan analyse -c phpstan.neon.dist --memory-limit=2G",
         "i18n:build": [
             "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/core/src packages/core/languages/tmswp-core.pot --domain=tmswp --package-name=tmswp-core --headers='{\"POT-Creation-Date\":\"\"}'",
             "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/core/languages/tmswp-core.pot",
