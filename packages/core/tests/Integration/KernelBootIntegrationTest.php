@@ -36,6 +36,7 @@ use TMSWP\Core\Option\OptionRepositoryFactory;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Core\Tests\Support\MemoryMetaStorage;
 use TMSWP\Core\Tests\Support\RecordingExtension;
 use TMSWP\Core\Tests\Support\RecordingInitializer;
 use TMSWP\Core\Tests\Support\RecordingLogger;
@@ -700,8 +701,8 @@ PHP);
     }
 
     /**
-     * acf-bridge は init 6 で外部管理のキーを申告する。#[MetaSchema] は boot の中で登録済みのため、同じキーの申告は
-     * その時点で DuplicateMetaKeyException になり、register_post_meta()(init 20)には進まない。
+     * acf-bridgeはinit 6で外部管理のキーを申告する。#[MetaSchema]はbootの中で登録済みのため、宣言と違うストレージでの
+     * 同じキーの申告は、その時点でDuplicateMetaKeyExceptionになり、register_post_meta()(init 20)には進まない。
      */
     public function testExternallyManagedKeyMarkedAtInitSixConflictsWithMetaSchemaRegisteredAtBoot(): void
     {
@@ -716,8 +717,8 @@ PHP);
 
         $initCallbacks = $this->bootBeforeInit($config);
         $registry = Kernel::get($namespace)->container()->get(MetaSchemaRegistry::class);
-        // acf-bridge の AcfBridge::registerManagedKeys()(init 6)の代わり
-        $mark = ['hook' => 'init', 'priority' => 6, 'function' => static fn() => $registry->markExternallyManaged(ObjectType::Post, $postType, 'tmswp_note'), 'acceptedArgs' => 0];
+        // acf-bridgeのAcfBridge::markManagedKeys()(init 6)の代わり。宣言側(既定のWpMetaStorage)と違うストレージで申告する
+        $mark = ['hook' => 'init', 'priority' => 6, 'function' => static fn() => $registry->markExternallyManaged(ObjectType::Post, $postType, 'tmswp_note', MemoryMetaStorage::class, "field group 'group_note'"), 'acceptedArgs' => 0];
 
         try {
             self::fireInit([$mark, ...$initCallbacks]);

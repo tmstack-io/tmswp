@@ -66,17 +66,12 @@ init(priority 20) → MetaSchemaRegistry::registerAll()
 | 値の種類 | 宣言と読み書きの経路 |
 | --- | --- |
 | 単純な値(文字列・数値・真偽・日付・単一画像 ID 等) | エンティティの定数に `#[MetaSchema]` で宣言し、アプリは `MetaBag`(`ProductPost::meta($post)`)だけで読み書きする。 |
-| 上の単純な値を ACF の画面で編集する場合 | 宣言と `MetaBag` はそのままにし、エンティティに `#[UseMetaStorage(AcfMetaStorage::class)]` を付けて保存先だけを ACF に切り替える(4.10)。ACF に完全には依存させないため、`UseMetaStorage` と `AcfMetaStorage` を維持する。v0.6.0 で acf-bridge 側を直すまでは使えない(下の「v0.6.0 までの境目」)。 |
+| 上の単純な値をACFの画面で編集する場合 | 宣言と`MetaBag`はそのままにし、エンティティに`#[UseMetaStorage(AcfMetaStorage::class)]`を付けて保存先だけをACFに切り替える(4.10)。そのキーはACFのフィールドグループで管理してよい(下の「ACFのフィールドグループで管理するキー」)。ACFに完全には依存させないため、`UseMetaStorage`と`AcfMetaStorage`を維持する。 |
 | ACF 固有の複合型(repeater・flexible_content・group・gallery・relationship) | acf-bridge の生成アクセサ(`XxxFields`)で扱う(文書09)。その案件は ACF に依存するものと割り切る。 |
 | 入力検証が重要なシステム設定(メールの宛先、API キー等) | オプショングループ enum(4.12〜4.16)に宣言し、設定画面は settings-page で作る(文書08)。API キー等の秘密情報もここに保存してよいが、テンプレートへの出力・ログへの記録・フロントへの公開(REST 等)をしない。 |
 | フロントに出すコンテンツ設定(画像、繰り返し項目等) | ACF のオプションページで作り、生成アクセサ(`XxxOptions`)で読む(文書09)。同じ値をオプショングループ enum に重複して宣言しない。 |
 
-**v0.6.0 までの境目**: 「ACF の画面で編集する場合」の行(`#[MetaSchema]` と `#[UseMetaStorage(AcfMetaStorage::class)]` の併用)は目標の契約であり、acf-bridge 側の対応(v0.6.0-T1)が済むまで使えない。現在の acf-bridge は、ACF のフィールドグループで管理するキーを `markExternallyManaged()` で外部管理として登録する(文書09 §7)。そのため、同じキーを `#[MetaSchema]` で宣言すると、起動時に `DuplicateMetaKeyException` になる(4.9)。v0.6.0 までは次のとおりにする。
-
-- ACF のフィールドグループで管理するキーは `#[MetaSchema]` で宣言せず、生成アクセサ(`XxxFields`)で読み書きする。
-- `#[UseMetaStorage(AcfMetaStorage::class)]` は、ACF のフィールドグループで管理しないキーを、ACF の保存規約(`update_field`)で読み書きする場合にだけ使う。
-
-v0.6.0 の完了後は、ACF のフィールドグループで管理するキーも `#[MetaSchema]` と `#[UseMetaStorage(AcfMetaStorage::class)]` で宣言でき、外部管理の登録と衝突しない。この節はそのときに改める。
+**ACFのフィールドグループで管理するキー**: acf-bridgeは、ACFのフィールドグループで管理するキーを`markExternallyManaged()`系で外部管理として申告する(ストレージは`AcfMetaStorage`。文書09 §7)。同じキーを`#[MetaSchema]`で宣言できるのは`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティだけで、申告と衝突せず、宣言どおり`register_*_meta`される。`#[UseMetaStorage]`の無いエンティティ等、ストレージの違うエンティティが同じキーを宣言すると、起動時に`DuplicateMetaKeyException`になる(4.9)。同じキーを`MetaBag`と生成アクセサ(`XxxFields`)の両方から読み書きしない。
 
 ---
 
@@ -668,19 +663,28 @@ final class MetaSchemaRegistry
     public function bagFor(string $entityClass, WP_Post|WP_Term|WP_User|int $object): MetaBag;
 
     /**
-     * 外部管理キーの宣言(acf-bridge が init 6 で呼ぶ)。該当キーは #[MetaSchema] で宣言できないため、register_*_meta されない。
-     * #[MetaSchema] は boot の中で登録済みのため、重複はこの申告の時点で検出される。
-     * PHP側 #[MetaSchema] と同一 (objectType, subtype, key) が両方に存在する場合は
-     * DuplicateMetaKeyException(DR-06: acf-json が真実源、二重宣言はエラー)。
+     * 外部管理キーの申告(acf-bridgeがinit 6で呼ぶ)。$storageClassはそのキーを読み書きするストレージのクラス、
+     * $originは申告元の説明(acf-bridgeは"ACF field group '{groupKey}'")で、重複の例外のメッセージに使う。
+     * 申告したキーを#[MetaSchema]で宣言できるのは、読み書きのストレージ(#[UseMetaStorage]か既定のストレージを
+     * Containerで解決したインスタンスのクラス)が$storageClassと同じエンティティだけで、そのキーは宣言どおり
+     * register_*_metaされる。宣言の無い申告済みのキーはregister_*_metaされない。
+     * #[MetaSchema]はbootの中で登録済みのため、重複はこの申告の時点で検出される。ストレージの違うエンティティの
+     * #[MetaSchema]が同一(objectType, subtype, key)を宣言していればDuplicateMetaKeyException(DR-06)。
+     * メッセージは、キー・(objectType, subtype)・宣言クラスと定数名・$origin・両方のストレージと解消方法を含む。
      * subtype は文字列どおりの1サブタイプだけを表す('all' という名前の投稿タイプも1つのサブタイプとして扱う)。
+     *
+     * @param class-string<MetaStorageInterface> $storageClass
      */
-    public function markExternallyManaged(ObjectType $objectType, string $subtype, string $key): void;
+    public function markExternallyManaged(ObjectType $objectType, string $subtype, string $key, string $storageClass, string $origin): void;
 
     /**
-     * ObjectType のすべてのサブタイプについての外部管理キーの宣言(ACF の location が taxonomy==all 等の場合)。
-     * いずれかのサブタイプの #[MetaSchema] が同じ key を宣言していれば DuplicateMetaKeyException。
+     * ObjectTypeのすべてのサブタイプについての外部管理キーの申告(ACFのlocationがtaxonomy==all等の場合)。
+     * いずれかのサブタイプの、ストレージが$storageClassでないエンティティの#[MetaSchema]が同じkeyを宣言していれば
+     * DuplicateMetaKeyException。
+     *
+     * @param class-string<MetaStorageInterface> $storageClass
      */
-    public function markExternallyManagedInAllSubtypes(ObjectType $objectType, string $key): void;
+    public function markExternallyManagedInAllSubtypes(ObjectType $objectType, string $key, string $storageClass, string $origin): void;
 
     /** markExternallyManaged() の (objectType, subtype, key) か、markExternallyManagedInAllSubtypes() の (objectType, key) に当たれば true */
     public function isExternallyManaged(ObjectType $objectType, string $subtype, string $key): bool;
@@ -757,9 +761,9 @@ foreach 登録済みエンティティ:
     if registered !== true: InvalidSchemaException                # WP が登録を拒否した(黙殺しない)
 ```
 
-- 外部管理のキー(ACF管理下。DR-06)は `#[MetaSchema]` と重なれば `DuplicateMetaKeyException` になるため、登録済みのスキーマに含まれることはなく、`register_*_meta` されない。
+- 外部管理のキー(ACF管理下。DR-06)は、`#[MetaSchema]`で宣言していなければ登録済みのスキーマに含まれないため、`register_*_meta`されない。申告と同じストレージのエンティティが宣言したキーは、他のキーと同じく宣言どおり`register_*_meta`される(ストレージの違うエンティティの宣言は`DuplicateMetaKeyException`になる)。
 - registerAll() が最後まで成功すると、以降は sanitize を宣言したキーにも `MetaBag::set()` で書き込める(4.8)。
-- フック登録はKernelが行う: `add_action('init', $registry->registerAll(...), 20)`(第一級callable構文。本番の遅延bootではキャッチアップの規則に従う。Kernel設計書 §3.3)。priority 20 にするのは次の2点のためである。(1) acf-bridge が外部管理のキーを申告する init 6 の後に流す(`#[MetaSchema]` と重なる申告は、その時点で例外になり、`register_*_meta` に進まない。DR-06)。(2) WordPress の `register_meta()` は `revisions_enabled` を `post_type_supports($subtype, 'revisions')` で確かめて満たさなければ登録を拒否するため、エンティティの `register_post_type`/`register_taxonomy`(init 9・10、エンティティ設計書)を確実に先行させる。リビジョン保存宣言は属性(4.11)であり registerEntity() 時点で確定しているため、init より前に呼ぶべき有効化処理は存在しない。
+- フック登録はKernelが行う: `add_action('init', $registry->registerAll(...), 20)`(第一級callable構文。本番の遅延bootではキャッチアップの規則に従う。Kernel設計書§3.3)。priority 20にするのは次の2点のためである。(1) acf-bridgeが外部管理のキーを申告するinit 6の後に流す(ストレージの違う`#[MetaSchema]`と重なる申告は、その時点で例外になり、`register_*_meta`に進まない。DR-06)。(2) WordPressの`register_meta()`は`revisions_enabled`を`post_type_supports($subtype, 'revisions')`で確かめて満たさなければ登録を拒否するため、エンティティの`register_post_type`/`register_taxonomy`(init 9・10、エンティティ設計書)を確実に先行させる。リビジョン保存宣言は属性(4.11)でありregisterEntity()時点で確定しているため、initより前に呼ぶべき有効化処理は存在しない。
 - エンティティの `register()` が例外を投げても(本番を含む。設定の誤りのため隔離しない。Kernel設計書 §7)、スキーマは boot で登録済みであり、`register()` の失敗によってスキーマの登録が黙って飛ばされることはない。例外は init から伝わり、そのリクエストでは registerAll() に進まない。
 - 旧FWの `insert_default_meta`(新規作成時に空文字メタ行を自動挿入し meta_query EXISTS を成立させる機能)は**踏襲しない**。デフォルト値は `register_meta` の `default` と `MetaBag` の解決順で供給される。EXISTS/ORDER BY meta_value が必要なケースの対処(保存フックでの明示挿入)は rules/ のレシピとして提供する。
 
@@ -807,7 +811,7 @@ final class UseMetaStorage
 final class ProductPost extends PostType { /* ... */ }
 ```
 
-- ストレージ差し替えは**読み書き経路のみ**に影響する。`register_*_meta` の発行可否は `markExternallyManaged()`・`markExternallyManagedInAllSubtypes()`(キー単位)が決める。acf-bridge は「ACF管理キーを markExternallyManaged 系で申告」+「エンティティに UseMetaStorage を付けさせる」の両輪で統合する(acf-bridge設計書)。
+- ストレージ差し替えは**読み書き経路のみ**に影響する。`register_*_meta`の発行可否は`#[MetaSchema]`の宣言の有無が決める(外部管理の申告だけのキーは発行しない)。acf-bridgeは「ACF管理キーをmarkExternallyManaged系で申告」+「そのキーを宣言するエンティティに`#[UseMetaStorage(AcfMetaStorage::class)]`を付けさせる」の両輪で統合する(申告とストレージの違うエンティティの宣言は重複エラー。acf-bridge設計書§7.3)。
 
 ### 4.11 `TMSWP\Core\Attribute\WithMetaRevisions`
 
@@ -842,7 +846,7 @@ final class WithMetaRevisions
 - 付与されたエンティティのメタは `register_post_meta(..., ['revisions_enabled' => true])` で登録され(4.9)、以降の保存・プレビュー・リビジョン復元はすべてWPコアが処理する: 投稿保存/オートセーブ時にメタがリビジョンへ複製され、プレビュー表示時はWPコアの `_wp_preview_meta_filter`(`get_post_metadata` フィルタ)がオートセーブリビジョンの値へ読み替える。FW独自のフックは一切追加しない。
 - プレビューの値は `MetaBag` のすべての読み取り(`has()`・`get()`・型付きgetter・`all()`)で読める。そのため `WpMetaStorage`(4.6)は、行の有無を `get_metadata_raw(..., false)` が行を返したか(フィルタが返した空でないスカラーも1行。アイキャッチを差し替えるプレビューで `_wp_preview_post_thumbnail_filter` が返す ID を含む。アイキャッチを外すプレビューでこのフィルタが返すスカラーの `''` は、WP と同じく行なし)で判定し(`metadata_exists()` はフィルタの結果を `(bool)` にするため、オートセーブの値が `'0'`・`''` だと行が無いと判定され、スキーマdefaultが返る)、`getMultiple()` をキーごとに読む(全メタを読む `get_metadata($type, $id)` はキーを指定しないため、プレビューのフィルタに当たらない)。例えば Integer のキー(default 100)をオートセーブで 0 にしてプレビューすると、`int()` は 0、`all()` はそのキーに `'0'` を返す。
 - 宣言は属性であるため「いつ有効化するか」という時間軸の概念が存在しない。宣言は `registerAll()`(init 20)実行前に構造上確定しているため、呼び出し順序の契約・手遅れ時の例外・レジストリの可変メソッドを持たない(設計根拠6)。
-- ACF管理下キー(`isExternallyManaged()` = true)はそもそも `register_post_meta` されないため本機構の対象外。ACFフィールドのプレビュー対応はacf-bridge側の責務とする(本書はスコープ外と明記するに留める)。
+- `#[MetaSchema]`で宣言していないACF管理下キー(`isExternallyManaged()` = true)はそもそも`register_post_meta`されないため本機構の対象外。ACFフィールドのプレビュー対応はacf-bridge側の責務とする(本書はスコープ外と明記するに留める)。`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティが宣言したACF管理下キーは、宣言どおり登録されるため本機構の対象になる。
 - サイト構成に応じて実行時に要否を切り替える用途には属性は使えない。リビジョン保存の要否はエンティティ単位で静的に決まるものとして扱う。
 
 ### 4.12 `TMSWP\Core\Attribute\AsOptionGroup` / `TMSWP\Core\Attribute\OptionSchema`
@@ -1545,10 +1549,11 @@ $code  = \App\Post\ProductPost::meta($post)->string(\App\Post\ProductPost::META_
 #[UseMetaStorage(\TMSWP\AcfBridge\AcfMetaStorage::class)]
 final class CampaignPost extends PostType
 {
-    // v0.6.0 までは、ACF のフィールドグループで管理するキーを #[MetaSchema] で宣言すると
-    // DuplicateMetaKeyException になる(「メタ・設定の使い分け」の v0.6.0 までの境目)。重複は宣言と
-    // acf-bridge のマークのうち後に起きた側で検出し、通常の boot では acf-bridge が init 6 でマークした
-    // 時点で例外になる(acf-bridge 設計書 §7.3)
+    // ACFのフィールドグループで管理するキーも宣言できる。ストレージがacf-bridgeの申告と同じAcfMetaStorageのため
+    // 衝突しない(#[UseMetaStorage]の無いエンティティで宣言するとDuplicateMetaKeyException。acf-bridge設計書§7.3)
+    #[MetaSchema(type: MetaValueType::Integer)]
+    public const META_PRICE = 'price';
+
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('campaign')->label('キャンペーン')->labelLanguage(LabelLanguage::Ja);
@@ -1643,7 +1648,7 @@ final class ProductPost extends PostType
 - [ ] `#[MetaSchema]` の6パラメータ(type/default/single/showInRest/description/sanitize)がすべて `register_*_meta` 引数へ正しくマップされる(統合テストで `get_registered_meta_keys()` を検証)。
 - [ ] default型不一致・single=false+default併用・sanitize形式不正・空キー・public でない定数への付与・REST に出す Array/Object 型のスキーマ欠落が、いずれもブート時に `InvalidSchemaException` となる(ユニットテスト)。WP が `register_*_meta` を拒否した場合(false を返した場合)も `registerAll()` が `InvalidSchemaException` となる(ユニットテスト)。type の不正値は `MetaValueType` enum 受けにより実行前(IDE/PHPStan/PHPの属性インスタンス化)に拒否されるため、ブート時検証・例外テストは存在しない。
 - [ ] 同一エンティティ内・同一 (ObjectType, subtype) スコープのキー重複が `DuplicateMetaKeyException` となる。subtypeが異なる同名キーは共存できる。
-- [ ] `markExternallyManaged()`・`markExternallyManagedInAllSubtypes()` 済みキーは `register_*_meta` が発行されず、同キーのPHP側 `#[MetaSchema]` 宣言が存在する場合は `DuplicateMetaKeyException` となる(acf-bridge連携点のコア側単体で検証)。サブタイプの文字列 `'all'` は特別な意味を持たない。ACF のフィールドグループで管理するキーを `#[MetaSchema]` と `#[UseMetaStorage(AcfMetaStorage::class)]` で宣言できるようにするのは v0.6.0 の acf-bridge 側の対応である(「メタ・設定の使い分け」の v0.6.0 までの境目)。
+- [ ] `markExternallyManaged()`・`markExternallyManagedInAllSubtypes()`済みで宣言の無いキーは`register_*_meta`が発行されず、同キーを申告と違うストレージのエンティティが`#[MetaSchema]`で宣言している場合は`DuplicateMetaKeyException`となり、メッセージがキー・(objectType, subtype)・宣言クラスと定数名・申告元を含む。申告と同じストレージのエンティティの宣言は衝突せず、宣言どおり登録される(acf-bridge連携点のコア側単体で検証)。サブタイプの文字列`'all'`は特別な意味を持たない。
 - [ ] `MetaBag` の全getterについて「ストレージ値 → 引数default → スキーマdefault → ゼロ値/null」の解決順がユニットテスト(モックストレージ、Brain Monkey不要)で網羅されている。
 - [ ] `ValueCaster` のキャスト表(4.7)の全セルがユニットテストで固定されている。
 - [ ] `MetaStorageInterface` 契約テスト(has/get分離、getMultipleのキー有無セマンティクス、deleteの冪等性)が抽象テストケースとして存在し、`WpMetaStorage` が統合テスト(wp-env)でそれを満たす。データベースに依存しない契約は trait(`MetaStorageContract`)に分けて置き、テストでの差し替えに使うメモリの実装がユニットテストでそれを満たす。

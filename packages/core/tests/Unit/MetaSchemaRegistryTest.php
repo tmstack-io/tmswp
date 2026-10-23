@@ -58,8 +58,8 @@ final class MetaSchemaRegistryTest extends UnitTestCase
     public function testRegisterAllDoesNotRegisterExternallyManagedKeys(): void
     {
         $registry = new MetaSchemaRegistry(self::container());
-        $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'acf_field');
-        $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'acf_shared_field');
+        $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'acf_field', RegistryArrayMetaStorage::class, "field group 'group_registry'");
+        $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'acf_shared_field', RegistryArrayMetaStorage::class, "field group 'group_registry'");
         $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
         Functions\expect('register_post_meta')
             ->once()
@@ -69,31 +69,69 @@ final class MetaSchemaRegistryTest extends UnitTestCase
         $registry->registerAll();
     }
 
-    public function testExternallyManagedKeysCannotBeDeclaredByPhpSchema(): void
+    /**
+     * 外部管理のキーを、申告と違うストレージのエンティティが後から宣言するとDuplicateMetaKeyExceptionになる。メッセージは
+     * キー・(ObjectType, サブタイプ)・宣言クラスと定数名・申告元・両方のストレージ・解消方法を含む。
+     */
+    public function testExternallyManagedKeysCannotBeDeclaredByEntityWithAnotherStorage(): void
     {
         $registry = new MetaSchemaRegistry(self::container());
-        $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key');
+        $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key', RegistryArrayMetaStorage::class, "field group 'group_registry'");
 
         $this->expectException(DuplicateMetaKeyException::class);
+        $this->expectExceptionMessage(
+            "meta key 'shared_key' for post:registry_product is externally managed by field group 'group_registry' with meta storage " . RegistryArrayMetaStorage::class
+            . ' and cannot be declared by ' . RegistryProductPost::class . '::META_SHARED with meta storage ' . MemoryMetaStorage::class
+            . '; Add #[UseMetaStorage(\\' . RegistryArrayMetaStorage::class . '::class)] to ' . RegistryProductPost::class
+            . ", remove the #[MetaSchema] constant META_SHARED, or remove the key from field group 'group_registry'",
+        );
 
         $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
     }
 
-    public function testMarkingAnAlreadyDeclaredKeyAsExternallyManagedIsRejected(): void
+    public function testMarkingAKeyDeclaredByEntityWithAnotherStorageIsRejected(): void
     {
         $registry = new MetaSchemaRegistry(self::container());
         $registry->registerEntity(RegistryProductPost::class, ObjectType::Post, 'registry_product');
 
         $this->expectException(DuplicateMetaKeyException::class);
-        $this->expectExceptionMessage("externally managed meta key 'shared_key' for post:registry_product is already declared by " . RegistryProductPost::class);
+        $this->expectExceptionMessage(
+            "externally managed meta key 'shared_key' for post:registry_product is already declared by " . RegistryProductPost::class . '::META_SHARED'
+            . ' with meta storage ' . MemoryMetaStorage::class . "; field group 'group_registry' manages it with meta storage " . RegistryArrayMetaStorage::class
+            . '. Add #[UseMetaStorage(\\' . RegistryArrayMetaStorage::class . '::class)] to ' . RegistryProductPost::class
+            . ", remove the #[MetaSchema] constant META_SHARED, or remove the key from field group 'group_registry'",
+        );
 
-        $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key');
+        $registry->markExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key', RegistryArrayMetaStorage::class, "field group 'group_registry'");
+    }
+
+    /**
+     * 外部管理のキーでも、申告と同じストレージ(#[UseMetaStorage])のエンティティなら、宣言の前後どちらの申告とも衝突せず、
+     * 宣言どおりにregister_*_metaする。宣言の無い外部管理のキーはregister_*_metaしない。
+     */
+    public function testExternallyManagedKeyCanBeDeclaredByEntityWithTheSameStorage(): void
+    {
+        $registry = new MetaSchemaRegistry(self::container());
+        $registry->markExternallyManaged(ObjectType::Post, 'registry_custom', 'custom_key', RegistryArrayMetaStorage::class, "field group 'group_registry'");
+        $registry->markExternallyManaged(ObjectType::Post, 'registry_custom', 'undeclared_key', RegistryArrayMetaStorage::class, "field group 'group_registry'");
+        $registry->registerEntity(RegistryCustomStoragePost::class, ObjectType::Post, 'registry_custom');
+        $registry->registerEntity(RegistryOtherCustomStoragePost::class, ObjectType::Post, 'registry_other_custom');
+        $registry->markExternallyManaged(ObjectType::Post, 'registry_other_custom', 'custom_key', RegistryArrayMetaStorage::class, "field group 'group_registry'");
+        $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'custom_key', RegistryArrayMetaStorage::class, "field group 'group_registry'");
+
+        self::assertTrue($registry->isExternallyManaged(ObjectType::Post, 'registry_custom', 'custom_key'));
+        self::assertTrue($registry->schemasFor(RegistryCustomStoragePost::class)->has('custom_key'));
+
+        Functions\expect('register_post_meta')->once()->with('registry_custom', 'custom_key', Mockery::type('array'))->andReturn(true);
+        Functions\expect('register_post_meta')->once()->with('registry_other_custom', 'custom_key', Mockery::type('array'))->andReturn(true);
+
+        $registry->registerAll();
     }
 
     public function testExternallyManagedInAllSubtypesCoversConcreteSubtypes(): void
     {
         $registry = new MetaSchemaRegistry(self::container());
-        $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'shared_key');
+        $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'shared_key', RegistryArrayMetaStorage::class, "field group 'group_registry'");
 
         self::assertTrue($registry->isExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key'));
         self::assertTrue($registry->isExternallyManaged(ObjectType::Post, 'registry_other', 'shared_key'));
@@ -110,16 +148,19 @@ final class MetaSchemaRegistryTest extends UnitTestCase
         $registry->registerEntity(RegistryOtherProductPost::class, ObjectType::Post, 'registry_other');
 
         $this->expectException(DuplicateMetaKeyException::class);
-        $this->expectExceptionMessage("externally managed meta key 'shared_key' for all post subtypes is already declared by " . RegistryOtherProductPost::class . ' (post:registry_other)');
+        $this->expectExceptionMessage(
+            "externally managed meta key 'shared_key' for all post subtypes is already declared by " . RegistryOtherProductPost::class . '::META_SHARED (post:registry_other)'
+            . ' with meta storage ' . MemoryMetaStorage::class . "; field group 'group_registry' manages it with meta storage " . RegistryArrayMetaStorage::class,
+        );
 
-        $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'shared_key');
+        $registry->markExternallyManagedInAllSubtypes(ObjectType::Post, 'shared_key', RegistryArrayMetaStorage::class, "field group 'group_registry'");
     }
 
     public function testSubtypeNamedAllIsAnOrdinarySubtype(): void
     {
         $registry = new MetaSchemaRegistry(self::container());
         // 'all' という名前の投稿タイプへの申告は、その投稿タイプだけを対象にする(全サブタイプの意味を持たない)
-        $registry->markExternallyManaged(ObjectType::Post, 'all', 'shared_key');
+        $registry->markExternallyManaged(ObjectType::Post, 'all', 'shared_key', RegistryArrayMetaStorage::class, "field group 'group_registry'");
 
         self::assertTrue($registry->isExternallyManaged(ObjectType::Post, 'all', 'shared_key'));
         self::assertFalse($registry->isExternallyManaged(ObjectType::Post, 'registry_product', 'shared_key'));
@@ -355,6 +396,19 @@ final class RegistryCustomStoragePost extends PostType
     public static function definition(): PostTypeDefinition
     {
         return PostTypeDefinition::create('registry_custom');
+    }
+}
+
+#[AsPostType]
+#[UseMetaStorage(RegistryArrayMetaStorage::class)]
+final class RegistryOtherCustomStoragePost extends PostType
+{
+    #[MetaSchema(type: MetaValueType::String)]
+    public const META_CUSTOM = 'custom_key';
+
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('registry_other_custom');
     }
 }
 

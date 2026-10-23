@@ -59,6 +59,8 @@ tmswp/acf-bridge は本書のスコープ外(専用文書が定義)。CSVイン�
 
 各 `register()`/`enable()` は二重呼び出しで `TMSWP\Core\Exception\LogicException` を投げる(冪等な握り潰しはしない。設定差異の取り違えを早期検出するため)。
 
+Kernelごとに登録する拡張(`KernelConfig`の`extensions`に渡す`ExtensionInterface`の実装。acf-bridgeは文書09 §2.1)の`register(Kernel $kernel)`が、`init`等のフックに処理を予約するときは、`add_action()`ではなく`$kernel->defer($hook, $priority, $callback)`を使う。本番の遅延boot(フックの発火後のboot)では`add_action()`で登録した処理が二度と実行されないが、`defer()`はKernelのキャッチアップの中で実行するためである(文書02 §3.3)。
+
 ### 例外・ログ・i18n
 
 - 例外は各パッケージの `TMSWP\<Pascal>\Exception\` 配下に置き、すべて `TMSWP\Core\Exception\RuntimeException`(または `LogicException`)を継承する。

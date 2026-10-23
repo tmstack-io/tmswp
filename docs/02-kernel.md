@@ -69,7 +69,8 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
 │  6. KernelConfig の extensions を順に register()(§3.10)              │
 │  7. Kernel のレジストリへの登録と、boot 時の初期化(エンティティの    │
 │     メタスキーマを MetaSchemaRegistry に登録。WP の API は呼ばない)  │
-│  8. 本番の遅延bootのみ: 発火済みフックのキャッチアップ(§3.3)        │
+│  8. キャッチアップ(§3.3): 本番の遅延bootの発火済みのグループと、    │
+│     boot中にdefer()で発火済みのフックへ予約したもの               │
 └────────────────────────────────────────┘
         │ WPライフサイクル進行
         ▼
@@ -315,8 +316,9 @@ final class Kernel
 
     /**
      * コールバックを (フック, priority) の時点で引数なしで実行するよう予約する(§3.3)。通常は add_action() と同じ。
-     * 本番の遅延bootのキャッチアップ中に発火済みのフックへ予約したものは、キャッチアップの中で実行する。
-     * @internal コンポーネントの初期化が、同じ Kernel の後の priority の初期化を待つ処理に使う(03-entities §9.2)
+     * bootの中(フックの登録の後からキャッチアップの終わりまで)に発火済みのフックへ予約したものは、bootの最後の
+     * キャッチアップの中で実行する。コンポーネントの初期化が、同じKernelの後のpriorityの初期化を待つ処理(03-entities §9.2)と、
+     * 拡張(ExtensionInterface)のregister()が、遅延bootでも確実に動かしたいフックの処理の予約に使う
      * @param \Closure(): void $callback
      */
     public function defer(string $hook, int $priority, \Closure $callback): void;
@@ -379,6 +381,8 @@ boot(config):
     5. missed = kernel.scheduleAll()  // §7。遅延bootの検査を最初に行い(debug の遅延bootはここで、何も登録しない
                                       // うちに例外)、add_filter/add_actionを登録する(コンポーネント・MetaSchema・
                                       // #[Action]/#[Filter])。発火済みフックのグループ(本番のみ)を返し、まだ実行しない
+    5a. kernel.prepareCatchUp(missed) // キャッチアップの列をmissedで用意する。ここから手順8aまでのdefer()の予約
+                                      // (拡張のregister()・boot時の初期化から)は、発火済みのフックならこの列に入る
     6. kernel.registerLifecycleHooks()  // コンテキスト別運用フック(下記)
     6a. TempFileGc::register(kernel)    // フォームの一時ファイルの gc を WP-Cron のフックと tmswp/deactivated に登録する
                                         // (プロセスで1回。05-form §WP-Cronによるgc)。フック登録のみ
@@ -391,7 +395,7 @@ boot(config):
                                                                      // (解決済み id への set()・alias())は ContainerException
     8. self::$kernels[ns] = kernel      // キャッチアップより前に登録する(§3.3)
        kernel.initializeAtBoot()        // boot 時の初期化(§7)。拡張の登録より後、キャッチアップより前
-    8a. kernel.catchUp(missed)          // 本番の遅延bootのキャッチアップ(§3.3)。missed が空なら何もしない
+    8a. kernel.catchUp()                // キャッチアップ(§3.3)。列が空なら何もしない
   catch (Throwable e):
     unset(self::$kernels[ns])          // 手順8で登録した Kernel を取り除く(未登録なら何もしない)
     throw e                            // 例外はそのまま投げ直す
@@ -443,9 +447,9 @@ boot(config):
 
 キャッチアップの順序は、**WordPress でフックが最初に発火した順**、同じフックの中では **priority の昇順**とする(同じ (フック, priority) のグループは1つにまとめてあるため、この2つで順序が決まる)。プラグインの遅延 boot では `plugins_loaded` のグループが `init` のグループより先に動く。最初に発火した順は `$wp_actions` のキーの並びから取る。`do_action()` / `do_action_ref_array()` はフックが初めて発火したときに `$wp_actions` へキーを足し、2回目以降は値(発火回数)を増やすだけなので、キーの並びが最初に発火した順になる(WP 7.0 の wp-includes/plugin.php の `do_action()`・`do_action_ref_array()`。PHP の配列は挿入順を保つ)。`$wp_actions` が配列でなければ発火済みのフックが分からないため、`KernelException` を投げる。
 
-**初期化からの予約(`defer()`)**: コンポーネントの初期化が、同じ Kernel の後の priority の初期化を待って行う処理(builtin のタクソノミーの紐付けの再試行を `init` 11 で行う。03-entities §9.2)は、`add_action()` ではなく `Kernel::defer($hook, $priority, $callback)` で予約する。キャッチアップ中でなければ `add_action($hook, $callback, $priority, 0)` と同じである。キャッチアップの最中に発火済みのフックへ予約した場合は、`add_action()` では二度と実行されないため、キャッチアップの残りのグループの中の (最初に発火した順, priority) の位置(同じ位置のグループの後)に入れて、キャッチアップの中で実行する。例えば `init` 9 のグループの中で `init` 11 に予約したものは、`init` 10 のグループと `init` 11 のグループ(ロールの登録)の後、`init` 20(MetaSchema の WordPress への登録)の前に実行される。予約したものには遅延bootのログを記録しない(ログは発火済みのグループごとに1回)。未発火のフックへの予約は、キャッチアップ中でも `add_action()` で登録する。
+**初期化からの予約(`defer()`)**: コンポーネントの初期化が、同じKernelの後のpriorityの初期化を待って行う処理(builtinのタクソノミーの紐付けの再試行を`init` 11で行う。03-entities §9.2)は、`add_action()`ではなく`Kernel::defer($hook, $priority, $callback)`で予約する。拡張(`ExtensionInterface`)の`register()`も、遅延bootでも確実に動かしたいフックの処理を`defer()`で予約してよい(例: acf-bridgeの`init` 6の管理キーの申告。09-acf-bridge §2.1)。bootの外(bootの後のフックの中等)では`add_action($hook, $callback, $priority, 0)`と同じである。bootの中(フックの登録(手順5)の後からキャッチアップ(手順8a)の終わりまで。拡張の`register()`、boot時の初期化、キャッチアップ中の初期化)で発火済みのフックへ予約した場合は、`add_action()`では二度と実行されないため、キャッチアップの列の(最初に発火した順, priority)の位置(同じ位置のグループの後)に入れて、bootの最後のキャッチアップの中で実行する。拡張の`register()`が本番の遅延bootで`init` 6に予約したものは、`init` 10のコンポーネントの初期化と`init` 20(MetaSchemaのWordPressへの登録)より前に実行される。テーマのKernelの拡張が、テーマの読み込みの前に発火済みの`plugins_loaded`へ予約したものも、遅延bootでなくても同じくキャッチアップの中で実行される(debugでも実行する。debugの遅延bootの例外は、手順5でこれより先に投げる)。例えば`init` 9のグループの中で`init` 11に予約したものは、`init` 10のグループと`init` 11のグループ(ロールの登録)の後、`init` 20(MetaSchemaのWordPressへの登録)の前に実行される。予約したものには遅延bootのログを記録しない(ログは発火済みのグループごとに1回)。未発火のフックへの予約は、キャッチアップ中でも`add_action()`で登録する。
 
-これは「即時同期初期化の禁止」(DR-04)の例外ではなく、誤用に対する縮退仕様である。正常な boot 位置(functions.php / プラグイン本体の直下)ではキャッチアップは決して発生しない。
+これは「即時同期初期化の禁止」(DR-04)の例外ではなく、誤用に対する縮退仕様である。正常なboot位置(functions.php / プラグイン本体の直下)では、`scheduleAll()`のグループ(コンポーネントの初期化とMetaSchemaのWordPressへの登録)の遅延初期化のキャッチアップは発生しない。ただし正常な位置でも、bootの中で`defer()`が発火済みのフックへ予約したもの(テーマのKernelの拡張が`plugins_loaded`へ予約したもの等)は、上の「初期化からの予約」のとおり、bootの最後のキャッチアップの中で実行する(遅延bootのログは記録しない)。
 
 #### 3.4 registerLifecycleHooks() — テーマとプラグインの差異
 
@@ -1173,7 +1177,7 @@ MetaSchema の WordPress への登録(`MetaSchemaRegistry::registerAll()`。`reg
 
 補足仕様:
 
-- **メタスキーマは boot の中で集め、WordPress へは `init` 20 で登録する(確定判断)。** エンティティの Initializer は `BootInitializerInterface`(§5)を実装し、boot の手順8で `MetaSchemaRegistry::registerEntity()` を呼ぶ(エンティティの一覧は探索結果ファイル(本番)か走査(debug)の components から取る。スキーマ自体は探索結果ファイルに載せず、エンティティのクラスの定数と属性(`#[MetaSchema]`・`#[UseMetaStorage]`・`#[WithMetaRevisions]`)をリフレクションで読む。04-meta-options §4.9)。そのため、boot の後なら init の前でも、同じ priority でエンティティの登録より先に動く app の `#[Action('init')]` の中でも `meta()` が使え、スキーマの宣言の誤りは debug に関係なく boot の例外になる。ただし `sanitize` を宣言したキーへの書き込みは、WordPress が sanitize を適用する `init` 20 の登録の後でなければ `LogicException` になる(04-meta-options §4.8)。WordPress への登録を `init` 20 にするのは、(1) acf-bridge が `init` 6 で外部管理のキーを申告した後に流すため(`#[MetaSchema]` と同じキーの申告は、スキーマが boot で揃っているため申告の時点で `DuplicateMetaKeyException` になり、`register_*_meta` に進まない。09-acf-bridge §7.3)、(2) WordPress の `register_meta()` は `revisions_enabled` を `post_type_supports($subtype, 'revisions')` で確かめるため、投稿タイプの登録(`init` 10)より後でなければならないためである。boot 時の初期化はエンティティのクラスを読み込み、`definition()` を呼ぶ(スラッグと `supports` の取得)。`definition()` は WP 関数を呼ばない純粋関数とする規約(03-entities)はこのためにも必要である。
+- **メタスキーマはbootの中で集め、WordPressへは`init` 20で登録する(確定判断)。** エンティティのInitializerは`BootInitializerInterface`(§5)を実装し、bootの手順8で`MetaSchemaRegistry::registerEntity()`を呼ぶ(エンティティの一覧は探索結果ファイル(本番)か走査(debug)のcomponentsから取る。スキーマ自体は探索結果ファイルに載せず、エンティティのクラスの定数と属性(`#[MetaSchema]`・`#[UseMetaStorage]`・`#[WithMetaRevisions]`)をリフレクションで読む。04-meta-options §4.9)。そのため、bootの後ならinitの前でも、同じpriorityでエンティティの登録より先に動くappの`#[Action('init')]`の中でも`meta()`が使え、スキーマの宣言の誤りはdebugに関係なくbootの例外になる。ただし`sanitize`を宣言したキーへの書き込みは、WordPressがsanitizeを適用する`init` 20の登録の後でなければ`LogicException`になる(04-meta-options §4.8)。WordPressへの登録を`init` 20にするのは、(1) acf-bridgeが`init` 6で外部管理のキーを申告した後に流すため(同じキーを申告と違うストレージのエンティティが`#[MetaSchema]`で宣言していれば、スキーマがbootで揃っているため申告の時点で`DuplicateMetaKeyException`になり、`register_*_meta`に進まない。例外のメッセージは`#[MetaSchema]`の定数名とACFのフィールドグループのkeyを含む。`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティの宣言は申告と衝突せず、宣言どおり登録する。09-acf-bridge §7.3)、(2) WordPressの`register_meta()`は`revisions_enabled`を`post_type_supports($subtype, 'revisions')`で確かめるため、投稿タイプの登録(`init` 10)より後でなければならないためである。boot時の初期化はエンティティのクラスを読み込み、`definition()`を呼ぶ(スラッグと`supports`の取得)。`definition()`はWP関数を呼ばない純粋関数とする規約(03-entities)はこのためにも必要である。
 - **UserRole(11) を PostType(10) の後に登録する(確定判断)。** 同じ priority に置くと FQCN の順で混ざるため、priority で順序を固定する。
 - **Taxonomy(9) を PostType(10) より先に登録する(確定判断)。** 根拠: `register_post_type()` の `taxonomies` 引数は内部で `register_taxonomy_for_object_type()` を呼ぶが、これは**未登録のタクソノミー名に対して false を返して黙って失敗する**。逆方向(`register_taxonomy()` の `$object_type` に未登録のCPT名を渡す)は文字列として保持され後から解決されるため問題ない。したがって「Taxonomy先・PostType後」が唯一安全な順序である。WPコアの `create_initial_post_types` / `create_initial_taxonomies` は init 0 で動くため、5/9/10 はいずれもコア登録より後になる。
 - `#[AsModel]` のスキーマ適用(dbDelta)の契機は WP-CLI の `wp tmswp migrate` だけであり、Model 文書の Migrator が定義する。起動時・`admin_init`・ajax・cron・有効化では適用せず、テーブル定義のハッシュが DB と食い違えば `admin_notices` で権限のある管理者に通知する。本表の plugins_loaded(1) は「`InquiryModel::query()` が呼べるようにレジストリへ載せる」だけの軽量処理である。
@@ -1210,7 +1214,7 @@ scheduleAll():
      // debug の boot は走査(§4)でクラスを読み込む)
   4. for (hook, priority, runner) in pending:
         add_action(hook, runner, priority, 0)          // グループごとに1クロージャ
-  5. return missed                                    // キャッチアップは boot の手順8a(catchUp)で、拡張とレジストリへの登録の後に実行する
+  5. return missed                                    // bootの手順5aでキャッチアップの列にし、手順8a(catchUp)で、拡張とレジストリへの登録の後に実行する
 
 initializeAtBoot():                // boot の手順8。失敗は設定の誤り。debug に関係なく例外をそのまま投げる
   for c in this.components (FQCN昇順):
@@ -1218,8 +1222,12 @@ initializeAtBoot():                // boot の手順8。失敗は設定の誤り
      if class が BootInitializerInterface を実装する:
         container->get(class)->initializeAtBoot(c, this)   // エンティティ: MetaSchemaRegistry::registerEntity()
 
-catchUp(missed):                   // 本番の遅延bootのみ。boot の手順8a(§3.3)。missed が空なら何もしない
-  this.catchUpQueue = missed                       // (最初に発火した順, priority) の昇順に並べ済み
+prepareCatchUp(missed):            // bootの手順5a
+  this.catchUpQueue = missed                       // (最初に発火した順, priority)の昇順に並べ済み。debugでは常に空
+                                                   // (debugの遅延bootは手順5で例外のため)
+
+catchUp():                         // bootの手順8a(§3.3)。列は本番の遅延bootの発火済みのグループと、手順5a以降に
+                                   // defer()で発火済みのフックへ予約したもの。列が空なら何もしない
   try:
      while catchUpQueue が空でない:
         (hook, priority, runner, deferred) = catchUpQueue の先頭を取り出す
@@ -1227,7 +1235,7 @@ catchUp(missed):                   // 本番の遅延bootのみ。boot の手順
         runner()                                   // キャッチアップ。失敗は boot の catch でレジストリから取り除いて投げ直す
                                                    // runner の中の defer() は catchUpQueue の (発火順, priority) の位置に入る(§3.3)
   finally:
-     this.catchUpQueue = null                      // キャッチアップ中でなければ defer() は add_action
+     this.catchUpQueue = null                      // 手順5aより前・bootの後のdefer()はadd_action
 
 runInitializer(c, attr):           // 失敗は設定の誤り。debug に関係なく例外をそのまま投げる
   initializer = container->get(attr->initializerClass())
@@ -1240,7 +1248,7 @@ runInitializer(c, attr):           // 失敗は設定の誤り。debug に関係
 
 補足(`#[Action]`/`#[Filter]` 登録の確定仕様):
 
-- 遅延boot検査(`$wp_actions`)とキャッチアップ(§3.3)は、コンポーネント初期化グループと MetaSchema の WordPress への登録に適用する(キャッチアップ中の初期化が `defer()` で予約した処理も、キャッチアップの中で実行する。§3.3)。`#[Action]`/`#[Filter]` はハンドラ登録であり「過去の発火に対するキャッチアップ」が定義できないためキャッチアップの対象外とする。ただし debug の遅延boot例外は `#[Action]`/`#[Filter]` の登録よりも前に投げるため、例外のときは `#[Action]`/`#[Filter]` も登録されない(§3.1)。
+- 遅延boot検査(`$wp_actions`)とキャッチアップ(§3.3)は、コンポーネント初期化グループとMetaSchemaのWordPressへの登録に適用する(bootの中で`defer()`が発火済みのフックへ予約した処理(拡張の`register()`・boot時の初期化・キャッチアップ中の初期化から)も、キャッチアップの中で実行する。§3.3)。`#[Action]`/`#[Filter]`はハンドラ登録であり「過去の発火に対するキャッチアップ」が定義できないためキャッチアップの対象外とする。ただしdebugの遅延boot例外は`#[Action]`/`#[Filter]`の登録よりも前に投げるため、例外のときは`#[Action]`/`#[Filter]`も登録されない(§3.1)。
 - クロージャ登録のため、第三者コードからの `remove_action` / `remove_filter` による個別解除は事実上できない。登録クロージャを保持して解除APIを提供することは実需要が出るまで行わない(YAGNI。受託で第三者がHookを外す要件は稀)。
 
 **正確に1回の初期化(Kernel契約)**: Kernel は Discovery が収集した components リストを1巡だけ走査し、各コンポーネントの Initializer(エンティティ基底の `register()` を含む)を**正確に1回**呼ぶ。冪等性の保証はこの1巡走査のみであり、エンティティ基底の `register()` 側は再入ガード・重複防止を持たない(エンティティ文書)。
@@ -1808,8 +1816,8 @@ final class ContainerTest extends TestCase
 - [ ] 拡張の `register()` が Container に入れたサービスを、init 10 の初期化が、init 未発火の通常の boot と、init 発火済みの本番の遅延boot(キャッチアップ)の両方で使える
 - [ ] `Kernel::forFile()` が、シンボリックリンクを経由したパスを実体の Kernel に解決し、`..` でルートの外へ出るパスと存在しないパスで `KernelException` を投げる
 - [ ] 本番の遅延bootのキャッチアップが、`$wp_actions` で最初に発火した順、同じフックの中では priority の昇順で実行される(`plugins_loaded` のグループが `init` より先。MetaSchema の WordPress への登録(`init` 20)も同じ規則で、メタスキーマの `MetaSchemaRegistry` への登録(boot 時の初期化)はキャッチアップより先)。未発火のフックのグループは `add_action` される。debug の遅延bootは、最初に発火したフックのグループで `KernelException` になり、`#[Action]`/`#[Filter]` を含めどのフックも登録せず、どのグループも実行しない
-- [ ] キャッチアップ中の初期化が `defer()` で発火済みのフックへ予約した処理が、キャッチアップの中の (最初に発火した順, priority) の位置で、遅延bootのログを記録せずに実行される(例: `init` 9 のタクソノミーの初期化が予約した `init` 11 の再試行が、`init` 10 の投稿タイプの登録の後、`init` 20 の前に動く。統合テスト)。キャッチアップ中でなければ `add_action` で登録される
-- [ ] init の前の boot で、エンティティのメタスキーマが `MetaSchemaRegistry` に登録され、`register_post_meta()` は呼ばれない。`#[MetaSchema]` と同じキーの外部管理の申告(`markExternallyManaged()`)は、その時点で `DuplicateMetaKeyException` になる
+- [ ] キャッチアップ中の初期化が`defer()`で発火済みのフックへ予約した処理が、キャッチアップの中の(最初に発火した順, priority)の位置で、遅延bootのログを記録せずに実行される(例: `init` 9のタクソノミーの初期化が予約した`init` 11の再試行が、`init` 10の投稿タイプの登録の後、`init` 20の前に動く。統合テスト)。拡張の`register()`が`defer()`で発火済みのフックへ予約した処理も、同じくキャッチアップの中で実行される(遅延bootでも、正常なboot位置のテーマのKernelが発火済みの`plugins_loaded`へ予約した場合も)。手順5aより前かbootの後の予約と、未発火のフックへの予約は`add_action`で登録される
+- [ ] initの前のbootで、エンティティのメタスキーマが`MetaSchemaRegistry`に登録され、`register_post_meta()`は呼ばれない。`#[MetaSchema]`と同じキーの外部管理の申告(`markExternallyManaged()`)は、申告のストレージが宣言したエンティティのストレージと違えば、その時点で`DuplicateMetaKeyException`になり、メッセージは宣言の定数名と申告元(ACFのフィールドグループのkey)を含む。ストレージが同じなら衝突しない
 - [ ] コンポーネントの初期化の失敗(Initializer の例外、`ComponentInitializerInterface` を実装しない Initializer、探索結果ファイルの属性を復元できない)が、本番(debug=false)でも例外になる(例: `PostType` を継承しない `#[AsPostType]` のコンポーネントは、boot 時の初期化で boot の例外になる)。属性を復元できない場合(属性クラスが無い・`ComponentAttributeInterface` を実装しない・属性の生成で例外が起きる)は、メッセージに探索結果ファイルの作り直しの案内(`wp tmswp discover`)を含む `DiscoveryException` になり、属性の生成で起きた例外(引数の不一致による `ArgumentCountError`・`TypeError` 等の Error を含む)を previous に持つ。本番のキャッチアップ中の失敗では boot が例外になる
 - [ ] `#[Action]`/`#[Filter]` メソッドの失敗(Container での解決の失敗を含む)が、debug では例外のまま伝わり、本番ではその Kernel のロガー(`$kernel->logger()`)に `error` で記録されてそのメソッドだけスキップされ、第1引数が返る。引数を宣言しない `#[Filter]` も第1引数を受け取って登録され、失敗時は元の値を、成功時はメソッドの戻り値を返し、メソッドには引数を渡さない(宣言引数数に切り詰める)
 - [ ] 本番の `#[Action]`/`#[Filter]` メソッドの失敗のログの文脈が、`class`・`method`・`hook`・`exceptionClass`・`exceptionAt`(ファイル:行)・`previousClasses` だけで、例外のオブジェクト・メッセージ・トレースを含まない
@@ -1824,7 +1832,7 @@ final class ContainerTest extends TestCase
 - [ ] init 完走後、`#[AsTaxonomy]`(init 9)→`#[AsPostType]`(init 10)→`#[AsUserRole]`(init 11)の順で登録され、`PostTypeDefinition` の taxonomies 連携が機能する。ロールは FQCN の順に関係なく投稿タイプの後に登録される
 - [ ] 本番相当(debug=false)の init の前の boot の後、init の前でも、app の `#[Action('init')]`(エンティティの登録と同じ priority 10 で先に動く)の中でも `meta()` が使え、`register_post_meta()` は `init` 20 で行われる。`#[UseMetaStorage]` と `#[WithMetaRevisions]` が探索結果ファイルの経路でも保持される
 - [ ] 本番相当(debug=false)でエンティティの `register()` が例外を投げても、メタスキーマは boot で登録済みで、例外はログに記録されるだけで済まされず init から伝わる
-- [ ] acf-bridge の外部管理のキーの申告(`init` 6)が `#[MetaSchema]` と同じキーなら、その時点で `DuplicateMetaKeyException` になり、`register_post_meta()`(`init` 20)には進まない
+- [ ] acf-bridgeの外部管理のキーの申告(`init` 6)が、申告と違うストレージのエンティティの`#[MetaSchema]`と同じキーなら、その時点で`DuplicateMetaKeyException`になり、`register_post_meta()`(`init` 20)には進まない
 - [ ] `#[Action]`/`#[Filter]` メソッドが宣言どおりの(フック, priority)と、引数の数(`#[Action]` は宣言引数数、`#[Filter]` は `max(1, 宣言引数数)`)で `add_filter` 登録され、フック発火時に Container 経由で1回だけインスタンス化されて呼ばれる。属性宣言のみ(`register()` 非オーバーライド)の `#[AsHook]` クラスは、本番相当(debug=false)の boot で、宣言フックの発火までロードされない(`get_declared_classes()` の差分で検証。debug の boot は走査ですべてのクラスを読み込む)
 - [ ] Kernel が各コンポーネントの Initializer(エンティティ基底の `register()` を含む)を1リクエスト内で正確に1回だけ呼ぶ(Initializerへのスパイで検証。register() 側に再入ガードは存在しない)
 - [ ] テーマ(`App`)+プラグイン(`MyShopPlugin`)の2 Kernel併用で、Container・探索結果ファイル・components が相互に独立し、`Kernel::all()` にテーマとプラグインの2つの Kernel が含まれる

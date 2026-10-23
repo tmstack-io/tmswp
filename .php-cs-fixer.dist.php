@@ -19,6 +19,8 @@ $finder = (new Finder())
     ->notPath('#tests/(.+/)?fixtures/#')
     // packages/*/languages/ の .l10n.php は `wp i18n make-php` の生成物で、出力をそのままコミットする
     ->notPath('#^[^/]+/languages/#')
+    // fixtureのテーマ・プラグインのacf-bridgeの生成物は、`wp tmswp acf sync`の出力をそのままコミットし、checkがバイト単位で照合する
+    ->notPath('#^fixtures/(themes|plugins)/[^/]+/app/Acf/(AcfManifest|[A-Za-z0-9]+(Fields|Options))\.php$#')
     ->append([__FILE__, __DIR__ . '/monorepo-builder.php']);
 
 return (new Config())

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Composer\Autoload\ClassLoader;
+use TMSWP\AcfBridge\AcfBridge;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Log\LogChannel;
@@ -19,7 +20,7 @@ use TMSWP\Core\Tests\Support\RecordingLogger;
     Kernel::boot(KernelConfig::theme(
         __DIR__ . '/app',
         'TmswpFixtureTheme',
-        extensions: [new RecordingExtension()],
+        extensions: [new RecordingExtension(), new AcfBridge()],
         logChannels: static fn(): array => ['test' => new LogChannel(new RecordingLogger())],
     ));
 })();

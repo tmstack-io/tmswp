@@ -65,8 +65,9 @@ final class Kernel
     private array $hookMethods = [];
 
     /**
-     * キャッチアップ(§3.3)でこれから実行するグループ((最初に発火した順, priority) の昇順)。キャッチアップ中でなければ
-     * null。defer() が、発火済みのフックへの予約をこの中に入れる。
+     * キャッチアップ(§3.3)でこれから実行するグループ((最初に発火した順, priority)の昇順)。bootの中で、フックの登録
+     * (scheduleAll())の後からキャッチアップの終わりまでは配列で、それ以外はnull。defer()が、発火済みのフックへの
+     * 予約をこの中に入れる(拡張のregister()・boot時の初期化・キャッチアップ中の初期化からの予約)。
      *
      * @var list<array{hook: string, priority: int, runner: Closure(): void, deferred: bool}>|null
      */
@@ -155,6 +156,8 @@ final class Kernel
         try {
             // debug の遅延 boot の検査(何も登録しないうちに例外)と、コアのフックの登録
             $missed = $kernel->scheduleAll();
+            // ここからキャッチアップの終わりまでのdefer()の予約は、発火済みのフックならキャッチアップの列に入る
+            $kernel->prepareCatchUp($missed);
             $kernel->registerTemplateFallback();
             $kernel->registerLifecycleHooks();
             TempFileGc::register($kernel);
@@ -171,7 +174,7 @@ final class Kernel
             // メタスキーマの登録等の boot 時の初期化。拡張が Container に入れたサービス(メタのストレージ等)を使え、
             // キャッチアップで動く初期化やアプリのコードからも登録済みのスキーマを使えるよう、この位置で行う
             $kernel->initializeAtBoot();
-            $kernel->catchUp($missed);
+            $kernel->catchUp();
         } catch (Throwable $exception) {
             // boot が失敗したら、起動していない Kernel をレジストリに残さないよう取り除いてから、例外をそのまま投げ直す
             unset(self::$kernels[$config->appNamespace]);
@@ -296,12 +299,12 @@ final class Kernel
     /**
      * コールバックを、フック $hook の priority $priority の時点で引数なしで実行するよう予約する(§3.3)。
      *
-     * 通常は add_action() で登録する。本番の遅延 boot のキャッチアップの最中に、発火済みのフックへ予約した場合は、
-     * add_action() では二度と実行されないため、キャッチアップの残りのグループの中の (最初に発火した順, priority) の
-     * 位置(同じ位置のグループの後)に入れて実行する。コンポーネントの初期化が、同じ Kernel の後の priority の初期化を
-     * 待って行う処理(builtin のタクソノミーの紐付けの再試行。03-entities §9.2)に使う。
-     *
-     * @internal
+     * 通常はadd_action()で登録する。bootの中(フックの登録の後からキャッチアップの終わりまで。拡張のregister()、
+     * boot時の初期化、キャッチアップ中の初期化)で発火済みのフックへ予約した場合は、add_action()では二度と実行されない
+     * ため、キャッチアップの列の(最初に発火した順, priority)の位置(同じ位置のグループの後)に入れて、bootの最後の
+     * キャッチアップの中で実行する。コンポーネントの初期化が、同じKernelの後のpriorityの初期化を
+     * 待って行う処理(builtinのタクソノミーの紐付けの再試行。03-entities §9.2)に使う。拡張(ExtensionInterface)の
+     * register()も、本番の遅延bootでも確実に動かしたいフックの処理を、add_action()ではなくこれで予約してよい。
      *
      * @param Closure(): void $callback
      */
@@ -474,11 +477,12 @@ final class Kernel
     }
 
     /**
-     * 本番の遅延 boot で、発火済みのフックの処理をその場で実行して縮退動作させる(キャッチアップ。§3.3)。
+     * キャッチアップの列を、scheduleAll()が返した発火済みのグループで用意する(§3.3)。この後catchUp()までの間に
+     * defer()で発火済みのフックへ予約したもの(拡張のregister()・boot時の初期化から)も、この列に入る。
      *
      * @param list<array{hook: string, priority: int, runner: Closure(): void}> $missed scheduleAll() が返したグループ
      */
-    private function catchUp(array $missed): void
+    private function prepareCatchUp(array $missed): void
     {
         $queue = [];
 
@@ -487,7 +491,14 @@ final class Kernel
         }
 
         $this->catchUpQueue = $queue;
+    }
 
+    /**
+     * 発火済みのフックの処理をその場で実行して縮退動作させる(キャッチアップ。§3.3)。列はprepareCatchUp()が用意した
+     * 本番の遅延bootの発火済みのグループと、defer()で発火済みのフックへ予約したもの。
+     */
+    private function catchUp(): void
+    {
         try {
             // 実行中のグループが defer() で予約したものも、この列に入って順に実行される(列は finally まで null にならない)
             while ($this->catchUpQueue !== null && $this->catchUpQueue !== []) {

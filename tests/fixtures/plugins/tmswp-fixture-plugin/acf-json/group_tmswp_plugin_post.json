@@ -1,0 +1,22 @@
+{
+    "key": "group_tmswp_plugin_post",
+    "title": "TMSWP plugin post",
+    "fields": [
+        {
+            "key": "field_tmswp_plugin_post_note",
+            "label": "Plugin note",
+            "name": "tmswp_plugin_note",
+            "type": "text"
+        }
+    ],
+    "location": [
+        [
+            {
+                "param": "post_type",
+                "operator": "==",
+                "value": "post"
+            }
+        ]
+    ],
+    "active": true
+}

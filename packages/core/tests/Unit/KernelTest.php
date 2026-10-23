@@ -45,6 +45,7 @@ use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
+use TMSWP\Core\Tests\Support\MemoryMetaStorage;
 use TMSWP\Core\Tests\Support\UnitTestCase;
 use TypeError;
 
@@ -575,7 +576,7 @@ PHP);
         $this->expectException(DuplicateMetaKeyException::class);
         $this->expectExceptionMessage("externally managed meta key 'tmswp_kernel_note' for post:tmswp_kernel_meta is already declared by " . KernelTestMetaPost::class);
 
-        $registry->markExternallyManaged(ObjectType::Post, 'tmswp_kernel_meta', 'tmswp_kernel_note');
+        $registry->markExternallyManaged(ObjectType::Post, 'tmswp_kernel_meta', 'tmswp_kernel_note', MemoryMetaStorage::class, "field group 'group_kernel'");
     }
 
     public function testDeferOutsideCatchUpIsAddAction(): void
@@ -627,6 +628,40 @@ PHP);
         );
         // 発火済みのグループ(init 9・10・12 と MetaSchema の init 20)ごとに1回
         self::assertCount(4, $logger->records);
+    }
+
+    /**
+     * 本番の遅延bootで、拡張のregister()がdefer()で発火済みのフックへ予約したものは、キャッチアップの列の
+     * (最初に発火した順, priority)の位置で実行される(init 6はinit 10のコンポーネントの初期化と、MetaSchemaの
+     * WordPressへの登録(init 20)より前)。未発火のフックへの予約はadd_action()する。
+     */
+    public function testDeferFromExtensionRegisterIsCaughtUpInLateBoot(): void
+    {
+        $logger = new KernelTestLogger();
+        $config = KernelConfig::theme(
+            $this->createTempDirectory('defer-extension-app'),
+            'Example\Tests\DeferExtensionApp' . uniqid(),
+            false,
+            [new KernelTestDeferringExtension()],
+            self::recordTo($logger),
+        );
+        $namespace = $config->appNamespace;
+        (new DiscoveryFile($config))->write(new DiscoveryResult([
+            new DiscoveredComponent($namespace . '\A', KernelTestCatchUpAttribute::class, ['hook' => 'init', 'priority' => 10]),
+            new DiscoveredComponent($namespace . '\C', KernelTestCatchUpAttribute::class, ['hook' => 'init', 'priority' => 30]),
+        ], []));
+        $GLOBALS['wp_actions'] = ['plugins_loaded' => 1, 'init' => 1];
+        Functions\when('register_post_meta')->justReturn(true);
+        Actions\expectAdded('wp_loaded')->once()->with(Mockery::type(Closure::class), 10, 0);
+
+        Kernel::boot($config);
+
+        self::assertSame(
+            ['extension plugins_loaded 5', 'extension init 6', $namespace . '\A', 'extension init 25', $namespace . '\C'],
+            KernelTestRecordingInitializer::$initialized,
+        );
+        // 遅延bootのログは発火済みのグループ(init 10・20・30)ごとに1回で、拡張の予約は記録しない
+        self::assertCount(3, $logger->records);
     }
 
     /**
@@ -1504,6 +1539,22 @@ final class KernelTestServiceExtension implements ExtensionInterface
     public function register(Kernel $kernel): void
     {
         $kernel->container()->set(KernelTestExtensionService::class, new KernelTestExtensionServiceImplementation());
+    }
+}
+
+/**
+ * register()の中で、発火済みのフック(plugins_loaded・init)と未発火のフック(wp_loaded)へdefer()で予約する拡張。
+ * 実行した予約をKernelTestRecordingInitializer::$initializedに記録する。
+ */
+final class KernelTestDeferringExtension implements ExtensionInterface
+{
+    public function register(Kernel $kernel): void
+    {
+        foreach ([['init', 25], ['init', 6], ['plugins_loaded', 5], ['wp_loaded', 10]] as [$hook, $priority]) {
+            $kernel->defer($hook, $priority, static function () use ($hook, $priority): void {
+                KernelTestRecordingInitializer::$initialized[] = "extension {$hook} {$priority}";
+            });
+        }
     }
 }
 

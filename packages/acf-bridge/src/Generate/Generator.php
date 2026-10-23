@@ -7,6 +7,7 @@ namespace TMSWP\AcfBridge\Generate;
 use TMSWP\AcfBridge\BridgeConfig;
 use TMSWP\AcfBridge\Json\FieldDefinition;
 use TMSWP\AcfBridge\Json\FieldGroup;
+use TMSWP\AcfBridge\Manifest\ManagedKeyCollector;
 use TMSWP\AcfBridge\Mapping\GenerationTarget;
 use TMSWP\AcfBridge\Mapping\LocationResolver;
 use TMSWP\AcfBridge\Mapping\TargetKind;
@@ -90,7 +91,7 @@ final class Generator
             );
         }
 
-        $files[] = new GeneratedFile('AcfManifest.php', $this->renderManifest($buckets, $context));
+        $files[] = new GeneratedFile('AcfManifest.php', $this->renderManifest($groups, $context));
 
         usort($files, static fn(GeneratedFile $a, GeneratedFile $b): int => $a->relativePath <=> $b->relativePath);
 
@@ -281,15 +282,7 @@ final class Generator
     {
         $target = $bucket->target;
         $sourceLines = $this->sourceLines($bucket->groups());
-        $optionsPostId = null;
-
-        if ($target->kind === TargetKind::Options) {
-            $optionsPostId = $this->optionsPostId($target->subtype, $context);
-
-            if ($optionsPostId['source'] !== null) {
-                $sourceLines[] = $optionsPostId['source'];
-            }
-        }
+        $optionsPostId = $target->kind === TargetKind::Options ? $this->optionsPostId($target->subtype, $context) : null;
 
         $lines = $this->headerLines(
             "{$target->className} — ACF typed accessors for {$this->targetDescription($target)}.",
@@ -322,7 +315,7 @@ final class Generator
             $lines[] = "    public const {$accessor->keyConstName} = " . $this->phpString($accessor->field->key) . ';';
         }
 
-        $lines = array_merge($lines, $this->factoryLines($target, $optionsPostId['postId'] ?? null));
+        $lines = array_merge($lines, $this->factoryLines($target, $optionsPostId));
 
         foreach ($accessors as $accessor) {
             $lines = array_merge($lines, $this->getterLines($accessor));
@@ -555,10 +548,14 @@ final class Generator
         ];
     }
 
-    /** @param list<TargetBucket> $buckets */
-    private function renderManifest(array $buckets, GeneratorContext $context): string
+    /**
+     * 管理キーの一覧(AcfManifest)を生成する。管理キーは`wp tmswp acf check`のE101と同じManagedKeyCollectorで集める。
+     *
+     * @param list<FieldGroup> $groups cloneを解決したグループ
+     */
+    private function renderManifest(array $groups, GeneratorContext $context): string
     {
-        $managedKeys = $this->managedKeys($buckets);
+        $managedKeys = (new ManagedKeyCollector($this->locations, $this->types))->collect($groups, $context->config);
         $lines = $this->headerLines(
             'AcfManifest — ACF managed keys.',
             $context->config->namespace,
@@ -568,7 +565,7 @@ final class Generator
         $usesObjectType = false;
 
         foreach ($managedKeys as $managedKey) {
-            if ($managedKey['objectType'] !== null) {
+            if ($managedKey->objectType !== null) {
                 $usesObjectType = true;
                 break;
             }
@@ -590,11 +587,11 @@ final class Generator
 
         foreach ($managedKeys as $managedKey) {
             $lines[] = '            new ManagedKey('
-                . ($managedKey['objectType'] ?? 'null') . ', '
-                . $this->phpString($managedKey['subtype']) . ', '
-                . $this->phpString($managedKey['metaKey']) . ', '
-                . $this->phpString($managedKey['fieldKey']) . ', '
-                . $this->phpString($managedKey['groupKey'])
+                . ($managedKey->objectType !== null ? 'ObjectType::' . $managedKey->objectType->name : 'null') . ', '
+                . $this->phpString($managedKey->objectSubtype) . ', '
+                . $this->phpString($managedKey->metaKey) . ', '
+                . $this->phpString($managedKey->fieldKey) . ', '
+                . $this->phpString($managedKey->groupKey)
                 . '),';
         }
 
@@ -606,72 +603,12 @@ final class Generator
     }
 
     /**
-     * @param list<TargetBucket> $buckets
-     *
-     * @return list<array{objectType: ?string, subtype: string, metaKey: string, fieldKey: string, groupKey: string}>
+     * オプションページのACFのpost_id。GeneratorContext::$optionsPagePostIds(acf-jsonのui_options_pageと
+     * BridgeConfigのoptionsPagePostIds)に無ければ'option'。
      */
-    private function managedKeys(array $buckets): array
+    private function optionsPostId(string $menuSlug, GeneratorContext $context): string
     {
-        $keys = [];
-
-        foreach ($buckets as $bucket) {
-            foreach ($bucket->groups() as $group) {
-                foreach ($group->fields as $field) {
-                    if (!$this->types->storesValue($field) || $field->name === '' || $field->type === 'clone') {
-                        continue;
-                    }
-
-                    $keys[] = [
-                        'objectType' => $this->objectTypeExpression($bucket->target),
-                        'subtype' => $bucket->target->subtype,
-                        'metaKey' => $field->name,
-                        'fieldKey' => $field->key,
-                        'groupKey' => $group->key,
-                    ];
-                }
-            }
-        }
-
-        usort(
-            $keys,
-            static fn(array $a, array $b): int => (($a['objectType'] ?? 'options') . "\0" . $a['subtype'] . "\0" . $a['metaKey'])
-                <=> (($b['objectType'] ?? 'options') . "\0" . $b['subtype'] . "\0" . $b['metaKey']),
-        );
-
-        return $keys;
-    }
-
-    /** @return array{postId: string, source: ?string} */
-    private function optionsPostId(string $menuSlug, GeneratorContext $context): array
-    {
-        $configured = $context->optionsPagePostIds[$menuSlug] ?? null;
-
-        if ($configured !== null) {
-            return ['postId' => $configured, 'source' => null];
-        }
-
-        if ($context->runtimePostIdResolver !== null) {
-            $runtime = ($context->runtimePostIdResolver)($menuSlug);
-
-            if ($runtime !== null && $runtime !== '') {
-                return [
-                    'postId' => $runtime,
-                    'source' => "runtime: acf_get_options_page('{$menuSlug}')",
-                ];
-            }
-        }
-
-        return ['postId' => 'option', 'source' => null];
-    }
-
-    private function objectTypeExpression(GenerationTarget $target): ?string
-    {
-        return match ($target->kind) {
-            TargetKind::Post => 'ObjectType::Post',
-            TargetKind::Term => 'ObjectType::Term',
-            TargetKind::User => 'ObjectType::User',
-            TargetKind::Options => null,
-        };
+        return $context->optionsPagePostIds[$menuSlug] ?? 'option';
     }
 
     private function objectClassFromDocType(string $docType): ?string

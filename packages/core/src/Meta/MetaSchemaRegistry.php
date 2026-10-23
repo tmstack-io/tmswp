@@ -26,6 +26,7 @@ final class MetaSchemaRegistry
      *     subtype: string,
      *     schemas: MetaSchemaSet,
      *     storageClass: class-string<MetaStorageInterface>,
+     *     storageImplementation: class-string<MetaStorageInterface>,
      *     revisions: bool
      * }>
      */
@@ -34,10 +35,14 @@ final class MetaSchemaRegistry
     /** @var array<string, class-string> */
     private array $declaredScopes = [];
 
-    /** @var array<string, true> (ObjectType, subtype, key) の組 */
+    /**
+     * @var array<string, array{storageClass: class-string<MetaStorageInterface>, origin: string}> (ObjectType, subtype, key)の組
+     */
     private array $externalScopes = [];
 
-    /** @var array<string, true> 全サブタイプで外部管理する (ObjectType, key) の組 */
+    /**
+     * @var array<string, array{storageClass: class-string<MetaStorageInterface>, origin: string}> 全サブタイプで外部管理する(ObjectType, key)の組
+     */
     private array $externalAllSubtypeScopes = [];
 
     private bool $registered = false;
@@ -54,7 +59,7 @@ final class MetaSchemaRegistry
      *
      * @throws LogicException registerAll() の後に呼んだ場合(WordPress に登録されないスキーマになるため)
      * @throws InvalidSchemaException スキーマ・ストレージ・#[WithMetaRevisions] の宣言の誤り
-     * @throws DuplicateMetaKeyException キーの重複、または外部管理のキーを宣言した場合
+     * @throws DuplicateMetaKeyException キーの重複、または外部管理のキーを、申告と違うストレージのエンティティで宣言した場合
      */
     public function registerEntity(string $entityClass, ObjectType $objectType, string $subtype): void
     {
@@ -65,10 +70,10 @@ final class MetaSchemaRegistry
         $reflection = new ReflectionClass($entityClass);
         $schemas = MetaSchemaSet::fromList($this->definitionsFor($reflection));
         $storageClass = $this->storageClassFor($reflection);
-        $this->assertStorage($storageClass, $entityClass);
+        $storageImplementation = $this->storageImplementation($storageClass, $entityClass);
         $revisions = $this->revisionsEnabled($reflection, $objectType);
 
-        $this->registerEntry($entityClass, $objectType, $subtype, $schemas, $storageClass, $revisions);
+        $this->registerEntry($entityClass, $objectType, $subtype, $schemas, $storageClass, $storageImplementation, $revisions);
     }
 
     public function schemasFor(string $entityClass): MetaSchemaSet
@@ -120,42 +125,55 @@ final class MetaSchemaRegistry
     }
 
     /**
-     * 外部(acf-bridge 等)が管理するキーを申告する。申告したキーは #[MetaSchema] で宣言できないため、register_*_meta
-     * されない。#[MetaSchema] は boot の中で登録済みのため、acf-bridge が init 6 で申告した時点で重複を検出する。
+     * 外部(拡張パッケージ等)が管理するキーを申告する。申告したキーを#[MetaSchema]で宣言できるのは、読み書きの
+     * ストレージ(#[UseMetaStorage]か既定のストレージを解決したインスタンスのクラス)が$storageClassと同じ
+     * エンティティだけで、そのときは同じ値を同じ経路で読み書きするため、宣言どおりにregister_*_metaする。
+     * 宣言の無いキーはregister_*_metaしない。#[MetaSchema]はbootの中で登録済みのため、拡張がinitで申告した時点で
+     * 重複を検出する。
      *
-     * @throws DuplicateMetaKeyException 同じ (ObjectType, subtype, key) を #[MetaSchema] が宣言済み
+     * @param class-string<MetaStorageInterface> $storageClass このキーを読み書きするストレージのクラス
+     * @param string $origin 申告元の説明(例: 外部のフィールド定義のグループのkey)。重複の例外のメッセージに使う
+     *
+     * @throws DuplicateMetaKeyException 同じ(ObjectType, subtype, key)を、ストレージが$storageClassでない
+     *                                   エンティティの#[MetaSchema]が宣言済み
      */
-    public function markExternallyManaged(ObjectType $objectType, string $subtype, string $key): void
+    public function markExternallyManaged(ObjectType $objectType, string $subtype, string $key, string $storageClass, string $origin): void
     {
-        $declaredClass = $this->declaredScopes[$this->scopeKey($objectType, $subtype, $key)] ?? null;
+        $scope = $this->scopeKey($objectType, $subtype, $key);
+        $declaredClass = $this->declaredScopes[$scope] ?? null;
 
-        if ($declaredClass !== null) {
-            throw new DuplicateMetaKeyException("externally managed meta key '{$key}' for {$objectType->value}:{$subtype} is already declared by {$declaredClass}");
+        if ($declaredClass !== null && $this->entities[$declaredClass]['storageImplementation'] !== $storageClass) {
+            throw new DuplicateMetaKeyException("externally managed meta key '{$key}' for {$objectType->value}:{$subtype} is already declared by "
+                . $this->conflictDescription($declaredClass, $key, $storageClass, $origin));
         }
 
-        $this->externalScopes[$this->scopeKey($objectType, $subtype, $key)] = true;
+        $this->externalScopes[$scope] = ['storageClass' => $storageClass, 'origin' => $origin];
     }
 
     /**
-     * ObjectType のすべてのサブタイプについて、外部が管理するキーを申告する。
+     * ObjectTypeのすべてのサブタイプについて、外部が管理するキーを申告する。宣言との関係はmarkExternallyManaged()と同じ。
      *
-     * @throws DuplicateMetaKeyException 同じ (ObjectType, key) を、いずれかのサブタイプの #[MetaSchema] が宣言済み
+     * @param class-string<MetaStorageInterface> $storageClass このキーを読み書きするストレージのクラス
+     * @param string $origin 申告元の説明(例: 外部のフィールド定義のグループのkey)。重複の例外のメッセージに使う
+     *
+     * @throws DuplicateMetaKeyException 同じ(ObjectType, key)を、いずれかのサブタイプの、ストレージが$storageClassでない
+     *                                   エンティティの#[MetaSchema]が宣言済み
      */
-    public function markExternallyManagedInAllSubtypes(ObjectType $objectType, string $key): void
+    public function markExternallyManagedInAllSubtypes(ObjectType $objectType, string $key, string $storageClass, string $origin): void
     {
         foreach ($this->entities as $entityClass => $entry) {
-            if ($entry['objectType'] === $objectType && $entry['schemas']->has($key)) {
-                throw new DuplicateMetaKeyException("externally managed meta key '{$key}' for all {$objectType->value} subtypes is already declared by {$entityClass} ({$objectType->value}:{$entry['subtype']})");
+            if ($entry['objectType'] === $objectType && $entry['schemas']->has($key) && $entry['storageImplementation'] !== $storageClass) {
+                throw new DuplicateMetaKeyException("externally managed meta key '{$key}' for all {$objectType->value} subtypes is already declared by "
+                    . $this->conflictDescription($entityClass, $key, $storageClass, $origin, " ({$objectType->value}:{$entry['subtype']})"));
             }
         }
 
-        $this->externalAllSubtypeScopes[$objectType->value . "\0" . $key] = true;
+        $this->externalAllSubtypeScopes[$objectType->value . "\0" . $key] = ['storageClass' => $storageClass, 'origin' => $origin];
     }
 
     public function isExternallyManaged(ObjectType $objectType, string $subtype, string $key): bool
     {
-        return \array_key_exists($this->scopeKey($objectType, $subtype, $key), $this->externalScopes)
-            || \array_key_exists($objectType->value . "\0" . $key, $this->externalAllSubtypeScopes);
+        return $this->externalMark($objectType, $subtype, $key) !== null;
     }
 
     /**
@@ -293,14 +311,24 @@ final class MetaSchemaRegistry
         return $attribute->storageClass;
     }
 
-    /** @param class-string<MetaStorageInterface> $storageClass */
-    private function assertStorage(string $storageClass, string $entityClass): void
+    /**
+     * ストレージを解決し、そのインスタンスのクラスを返す。外部管理の申告とストレージが同じかの判定に使う。
+     *
+     * @param class-string<MetaStorageInterface> $storageClass
+     *
+     * @throws InvalidSchemaException 解決したものがMetaStorageInterfaceを実装していない場合
+     *
+     * @return class-string<MetaStorageInterface>
+     */
+    private function storageImplementation(string $storageClass, string $entityClass): string
     {
         $storage = $this->container->get($storageClass);
 
         if (!$storage instanceof MetaStorageInterface) {
             throw new InvalidSchemaException("meta storage '{$storageClass}' for {$entityClass} must implement MetaStorageInterface");
         }
+
+        return $storage::class;
     }
 
     /** @param ReflectionClass<object> $reflection */
@@ -328,6 +356,7 @@ final class MetaSchemaRegistry
     /**
      * @param class-string $entityClass
      * @param class-string<MetaStorageInterface> $storageClass
+     * @param class-string<MetaStorageInterface> $storageImplementation
      */
     private function registerEntry(
         string $entityClass,
@@ -335,11 +364,16 @@ final class MetaSchemaRegistry
         string $subtype,
         MetaSchemaSet $schemas,
         string $storageClass,
+        string $storageImplementation,
         bool $revisions,
     ): void {
         foreach ($schemas->all() as $definition) {
-            if ($this->isExternallyManaged($objectType, $subtype, $definition->key)) {
-                throw new DuplicateMetaKeyException("meta key '{$definition->key}' is externally managed and cannot be declared by {$entityClass}");
+            $mark = $this->externalMark($objectType, $subtype, $definition->key);
+
+            if ($mark !== null && $mark['storageClass'] !== $storageImplementation) {
+                throw new DuplicateMetaKeyException("meta key '{$definition->key}' for {$objectType->value}:{$subtype} is externally managed by {$mark['origin']} with meta storage {$mark['storageClass']}"
+                    . " and cannot be declared by {$entityClass}::{$definition->constantName} with meta storage {$storageImplementation}; "
+                    . self::conflictResolution($entityClass, $definition->constantName, $mark['storageClass'], $mark['origin']));
             }
 
             $scope = $this->scopeKey($objectType, $subtype, $definition->key);
@@ -356,8 +390,46 @@ final class MetaSchemaRegistry
             'subtype' => $subtype,
             'schemas' => $schemas,
             'storageClass' => $storageClass,
+            'storageImplementation' => $storageImplementation,
             'revisions' => $revisions,
         ];
+    }
+
+    /**
+     * (ObjectType, subtype, key)への外部管理の申告。サブタイプへの申告を、全サブタイプへの申告より優先する。
+     *
+     * @return array{storageClass: class-string<MetaStorageInterface>, origin: string}|null
+     */
+    private function externalMark(ObjectType $objectType, string $subtype, string $key): ?array
+    {
+        return $this->externalScopes[$this->scopeKey($objectType, $subtype, $key)]
+            ?? $this->externalAllSubtypeScopes[$objectType->value . "\0" . $key]
+            ?? null;
+    }
+
+    /**
+     * 申告より先に宣言済みのキーとの衝突の説明。「{宣言クラス}::{定数名} with meta storage ...」から始まる。
+     *
+     * @param class-string $entityClass
+     * @param class-string<MetaStorageInterface> $storageClass
+     */
+    private function conflictDescription(string $entityClass, string $key, string $storageClass, string $origin, string $scope = ''): string
+    {
+        $entry = $this->entities[$entityClass];
+        $constantName = $entry['schemas']->get($key)->constantName ?? '';
+
+        return "{$entityClass}::{$constantName}{$scope} with meta storage {$entry['storageImplementation']}; {$origin} manages it with meta storage {$storageClass}. "
+            . self::conflictResolution($entityClass, $constantName, $storageClass, $origin);
+    }
+
+    /**
+     * 衝突の解消方法(ストレージを揃える、#[MetaSchema]の定数を消す、外部の定義からキーを消す)。
+     *
+     * @param class-string<MetaStorageInterface> $storageClass
+     */
+    private static function conflictResolution(string $entityClass, string $constantName, string $storageClass, string $origin): string
+    {
+        return "Add #[UseMetaStorage(\\{$storageClass}::class)] to {$entityClass}, remove the #[MetaSchema] constant {$constantName}, or remove the key from {$origin}";
     }
 
     private function scopeKey(ObjectType $objectType, string $subtype, string $key): string

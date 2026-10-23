@@ -8,7 +8,7 @@
     "tmswp/core": "^0.1"
   },
   "suggest": {
-    "advanced-custom-fields-pro": "ACF Pro 6.0+ をWPプラグインとして導入すること"
+    "advanced-custom-fields-pro": "ACF Pro 6.2+ をWPプラグインとして導入すること"
   },
   "autoload": {
     "psr-4": {

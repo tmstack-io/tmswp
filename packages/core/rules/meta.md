@@ -8,16 +8,17 @@
 値の種類ごとに経路を1つに決める。同じ値を複数の経路で宣言しない。
 
 - 単純な値(文字列・数値・真偽・日付・単一画像ID等)は、必ず `#[MetaSchema]` で宣言し、`MetaBag`(`::meta($object)`)だけで読み書きする。
-- 単純な値をACFの画面で編集する場合も、宣言と `MetaBag` はそのままにし、エンティティに `#[UseMetaStorage(AcfMetaStorage::class)]` を付けて保存先だけを切り替える(rules/acf.md の「MetaBagをACFへ委譲する場合」)。ただし、これはv0.6.0でacf-bridge側を直してから使える。v0.6.0までは下の「v0.6.0までの境目」に従う。
+- 単純な値をACFの画面で編集する場合も、宣言と`MetaBag`はそのままにし、エンティティに`#[UseMetaStorage(AcfMetaStorage::class)]`を付けて保存先だけを切り替える(rules/acf.mdの「MetaBagをACFへ委譲する場合」)。そのキーはACFのフィールドグループで管理してよい(下の「ACFのフィールドグループで管理するキー」)。
 - ACF固有の複合型(repeater・flexible_content・group・gallery・relationship)は、acf-bridgeの生成アクセサ(`XxxFields`)で扱う(rules/acf.md)。
 - サイト全体の設定はメタではなく設定で扱う(rules/options.md の「使い分け」)。
 
-### v0.6.0までの境目
+### ACFのフィールドグループで管理するキー
 
-今のacf-bridgeは、ACFのフィールドグループで管理するキーを外部管理として登録する。そのため、同じキーを `#[MetaSchema]` で宣言すると、起動時に `DuplicateMetaKeyException` になる。v0.6.0までは次のとおりにする。
+acf-bridgeは、ACFのフィールドグループで管理するキーを外部管理(ストレージは`AcfMetaStorage`)として申告する。
 
-- ACFのフィールドグループで管理するキーは `#[MetaSchema]` で宣言せず、生成アクセサ(`XxxFields`)で読み書きする。
-- `#[UseMetaStorage(AcfMetaStorage::class)]` は、ACFのフィールドグループで管理しないキーをACFの保存規約(`update_field`)で読み書きする場合にだけ使う。
+- そのキーを`#[MetaSchema]`で宣言するエンティティには`#[UseMetaStorage(AcfMetaStorage::class)]`を付ける。申告と衝突せず、宣言どおりに登録される。
+- `#[UseMetaStorage]`の無いエンティティで同じキーを宣言すると、起動時に`DuplicateMetaKeyException`になる。
+- 同じキーを`MetaBag`と生成アクセサ(`XxxFields`)の両方から読み書きしない。
 
 ## 手順
 
@@ -322,7 +323,7 @@ final class ProductPriceTest extends TestCase
 ## してはいけないこと
 
 - メタキー文字列をテンプレートに直書きしない。宣言済みのキーは定数で渡す。
-- v0.6.0まで、ACFのフィールドグループで管理するキーを `#[MetaSchema]` で宣言しない(「v0.6.0までの境目」)。
+- ACFのフィールドグループで管理するキーを、`#[UseMetaStorage(AcfMetaStorage::class)]`の無いエンティティで宣言しない(「ACFのフィールドグループで管理するキー」)。
 - 未保存判定に falsy 判定を使わない。必要なら `has()` を使う。
 - `#[MetaSchema]` を `protected` / `private` の定数に付けない(起動時に `InvalidSchemaException` になる)。
 - `set()` に渡す値を自分で `wp_slash()` しない(バックスラッシュが残る)。
