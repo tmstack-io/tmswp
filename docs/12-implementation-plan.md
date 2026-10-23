@@ -940,7 +940,9 @@ v0.2.0〜v0.7.0
 #### v0.8.0-T4: sample-site の作り直し
 
 - 対象ファイル領域: examples/sample-site/
-- 完了条件: sample-site が想定する用途の機能(フォーム、設定ページ、サムネイル、日本語対応、ACF、ブロック)を備え、README が sample-site 用で、lock と path リポジトリの扱いが決まり、`composer qa` が通り、wp-env 上で動く。探索結果ファイル(ブロックを含む)をコミットし、sample-site の `composer qa` が照合する(§1.4)。
+- 完了条件:
+  - sample-site が想定する用途の機能(フォーム、設定ページ、サムネイル、日本語対応、ACF、ブロック)を備え、README が sample-site 用で、lock と path リポジトリの扱いが決まり、`composer qa` が通り、wp-env 上で動く。探索結果ファイル(ブロックを含む)をコミットし、sample-site の `composer qa` が照合する(§1.4)。
+  - sample-siteの依存が今のpackages/*から解決され、`composer validate`がlockの古さを報告しない(lockをコミットしない扱いにする場合は、lockを作る手順がREADMEにある)。v0.5.0の時点では、examples/sample-site/composer.lockは.gitignoreの対象(`/composer.lock`)でコミットされておらず、手元に残るlockの更新日は2026-07-05で、`composer validate`が「The lock file is not up to date with the latest changes in composer.json」を出す。lockのtmswp/core 0.1.0は`php: >=8.2`と`ext-mbstring`を要求し、今のpackages/core/composer.json(`php: >=8.3`、ext-mbstringなし)と食い違う。pathリポジトリが`symlink: false`のため、vendor/tmswp/*(.gitignoreの対象)もその時点のpackages/*の写しで、今のpackages/core/srcと一致しない。
 - 検証コマンド: `cd examples/sample-site && composer qa`、wp-env 上での表示確認
 
 #### v0.8.0-T5: テスト構成の整理
@@ -951,22 +953,24 @@ v0.2.0〜v0.7.0
 
 #### v0.8.0-T6: 開発基盤の残り
 
-- 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.github/workflows/split.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、package.json・package-lock.json(@wordpress/env の版と、npm のインストールスクリプトの扱い)、docs/10 §1.1(package.json の写しの版)・§4.8(カバレッジゲート)・§5(ワークフローの完全版)、docs/01 §4.4(ワークフロー)
+- 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.github/workflows/split.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、package.json・package-lock.json(@wordpress/env の版と、npm のインストールスクリプトの扱い)、docs/10 §1.1(package.json の写しの版)・§4.8(カバレッジゲート)・§5(ワークフローの完全版)、docs/01 §4.4(ワークフロー)、packages/core/src/Kernel/DiscoverCommand.php(照合したKernelの数)、tests/fixtures/_wp-cli.php(`theme_roots`に左右されないfixtureの読み込み)
 - 完了条件:
   - rules の検査が全パッケージの rules/ を対象にし、docs/11 §6.3 どおりの検証をする。sample-site と starters の `composer qa` が CI にある。
   - tools/extract-rules-code.php が、namespace 付きのコード例のクラス名を `final readonly class`・`readonly class` の宣言からも取り出す(v0.4.0 の時点では、クラス名の正規表現が `final class`・`class`・`enum` だけに一致し、`final readonly class` のコード例は「クラス名がありません」の例外になる。v0.4.0 の rules/form-mail.md は `final class` と `public readonly` のプロパティで回避している)。
   - unit と integration の合算カバレッジが、5 パッケージ全体に加えてパッケージ別にも判定され(パッケージ別の基準値はこの版で決める)、docs/10 §4.8 がその方式に改訂されている。php-cs-fixer の設定が docs/10 §3.2・§7 項目4 どおり。
   - qa.yml と split.yml の外部アクションが Node.js 24 で動く版になり(CI に Node.js 20 の非推奨の警告が出ない)、SHA で固定されている(docs/10 §5.3)。外部アクションの実行時に出る Node.js の非推奨の警告(DEP0040 の `punycode`、DEP0169 の `url.parse()`。v0.2.0 の時点では、actions/setup-node・actions/cache・actions/upload-artifact・ramsey/composer-install の実行時に全ジョブで出ている)が、更新後の版で出ないことを確かめる。最新の版でも出る場合は、そのアクションと版を受け入れ記録に書く。
   - CI の `npm ci` の警告を解消する。v0.2.0 の時点では、`npm ci` を実行するジョブ(Integration の 4 セルと Coverage)で、`npm warn deprecated` の @octokit/webhooks-types@7.6.1・glob@10.5.0 と、fs-ext-extra-prebuilt@2.2.7 のインストールスクリプトが allowScripts で許可されていないという `npm warn install-scripts` が出ている(いずれも @wordpress/env 11.17.0 の依存)。@wordpress/env の更新か、インストールスクリプトの扱いの決定で解消し、最新の版でも出る警告は、そのパッケージと版を受け入れ記録に書く。全ジョブの runner の版が固定され、`ubuntu-latest` を使っていない。docs/10 §5 と docs/01 §4.4 のワークフローの完全版が実ファイルと一致する。
+  - `composer discover:check`が、開発用サイトのsite transient `theme_roots`の状態に左右されず、照合したKernelの数(fixtureのテーマとプラグインの2つ)を確かめる。v0.5.0の時点では、fixtureのテーマの置き場(tests/fixtures/themes)を含まない`theme_roots`が開発用サイトに残っていると、fixtureのテーマが見つからずテーマのKernelが起動しないため、2つのKernelのうちプラグインの1つだけを照合して成功する(照合したKernelの数を確かめていない)。このtransientは、`--require=tests/fixtures/_wp-cli.php`の無いWP-CLIの実行や、開発用サイトへの通常のリクエストの後に、fixtureのテーマの置き場を含まない形で作られうる。
 - 検証コマンド: `composer lint`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`、`composer test:coverage`、`grep -n "ubuntu-latest" .github/workflows/*.yml`(0 件)
 
 #### v0.8.0-T7: rules・AGENTS.md・README の全面整備
 
-- 対象ファイル領域: packages/*/rules/、packages/*/README.md、AGENTS.md、README.md、starters/*/AGENTS.md
+- 対象ファイル領域: packages/*/rules/、packages/*/README.md、AGENTS.md、README.md、starters/*/AGENTS.md、starters/*/CLAUDE.md・examples/sample-site/CLAUDE.md(削除)、docs/11 §1.4・§12.1(CLAUDE.mdとAGENTS.mdの記述)
 - 完了条件:
   - rules/・AGENTS.md・README が v0.2.0〜v0.8.0 で確定した API を反映し、docs/11 が定める項目(配置決定木、コーディング規約、デバッグ節、探索結果ファイルの扱い等)を備え、コード例が抽出・検査を通る。CLAUDE.md を置いていない(§1.18)。
   - packages/core/rules に次の注意がある(v0.3.0 の時点では無い)。builtin の `post` のクラスに `#[WithMetaRevisions]` を付けるには、定義で `supports('revisions')` を指定する(`MetaSchemaRegistry` は定義の supports を検査するため、WordPress が `post` に付ける revisions では足りない)。attachment のアダプタのクラスの `query()` は、`status('inherit')` を指定しないと添付ファイルを返さない(PostQuery の既定の `post_status` は `publish`)。
   - rules/meta.md・options.md の「テスト」の例が、v0.5.0-T4 の後の boot に要るグローバルだけを置いている(v0.3.0 の時点では `$wpdb` の代役も置いている)。
+  - docs/11 §12.1のCLAUDE.mdとAGENTS.mdの項目が実態と一致している。v0.5.0の時点では、§12.1(とdocs/11 §1.4、本計画§1.18)はCLAUDE.mdをmonorepo・スターターのどこにも置かないとするが、starters/theme・starters/plugin・examples/sample-siteに、`@AGENTS.md`の1行だけのCLAUDE.mdがコミットされている(monorepoのルートには無い)。また、§12.1はルートのAGENTS.mdを§4の内容とするが、ルートのAGENTS.mdは§4の全文案ではなく、monorepoの開発ルールの12行である。
 - 検証コマンド: `php tools/extract-rules-code.php && php tools/verify-rules-code.php`
 
 #### v0.8.0-T8: 受け入れ確認と記録
@@ -980,7 +984,8 @@ v0.2.0〜v0.7.0
 - 順序: T1 → {T2 ∥ T3 ∥ T4} → {T5 ∥ T6} → T7 → T8
 - T2(starters/ と docs/11)・T3(packages/* の配布設定、テスト支援、docs/01・10)・T4(examples/sample-site/)はファイル領域が重ならない。T2 と T4 は T1 のブロック登録を使うため T1 の後。
 - T5(packages/*/tests/Unit)と T6(tools・bin・CI・cs-fixer の設定・package.json・docs/10 §1.1・§4.8・§5、docs/01 §4.4)はファイル領域が重ならない。T5 は T3(テスト支援の配置)、T6 は T2・T4(CI に入れる対象)と T3(docs/01・docs/10 §5)の後。
-- T7 は全 API の確定後に行う。
+- T7 は全 API の確定後に行う。T7のstarters/*/AGENTS.md・CLAUDE.mdはT2(starters/)、examples/sample-site/CLAUDE.mdはT4(examples/sample-site/)、docs/11 §1.4・§12.1はT2(docs/11 §10と同じファイル)の対象ファイル領域と重なるが、T7はT2・T4の完了後に着手するため並列にならない。
+- T6のpackages/core/src/Kernel/DiscoverCommand.phpとtests/fixtures/_wp-cli.phpはT1(探索コマンド、tests/fixtures/)の対象ファイル領域と重なるが、T6はT1の完了後に着手する。
 
 ### 受け入れ条件
 
@@ -1019,7 +1024,9 @@ v0.8.0
 #### v0.9.0-T3: 全マトリクスの qa と critical / high の解消確認
 
 - 対象ファイル領域: なし(確認作業)
-- 完了条件: 既知の critical / high の不具合がすべて解消し、CI の 4 セルで `composer qa`(integration を含む)と E2E が通り、CI の `coverage` ジョブで合算カバレッジが 85% 以上である(§0.7)。
+- 完了条件:
+  - 既知の critical / high の不具合がすべて解消し、CI の 4 セルで `composer qa`(integration を含む)と E2E が通り、CI の `coverage` ジョブで合算カバレッジが 85% 以上である(§0.7)。
+  - Modelの予約語の一覧(packages/core/src/Model/Identifier.php。TableDefinitionが宣言の時点で使う)と、MigratorのdbDeltaの後の実際の構造の照合を、MySQL 8.4 LTSと9.xでも確かめ、違いがあれば直している(修正は、v0.9.0-T1と同じく、該当パッケージの修正タスクを追加して行う)。v0.5.0の時点では、予約語の一覧(283語)はMySQL 8.0.44とMariaDB 10.11・12.3の実測にもとづき、Migratorの照合もこの3つのDBで確かめた。MySQL 8.4 LTSと9.xでは、どちらも確かめていない。
 - 検証コマンド: `composer qa`(CI の 4 セル)
 
 #### v0.9.0-T4: 公開(push・split・Packagist 登録・タグ付け)

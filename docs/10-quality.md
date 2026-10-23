@@ -167,7 +167,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
             "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/unit.xml"
         ],
         "test:coverage:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --coverage-clover=var/coverage/integration.xml",
-        "test:coverage:check": "php bin/coverage-check.php 68 var/coverage/unit.xml var/coverage/integration.xml",
+        "test:coverage:check": "php bin/coverage-check.php 72 var/coverage/unit.xml var/coverage/integration.xml",
         "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
         "test": ["@test:unit", "@test:integration"],
         "qa:fast": ["@lint", "@analyse", "@test:unit"],
