@@ -842,7 +842,7 @@ final class QueryBuilder
 - 引数2個: `where($column, $value)`。`$value === null`なら`{col} IS NULL`にコンパイル。それ以外はR3写像で`{col} = {placeholder}`。
 - 引数3個: 演算子を大文字正規化し許可リストと照合。`=`+null→`IS NULL`、`!=`/`<>`+null→`IS NOT NULL`。それ以外の演算子+null、および値が配列の場合は`InvalidQueryException`。
 
-**グループ(Closure)**: 子の`QueryBuilder`(同一Connection・同一テーブル)を生成してClosureに渡す。Closureの実行後、子のwhere断片を`( ... )`で括って親に連結し、子のbindingsを親に連結する。子でwhere系以外(`select`/`selectRaw`/`alias`/`join`/`groupBy`/`orderBy`/`limit`/`offset`)が呼ばれていた場合は、そのグループを追加する`where()`/`orWhere()`の呼び出しで`InvalidQueryException`。
+**グループ(Closure)**: 子の`QueryBuilder`(同一Connection・同一テーブル)を生成してClosureに渡す。Closureの実行後、子のwhere断片を`(...)`で括って親に連結し、子のbindingsを親に連結する。子でwhere系以外(`select`/`selectRaw`/`alias`/`join`/`groupBy`/`orderBy`/`limit`/`offset`)が呼ばれていた場合は、そのグループを追加する`where()`/`orWhere()`の呼び出しで`InvalidQueryException`。
 
 **条件はメソッド呼び出し時に即コンパイル**する(`['AND', 'email = %s']` + bindings `['a@b.c']`の形で蓄積)。遅延コンパイルは行わない。仕様が単純になり、`toSql()`が常に現状態を反映する。
 
@@ -880,7 +880,7 @@ final class QueryBuilder
    - `float` → 数値の文字列(`is_numeric()`)とintをfloatに変換(floatの値はそのまま)。それ以外は`HydrationException`。
    - `string` → 文字列のまま。文字列以外は`HydrationException`。
    - `bool` → `'0'`・`0`→false、`'1'`・`1`→true(boolの値はそのまま)。それ以外は`HydrationException`。
-   - `\DateTimeImmutable`または`\DateTimeInterface` → `\DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $value, wp_timezone())` の厳密書式パース。書式はdatetime/timestampカラムへの書き込み書式`'Y-m-d H:i:s'`(R3参照)と整合させ、先頭の`!`で未指定フィールド(マイクロ秒)を0に確定させる。戻り値が`false`、または`\DateTimeImmutable::getLastErrors()`が配列を返し`warning_count`/`error_count`のいずれかが0でない場合は`HydrationException`(PHP 8.2+ではエラー・警告なしのとき`getLastErrors()`は`false`を返す)。`new \DateTimeImmutable($value)`による相対書式(`'tomorrow'`・`'+1 day'`等)・`'@unixtime'`・任意文字列の暗黙解釈は行わない。
+   - `\DateTimeImmutable`または`\DateTimeInterface` → `\DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $value, wp_timezone())` の厳密書式パース。書式はdatetime/timestampカラムへの書き込み書式`'Y-m-d H:i:s'`(R3参照)と整合させ、先頭の`!`で未指定フィールド(マイクロ秒)を0に確定させる。戻り値が`false`、または`\DateTimeImmutable::getLastErrors()`が配列を返し`warning_count`/`error_count`のいずれかが0でない場合は`HydrationException`(PHP 8.2+ではエラー・警告なしのとき`getLastErrors()`は`false`を返す)。NULを含む値は、`createFromFormat()`が`ValueError`を投げるため、解析の前に`HydrationException`にする。`new \DateTimeImmutable($value)`による相対書式(`'tomorrow'`・`'+1 day'`等)・`'@unixtime'`・任意文字列の暗黙解釈は行わない。
    - `\BackedEnum`サブクラス → backing typeに変換して`::from()`(intのenumは上記`int`の規則で変換する)。変換できない値と`ValueError`は`HydrationException`。
    - `array` → `json_decode($value, true, 512, JSON_THROW_ON_ERROR)`。失敗は`HydrationException`(`json()`カラム用)。
    - nullable型(`?T`)+DB値null → null。非nullable型+null → `HydrationException`。
@@ -1476,7 +1476,7 @@ $migrator->dropTable(\App\Model\InquiryModel::class);
 - [ ] raw断片引数(`whereRaw`/`orWhereRaw`の`$sql`、`selectRaw`の`$expression`、`innerJoinRaw`/`leftJoinRaw`の`$on`)が`@param literal-string`宣言を持ち、PHP変数を連結した断片(例: `->whereRaw("{$col} = %s", [$v])`)が`composer analyse`(PHPStan level max)でエラーになる(リテラル断片`->whereRaw('%i = %s', [...])`は通過する)
 - [ ] `TMSWP\Core\Query\Compare`/`CastType`/`SortOrder`が正準定義どおりのcase・backing値を持ち(`Compare`はEXISTS/NOT EXISTSを含まない)、`orderBy()`が`SortOrder`を受け取って句構築時に`->value`でSQLへ変換する(文字列`'RAND()'`等の不正方向は型レベルで渡せない)
 - [ ] `whereIn`空配列が恒偽、`whereNotIn`空配列が恒真にコンパイルされる
-- [ ] Closureグループが`( a OR b )`の括弧付きSQLを生成し、bindings順序がSQL出現順と一致する
+- [ ] Closureグループが`(a OR b)`の括弧付きSQLを生成し、bindings順序がSQL出現順と一致する
 - [ ] `groupBy`+`count()`がサブクエリ件数を返す
 - [ ] `as(Dto::class)`がint/bool/DateTimeImmutable/BackedEnum/array(json)の型強制とcamelCase→snake_case解決を行い、欠落カラム(デフォルトなし)で`HydrationException`
 - [ ] DTOの`\DateTimeImmutable`変換が厳密書式パースであり、`'tomorrow'`(相対書式)・`'@0'`(Unixタイム)・`'2024-02-30 00:00:00'`(存在しない日付=parse warning)がいずれも`HydrationException`になる
@@ -1498,7 +1498,7 @@ $migrator->dropTable(\App\Model\InquiryModel::class);
 - [ ] 利用例2(キュー)・例3(自己結合JOIN/LEFT JOIN+集計)のコードが動作する統合テストが存在する(旧生SQLフォールバック事例の置換実証)
 
 **品質ゲート**
-- [ ] 本層の全クラスが`declare(strict_types=1)`・`final`(Model基底を除く)・全シグネチャ型宣言済みで、`__callStatic`等のマジックメソッドを含まない
+- [ ] 本層の全クラスが`declare(strict_types=1)`・`final`(Model基底と、R4によりfinalにしない`QueryException`を除く)・全シグネチャ型宣言済みで、`__callStatic`等のマジックメソッドを含まない(WP-CLIがコマンドのクラスに`__invoke`を要求するため、`MigrateCommand::__invoke`(§6)を除く)
 - [ ] PHPStan level max(szepeviktor/phpstan-wordpress)をbaselineなしで通過
 - [ ] ユニットテスト(WP非依存)がTableDefinition生成・QueryBuilderコンパイル・ハイドレーション・例外系を網羅する
 

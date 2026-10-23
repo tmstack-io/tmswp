@@ -46,6 +46,23 @@ final class ViewIntegrationTest extends IntegrationTestCase
         self::assertSame('plugin fallback', Template::render('plugin/card'));
     }
 
+    /**
+     * プラグインのtemplates/のテンプレートは、テーマに同じslugのファイルを置くと上書きされる。プラグインのファイルは
+     * 候補には残る(テーマの後に探す)。
+     */
+    public function testThemeFileOverridesPluginTemplateOfSameSlug(): void
+    {
+        $themeFile = get_stylesheet_directory() . DIRECTORY_SEPARATOR . 'plugin/override.php';
+        $pluginFile = $this->pluginTemplatesDir() . DIRECTORY_SEPARATOR . 'plugin/override.php';
+
+        self::assertFileExists($pluginFile);
+        self::assertSame($themeFile, Template::locate('plugin/override'));
+        self::assertSame('theme override', Template::render('plugin/override'));
+        $candidates = Template::locator()->candidatePaths('plugin/override');
+        self::assertSame($themeFile, $candidates[0]);
+        self::assertContains($pluginFile, $candidates);
+    }
+
     public function testPluginTemplateFallbackCanRenderFormControl(): void
     {
         $html = Template::render('plugin/form');

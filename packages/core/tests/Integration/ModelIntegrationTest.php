@@ -4,11 +4,16 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Integration;
 
+use Closure;
 use DateTimeImmutable;
 use DateTimeZone;
+use ReflectionFunction;
+use ReflectionMethod;
 use ReflectionProperty;
 use stdClass;
 use TMSWP\Core\Exception\MigrationException;
+use TMSWP\Core\Form\TempFileGc;
+use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Model\Connection;
 use TMSWP\Core\Model\MigrationAction;
 use TMSWP\Core\Model\MigrationResult;
@@ -17,6 +22,8 @@ use TMSWP\Core\Model\Model;
 use TMSWP\Core\Model\QueryBuilder;
 use TMSWP\Core\Model\TableDefinition;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use WP_Error;
+use WP_Hook;
 
 /**
  * fixture テーマの Contact(#[AsModel])を、`wp tmswp migrate` が呼ぶ Migrator::migrateAll() で移行し、CRUD を
@@ -83,6 +90,161 @@ final class ModelIntegrationTest extends IntegrationTestCase
         self::assertNull($connection->selectVar('SHOW TABLES LIKE %s', [$wpdb->prefix . self::TABLE]));
         self::assertFalse($migrator->status()[0]->current);
         self::assertFalse(get_option(self::OPTION));
+    }
+
+    /**
+     * bootしたKernelについて、MigratorがWordPressのフックに登録したコールバックは、Kernelごとのadmin_noticesの
+     * 通知だけである。どのフックのコールバックも、テーブルを変えるMigratorのメソッド(migrateAll()・dropTable())を
+     * 呼ばない。WP-CLIのコマンドの登録はフックではないため対象外。
+     */
+    public function testMigratorHooksOnlyAdminNoticesAndNoHookCallbackChangesTables(): void
+    {
+        $wpFilter = $GLOBALS['wp_filter'] ?? null;
+        self::assertIsArray($wpFilter);
+        $migratorCallbacks = [];
+        $changingCallbacks = [];
+
+        foreach ($wpFilter as $hook => $wpHook) {
+            self::assertInstanceOf(WP_Hook::class, $wpHook);
+
+            foreach ($wpHook->callbacks as $priority => $callbacks) {
+                self::assertIsArray($callbacks);
+
+                foreach ($callbacks as $callback) {
+                    self::assertIsArray($callback);
+                    $reflection = self::callbackReflection($callback['function'] ?? null);
+                    $file = $reflection?->getFileName();
+
+                    if ($reflection === null || !\is_string($file)) {
+                        continue;
+                    }
+
+                    if (self::callbackScope($reflection) === Migrator::class) {
+                        $migratorCallbacks[] = [$hook, $priority, $callback['accepted_args'] ?? null];
+                    }
+
+                    $source = implode('', \array_slice((array) file($file), (int) $reflection->getStartLine() - 1, (int) $reflection->getEndLine() - (int) $reflection->getStartLine() + 1));
+
+                    if (preg_match('/\b(migrateAll|dropTable)\s*\(/', $source) === 1) {
+                        $changingCallbacks[] = "{$hook}: {$file}:{$reflection->getStartLine()}";
+                    }
+                }
+            }
+        }
+
+        self::assertCount(2, Kernel::all());
+        self::assertSame([['admin_notices', 10, 0], ['admin_notices', 10, 0]], $migratorCallbacks);
+        self::assertSame([], $changingCallbacks);
+    }
+
+    /**
+     * プラグインの有効化(register_activation_hookのフック)とajaxのリクエストでは、テーブルを作らず、保存済みのハッシュの
+     * 読み書きもDDLも発行しない。ajaxはadmin-ajax.phpと同じく、wp_doing_ajaxを真にしてadmin_initとwp_ajax_*を
+     * 発火する。
+     */
+    public function testPluginActivationAndAjaxRequestsDoNotMigrate(): void
+    {
+        $pluginFile = self::pluginKernel()->config()->pluginFile;
+        self::assertNotNull($pluginFile);
+        $this->assertModelsAreRegisteredWithoutTables();
+        $this->recordQueries();
+
+        do_action('activate_' . plugin_basename($pluginFile));
+
+        add_filter('wp_doing_ajax', '__return_true');
+
+        try {
+            $this->fireAdminInit();
+            do_action('wp_ajax_tmswp_model_probe');
+            do_action('wp_ajax_nopriv_tmswp_model_probe');
+        } finally {
+            remove_filter('wp_doing_ajax', '__return_true');
+        }
+
+        $this->assertNothingWasMigrated();
+    }
+
+    /**
+     * cronのリクエストでは移行しない。wp-cron.phpと同じく、wp_doing_cronを真にして初期化(init・wp_loaded)を通し、
+     * 予約されたTMSWPのイベント(一時ファイルの掃除)を実行する。HTTPを伴うWordPress本体のイベントは実行せず、
+     * 初期化の中のHTTPの要求(cronの起動等)も止める。
+     *
+     * テストのプロセスでは、WordPressの読み込みでinit・wp_loadedが発火済みである。このリポジトリのコード(Kernelの
+     * エンティティの登録・メタの登録・フックのメソッド等)がinit・wp_loadedに登録したコールバックは、2回目の実行で
+     * 登録済みの例外になるため、発火の間だけ外す。Migratorのコールバックは外さない。
+     */
+    public function testCronRequestDoesNotMigrate(): void
+    {
+        $this->assertModelsAreRegisteredWithoutTables();
+        // 一時ファイルを保管したリクエストと同じく、掃除のイベントを予約しておく
+        TempFileGc::schedule();
+        $this->recordQueries();
+        $blockHttp = static fn(): WP_Error => new WP_Error('tmswp_test_http_blocked', 'HTTP requests are blocked in this test');
+        add_filter('wp_doing_cron', '__return_true');
+        add_filter('pre_http_request', $blockHttp);
+
+        $removed = $this->removeRepositoryCallbacksExceptMigrator(['init', 'wp_loaded']);
+
+        try {
+            do_action('init');
+            do_action('wp_loaded');
+            $ran = 0;
+
+            // wp-cron.phpと同じく、予約されたイベントを引数とともに実行する(TMSWPのイベントだけ)
+            foreach (_get_cron_array() as $events) {
+                self::assertIsArray($events);
+                $instances = $events[TempFileGc::HOOK] ?? [];
+                self::assertIsArray($instances);
+
+                foreach ($instances as $event) {
+                    self::assertIsArray($event);
+                    self::assertIsArray($event['args'] ?? null);
+                    do_action_ref_array(TempFileGc::HOOK, $event['args']);
+                    ++$ran;
+                }
+            }
+
+            self::assertSame(1, $ran);
+        } finally {
+            remove_filter('wp_doing_cron', '__return_true');
+            remove_filter('pre_http_request', $blockHttp);
+
+            foreach ($removed as [$hook, $callback, $priority, $acceptedArgs]) {
+                add_action($hook, $callback, $priority, $acceptedArgs);
+            }
+        }
+
+        $this->assertNothingWasMigrated();
+    }
+
+    /**
+     * フロントエンドのリクエストでは移行しない。トップページのURLでメインクエリを実行し(parse_request・wp等)、
+     * template_redirectまで発火する。リダイレクト(redirect_canonical等のwp_redirect())はwp_redirectのフィルタで
+     * 止め、ヘッダーを送るWordPress本体のコールバックは外す。
+     */
+    public function testFrontendRequestDoesNotMigrate(): void
+    {
+        $this->assertModelsAreRegisteredWithoutTables();
+        $this->recordQueries();
+        add_filter('wp_redirect', '__return_false');
+        $headerCallbacks = ['rest_output_link_header' => 11, 'wp_shortlink_header' => 11];
+
+        foreach ($headerCallbacks as $callback => $priority) {
+            remove_action('template_redirect', $callback, $priority);
+        }
+
+        try {
+            $this->go_to(home_url('/'));
+            do_action('template_redirect');
+        } finally {
+            remove_filter('wp_redirect', '__return_false');
+
+            foreach ($headerCallbacks as $callback => $priority) {
+                add_action('template_redirect', $callback, $priority, 0);
+            }
+        }
+
+        $this->assertNothingWasMigrated();
     }
 
     public function testMigrateAllCreatesTableOnceAndModelRunsCrud(): void
@@ -419,6 +581,15 @@ final class ModelIntegrationTest extends IntegrationTestCase
 
         $rows = ModelIntegrationTestRecord::query()->orderBy('id')->get();
         self::assertSame(['first', 'second', 'third'], array_map(fn(object $row): mixed => $this->objectProperty($row, 'title'), $rows));
+        // 既定の行(stdClass)は、DBのNULLをnullのまま、ほかの値を文字列のまま持つ
+        self::assertContainsOnlyInstancesOf(stdClass::class, $rows);
+        self::assertSame((string) $first, $this->objectProperty($rows[0], 'id'));
+        self::assertSame('1', $this->objectProperty($rows[0], 'priority'));
+        self::assertNull($this->objectProperty($rows[0], 'published_at'));
+        self::assertNull($this->objectProperty($rows[0], 'note'));
+        self::assertSame('2026-06-13 09:10:11', $this->objectProperty($rows[1], 'published_at'));
+        self::assertSame('memo', $this->objectProperty($rows[1], 'note'));
+        self::assertNull($this->objectProperty($rows[2], 'note'));
 
         // NULLはcount()のnullとwhereNull()で、enumは値として絞れる
         self::assertSame(1, ModelIntegrationTestRecord::count(['published_at' => null, 'note' => null]));
@@ -470,14 +641,16 @@ final class ModelIntegrationTest extends IntegrationTestCase
         $builder = ModelIntegrationTestRecord::query()
             ->selectRaw('id %% 2 AS odd')
             ->whereLike('title', '%' . $connection->escLike('100%') . '%');
+        // toSql()とprepare()はSQLを組み立てるだけで、DBにクエリを発行しない
+        $this->recordQueries();
         $sql = $builder->toSql();
 
         self::assertSame("SELECT id % 2 AS odd FROM {$table} WHERE title LIKE '%100\\\\%%'", $sql);
         self::assertStringNotContainsString($wpdb->placeholder_escape(), $sql);
         self::assertSame("SELECT '100%'", $connection->prepare('SELECT %s', ['100%']));
+        self::assertSame([], $this->queries);
 
         // 実行したSQLはtoSql()と同じ
-        $this->recordQueries();
         self::assertSame([(string) ($pure % 2)], $builder->pluck('odd'));
         self::assertSame([$sql], $this->queries);
 
@@ -537,6 +710,28 @@ final class ModelIntegrationTest extends IntegrationTestCase
         self::assertCount(8, array_filter($this->queries, static fn(string $sql): bool => str_contains($sql, "title = 'x\\' OR 1=1 --'")));
         self::assertSame(3, ModelIntegrationTestRecord::count());
         self::assertSame(2, ModelIntegrationTestRecord::count(['note' => null]));
+    }
+
+    /** 空のinsert()はINSERT INTO {テーブル} () VALUES ()を発行し、AUTO_INCREMENTで採番したinsert_idを返す。 */
+    public function testEmptyInsertIssuesInsertWithEmptyColumnListAndReturnsInsertId(): void
+    {
+        $this->migrateModel(ModelIntegrationTestTranslationGroup::class, 'tmswp_it_translation_group');
+        Model::useConnection(new Connection(self::wpdb()));
+        $table = self::wpdb()->prefix . 'tmswp_it_translation_group';
+        $this->recordQueries();
+
+        $first = ModelIntegrationTestTranslationGroup::insert([]);
+        self::assertSame(self::wpdb()->insert_id, $first);
+        $second = ModelIntegrationTestTranslationGroup::insert([]);
+        self::assertSame(self::wpdb()->insert_id, $second);
+
+        self::assertGreaterThan(0, $first);
+        self::assertGreaterThan($first, $second);
+        self::assertSame(
+            ["INSERT INTO {$table} () VALUES ()", "INSERT INTO {$table} () VALUES ()"],
+            array_values(array_filter($this->queries, static fn(string $query): bool => str_starts_with($query, 'INSERT'))),
+        );
+        self::assertSame(2, ModelIntegrationTestTranslationGroup::count());
     }
 
     /**
@@ -711,6 +906,115 @@ final class ModelIntegrationTest extends IntegrationTestCase
     private static function actions(array $results): array
     {
         return array_map(static fn(MigrationResult $result): array => [$result->table, $result->action], $results);
+    }
+
+    /** 両方のKernelにModelが登録済みで、テーブルとハッシュがまだ無いことを確かめる。 */
+    private function assertModelsAreRegisteredWithoutTables(): void
+    {
+        $spied = self::fixtureClass(self::PLUGIN_NAMESPACE . '\\Model\\SpiedModel', Model::class);
+        self::assertSame([$this->contactClass()], $this->themeMigrator()->models());
+        self::assertSame([$spied], self::pluginKernel()->container()->get(Migrator::class)->models());
+        $this->assertTablesAndHashesAreAbsent();
+    }
+
+    /** recordQueries()の後にDDLもハッシュのオプションの読み書きも発行されず、テーブルとハッシュが無いことを確かめる。 */
+    private function assertNothingWasMigrated(): void
+    {
+        self::assertSame([], array_values(array_filter(
+            $this->queries,
+            static fn(string $query): bool => preg_match('/^\s*(DESCRIBE|CREATE|ALTER|SHOW)\b/i', $query) === 1 || str_contains($query, self::OPTION),
+        )));
+        $this->assertTablesAndHashesAreAbsent();
+    }
+
+    private function assertTablesAndHashesAreAbsent(): void
+    {
+        $wpdb = self::wpdb();
+        $connection = new Connection($wpdb);
+        self::assertNull($connection->selectVar('SHOW TABLES LIKE %s', [$wpdb->prefix . self::TABLE]));
+        self::assertNull($connection->selectVar('SHOW TABLES LIKE %s', [$wpdb->prefix . 'tmswp_fixture_spied']));
+        self::assertFalse(get_option(self::OPTION));
+    }
+
+    /**
+     * $hooksから、このリポジトリのファイルで定義したコールバックをMigratorのものを除いて外し、外したものを
+     * [フック, コールバック, priority, 引数の数]の形で返す。
+     *
+     * @param list<string> $hooks
+     *
+     * @return list<array{string, callable, int, int}>
+     */
+    private function removeRepositoryCallbacksExceptMigrator(array $hooks): array
+    {
+        $root = \dirname(__DIR__, 4) . DIRECTORY_SEPARATOR;
+        $removed = [];
+
+        $wpFilter = $GLOBALS['wp_filter'] ?? null;
+        self::assertIsArray($wpFilter);
+
+        foreach ($hooks as $hook) {
+            $wpHook = $wpFilter[$hook] ?? null;
+            self::assertInstanceOf(WP_Hook::class, $wpHook);
+
+            foreach ($wpHook->callbacks as $priority => $callbacks) {
+                self::assertIsArray($callbacks);
+
+                foreach ($callbacks as $callback) {
+                    self::assertIsArray($callback);
+                    $function = $callback['function'] ?? null;
+                    $reflection = self::callbackReflection($function);
+                    $file = $reflection?->getFileName();
+
+                    if ($reflection === null || !\is_string($file) || !str_starts_with($file, $root) || self::callbackScope($reflection) === Migrator::class) {
+                        continue;
+                    }
+
+                    $acceptedArgs = $callback['accepted_args'] ?? null;
+                    self::assertIsCallable($function);
+                    self::assertIsInt($acceptedArgs);
+                    $removed[] = [$hook, $function, (int) $priority, $acceptedArgs];
+                }
+            }
+        }
+
+        self::assertNotSame([], $removed);
+
+        foreach ($removed as [$hook, $function, $priority]) {
+            remove_action($hook, $function, $priority);
+        }
+
+        return $removed;
+    }
+
+    /** コールバックが属するクラス(メソッドの宣言のクラス・クロージャのスコープ)。無ければnull。 */
+    private static function callbackScope(ReflectionFunction|ReflectionMethod $reflection): ?string
+    {
+        $scope = $reflection instanceof ReflectionMethod ? $reflection->getDeclaringClass() : $reflection->getClosureScopeClass();
+
+        return $scope?->getName();
+    }
+
+    /** フックのコールバックの関数・メソッドのリフレクション。呼び出せる形でなければnull。 */
+    private static function callbackReflection(mixed $callback): ReflectionFunction|ReflectionMethod|null
+    {
+        if ($callback instanceof Closure || (\is_string($callback) && \function_exists($callback))) {
+            return new ReflectionFunction($callback);
+        }
+
+        if (\is_string($callback) && str_contains($callback, '::') && class_exists(explode('::', $callback)[0])) {
+            return ReflectionMethod::createFromMethodName($callback);
+        }
+
+        // 読み込まれていないWordPress本体のクラスのメソッド(例: Language_Pack_Upgrader)は、TMSWPのコードではないため除く
+        if (\is_array($callback) && \count($callback) === 2 && (\is_object($callback[0]) || (\is_string($callback[0]) && class_exists($callback[0]))) && \is_string($callback[1])) {
+            return new ReflectionMethod($callback[0], $callback[1]);
+        }
+
+        if (\is_object($callback) && method_exists($callback, '__invoke')) {
+            return new ReflectionMethod($callback, '__invoke');
+        }
+
+        return null;
     }
 
     /** これから発行される SQL を $this->queries に控える。 */

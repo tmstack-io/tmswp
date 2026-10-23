@@ -62,8 +62,8 @@ active tinyint(1) NOT NULL DEFAULT 1,
 created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 user_id bigint(20) unsigned NOT NULL,
 PRIMARY KEY  (id),
-KEY user_id (user_id),
-UNIQUE KEY email_unique (email)
+UNIQUE KEY email_unique (email),
+KEY user_id (user_id)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 SQL, $definition->toSql($connection));
         self::assertSame(['id', 'email', 'body', 'active', 'created_at', 'user_id'], $definition->columns());
@@ -362,7 +362,8 @@ SQL, $definition->toSql($connection));
      */
     public function testPrepareAndToSqlReturnPercentWithoutPlaceholderEscape(): void
     {
-        $connection = new Connection(WpdbTestDouble::create());
+        $wpdb = WpdbTestDouble::create();
+        $connection = new Connection($wpdb);
 
         self::assertSame(
             "SELECT id % 2 FROM wp_contacts WHERE email LIKE '%news%'",
@@ -372,6 +373,32 @@ SQL, $definition->toSql($connection));
             "SELECT id % 2 AS odd FROM wp_contacts WHERE email LIKE '%news%' AND id % 2 = 1",
             (new QueryBuilder($connection, 'contacts'))->selectRaw('id %% 2 AS odd')->whereLike('email', '%news%')->whereRaw('id %% %d = %d', [2, 1])->toSql(),
         );
+        // prepare()とtoSql()はSQLを組み立てるだけで、実行しない
+        self::assertSame([], $wpdb->queries());
+    }
+
+    /** toSql()は、JOIN・グループ・GROUP BY・ORDER BY・LIMIT・OFFSETを含むビルダでも、SQLを1件も実行しない。 */
+    public function testToSqlDoesNotExecuteQuery(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $builder = (new QueryBuilder(new Connection($wpdb), 'contacts'))
+            ->alias('c')
+            ->select('c.status')
+            ->selectRaw('COUNT(*) AS total')
+            ->leftJoin('users AS u', 'u.ID', '=', 'c.user_id')
+            ->where(static fn(QueryBuilder $group): QueryBuilder => $group->where('c.active', true)->orWhere('c.deleted_at', null))
+            ->groupBy('c.status')
+            ->orderBy('c.status')
+            ->limit(10)
+            ->offset(20);
+
+        self::assertSame(
+            'SELECT c.status, COUNT(*) AS total FROM wp_contacts AS c LEFT JOIN wp_users AS u ON u.ID = c.user_id'
+            . ' WHERE (c.active = 1 OR c.deleted_at IS NULL) GROUP BY c.status ORDER BY c.status ASC LIMIT 10 OFFSET 20',
+            $builder->toSql(),
+        );
+        self::assertSame($builder->toSql(), $builder->toSql());
+        self::assertSame([], $wpdb->queries());
     }
 
     /**
@@ -644,7 +671,23 @@ SQL, $definition->toSql($connection));
         self::assertNull(TestPlainModel::rowClass());
         self::assertInstanceOf(stdClass::class, $found);
         self::assertEquals((object) ['id' => '7', 'email' => 'plain@example.test', 'deleted_at' => null], $found);
+        self::assertSame('7', $found->id);
+        self::assertSame('plain@example.test', $found->email);
+        self::assertNull($found->deleted_at);
         self::assertSame('SELECT * FROM wp_plain_rows WHERE id = 7 LIMIT 1', $wpdb->queries()[0]);
+
+        // get()の既定の行もstdClassで、NULLはnullのまま、ほかの値はDB由来の文字列のまま
+        $wpdb->queueResultSet([
+            ['id' => '8', 'email' => 'a@example.test', 'deleted_at' => null],
+            ['id' => '9', 'email' => '', 'deleted_at' => '2026-06-13 00:00:00'],
+        ]);
+        $rows = TestPlainModel::query()->orderBy('id')->get();
+
+        self::assertCount(2, $rows);
+        self::assertContainsOnlyInstancesOf(stdClass::class, $rows);
+        self::assertSame(['id' => '8', 'email' => 'a@example.test', 'deleted_at' => null], get_object_vars($rows[0]));
+        self::assertNull(get_object_vars($rows[0])['deleted_at']);
+        self::assertSame(['id' => '9', 'email' => '', 'deleted_at' => '2026-06-13 00:00:00'], get_object_vars($rows[1]));
     }
 
     /** Model は行の入れ物にならない。コンストラクタは引数の無い final で、サブクラスはコンストラクタを宣言できない。 */

@@ -886,6 +886,11 @@ final class QueryBuilder
             throw new HydrationException('wp_timezone is not available');
         }
 
+        // createFromFormat()はNULを含む文字列でValueErrorを投げるため、呼ぶ前に変換できない値として拒否する
+        if (str_contains($value, "\0")) {
+            throw new HydrationException("invalid datetime for '{$parameter}'");
+        }
+
         $date = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $value, wp_timezone());
         $errors = DateTimeImmutable::getLastErrors();
 

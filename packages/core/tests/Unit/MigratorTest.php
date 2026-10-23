@@ -146,6 +146,57 @@ final class MigratorTest extends UnitTestCase
     }
 
     /**
+     * dbDeltaの後にlast_errorが残ればMigrationExceptionになり、ハッシュを保存しない。後のテーブルは処理しない
+     * (docs/06 R4・§5のエッジケース)。
+     */
+    #[RunInSeparateProcess]
+    public function testDatabaseErrorAfterDbDeltaThrowsMigrationExceptionWithoutSavingHash(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $GLOBALS['wpdb'] = $wpdb;
+        $migrator = new Migrator(new Connection($wpdb));
+        $migrator->register(MigratorTestNoteModel::class);
+        $migrator->register(MigratorTestTagModel::class);
+        Functions\when('get_option')->justReturn([]);
+        Functions\expect('dbDelta')->once()->andReturnUsing(static function () use ($wpdb): array {
+            $wpdb->last_error = "Duplicate column name 'note'";
+
+            return [];
+        });
+        Functions\expect('update_option')->never();
+        Functions\expect('add_option')->never();
+
+        $this->expectException(MigrationException::class);
+        $this->expectExceptionMessage("dbDelta failed on table tmswp_notes: Duplicate column name 'note'");
+
+        $migrator->migrateAll();
+    }
+
+    /** 保存済みのハッシュのオプションが配列でなければ、移行も状態の確認もMigrationExceptionになる。 */
+    #[RunInSeparateProcess]
+    public function testBrokenHashOptionThrowsMigrationException(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $GLOBALS['wpdb'] = $wpdb;
+        $migrator = new Migrator(new Connection($wpdb));
+        $migrator->register(MigratorTestNoteModel::class);
+        Functions\when('get_option')->justReturn('broken');
+        Functions\expect('dbDelta')->never();
+        $thrown = [];
+
+        foreach (['migrateAll' => static fn(): array => $migrator->migrateAll(), 'status' => static fn(): array => $migrator->status()] as $label => $call) {
+            try {
+                $call();
+                $thrown[$label] = null;
+            } catch (MigrationException $exception) {
+                $thrown[$label] = $exception->getMessage();
+            }
+        }
+
+        self::assertSame(['migrateAll' => 'schema hash option must be an array', 'status' => 'schema hash option must be an array'], $thrown);
+    }
+
+    /**
      * @return iterable<string, array{TableDefinition, string|null, bool}> val 列の定義、DB が SHOW FULL COLUMNS で返す
      *                                                                     既定値、同じとみなすか
      */

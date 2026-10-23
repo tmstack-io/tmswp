@@ -317,8 +317,13 @@ final class TableDefinition
         $lines = $this->columnLines;
         $lines[] = 'PRIMARY KEY  (' . implode(',', $primaryColumns) . ')';
 
-        foreach ($this->indexes as $index) {
-            $lines[] = "{$index['type']} {$index['name']} (" . implode(',', $index['columns']) . ')';
+        // UNIQUE KEYの行(宣言順)の後にKEYの行(宣言順)を置く
+        foreach (['UNIQUE KEY', 'KEY'] as $type) {
+            foreach ($this->indexes as $index) {
+                if ($index['type'] === $type) {
+                    $lines[] = "{$index['type']} {$index['name']} (" . implode(',', $index['columns']) . ')';
+                }
+            }
         }
 
         return 'CREATE TABLE ' . $fullName . " (\n"

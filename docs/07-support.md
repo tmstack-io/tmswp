@@ -155,10 +155,12 @@ final class TemplateLocator
 
 1. slug を §1.4 の規則で検証(違反 → `InvalidTemplateSlugException`)。
 2. 解決キャッシュにあればそれを返す(null 含む)。
-3. `get_stylesheet_directory() . '/' . $slug . '.php'`(子テーマ)
-4. `get_template_directory() . '/' . $slug . '.php'`(親テーマ。子=親なら本ステップはスキップ)
-5. 登録済み `fallbackDirs` を登録順に `{$dir}/{$slug}.php`
+3. `rtrim(get_stylesheet_directory(), '/\\') . DIRECTORY_SEPARATOR . $slug . '.php'`(子テーマ)
+4. `rtrim(get_template_directory(), '/\\') . DIRECTORY_SEPARATOR . $slug . '.php'`(親テーマ。子=親なら本ステップはスキップ)
+5. 登録済み `fallbackDirs`(登録時に末尾の `/`・`\` を除いたもの)を登録順に `$dir . DIRECTORY_SEPARATOR . $slug . '.php'`
 6. すべて不在なら null。結果(null 含む)をキャッシュして返す。
+
+ディレクトリと slug の間の区切りは `DIRECTORY_SEPARATOR` で、slug の中の区切りは `/` のまま連結する。3〜5 の候補パスは `candidatePaths()` が返す順と同じである。
 
 存在判定は `is_file()`。テーマが常に最優先であるため、**プラグイン同梱テンプレートはテーマ側に同名ファイルを置くだけで上書きできる**(WooCommerce 方式の一般化)。プラグインは自身のテンプレートを `templates/{plugin-slug}/...` に置き、slug を `{plugin-slug}/...` で始めることを規約とする(rules/ に明記)。これによりテーマ側オーバーライドパスは `{テーマ}/{plugin-slug}/...` となり、プラグイン間の slug 衝突も構造的に回避される。
 

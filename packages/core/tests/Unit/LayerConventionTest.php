@@ -7,11 +7,19 @@ namespace TMSWP\Core\Tests\Unit;
 use PhpToken;
 use PHPUnit\Framework\Attributes\DataProvider;
 use ReflectionClass;
+use TMSWP\Core\Exception\HydrationException;
+use TMSWP\Core\Exception\InvalidQueryException;
+use TMSWP\Core\Exception\MigrationException;
+use TMSWP\Core\Exception\QueryException;
+use TMSWP\Core\Exception\SchemaException;
+use TMSWP\Core\Model\MigrateCommand;
+use TMSWP\Core\Model\Model;
 use TMSWP\Core\Tests\Support\UnitTestCase;
 
 /**
- * エンティティ層(docs/03 §16「静的解析・規約」)とメタ・オプション層(docs/04の受け入れ基準)のソースが、宣言の規約を
- * 守っていることを、ソースのトークンとリフレクションで確かめる。PHPStan level maxの通過はcomposer analyseが確かめる。
+ * エンティティ層(docs/03 §16「静的解析・規約」)、メタ・オプション層(docs/04の受け入れ基準)、Model層(docs/06の
+ * 品質ゲート)とView層(docs/07)のソースが、宣言の規約を守っていることを、ソースのトークンとリフレクションで確かめる。
+ * PHPStan level maxの通過はcomposer analyseが確かめる。
  */
 final class LayerConventionTest extends UnitTestCase
 {
@@ -23,6 +31,8 @@ final class LayerConventionTest extends UnitTestCase
     {
         yield 'entity' => [['Post', 'Tax', 'User', 'Entity', 'Query']];
         yield 'meta and option' => [['Meta', 'Option']];
+        yield 'model' => [['Model']];
+        yield 'view' => [['View']];
     }
 
     /**
@@ -110,6 +120,55 @@ final class LayerConventionTest extends UnitTestCase
         }
 
         self::assertGreaterThan(5, $checked);
+    }
+
+    /**
+     * Model層とView層のクラスは、interface・enum・traitとModelの基底を除いてfinalである。Model層の例外は、エンティティ層と
+     * 共有するQueryException(docs/06 R4)を除いてfinalである。
+     */
+    public function testModelAndViewClassesAreFinal(): void
+    {
+        $classes = array_values(self::sourceFiles(['Model', 'View']));
+
+        foreach ([SchemaException::class, MigrationException::class, InvalidQueryException::class, HydrationException::class] as $exception) {
+            $classes[] = $exception;
+        }
+
+        $checked = 0;
+
+        foreach ($classes as $class) {
+            $reflection = new ReflectionClass($class);
+
+            if ($reflection->isInterface() || $reflection->isEnum() || $reflection->isTrait() || $class === Model::class) {
+                continue;
+            }
+
+            self::assertTrue($reflection->isFinal(), "{$class} is not final");
+            ++$checked;
+        }
+
+        self::assertGreaterThan(14, $checked);
+        self::assertTrue((new ReflectionClass(Model::class))->isAbstract());
+        self::assertFalse((new ReflectionClass(QueryException::class))->isFinal());
+    }
+
+    /**
+     * Model層とView層のクラスが宣言するマジックメソッドは、コンストラクタと、WP-CLIがコマンドのクラスに要求する
+     * MigrateCommand::__invoke()だけである(docs/06の品質ゲート)。
+     */
+    public function testModelAndViewDeclareNoMagicMethodsExceptConstructorsAndCliInvoke(): void
+    {
+        $magic = [];
+
+        foreach (self::sourceFiles(['Model', 'View']) as $class) {
+            foreach ((new ReflectionClass($class))->getMethods() as $method) {
+                if ($method->getDeclaringClass()->getName() === $class && str_starts_with($method->getName(), '__') && $method->getName() !== '__construct') {
+                    $magic[] = "{$class}::{$method->getName()}";
+                }
+            }
+        }
+
+        self::assertSame([MigrateCommand::class . '::__invoke'], $magic);
     }
 
     /**
