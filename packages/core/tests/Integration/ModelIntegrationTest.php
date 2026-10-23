@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Integration;
 
+use DateTimeImmutable;
+use DateTimeZone;
 use ReflectionProperty;
 use stdClass;
 use TMSWP\Core\Exception\MigrationException;
@@ -12,6 +14,7 @@ use TMSWP\Core\Model\MigrationAction;
 use TMSWP\Core\Model\MigrationResult;
 use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Model\Model;
+use TMSWP\Core\Model\QueryBuilder;
 use TMSWP\Core\Model\TableDefinition;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
 
@@ -37,6 +40,9 @@ final class ModelIntegrationTest extends IntegrationTestCase
 
     private const DEC_TABLE = 'tmswp_it_dec';
 
+    /** 行の保存と読み取りを確かめるテーブル(このファイルのRecord・TypedRecordが宣言する) */
+    private const RECORDS_TABLE = 'tmswp_it_records';
+
     /** @var list<string> recordQueries() の後に発行された SQL */
     private array $queries = [];
 
@@ -53,10 +59,11 @@ final class ModelIntegrationTest extends IntegrationTestCase
     public function tear_down(): void
     {
         // テスト中の CREATE TABLE はテストライブラリにより一時テーブルになり、接続が続く限り残るため削除する
-        foreach ([self::TABLE, 'tmswp_fixture_spied', self::NOTES_TABLE, self::FLAGS_TABLE, self::BIG_TABLE, self::DEC_TABLE, 'tmswp_it_words', 'tmswp_it_precise', 'tmswp_it_exponent', 'tmswp_it_rounded'] as $table) {
+        foreach ([self::TABLE, 'tmswp_fixture_spied', self::NOTES_TABLE, self::FLAGS_TABLE, self::BIG_TABLE, self::DEC_TABLE, 'tmswp_it_words', 'tmswp_it_precise', 'tmswp_it_exponent', 'tmswp_it_rounded', self::RECORDS_TABLE, 'tmswp_it_queue', 'tmswp_it_translation_group', 'tmswp_it_translation_relation'] as $table) {
             self::wpdb()->query('DROP TABLE IF EXISTS ' . self::wpdb()->prefix . $table);
         }
 
+        Model::useConnection(null);
         parent::tear_down();
     }
 
@@ -378,6 +385,254 @@ final class ModelIntegrationTest extends IntegrationTestCase
         self::assertTrue($migrator->status()[0]->current);
     }
 
+    /**
+     * v0.5.0の受け入れ条件1: 空でないテーブルでfind()・first()・get()が行を返し、DateTime・enum・NULLが正しく保存される。
+     */
+    public function testRowsAreReturnedFromNonEmptyTableAndDateTimeEnumAndNullAreStored(): void
+    {
+        $this->recordQueries();
+        [$first, $second, $third] = $this->seedRecords();
+        $connection = new Connection(self::wpdb());
+        $table = self::wpdb()->prefix . self::RECORDS_TABLE;
+
+        // DateTimeは'Y-m-d H:i:s'(タイムゾーンを変換しない)、enumはbacking value(intは%d)、nullはSQLのNULLで
+        // 送る。DBは別の形の日時も受け入れて同じ値に直しうるため、送ったSQLと保存された値の両方を確かめる
+        self::assertSame([
+            "INSERT INTO `{$table}` (`title`, `status`, `priority`, `published_at`, `note`) VALUES ('first', 'draft', 1, NULL, NULL)",
+            "INSERT INTO `{$table}` (`title`, `status`, `priority`, `published_at`, `note`) VALUES ('second', 'published', 2, '2026-06-13 09:10:11', 'memo')",
+            "INSERT INTO `{$table}` (`title`, `status`, `priority`, `published_at`, `note`) VALUES ('third', 'published', 1, '2026-01-02 03:04:05', NULL)",
+        ], array_values(array_filter($this->queries, static fn(string $query): bool => str_starts_with($query, "INSERT INTO `{$table}`"))));
+        self::assertSame([
+            ['title' => 'first', 'status' => 'draft', 'priority' => '1', 'published_at' => null, 'note' => null],
+            ['title' => 'second', 'status' => 'published', 'priority' => '2', 'published_at' => '2026-06-13 09:10:11', 'note' => 'memo'],
+            ['title' => 'third', 'status' => 'published', 'priority' => '1', 'published_at' => '2026-01-02 03:04:05', 'note' => null],
+        ], $connection->select("SELECT title, status, priority, published_at, note FROM {$table} ORDER BY id"));
+
+        $found = ModelIntegrationTestRecord::find($second);
+        self::assertInstanceOf(stdClass::class, $found);
+        self::assertSame('second', $this->objectProperty($found, 'title'));
+        self::assertNull(ModelIntegrationTestRecord::find($third + 100));
+
+        $firstPublished = ModelIntegrationTestRecord::query()->where('status', ModelIntegrationTestRecordStatus::Published)->orderBy('id')->first();
+        self::assertIsObject($firstPublished);
+        self::assertSame('second', $this->objectProperty($firstPublished, 'title'));
+
+        $rows = ModelIntegrationTestRecord::query()->orderBy('id')->get();
+        self::assertSame(['first', 'second', 'third'], array_map(fn(object $row): mixed => $this->objectProperty($row, 'title'), $rows));
+
+        // NULLはcount()のnullとwhereNull()で、enumは値として絞れる
+        self::assertSame(1, ModelIntegrationTestRecord::count(['published_at' => null, 'note' => null]));
+        self::assertSame(2, ModelIntegrationTestRecord::count(['status' => ModelIntegrationTestRecordStatus::Published]));
+        self::assertSame(2, ModelIntegrationTestRecord::query()->whereNull('note')->count());
+
+        // rowClass()のDTOには、DateTimeImmutable・enum・nullに型を強制して返す
+        $typed = ModelIntegrationTestTypedRecord::find($second);
+        self::assertInstanceOf(ModelIntegrationTestRecordRow::class, $typed);
+        self::assertSame($second, $typed->id);
+        self::assertSame('2026-06-13 09:10:11', $typed->publishedAt?->format('Y-m-d H:i:s'));
+        self::assertSame(ModelIntegrationTestRecordStatus::Published, $typed->status);
+        self::assertSame(ModelIntegrationTestRecordPriority::High, $typed->priority);
+        self::assertSame('memo', $typed->note);
+        $typedFirst = ModelIntegrationTestTypedRecord::query()->orderBy('id')->first();
+        self::assertInstanceOf(ModelIntegrationTestRecordRow::class, $typedFirst);
+        self::assertNull($typedFirst->publishedAt);
+        self::assertNull($typedFirst->note);
+        self::assertCount(3, ModelIntegrationTestTypedRecord::query()->get());
+
+        // 代入のnullはSQLのNULL、DateTimeとenumはR3の前処理をした値で更新する
+        self::assertSame(1, ModelIntegrationTestRecord::update(['published_at' => null, 'note' => null], $second));
+        self::assertSame(1, ModelIntegrationTestRecord::query()->where('id', $first)->update([
+            'status' => ModelIntegrationTestRecordStatus::Published,
+            'priority' => ModelIntegrationTestRecordPriority::High,
+            'published_at' => new DateTimeImmutable('2027-12-31 23:59:59', new DateTimeZone('Asia/Tokyo')),
+        ]));
+        self::assertSame([
+            ['title' => 'first', 'status' => 'published', 'priority' => '2', 'published_at' => '2027-12-31 23:59:59', 'note' => null],
+            ['title' => 'second', 'status' => 'published', 'priority' => '2', 'published_at' => null, 'note' => null],
+        ], $connection->select("SELECT title, status, priority, published_at, note FROM {$table} WHERE id IN (%d, %d) ORDER BY id", [$first, $second]));
+    }
+
+    /**
+     * raw断片の`%%`と値の中の`%`を、実際のDBで実行する。toSql()とprepare()は、wpdbのエスケープの文字列を
+     * 含まない、実行するとおりのSQLを返す。
+     */
+    public function testLiteralPercentIsExecutedAndToSqlHasNoPlaceholderEscape(): void
+    {
+        $wpdb = self::wpdb();
+        $this->migrateModel(ModelIntegrationTestRecord::class, self::RECORDS_TABLE);
+        Model::useConnection(new Connection($wpdb));
+        $pure = ModelIntegrationTestRecord::insert(['title' => '100% pure', 'status' => 'draft', 'priority' => 1]);
+        ModelIntegrationTestRecord::insert(['title' => 'plain', 'status' => 'draft', 'priority' => 1]);
+        ModelIntegrationTestRecord::insert(['title' => '50% off', 'status' => 'draft', 'priority' => 1]);
+        $connection = ModelIntegrationTestRecord::connection();
+        $table = $wpdb->prefix . self::RECORDS_TABLE;
+
+        $builder = ModelIntegrationTestRecord::query()
+            ->selectRaw('id %% 2 AS odd')
+            ->whereLike('title', '%' . $connection->escLike('100%') . '%');
+        $sql = $builder->toSql();
+
+        self::assertSame("SELECT id % 2 AS odd FROM {$table} WHERE title LIKE '%100\\\\%%'", $sql);
+        self::assertStringNotContainsString($wpdb->placeholder_escape(), $sql);
+        self::assertSame("SELECT '100%'", $connection->prepare('SELECT %s', ['100%']));
+
+        // 実行したSQLはtoSql()と同じ
+        $this->recordQueries();
+        self::assertSame([(string) ($pure % 2)], $builder->pluck('odd'));
+        self::assertSame([$sql], $this->queries);
+
+        // %%で書いた剰余と、値の中の%
+        self::assertSame(['100% pure', '50% off'], ModelIntegrationTestRecord::query()->whereRaw('id %% %d = %d', [2, $pure % 2])->orderBy('id')->pluck('title'));
+        self::assertSame(['100% pure', '50% off'], ModelIntegrationTestRecord::query()->whereLike('title', '%' . $connection->escLike('%') . '%')->orderBy('id')->pluck('title'));
+        self::assertSame('100% pure%', ModelIntegrationTestRecord::query()->selectRaw('CONCAT(title, %s) AS labeled', ['%'])->where('id', $pure)->value('labeled'));
+    }
+
+    /** grouped countとvalue・pluckを、実際のDBで確かめる。 */
+    public function testGroupedCountAndValueAndPluckOnRealDatabase(): void
+    {
+        [$first, $second, $third] = $this->seedRecords();
+
+        // grouped countはグループの数を返し、ORDER BY・LIMIT・OFFSETを捨てる
+        self::assertSame(2, ModelIntegrationTestRecord::query()->groupBy('status')->orderByDesc('status')->limit(1)->offset(1)->count());
+        self::assertSame(2, ModelIntegrationTestRecord::query()->where('priority', ModelIntegrationTestRecordPriority::Low)->groupBy('status')->count());
+        self::assertSame(1, ModelIntegrationTestRecord::query()->where('status', ModelIntegrationTestRecordStatus::Published)->groupBy('status')->count());
+        self::assertSame(3, ModelIntegrationTestRecord::query()->orderBy('id')->offset(1)->count());
+
+        // value: 指定の列だけをSELECTし、結果が無ければnull。select()・selectRaw()のSELECT句は保つ
+        self::assertSame('second', ModelIntegrationTestRecord::query()->where('id', $second)->value('title'));
+        self::assertNull(ModelIntegrationTestRecord::query()->where('id', $third + 100)->value('title'));
+        self::assertSame('2', ModelIntegrationTestRecord::query()->selectRaw('MAX(priority) AS top')->value('top'));
+        self::assertSame('first', ModelIntegrationTestRecord::query()->alias('r')->select('r.title')->where('r.id', $first)->value('r.title'));
+
+        // pluck: 値のリスト、キーの列を指定すれば連想配列。集計の別名もそのまま取り出せる
+        self::assertSame(['first', 'second', 'third'], ModelIntegrationTestRecord::query()->orderBy('id')->pluck('title'));
+        self::assertSame([$first => 'first', $second => 'second', $third => 'third'], ModelIntegrationTestRecord::query()->orderBy('id')->pluck('title', 'id'));
+        self::assertSame(
+            ['draft' => '1', 'published' => '2'],
+            ModelIntegrationTestRecord::query()->select('status')->selectRaw('COUNT(*) AS total')->groupBy('status')->orderBy('status')->pluck('total', 'status'),
+        );
+        self::assertTrue(ModelIntegrationTestRecord::query()->where('status', ModelIntegrationTestRecordStatus::Draft)->exists());
+    }
+
+    /**
+     * 攻撃的な値は、すべての終端メソッドでwpdb::prepare()がエスケープした文字列リテラルとしてSQLに入る
+     * (queryフィルタで、実行したSQLを確かめる)。
+     */
+    public function testHostileValueIsBoundAsLiteralInEveryTerminalQuery(): void
+    {
+        $this->seedRecords();
+        $query = static fn(): QueryBuilder => ModelIntegrationTestRecord::query()->where('title', "x' OR 1=1 --");
+
+        $this->recordQueries();
+        self::assertSame([], $query()->get());
+        self::assertNull($query()->first());
+        self::assertNull($query()->value('title'));
+        self::assertSame([], $query()->pluck('title'));
+        self::assertSame(0, $query()->count());
+        self::assertFalse($query()->exists());
+        self::assertSame(0, $query()->update(['note' => 'changed']));
+        self::assertSame(0, $query()->delete());
+
+        self::assertCount(8, $this->queries);
+        self::assertCount(8, array_filter($this->queries, static fn(string $sql): bool => str_contains($sql, "title = 'x\\' OR 1=1 --'")));
+        self::assertSame(3, ModelIntegrationTestRecord::count());
+        self::assertSame(2, ModelIntegrationTestRecord::count(['note' => null]));
+    }
+
+    /**
+     * docs/06の利用例2(キュー)と利用例3(空行のINSERT・自己結合・WPコアのテーブルとのLEFT JOIN・集計)が、実際のDBで
+     * 動く。
+     */
+    public function testQueueAndTranslationExamplesOfTheDesignRunOnRealDatabase(): void
+    {
+        $this->migrateModel(ModelIntegrationTestQueue::class, 'tmswp_it_queue');
+        $this->migrateModel(ModelIntegrationTestTranslationGroup::class, 'tmswp_it_translation_group');
+        $this->migrateModel(ModelIntegrationTestTranslationRelation::class, 'tmswp_it_translation_relation');
+        Model::useConnection(new Connection(self::wpdb()));
+
+        // 例2: キュー
+        $older = ModelIntegrationTestQueue::insert(['url' => 'https://example.test/a', 'handler' => 'export', 'queued_at' => '2026-06-13 08:00:00', 'completed' => false]);
+        $newer = ModelIntegrationTestQueue::insert(['url' => 'https://example.test/b', 'handler' => 'export', 'queued_at' => '2026-06-13 09:00:00', 'completed' => false]);
+        ModelIntegrationTestQueue::insert(['url' => 'https://example.test/c', 'handler' => 'import', 'queued_at' => '2026-06-13 07:00:00', 'completed' => false]);
+
+        $next = ModelIntegrationTestQueue::nextPending('export');
+        self::assertIsObject($next);
+        self::assertSame((string) $older, $this->objectProperty($next, 'id'));
+        self::assertSame(0, ModelIntegrationTestQueue::progressPercentage('export'));
+        self::assertSame(1, ModelIntegrationTestQueue::markCompleted($older));
+        $next = ModelIntegrationTestQueue::nextPending('export');
+        self::assertIsObject($next);
+        self::assertSame((string) $newer, $this->objectProperty($next, 'id'));
+        self::assertSame(50, ModelIntegrationTestQueue::progressPercentage('export'));
+        self::assertSame(100, ModelIntegrationTestQueue::progressPercentage('missing'));
+        self::assertSame(2, ModelIntegrationTestQueue::clearHandler('export'));
+        self::assertSame(1, ModelIntegrationTestQueue::count());
+
+        // 例3: 空行のINSERTで採番し、翻訳の組を登録する
+        $postGroup = ModelIntegrationTestTranslationGroup::create();
+        $termGroup = ModelIntegrationTestTranslationGroup::create();
+        self::assertGreaterThan($postGroup, $termGroup);
+        $termJa = self::factory()->term->create(['taxonomy' => 'category', 'name' => 'ニュース']);
+        $termEn = self::factory()->term->create(['taxonomy' => 'category', 'name' => 'News']);
+        self::assertIsInt($termJa);
+        self::assertIsInt($termEn);
+        ModelIntegrationTestTranslationRelation::insert(['group_id' => $postGroup, 'object_id' => 10, 'object_type' => 'post', 'language_code' => 'ja']);
+        ModelIntegrationTestTranslationRelation::insert(['group_id' => $postGroup, 'object_id' => 20, 'object_type' => 'post', 'language_code' => 'en']);
+        ModelIntegrationTestTranslationRelation::insert(['group_id' => $termGroup, 'object_id' => $termJa, 'object_type' => 'term', 'language_code' => 'ja']);
+        ModelIntegrationTestTranslationRelation::insert(['group_id' => $termGroup, 'object_id' => $termEn, 'object_type' => 'term', 'language_code' => 'en']);
+
+        self::assertSame(20, ModelIntegrationTestTranslationRelation::translatedObjectId(10, 'post', 'en'));
+        self::assertSame($termJa, ModelIntegrationTestTranslationRelation::translatedObjectId($termEn, 'term', 'ja'));
+        self::assertNull(ModelIntegrationTestTranslationRelation::translatedObjectId(10, 'post', 'fr'));
+
+        // 言語がjaの行のobject_id(順序は決まらないため、並べてから比べる)
+        $jaObjectIds = ModelIntegrationTestTranslationRelation::termIdsForLanguage('ja');
+        $expected = ['10', (string) $termJa];
+        sort($jaObjectIds);
+        sort($expected);
+        self::assertSame($expected, $jaObjectIds);
+
+        $counts = ModelIntegrationTestTranslationRelation::countsByLanguage();
+        ksort($counts);
+        self::assertSame(['en' => '2', 'ja' => '2'], $counts);
+    }
+
+    /**
+     * Recordのテーブルを作り、3行を入れて、その主キーを返す。DateTimeはタイムゾーンの違う2つ、enumは文字列と整数の
+     * 2種類、nullは2つの列に入れる。
+     *
+     * @return array{int, int, int}
+     */
+    private function seedRecords(): array
+    {
+        $this->migrateModel(ModelIntegrationTestRecord::class, self::RECORDS_TABLE);
+        Model::useConnection(new Connection(self::wpdb()));
+
+        return [
+            ModelIntegrationTestRecord::insert([
+                'title' => 'first',
+                'status' => ModelIntegrationTestRecordStatus::Draft,
+                'priority' => ModelIntegrationTestRecordPriority::Low,
+                'published_at' => null,
+                'note' => null,
+            ]),
+            ModelIntegrationTestRecord::insert([
+                'title' => 'second',
+                'status' => ModelIntegrationTestRecordStatus::Published,
+                'priority' => ModelIntegrationTestRecordPriority::High,
+                'published_at' => new DateTimeImmutable('2026-06-13 09:10:11', new DateTimeZone('Asia/Tokyo')),
+                'note' => 'memo',
+            ]),
+            ModelIntegrationTestRecord::insert([
+                'title' => 'third',
+                'status' => ModelIntegrationTestRecordStatus::Published,
+                'priority' => ModelIntegrationTestRecordPriority::Low,
+                'published_at' => new DateTimeImmutable('2026-01-02 03:04:05', new DateTimeZone('UTC')),
+                'note' => null,
+            ]),
+        ];
+    }
+
     /** NoteV1 のテーブルを作り、保存されたハッシュを返す。 */
     private function migrateNotesV1(): string
     {
@@ -646,5 +901,192 @@ final class ModelIntegrationTestRoundedDouble extends Model
     public static function table(): TableDefinition
     {
         return TableDefinition::create('tmswp_it_rounded')->id()->rawColumn('valuecol', 'double NOT NULL DEFAULT 100000000000000000001');
+    }
+}
+
+/** 行の保存と読み取りに使う定義。published_atとnoteはNULLを許す。 */
+final class ModelIntegrationTestRecord extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return TableDefinition::create('tmswp_it_records')
+            ->id()
+            ->string('title', 100)
+            ->string('status', 20)
+            ->int('priority')
+            ->datetime('published_at', nullable: true)
+            ->text('note');
+    }
+}
+
+/** Recordと同じテーブルの行を、rowClass()のDTOで受け取る定義。 */
+final class ModelIntegrationTestTypedRecord extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return ModelIntegrationTestRecord::table();
+    }
+
+    /** @return class-string<ModelIntegrationTestRecordRow> */
+    public static function rowClass(): string
+    {
+        return ModelIntegrationTestRecordRow::class;
+    }
+}
+
+enum ModelIntegrationTestRecordStatus: string
+{
+    case Draft = 'draft';
+    case Published = 'published';
+}
+
+enum ModelIntegrationTestRecordPriority: int
+{
+    case Low = 1;
+    case High = 2;
+}
+
+/** Recordの行のDTO。 */
+final readonly class ModelIntegrationTestRecordRow
+{
+    public function __construct(
+        public int $id,
+        public string $title,
+        public ModelIntegrationTestRecordStatus $status,
+        public ModelIntegrationTestRecordPriority $priority,
+        public ?DateTimeImmutable $publishedAt,
+        public ?string $note,
+    ) {}
+}
+
+/** docs/06の利用例2のキュー(テーブル名だけを変えた)。 */
+final class ModelIntegrationTestQueue extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return TableDefinition::create('tmswp_it_queue')
+            ->id()
+            ->string('object_type', 40, nullable: true)
+            ->int('object_id', nullable: true, unsigned: true)
+            ->text('url')
+            ->text('output_path', nullable: true)
+            ->string('handler', 100)
+            ->datetime('queued_at')
+            ->bool('completed')
+            ->index(['handler', 'completed']);
+    }
+
+    /** 次に処理すべきキューを1件取得 */
+    public static function nextPending(string $handler): ?object
+    {
+        return self::query()
+            ->where('handler', $handler)
+            ->where('completed', false)
+            ->orderBy('queued_at')
+            ->first();
+    }
+
+    /** 処理済みフラグの更新 */
+    public static function markCompleted(int $id): int
+    {
+        return self::update(['completed' => true], $id);
+    }
+
+    /** ハンドラ単位の全消去 */
+    public static function clearHandler(string $handler): int
+    {
+        return self::query()->where('handler', $handler)->delete();
+    }
+
+    /** 進捗率 */
+    public static function progressPercentage(string $handler): int
+    {
+        $total = self::count(['handler' => $handler]);
+        $done = self::count(['handler' => $handler, 'completed' => 1]);
+
+        return $total > 0 ? (int) (round($done / $total, 2) * 100) : 100;
+    }
+}
+
+/** docs/06の利用例3の翻訳の組(テーブル名だけを変えた)。 */
+final class ModelIntegrationTestTranslationGroup extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return TableDefinition::create('tmswp_it_translation_group')->id();
+    }
+
+    /** AUTO_INCREMENTの採番だけの空行のINSERT */
+    public static function create(): int
+    {
+        return self::insert([]);
+    }
+}
+
+/** docs/06の利用例3の翻訳の関係(テーブル名だけを変えた)。 */
+final class ModelIntegrationTestTranslationRelation extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return TableDefinition::create('tmswp_it_translation_relation')
+            ->id()
+            ->foreignId('group_id')
+            ->bigint('object_id', unsigned: true)
+            ->string('object_type', 20)
+            ->string('language_code', 10)
+            ->index(['object_id', 'object_type', 'language_code']);
+    }
+
+    /** ある投稿の翻訳先のobject_id(自己結合) */
+    public static function translatedObjectId(int $objectId, string $objectType, string $language): ?int
+    {
+        $value = self::query()
+            ->alias('src')
+            ->select('dst.object_id')
+            ->innerJoinRaw(
+                'tmswp_it_translation_relation AS dst',
+                'dst.group_id = src.group_id AND dst.language_code = %s',
+                [$language],
+            )
+            ->where('src.object_id', $objectId)
+            ->where('src.object_type', $objectType)
+            ->value('object_id');
+
+        // wpdbは値を文字列で返し、行が無ければnull
+        return \is_string($value) ? (int) $value : null;
+    }
+
+    /**
+     * WPコアのテーブルとのLEFT JOIN。ON句への条件の追加をleftJoinRawで書く。
+     *
+     * @return array<int|string, mixed>
+     */
+    public static function termIdsForLanguage(string $language): array
+    {
+        return self::query()
+            ->alias('trl')
+            ->leftJoinRaw(
+                'terms AS t',
+                't.term_id = trl.object_id AND trl.object_type = %s',
+                ['term'],
+            )
+            ->where(static function (QueryBuilder $q) use ($language): void {
+                $q->where('trl.language_code', $language)
+                    ->orWhere('trl.language_code', null);
+            })
+            ->pluck('object_id');
+    }
+
+    /**
+     * 言語別の登録件数(集計)
+     *
+     * @return array<int|string, mixed>
+     */
+    public static function countsByLanguage(): array
+    {
+        return self::query()
+            ->selectRaw('language_code, COUNT(*) AS total')
+            ->groupBy('language_code')
+            ->pluck('total', 'language_code');
     }
 }

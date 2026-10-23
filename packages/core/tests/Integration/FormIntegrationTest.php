@@ -449,16 +449,27 @@ final class FormIntegrationTest extends IntegrationTestCase
         $wpdb->options = $wpdb->prefix . 'tmswp_no_such_table';
 
         try {
+            // claim()はmt_rand(1, 100)が1のときだけ、挿入の前にgc()を走らせる。乱数の種を決めて、どちらの順になるかを
+            // 決める(種1の最初の値は46、種111の最初の値は1)
             $calls = [
-                'failed to claim the form submission ID: ' => static fn(): JtiClaim => (new JtiStore())->claim(self::JTI, 60),
-                'failed to look up the form submission ID: ' => static fn(): bool => (new JtiStore())->isClaimed(self::JTI),
-                'failed to release the form submission ID: ' => static function (): void {
+                ['failed to claim the form submission ID: ', static function (): JtiClaim {
+                    mt_srand(1);
+
+                    return (new JtiStore())->claim(self::JTI, 60);
+                }],
+                ['failed to delete expired form submission IDs: ', static function (): JtiClaim {
+                    mt_srand(111);
+
+                    return (new JtiStore())->claim(self::JTI, 60);
+                }],
+                ['failed to look up the form submission ID: ', static fn(): bool => (new JtiStore())->isClaimed(self::JTI)],
+                ['failed to release the form submission ID: ', static function (): void {
                     (new JtiStore())->release(self::JTI);
-                },
-                'failed to delete expired form submission IDs: ' => static fn(): int => (new JtiStore())->gc(),
+                }],
+                ['failed to delete expired form submission IDs: ', static fn(): int => (new JtiStore())->gc()],
             ];
 
-            foreach ($calls as $message => $call) {
+            foreach ($calls as [$message, $call]) {
                 try {
                     $call();
                     self::fail("RuntimeException was not thrown: {$message}");
@@ -470,6 +481,8 @@ final class FormIntegrationTest extends IntegrationTestCase
         } finally {
             $wpdb->options = $options;
             $wpdb->suppress_errors($suppress);
+            // 決めた乱数の種を、ほかのテストに残さない
+            mt_srand();
         }
     }
 

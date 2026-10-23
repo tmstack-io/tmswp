@@ -166,7 +166,8 @@ final class Connection
      * prepare適用。R2規約2の読み方で`%`の並びを検証してプレースホルダを数え、
      * 個数と$bindingsの要素数の一致を検証する(違反はInvalidQueryException)。
      * $bindingsが空の場合はwpdb->prepareを通さず、`%%`を`%`に戻したSQLを返す。
-     * 非空の場合は各要素をR3写像の前処理で正規化して $this->wpdb->prepare($sql, ...$bindings) を返す。
+     * 非空の場合は各要素をR3写像の前処理で正規化して$this->wpdb->prepare($sql, ...$bindings)に通し、その結果を
+     * $this->wpdb->remove_placeholder_escape()に通して返す(wpdb->prepareが`%`を置き換えたエスケープの文字列を`%`に戻す)。
      * @param list<mixed> $bindings
      */
     public function prepare(string $sql, array $bindings = []): string;

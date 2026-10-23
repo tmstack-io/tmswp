@@ -357,6 +357,24 @@ SQL, $definition->toSql($connection));
     }
 
     /**
+     * wpdb::prepare()は`%`をエスケープの文字列(`{` + 16進 + `}`)に置き換えて返す。prepare()とtoSql()は、それを`%`に
+     * 戻したSQLを返す。
+     */
+    public function testPrepareAndToSqlReturnPercentWithoutPlaceholderEscape(): void
+    {
+        $connection = new Connection(WpdbTestDouble::create());
+
+        self::assertSame(
+            "SELECT id % 2 FROM wp_contacts WHERE email LIKE '%news%'",
+            $connection->prepare('SELECT id %% 2 FROM wp_contacts WHERE email LIKE %s', ['%news%']),
+        );
+        self::assertSame(
+            "SELECT id % 2 AS odd FROM wp_contacts WHERE email LIKE '%news%' AND id % 2 = 1",
+            (new QueryBuilder($connection, 'contacts'))->selectRaw('id %% 2 AS odd')->whereLike('email', '%news%')->whereRaw('id %% %d = %d', [2, 1])->toSql(),
+        );
+    }
+
+    /**
      * @param list<mixed> $bindings
      */
     #[DataProvider('invalidPlaceholderSql')]

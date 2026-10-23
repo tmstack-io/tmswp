@@ -60,7 +60,8 @@ final class Connection
      * プレースホルダに値を当てはめた SQL を返す。
      *
      * `%` で始まる並びは `%d` `%f` `%s` `%i` のプレースホルダと、リテラルの `%` を表す `%%` だけを受け付ける。
-     * 値が無いときは wpdb::prepare() を通さず、`%%` を `%` に戻して返す。
+     * 値が無いときは wpdb::prepare() を通さず、`%%` を `%` に戻して返す。値があるときは、wpdb::prepare()が`%`を
+     * 置き換えたエスケープの文字列(`{` + 16進 + `}`)をremove_placeholder_escape()で`%`に戻して返す。
      *
      * @param list<mixed> $bindings
      */
@@ -82,7 +83,7 @@ final class Connection
             throw new QueryException('wpdb::prepare failed');
         }
 
-        return $prepared;
+        return $this->wpdb->remove_placeholder_escape($prepared);
     }
 
     /**

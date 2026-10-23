@@ -22,7 +22,20 @@ if (!class_exists(wpdb::class, false)) {
 /**
  * ユニット層用の wpdb フェイク。
  *
- * 実行した SQL と insert/update/delete の呼び出しを記録し、読み取り結果はキューから返す。
+ * 実行した SQL と insert/update/delete の呼び出しを記録し、読み取り結果はキューから返す。prepare()は実wpdbと同じ
+ * SQLを返し(`%`はplaceholder_escape()に置き換わる)、実行したSQLは実wpdbのqueryフィルタと同じく
+ * remove_placeholder_escape()を通して記録する。
+ *
+ * prepare()が実wpdbと意図して違うのは次の5つだけ。
+ * 1. placeholder_escape()の文字列は、実wpdbではプロセスで1つ、代役ではインスタンスで1つ。
+ * 2. 文字列でもnullでもないSQLは、InvalidArgumentExceptionにする。
+ * 3. 文字列の値は、mysqli_real_escape_string()の代わりに同じ文字を置き換える(utf8mb4の接続と通常のSQLモードと同じ
+ *    結果。NO_BACKSLASH_ESCAPESと不正なバイト列は対象外)。
+ * 4. allow_unsafe_unquoted_parametersは、実wpdbの既定値(true)の振る舞いだけを持つ。
+ * 5. `%i`の位置の値(番号付きの書式で使う引数を含む)が、配列・resource・null・Stringableでないオブジェクトなら、
+ *    InvalidArgumentExceptionにする。実wpdbはこれらにPHPの警告・非推奨の通知・TypeErrorを出し、結果はPHPの弱い
+ *    型の変換と診断の順序で決まるため、再現しない。
+ *
  * failNextWrite() で、書き込み系の呼び出しを実 wpdb の失敗と同じく false で返させられる。
  * failNextRead() で、読み取り系の呼び出しを実 wpdb の失敗と同じく last_error を残して null で返させられる。
  */
@@ -85,6 +98,11 @@ final class WpdbTestDouble extends wpdb
 
     /** @var list<mixed> */
     private array $tmswpLastArgs = [];
+
+    /** @var list<string> */
+    private array $tmswpPrepareNotices = [];
+
+    private ?string $tmswpPlaceholderEscape = null;
 
     public static function create(): self
     {
@@ -184,48 +202,198 @@ final class WpdbTestDouble extends wpdb
     }
 
     /**
+     * wpdb::prepare()のnotice(実wpdbが_doing_it_wrong()で出すもの)の記録。
+     *
+     * @return list<string>
+     */
+    public function prepareNotices(): array
+    {
+        return $this->tmswpPrepareNotices;
+    }
+
+    /**
+     * 実wpdb::prepare()(WordPress 7.1のwp-includes/class-wpdb.php)と同じ手順でSQLを組み立てる。
+     *
+     * allow_unsafe_unquoted_parametersは実wpdbの既定値(true)の振る舞いだけを持つ。文字列の値は、MySQLへの接続が
+     * 無いためmysqli_real_escape_string()と同じ文字を同じ形でエスケープする(utf8mb4の接続と同じ結果)。
+     * 実wpdbが_doing_it_wrong()を出す場合は、noticeをprepareNotices()に記録し、実wpdbと同じ値を返す。
+     * 戻り値の`%`はすべてplaceholder_escape()に置き換わっている(実wpdbと同じ)。
+     *
+     * 戻り値の型は実wpdb(スタブ)の宣言に合わせる。実wpdbと同じく、nullを返す場合は値の無いreturnで返す。
+     *
      * @param mixed $query
      * @param mixed ...$args
+     *
+     * @return string|void
      */
-    public function prepare($query, ...$args): string
+    public function prepare($query, ...$args)
+    {
+        if ($query === null) {
+            return;
+        }
+
+        if (!\is_string($query)) {
+            throw new InvalidArgumentException('query must be string');
+        }
+
+        $this->tmswpLastQuery = $query;
+
+        if (!str_contains($query, '%')) {
+            $this->tmswpPrepareNotices[] = 'The query argument of wpdb::prepare() must have a placeholder.';
+        }
+
+        $allowedFormat = '(?:[1-9][0-9]*[$])?[-+0-9]*(?: |0|\'.)?[-+0-9]*(?:\.[0-9]+)?';
+        $query = str_replace("'%s'", '%s', $query);
+        $query = str_replace('"%s"', '%s', $query);
+        $query = (string) preg_replace("/%(?:%|$|(?!({$allowedFormat})?[sdfFi]))/", '%%\1', $query);
+        $split = preg_split("/(^|[^%]|(?:%%)+)(%(?:{$allowedFormat})?[sdfFi])/", $query, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+        if ($split === false) {
+            throw new RuntimeException('failed to split SQL placeholders');
+        }
+
+        $splitCount = \count($split);
+        $placeholderCount = intdiv($splitCount - 1, 3);
+        $passedAsArray = \count($args) === 1 && \is_array($args[0]);
+        // 実wpdbと同じく、配列1つで渡された値はキーを保つ(識別子の引数の位置はキーで照らし合わせる)
+        $args = $passedAsArray ? $args[0] : $args;
+        $this->tmswpLastArgs = array_values($args);
+
+        $newQuery = '';
+        $key = 2;
+        $argId = 0;
+        $identifierArgs = [];
+        $stringArgs = [];
+
+        while ($key < $splitCount) {
+            $placeholder = $split[$key];
+            $format = substr($placeholder, 1, -1);
+            $type = substr($placeholder, -1);
+
+            if ($type === 'f' && str_ends_with($split[$key - 1], '%')) {
+                // `%%%f`等: 直前の`%`の数で、この`%f`がプレースホルダかリテラルかを決める
+                $preceding = $split[$key - 2] . $split[$key - 1];
+                $length = \strlen($preceding);
+                $k = 1;
+
+                while ($k <= $length && $preceding[$length - $k] === '%') {
+                    ++$k;
+                }
+
+                $placeholder = '%' . ($k % 2 === 1 ? '%' : '') . $format . $type;
+                --$placeholderCount;
+            } else {
+                if ($type === 'f') {
+                    $type = 'F';
+                    $placeholder = '%' . $format . $type;
+                }
+
+                if ($type === 'i') {
+                    $placeholder = '`%' . $format . 's`';
+                    $identifierArgs[] = self::argumentPosition($format, $argId);
+                } elseif ($type !== 'd' && $type !== 'F') {
+                    $stringArgs[] = self::argumentPosition($format, $argId);
+
+                    if ($format === '' && !str_ends_with($split[$key - 1], '%')) {
+                        $placeholder = "'%" . $format . "s'";
+                    }
+                }
+            }
+
+            $newQuery .= $split[$key - 2] . $split[$key - 1] . $placeholder;
+            $key += 3;
+            ++$argId;
+        }
+
+        $query = $newQuery . $split[$key - 2];
+
+        if (array_intersect($identifierArgs, $stringArgs) !== []) {
+            $this->tmswpPrepareNotices[] = 'Arguments cannot be prepared as both an Identifier and Value.';
+
+            return;
+        }
+
+        $argsCount = \count($args);
+
+        if ($argsCount !== $placeholderCount) {
+            if ($placeholderCount === 1 && $passedAsArray) {
+                $this->tmswpPrepareNotices[] = 'The query only expected one placeholder, but an array of multiple placeholders was sent.';
+
+                return;
+            }
+
+            $this->tmswpPrepareNotices[] = "The query does not contain the correct number of placeholders ({$placeholderCount}) for the number of arguments passed ({$argsCount}).";
+
+            if ($argsCount < $placeholderCount) {
+                $maxNumbered = 0;
+
+                for ($i = 2; $i < $splitCount; $i += 3) {
+                    $maxNumbered = max($maxNumbered, (int) substr($split[$i], 1));
+                }
+
+                if ($maxNumbered === 0 || $argsCount < $maxNumbered) {
+                    return '';
+                }
+            }
+        }
+
+        $escapedArgs = [];
+
+        foreach ($args as $i => $value) {
+            if (\in_array($i, $identifierArgs, true)) {
+                $escapedArgs[] = self::escapeIdentifierValue($value);
+            } elseif (\is_int($value) || \is_float($value)) {
+                $escapedArgs[] = $value;
+            } else {
+                if (!\is_scalar($value) && $value !== null) {
+                    $this->tmswpPrepareNotices[] = 'Unsupported value type (' . \gettype($value) . ').';
+                    $value = '';
+                }
+
+                $escapedArgs[] = $this->realEscape($value);
+            }
+        }
+
+        return $this->add_placeholder_escape(vsprintf($query, $escapedArgs));
+    }
+
+    /**
+     * 実wpdbと同じく、prepare()の戻り値の`%`を置き換える文字列(`{` + 64桁の16進 + `}`)を返す。インスタンスごとに1つ。
+     */
+    public function placeholder_escape(): string
+    {
+        $this->tmswpPlaceholderEscape ??= '{' . hash_hmac('sha256', uniqid('', true), random_bytes(16)) . '}';
+
+        return $this->tmswpPlaceholderEscape;
+    }
+
+    /**
+     * 実wpdbと同じく、`%`をすべてplaceholder_escape()に置き換える。
+     *
+     * @param mixed $query
+     */
+    public function add_placeholder_escape($query): string
     {
         if (!\is_string($query)) {
             throw new InvalidArgumentException('query must be string');
         }
 
-        if (\count($args) === 1 && \is_array($args[0])) {
-            $args = array_values($args[0]);
+        return str_replace('%', $this->placeholder_escape(), $query);
+    }
+
+    /**
+     * 実wpdbと同じく、placeholder_escape()を`%`に戻す。実wpdbはqueryフィルタ(優先度0)でこれを呼ぶため、
+     * この代役のquery()と読み取り系も、記録する前にこれを通す。
+     *
+     * @param mixed $query
+     */
+    public function remove_placeholder_escape($query): string
+    {
+        if (!\is_string($query)) {
+            throw new InvalidArgumentException('query must be string');
         }
 
-        $normalizedArgs = [];
-        foreach ($args as $arg) {
-            $normalizedArgs[] = $arg;
-        }
-
-        $this->tmswpLastQuery = $query;
-        $this->tmswpLastArgs = $normalizedArgs;
-        $index = 0;
-
-        return (string) preg_replace_callback(
-            '/(?<!%)%(?:\d+\$)?[dfsi]/',
-            static function (array $matches) use (&$index, $normalizedArgs): string {
-                $placeholder = $matches[0];
-                if (!\array_key_exists($index, $normalizedArgs)) {
-                    throw new InvalidArgumentException('missing SQL binding');
-                }
-
-                $value = $normalizedArgs[$index];
-                ++$index;
-
-                return match ($placeholder[\strlen($placeholder) - 1]) {
-                    'd' => self::intSql($value),
-                    'f' => self::floatSql($value),
-                    'i' => '`' . str_replace('`', '``', self::stringSql($value)) . '`',
-                    default => "'" . str_replace("'", "''", self::stringSql($value)) . "'",
-                };
-            },
-            $query,
-        );
+        return str_replace($this->placeholder_escape(), '%', $query);
     }
 
     /**
@@ -238,7 +406,7 @@ final class WpdbTestDouble extends wpdb
             throw new InvalidArgumentException('query must be string');
         }
 
-        $this->tmswpQueries[] = $query;
+        $this->tmswpQueries[] = $this->remove_placeholder_escape($query);
 
         if ($this->consumeReadFailure()) {
             return null;
@@ -276,7 +444,7 @@ final class WpdbTestDouble extends wpdb
             throw new InvalidArgumentException('query must be string');
         }
 
-        $this->tmswpQueries[] = $query;
+        $this->tmswpQueries[] = $this->remove_placeholder_escape($query);
 
         if ($this->consumeReadFailure()) {
             return null;
@@ -306,7 +474,7 @@ final class WpdbTestDouble extends wpdb
             throw new InvalidArgumentException('query must be string');
         }
 
-        $this->tmswpQueries[] = $query;
+        $this->tmswpQueries[] = $this->remove_placeholder_escape($query);
 
         if ($this->consumeReadFailure()) {
             return null;
@@ -322,7 +490,7 @@ final class WpdbTestDouble extends wpdb
             throw new InvalidArgumentException('query must be string');
         }
 
-        $this->tmswpQueries[] = $query;
+        $this->tmswpQueries[] = $this->remove_placeholder_escape($query);
 
         if ($this->consumeWriteFailure()) {
             return false;
@@ -550,54 +718,52 @@ final class WpdbTestDouble extends wpdb
         return $normalized;
     }
 
-    private static function intSql(mixed $value): string
+    /** sprintfの番号付きの書式(`1$`)なら、その番号の引数の位置(0始まり)。それ以外は$argId。 */
+    private static function argumentPosition(string $format, int $argId): int
     {
-        if (\is_int($value)) {
-            return (string) $value;
-        }
+        $position = strpos($format, '$');
 
-        if (\is_bool($value)) {
-            return $value ? '1' : '0';
-        }
-
-        if (\is_string($value) && preg_match('/\A-?(0|[1-9][0-9]*)\z/', $value) === 1) {
-            return $value;
-        }
-
-        throw new InvalidArgumentException('integer SQL binding is invalid');
+        return $position === false ? $argId : (int) substr($format, 0, $position) - 1;
     }
 
-    private static function floatSql(mixed $value): string
+    /**
+     * 実wpdbの_escape_identifier_value()と同じ結果にする。実wpdbは値をそのままstr_replace()に渡し、class-wpdb.phpは
+     * strict_typesを宣言しないため、PHPの弱い型の変換が働く。文字列・int・float・Stringableは文字列に、boolは`1`か
+     * 空文字になる。実wpdbがPHPの診断を出す値(配列・resource・null・Stringableでないオブジェクト)は、再現せずに
+     * InvalidArgumentExceptionにする(クラスのdocblockの5)。
+     */
+    private static function escapeIdentifierValue(mixed $value): string
     {
-        if (\is_float($value) || \is_int($value)) {
-            return (string) $value;
-        }
+        $string = match (true) {
+            \is_string($value) => $value,
+            \is_int($value), \is_float($value), $value instanceof Stringable => (string) $value,
+            \is_bool($value) => $value ? '1' : '',
+            default => throw new InvalidArgumentException('WpdbTestDouble does not emulate %i with ' . get_debug_type($value) . ': real wpdb raises a PHP diagnostic for this input'),
+        };
 
-        if (\is_string($value) && is_numeric($value)) {
-            return $value;
-        }
-
-        throw new InvalidArgumentException('float SQL binding is invalid');
+        return str_replace('`', '``', $string);
     }
 
-    private static function stringSql(mixed $value): string
+    /**
+     * 実wpdb::_real_escape()と同じく、スカラーでない値は空文字にし、mysqli_real_escape_string()がエスケープする文字を
+     * エスケープして、placeholder_escape()を当てる。
+     */
+    private function realEscape(mixed $value): string
     {
-        if (\is_string($value)) {
-            return $value;
+        if (!\is_scalar($value)) {
+            return '';
         }
 
-        if (\is_int($value) || \is_float($value)) {
-            return (string) $value;
-        }
+        $escaped = strtr((string) $value, [
+            '\\' => '\\\\',
+            "\0" => '\\0',
+            "\n" => '\\n',
+            "\r" => '\\r',
+            "'" => "\\'",
+            '"' => '\\"',
+            "\x1a" => '\\Z',
+        ]);
 
-        if (\is_bool($value)) {
-            return $value ? '1' : '0';
-        }
-
-        if ($value instanceof Stringable) {
-            return (string) $value;
-        }
-
-        throw new InvalidArgumentException('string SQL binding is invalid');
+        return $this->add_placeholder_escape($escaped);
     }
 }
