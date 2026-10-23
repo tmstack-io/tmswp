@@ -130,3 +130,59 @@ msgstr ""
 #: Form/UploadedFile.php:84
 msgid "A PHP extension stopped the file upload."
 msgstr ""
+
+#. translators: %s: command synopsis
+#: Model/MigrateCommand.php:71
+#, php-format
+msgid "Usage: %s"
+msgstr ""
+
+#. translators: %s: command-line flag such as force
+#: Model/MigrateCommand.php:79
+#, php-format
+msgid "--%s does not take a value"
+msgstr ""
+
+#: Model/MigrateCommand.php:87
+msgid "--force and --dry-run cannot be used together"
+msgstr ""
+
+#: Model/MigrateCommand.php:101
+msgid "No models registered."
+msgstr ""
+
+#. translators: %s: database table name
+#: Model/MigrateCommand.php:116
+#, php-format
+msgid "%s: up-to-date"
+msgstr ""
+
+#. translators: %s: database table name
+#: Model/MigrateCommand.php:118
+#, php-format
+msgid "%s: changed"
+msgstr ""
+
+#. translators: %s: database table name
+#: Model/MigrateCommand.php:132
+#, php-format
+msgid "Migrated: %s"
+msgstr ""
+
+#. translators: %s: database table name
+#: Model/MigrateCommand.php:136
+#, php-format
+msgid "Skipped: %s (up to date)"
+msgstr ""
+
+#. translators: 1: number of migrated tables, 2: number of skipped tables
+#: Model/MigrateCommand.php:146
+#, php-format
+msgid "%1$d table(s) migrated, %2$d skipped."
+msgstr ""
+
+#. translators: 1: comma-separated database table names, 2: WP-CLI command
+#: Model/Migrator.php:205
+#, php-format
+msgid "The database tables %1$s do not match their TMSWP table definitions. Run %2$s to apply the definitions."
+msgstr ""

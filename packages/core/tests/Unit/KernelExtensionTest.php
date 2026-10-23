@@ -20,7 +20,6 @@ use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Tests\Support\RecordingExtension;
 use TMSWP\Core\Tests\Support\RecordingLogger;
 use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
 
 /**
  * KernelConfig で宣言する拡張・ログのチャネル・ラベル言語の既定を確かめる。
@@ -31,14 +30,13 @@ final class KernelExtensionTest extends UnitTestCase
     {
         parent::setUp();
 
-        $GLOBALS['wpdb'] = WpdbTestDouble::create();
         $GLOBALS['wp_version'] = '7.0';
         $GLOBALS['wp_actions'] = [];
     }
 
     protected function tearDown(): void
     {
-        unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions']);
+        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions']);
         Kernel::reset();
         parent::tearDown();
     }

@@ -48,7 +48,7 @@ composer test
 - `vendor/` 配下を編集しない。
 - プラグイン本体ファイルにロジックを足さない。
 - `register_post_type` / `register_taxonomy` / `register_post_meta` / `add_role` を直接呼ばない。
-- 独自マイグレーション用に `register_activation_hook` を直接書かない。ModelのマイグレーションはFWが配線する。
+- 独自マイグレーション用に `register_activation_hook` を直接書かない。Modelのテーブル定義は `wp tmswp migrate` で適用する。
 - `$wpdb` を直接使わない。独自テーブルは `Model` を使う。
 - `template_include` でテンプレート階層を迂回しない。
 - `__call` / `__callStatic` / `extract()` を使わない。

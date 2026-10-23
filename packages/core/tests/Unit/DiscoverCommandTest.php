@@ -12,7 +12,6 @@ use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
 
 /**
  * `wp tmswp discover` の生成と照合。WP_CLI の代役クラスをテスト用の一時ファイルに書いて読み込むため、
@@ -25,7 +24,6 @@ final class DiscoverCommandTest extends UnitTestCase
     {
         parent::setUp();
 
-        $GLOBALS['wpdb'] = WpdbTestDouble::create();
         $GLOBALS['wp_version'] = '7.0';
         $GLOBALS['wp_actions'] = [];
         $GLOBALS['tmswp_test_wp_cli'] = [];
@@ -33,7 +31,7 @@ final class DiscoverCommandTest extends UnitTestCase
 
     protected function tearDown(): void
     {
-        unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions'], $GLOBALS['tmswp_test_wp_cli']);
+        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions'], $GLOBALS['tmswp_test_wp_cli']);
         Kernel::reset();
         parent::tearDown();
     }

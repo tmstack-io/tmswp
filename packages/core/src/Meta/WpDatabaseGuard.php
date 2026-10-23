@@ -44,7 +44,7 @@ use wpdb;
  *    false(書き込まなかった)、読み取りは成功として扱う。データベースのサーバーの障害の経路であり、wpdb の内部
  *    (接続ハンドル等)に依存して検出すると WP の版の変更で壊れやすいため、検出しない。
  *
- * @internal WpMetaStorage と WpOptionStorage だけが使う。
+ * @internal WpMetaStorage・WpOptionStorage と、Migrator(保存済みのハッシュの読み書き)だけが使う。
  */
 final class WpDatabaseGuard
 {

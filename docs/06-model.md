@@ -2,10 +2,10 @@
 
 ## 目的
 
-WordPressの独自テーブルを「スキーマ宣言 → 自動マイグレーション → 型安全なクエリ」の一貫したフローで扱うModel層を定義する。旧iwf2bの`AbstractModel`が持っていた「クラスにスキーマを宣言するだけでテーブルが作られ、テーブル名を一切書かずにCRUDできる」体験を維持しつつ、以下を全面的に解決する。
+WordPressの独自テーブルを「スキーマ宣言 → `wp tmswp migrate`によるマイグレーション → 型安全なクエリ」の一貫したフローで扱うModel層を定義する。クラスにスキーマを宣言すれば`wp tmswp migrate`でテーブルが作られ、テーブル名を書かずにCRUDできる。そのうえで、次を満たす。
 
 1. **SQLインジェクションの構造的排除**: すべてのクエリは`wpdb->prepare`を経由し、エスケープなしの文字列補間が型システムとAPI設計のレベルで不可能になる。
-2. **暗黙ライフサイクルの廃止**: 毎リクエスト`init`フックでのマイグレーション実行をやめ、明示的な契機(有効化フック/テーマ切替/admin_init版数比較/WP-CLI)に限定する。
+2. **明示的なマイグレーション**: 適用はWP-CLIの`wp tmswp migrate`だけで行う。起動時・`admin_init`・ajax・cron・有効化フックでは自動適用せず、テーブル定義のハッシュがDBと食い違えば管理画面で管理者に通知する(FTPのアップロード途中の状態でテーブルを変えないため)。
 3. **AIフレンドリー化**: `__callStatic`によるwpdb透過プロキシを全廃し、全APIを静的解析・IDE補完が完全に効く明示シグネチャにする。
 
 フルORM(リレーション定義・自動ハイドレーション・エンティティ追跡)は実装しない(DR-08)。提供するのは「スキーマ宣言+dbDeltaマイグレーション+prepare強制クエリビルダ+任意の軽量DTOハイドレーション」の4点である。
@@ -42,7 +42,7 @@ app/Model/InquiryModel.php          ← 利用者が書くのはこれだけ
         │  Kernel(Discovery)が #[AsModel] を発見
         ▼
 Migrator ──── register(InquiryModel::class)
-  │  契機: 有効化フック / after_switch_theme / admin_init / WP-CLI
+  │  適用: wp tmswp migrate だけ(管理画面は食い違いを admin_notices で通知するだけ)
   │  TableDefinition::toSql() → sha256ハッシュ比較 → 差分時のみ dbDelta()
   ▼
 Connection(wpdbラッパ) ←── QueryBuilder(全クエリをprepare経由で実行)
@@ -55,7 +55,7 @@ Connection(wpdbラッパ) ←── QueryBuilder(全クエリをprepare経由で
 |---|---|
 | `Model` | 1テーブル=1クラスの静的ファサード。スキーマ宣言の置き場とCRUDショートカット |
 | `TableDefinition` | fluentなスキーマ宣言とdbDelta互換`CREATE TABLE`文の生成 |
-| `Migrator` | スキーマハッシュ比較によるマイグレーション実行と契機(フック/CLI)の管理 |
+| `Migrator` | スキーマハッシュ比較によるマイグレーション実行と、管理画面の通知・CLIの配線 |
 | `QueryBuilder` | SELECT/UPDATE/DELETEの組み立て。プレースホルダ強制 |
 | `Connection` | wpdbの薄いラッパ。prefix解決・prepare実行・テスト時差し替え点 |
 
@@ -304,7 +304,10 @@ final class TableDefinition
     /** bigint(20) unsigned + 同名単一カラムKEYを自動追加。FK制約は発行しない(dbDelta非対応のため) */
     public function foreignId(string $name, bool $nullable = false): self;
 
-    /** エスケープハッチ。$definitionは型以降の定義文字列(例: 'mediumint(9) NOT NULL')。R2と同じクォート文字禁止検査を行う */
+    /**
+     * エスケープハッチ。$definitionは型以降の定義文字列(例: 'mediumint(9) NOT NULL')。R2と同じクォート文字禁止検査を行い、
+     * 前後の空白を除いて書く。DBが別の表記で記録する型の表記(下記エッジケース)はSchemaException
+     */
     public function rawColumn(string $name, string $definition): self;
 
     // ---- キー定義 ----
@@ -349,6 +352,18 @@ final class TableDefinition
     /** 型名(例: 'varchar(191)')。未宣言のカラムはSchemaException */
     public function columnType(string $name): string;
 
+    /** NULLを許すか(下記「列の属性」)。主キーの列はfalse。未宣言のカラムはSchemaException */
+    public function columnNullable(string $name): bool;
+
+    /** 既定値(下記「列の属性」)。既定値が無いかDEFAULT NULLならnull。未宣言のカラムはSchemaException */
+    public function columnDefault(string $name): ?string;
+
+    /** @return 'number'|'string'|'temporal' 既定値の比べ方を決める種類(下記「列の属性」)。未宣言のカラムはSchemaException */
+    public function columnKind(string $name): string;
+
+    /** collation()で宣言した照合順序。宣言していなければnull */
+    public function declaredCollation(): ?string;
+
     /** dbDelta互換CREATE TABLE文(後述の生成仕様) */
     public function toSql(Connection $connection): string;
 
@@ -380,6 +395,18 @@ final class TableDefinition
 - `nullable: true` かつ `$default === null` → ` DEFAULT NULL`。
 - `nullable: true` かつ `$default`非null → ` DEFAULT {literal}`。
 - 文字列デフォルトのリテラル化: `'`を含む場合は`SchemaException`。それ以外は`'{$default}'`とシングルクォートで包む。`datetime`の`'CURRENT_TIMESTAMP'`のみ非クォート。int/bool/decimalはそのまま数値表記。
+
+#### 列の属性(確定)
+
+各列は、Migratorが適用後の構造と照らし合わせる属性(NULLの可否・既定値・既定値の種類)を持つ(§5の検証3)。
+
+- 組込のメソッドは、引数の値をそのまま属性として持つ。組み立てたSQLの文字列を解析し直さない(文字列の既定値`'NOT NULL'`を列の制約と取り違えないため)。
+  - NULLの可否: `nullable`引数。`id()`と`bool()`はNULLを許さない。
+  - 既定値: DBが`SHOW FULL COLUMNS`で返す形と比べられる値。文字列は引用符を外した値、`bool()`は`'0'`/`'1'`、`int()`・`bigint()`・`decimal()`は10進の数の文字列、`datetime()`は書いたままの値(`CURRENT_TIMESTAMP`等)。
+  - 種類: `id()`・`int()`・`bigint()`・`decimal()`・`bool()`・`foreignId()`は`number`、`string()`・`text()`・`json()`は`string`、`datetime()`は`temporal`。
+- `rawColumn()`は引用符を拒否するため、文字列の既定値を持てない。NULLの可否は定義に`NOT NULL`が無ければ許すとし、既定値は定義の最後の`DEFAULT`に続く1語(`NULL`ならnull)とする。種類は型の名前で決める(`tinyint`・`smallint`・`mediumint`・`int`・`bigint`・`decimal`・`float`・`double`は`number`、`date`・`datetime`・`timestamp`・`time`・`year`は`temporal`、それ以外は`string`)。
+- 主キーの列は、定義に`NOT NULL`が無くてもDBがNOT NULLにするため、NULLを許さない。
+- `decimal()`の既定値は、SQLにそのまま書くため、10進の数の表記(`-?\d+(\.\d+)?`)だけを受け付ける。指数・空白・`+`の付いた表記は`SchemaException`。
 
 #### toSql() 生成仕様(dbDelta互換要件、確定手順)
 
@@ -413,6 +440,13 @@ CREATE TABLE {full_table_name} (
 - `id()`と`primary()`の併用 → `SchemaException`。
 - `text`/`json`(longtext)カラムへの`index()` → `SchemaException`(プレフィックスインデックスは非対応。必要なら`rawColumn`+明示キーではなく`string`への変更を促すメッセージ)。
 - カラム名・インデックス名(`id()`の`$name`、`rawColumn()`、`index()`/`unique()`の`$name`を含む)にSQLの予約語(`order`・`key`・`group`・`desc`・`range`等。大文字小文字不問) → 宣言時に`SchemaException`。生成するSQLは識別子をクォートしない(dbDeltaの要件)ため、予約語はCREATE TABLEやクエリの実行時に構文エラーになる。予約語の集合は、MySQL 8.0の予約語(`information_schema.KEYWORDS`の`RESERVED = 1`)と、MariaDB(10.11・12.3)でクォートせずにカラム名に使えない語の和集合とする(`Identifier`が保持する)。ベアテーブル名はprefixが付くため対象外。
+- `rawColumn()`で、DBが別の表記で記録し、dbDeltaの差分が残り続ける型の表記 → 宣言時に`SchemaException`(使う表記をメッセージで案内する)。dbDeltaは宣言の型とDBの型を文字列で比べるため、そのままでは適用の後に差分が永久に残り、`wp tmswp migrate`が必ず失敗する。照らし合わせるのは、小文字にして空白をそろえた定義の先頭である。MySQL 8.0.44・MariaDB 10.11.18・12.3.3のすべてで、拒否する表記は少なくとも1つのDBで差分が残り、案内する表記は3つのDBで収束することを確かめた。
+  - 型の別名(案内する型): `integer`→`int`、`int1`→`tinyint`、`int2`→`smallint`、`int3`・`middleint`→`mediumint`、`int4`→`int`、`int8`→`bigint`、`numeric`・`dec`・`fixed`→`decimal`、`real`・`float8`→`double`、`float4`→`float`、`boolean`・`bool`→`tinyint(1)`、`character`・`nchar`→`char`、`character varying`・`char varying`・`varcharacter`・`nvarchar`→`varchar`、`national`→`char`か`varchar`、`long`・`long varchar`→`mediumtext`、`json`→`longtext`(MariaDBが`longtext`として記録する)。
+  - `serial`(DBは`bigint unsigned`とAUTO_INCREMENTで記録する): `id()`か`bigint(20) unsigned NOT NULL AUTO_INCREMENT`。
+  - 精度の引数が1つの`float(p)`・`double(p)`(DBは`float`か`double`と記録する。`double(p)`はCREATEも失敗する): 精度24までは`float`、25〜53は`double`。精度と桁の2つの引数(`float(10,2)`)は収束するため受け付ける。
+  - 表示幅の無い整数の型(`tinyint`・`smallint`・`mediumint`・`int`・`bigint`。`unsigned`付きを含む。MariaDBは表示幅付きで記録する): `tinyint(4)`・`smallint(6)`・`mediumint(9)`・`int(11)`・`bigint(20)`(`unsigned`はその後に付ける)。
+  - `double precision`はDBが`double`と記録し、dbDeltaも先頭の語だけを比べるため受け付ける。
+  - これ以外の表記でもdbDeltaの差分が残る場合(引数の無い`decimal`・`char`、`timestamp(0)`、型の前のコメント等)は、§5の検証2が`MigrationException`にし、メッセージにdbDeltaの差分の文と、定義の型をDBが記録する表記に合わせる案内を含める。利用側が定義を直せば解消する、明示的な失敗である。
 - `charset()`より前、または`charset()`なしでの`collation()` → 宣言時に`SchemaException`(charset句はcharsetの指定時にだけcollationを出力するため、collationだけの指定は反映できない)。
 
 ---
@@ -868,7 +902,7 @@ PHPStanでは、FW同梱のPHPStan拡張(DR-05のMetaBag拡張と同梱。`packa
 
 #### 役割
 
-登録された全Modelのスキーマを「ハッシュ比較 → 差分時のみdbDelta」で同期する。実行契機の配線(フック/CLI)もここが持つ。旧FWの「毎リクエストinitフックで実行」「optionキーがprefixなしで衝突」「autoload無制御」を解消する。
+登録された全Modelのテーブル定義を「ハッシュ比較 → 差分時のみdbDelta」でDBへ適用する。適用の経路は`wp tmswp migrate`(§6)だけで、起動時・`admin_init`・ajax・cron・有効化フック・テーマ切替では適用しない(FTPのアップロード途中の状態でテーブルを変えないため。12-implementation-plan §1.5)。管理画面では、定義のハッシュが保存済みのハッシュと食い違うテーブルを、権限のある管理者に`admin_notices`で通知するだけにする。適用したハッシュは、autoloadしない1つのoption(`tmswp_schema_hashes`)に保存する。
 
 #### シグネチャ
 
@@ -879,124 +913,165 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Model;
 
+use TMSWP\Core\Kernel\Kernel;
+
 final class Migrator
 {
-    /** 保存先option名。値は array<string フルテーブル名, string sha256>。autoload=false固定 */
-    public const OPTION_KEY = 'tmswp_schema_hashes';
+    /** 保存先option名。値は array<string ベアテーブル名, string sha256>。autoload=false固定 */
+    private const string OPTION_NAME = 'tmswp_schema_hashes';
 
-    /** @var list<class-string<Model>> */
-    private array $models = [];
-
-    /** @var list<self> listen()済みインスタンスのプロセス内レジストリ(CLIコマンドが横断利用) */
-    private static array $instances = [];
-
-    private static bool $cliRegistered = false;
+    /** 定義とDBの食い違いの通知を見せる権限 */
+    private const string NOTICE_CAPABILITY = 'manage_options';
 
     public function __construct(
         private readonly Connection $connection,
     ) {}
 
     /**
-     * モデル登録。Kernelが#[AsModel]発見時に呼ぶ。
-     * Modelを継承していないクラスはSchemaException。
-     * 同一クラスの二重登録は無視(冪等)。別クラスが同名テーブルを宣言した場合はSchemaException。
+     * モデル登録。Kernelが#[AsModel]のクラスの初期化(ModelInitializer)で呼ぶ。
+     * Modelを継承していないクラスと、別クラスが同名テーブルを宣言した場合はSchemaException(宣言の誤り)。
+     * 同一クラスの二重登録は同じ定義で上書きする(冪等)。
      * @param class-string<Model> $modelClass
      */
     public function register(string $modelClass): void;
 
     /** @return list<class-string<Model>> 登録順 */
-    public function registeredModels(): array;
+    public function models(): array;
 
     /**
-     * 全登録モデルを移行。戻り値は フルテーブル名 => dbDeltaを実行したか。
-     * @return array<string, bool>
-     */
-    public function migrateAll(bool $force = false): array;
-
-    /** 単一モデルの移行。dbDeltaを実行したらtrue @param class-string<Model> $modelClass */
-    public function migrate(string $modelClass, bool $force = false): bool;
-
-    /**
-     * 差分状況の取得(dry-run)。dbDeltaは実行しない。
-     * @return array<string, bool> フルテーブル名 => 保存済みハッシュと相違があるか
+     * 各テーブルの定義のハッシュを保存済みのハッシュと比べる。DBのテーブルは変えない(--dry-runと管理画面の通知が使う)。
+     * Modelが無ければoptionも読まない。
+     * @return list<MigrationStatus> 登録順
      */
     public function status(): array;
 
     /**
-     * DROP TABLE IF EXISTS + 保存ハッシュ削除。uninstall.php用。
+     * 全登録モデルを登録順に移行する。ハッシュが保存済みと同じテーブルは、$forceでなければdbDeltaを実行しない。
+     * @return list<MigrationResult> 登録順
+     */
+    public function migrateAll(bool $force = false): array;
+
+    /**
+     * DROP TABLE IF EXISTS + 保存済みハッシュの削除。uninstall.php用で、登録していないModelも渡せる。
      * @param class-string<Model> $modelClass
      */
     public function dropTable(string $modelClass): void;
 
     /**
-     * 実行契機の配線。Kernelがboot時に1回呼ぶ(Kernel統合契約参照)。
-     * @param bool $isTheme テーマ文脈ならtrue
-     * @param string|null $pluginFile プラグイン文脈なら本体ファイルの絶対パス
+     * 管理画面の通知(admin_notices)と`wp tmswp migrate`の登録。Kernelがboot時に1回呼ぶ(Kernel統合契約参照)。
+     * MigratorとConnectionはここでは解決しない。
      */
-    public function listen(bool $isTheme, ?string $pluginFile = null): void;
+    public static function listen(Kernel $kernel): void;
+}
+
+enum MigrationAction: string
+{
+    case Migrated = 'migrated';   // dbDeltaで適用し、ハッシュを保存した
+    case Skipped = 'skipped';     // ハッシュが保存済みと同じため、dbDeltaを実行しなかった
+}
+
+final readonly class MigrationResult
+{
+    /** @param class-string<Model> $model */
+    public function __construct(
+        public string $model,
+        public string $table,           // ベアテーブル名(prefixなし)
+        public MigrationAction $action,
+        public string $schemaHash,
+    ) {}
+}
+
+final readonly class MigrationStatus
+{
+    /** @param class-string<Model> $model */
+    public function __construct(
+        public string $model,
+        public string $table,           // ベアテーブル名(prefixなし)
+        public bool $current,           // 定義のハッシュが保存済みのハッシュと同じか
+        public string $schemaHash,
+        public ?string $storedHash,     // 一度も適用していなければnull
+    ) {}
 }
 ```
 
-#### migrate() の手順(確定)
+- ハッシュの保存先のキーはベアテーブル名である。optionはサイトごとのテーブルにあり、マルチサイトは対象外(00-overview §2.2)のため、prefixを含める必要が無い。
+
+#### migrateAll() の1テーブルの手順(確定)
 
 ```
-1. $definition = $modelClass::table()
-2. $sql  = $definition->toSql($this->connection)
-3. $hash = hash('sha256', $sql)
-4. $stored = get_option(self::OPTION_KEY, [])[フルテーブル名] ?? null
-5. if (!$force && $stored === $hash) return false   // スキップ(差分なし)
-6. require_once ABSPATH . 'wp-admin/includes/upgrade.php'
-7. dbDelta($sql)                                     // 実行
-8. 検証1: $this->connection->lastError() が非空 → MigrationException
-   (ハッシュは更新しない=次回契機で自動リトライされる)
-9. 検証2: dbDelta($sql, false) (dry-run)の戻り配列が非空 →
-   MigrationException(メッセージに残差分クエリを列挙)。
-   本FWのtoSql()生成規則はdbDeltaの比較器と整合するため、正常時の残差分は空になる
-10. option配列を更新して update_option(..., autoload: false)。return true
+1. $definition = 登録時に$modelClass::table()で得た定義
+2. $hash = $definition->hash($this->connection)          // sha256(toSql())
+3. $stored = get_option(self::OPTION_NAME)[ベアテーブル名] ?? null   // optionは最初に1回だけ読む。
+   読み取りのDBエラーはMigrationException("failed to read the schema hashes: {last_error}")
+4. if (!$force && $stored === $hash) → MigrationAction::Skipped(dbDeltaを実行しない)
+5. require_once ABSPATH . 'wp-admin/includes/upgrade.php'  // dbDeltaが未定義のときだけ
+6. dbDelta($sql)                                          // 実行
+7. 検証1: $this->connection->lastError() が非空 →
+   MigrationException("dbDelta failed on table {table}: {last_error}")
+8. 検証2: dbDelta($sql, false)(dry-run)の戻り配列が非空 →
+   MigrationException("dbDelta left differences on table {table}: {残差分を'; 'で連結}; if the database records
+   a column type in another notation, write the type in the table definition as the database records it")
+9. 検証3: 実際の構造を定義と照らし合わせる(SHOW FULL COLUMNS・SHOW INDEX・SHOW TABLE STATUS)。
+   テーブル・列・主キー・索引があること、各列のNULLの可否と既定値、collation()で宣言した
+   テーブルの照合順序が定義と同じであること。食い違えばMigrationException
+   ("table {table}: column {列} is expected to have DEFAULT 1 but the database has DEFAULT 0;
+    dbDelta does not apply this change, so apply it with a manual ALTER TABLE, or, if the database stored
+    a rounded value, change the definition to the value the database stores" 等。丸めの案内は既定値の
+    食い違いだけに付ける)
+10. option配列を更新して保存する(update_option / add_option、autoload: false)。書き込みのDBエラーは
+    MigrationException("failed to save the schema hashes: {last_error}")。MigrationAction::Migrated
 ```
 
-- dbDeltaは複数クエリを発行し`$wpdb->last_error`は最後のクエリしか反映しないため、検証2(apply後dry-run)を必須とする。
+- 保存済みのハッシュの読み書き(`status()`・`migrateAll()`・`dropTable()`)は、`get_option()`の`false`(optionが無い)とDBのエラーを区別する。`get_option()`は読み込みのクエリが失敗しても`false`を返すため、メタ・オプションの読み取り(04-meta-options.md §4.6。D-47)と同じ`WpDatabaseGuard`で、呼び出しの間に`num_queries`が増え、かつ`last_error`が空でない場合をDBのエラーとして`MigrationException`にする(呼び出しの前の無関係なエラーは拾わない)。失敗した読み込みでWPが書いた「optionが無い」のキャッシュ(notoptions)も消す。管理画面の通知では、この例外を下記の通知の失敗として扱う。
+- 検証1〜3のどれかで失敗したら、そのテーブルのハッシュは更新しない。原因を直して`wp tmswp migrate`をもう一度実行すれば、そのテーブルから適用し直す。
+- dbDeltaは1つの定義に複数の文(DESCRIBE・SHOW INDEX・ALTER等)を発行し、wpdbは文ごとに`last_error`を消すため、適用後の`last_error`は最後の文のエラーしか表さない。途中の文の失敗と、エラーを残さずに反映されなかった変更は、検証2の残差分で検出する。本FWのtoSql()生成規則はdbDeltaの比較器と整合するため、正常時の残差分は空になる(MySQL 8.0.17以降の整数型の表示幅は、dbDeltaが比較から除く)。
+- dbDeltaが適用するのは、テーブルの作成、列・索引の追加、列の型の変更、引用符で囲んだ既定値の変更だけである。数値の既定値(`bool()`・`int()`・`decimal()`等)の変更、既定値の削除、`CURRENT_TIMESTAMP`の追加、NULLの可否の変更、テーブルの照合順序の変更は、適用せず、検証2の残差分にも出ない。検証3はこれらの食い違いを検出してハッシュを更新しない。足りない変更はMigratorが自動でALTERせず、利用側が`Connection::execute()`等で手動のALTERを実行してから、`wp tmswp migrate`をもう一度実行する。
+- 検証3の既定値の比較は、列の種類(§2「列の属性」)ごとに、DBが返す表記の違いを除いて行う。どちらかが既定値なし(null)なら、両方が既定値なしのときだけ同じとする。
+  - `number`: 10進の数として正規化して厳密に比べる。符号・整数部の先頭の0・小数部の末尾の0を除き、`-0`は`0`にする(`decimal(10,2)`の`DEFAULT 1`をDBは`1.00`と返すが、同じとする)。指数の表記(`e`/`E`、指数の符号`+`/`-`/なし、係数の小数)は、floatを使わず、係数の数字の並びと指数による小数点の位置の移動を文字列で扱い、指数の無い正規形にする。DBは`double`・`float`の大きな既定値を指数の表記で返す(`DEFAULT 100000000000000000000`を`1e20`と返す)ため、`1e20`と`100000000000000000000`、`1E-3`と`0.001`、`1e+20`と`1e20`、`1e0`と`1.00`は同じとする。値を丸めないため、`9007199254740992`と`9007199254740993`、`1e20`と`1e21`、`1.5e1`と`16`は別。10進の数として読めない値と、指数の絶対値が400を超える値は、そのまま比べる。`double`・`float`で表せない桁の既定値(例: `DEFAULT 100000000000000000001`)はDBが丸めて記録するため、食い違いとして検出される。定義の既定値を、DBが記録する値に合わせる(既定値の食い違いの例外は、手動のALTER TABLEに加えてこの直し方を案内する)。
+  - `string`: そのまま厳密に比べる(`'001'`と`'1'`は別)。
+  - `temporal`: `CURRENT_TIMESTAMP`・`current_timestamp()`・`CURRENT_TIMESTAMP(n)`・`current_timestamp(n)`を、大小文字を無視して`CURRENT_TIMESTAMP`か`CURRENT_TIMESTAMP(n)`にそろえる。精度は保ち、精度の違うものは別とする。空の括弧と精度0は精度なしとする(3つのDBとも、`DEFAULT CURRENT_TIMESTAMP(0)`を精度なしと同じ`CURRENT_TIMESTAMP`・`current_timestamp()`として返す)。それ以外の値(日時の値)はそのまま比べる。
+  - 照合順序は、`utf8_`で始まる名前をDBが返す`utf8mb3_`にそろえて比べる。charsetだけを宣言した場合と、charsetを宣言しない場合(wpdbの既定)は、照合順序を比べない。
+  - MySQL 8.0.44・MariaDB 10.11.18・12.3.3で、組込の全ての列の型・既定値・NULLの可否と、§2で受け付けるrawColumnの型の作成と再適用が検証3を通り、上記の未適用の変更(大きな整数・桁の多いDECIMALの既定値の変更、指数の表記の既定値の変更を含む)が検証3で失敗することと、指数の表記で返る同じ値の既定値が検証3を通ることを確かめた。
 - dbDeltaの既知の制約 — **カラム削除・カラム名変更・型縮小のデータ変換は行われない** — はそのまま引き継ぐ。不要カラムはDBに残置される(削除が必要な運用は利用側が`Connection::execute()`で明示ALTERを書く)。この制約はrules/とPHPDocに明記する。
-- 同時実行(管理画面への並行アクセス等)でdbDeltaが二重に走っても、dbDeltaは差分適用型なので冪等であり整合性は壊れない。ロックは設けない。
+- 同時実行で`wp tmswp migrate`が二重に走っても、dbDeltaは差分適用型なので冪等であり整合性は壊れない。ロックは設けない。
 
 #### listen() の配線(確定)
 
 ```
-1. self::$instances[] = $this
-2. $pluginFile !== null の場合:
-     register_activation_hook($pluginFile, fn() => $this->migrateAll(force: true))
-3. $isTheme の場合:
-     add_action('after_switch_theme', fn() => $this->migrateAll(force: true))
-4. 共通(版数比較=ハッシュ比較。管理画面のみ・フロントでは一切動かない。
-   MigrationExceptionは非致死に捕捉する — 下記「admin_init契機のエラー処理」参照):
-     add_action('admin_init', function (): void {
-         try {
-             $this->migrateAll();
-         } catch (MigrationException $e) {
-             if ($debug) {   // このMigratorを起動したKernelのKernelConfig::$debug(00-overview.md §5.6)
-                 wp_trigger_error(self::class . '::migrateAll', $e->getMessage(), E_USER_WARNING);
-             }
-             add_action('admin_notices', static fn() => wp_admin_notice(
-                 'TMSWP: テーブル移行に失敗しました — ' . esc_html($e->getMessage()),
-                 ['type' => 'error'],
-             ));
-         }
-     }, 5)
-5. defined('WP_CLI') && WP_CLI かつ self::$cliRegistered === false の場合:
-     \WP_CLI::add_command('tmswp migrate', new MigrateCommand())
-     self::$cliRegistered = true
-   ※コマンドはself::$instancesを横断するため、テーマ+複数プラグインが
-     それぞれKernelをbootしていても 'wp tmswp migrate' 1コマンドで全テーブルが対象になる
+1. add_action('admin_notices', static fn() => self::noticeChangedDefinitions($kernel), 10, 0)
+2. MigrateCommand::register()        // WP-CLI環境ならプロセスで1回'tmswp migrate'を登録する(§6)
 ```
 
-- `admin_init`での`migrateAll()`は差分なし時「モデル数ぶんの文字列構築+`get_option` 1回」のみで、実DBクエリはoption読込(autoload対象外のため1クエリ)に限られる。フロントエンドのリクエストではフック自体が発火しない。
-- 有効化フック/テーマ切替は`force: true`で必ずdbDeltaを通す(再有効化時にテーブルが手動DROPされていても復旧できるようにするため)。
-- **admin_init契機のエラー処理(非致死)**: WPフックコールバック内の未捕捉例外はリクエストを致死させ、失敗テーブルのハッシュは未更新のため毎`admin_init`で再fatal=管理画面全体の恒久ロックアウトに転化する。これを防ぐため、`admin_init`契機に限り`MigrationException`を捕捉し、(a) `wp_admin_notice()`(WP 6.4+、`type: error`。01-architecture.mdの正準API棚卸しどおり)で管理者へ**無条件**に通知、(b) このMigratorを起動したKernelの`KernelConfig::$debug`がtrueのときはさらに`wp_trigger_error(..., E_USER_WARNING)`でログへ可視化する(debugの判定は00-overview.md §5.6のとおりKernelConfig::$debugに一本化する)。捕捉してもハッシュは未更新のままなので、原因解消後の次回`admin_init`で自動的に再試行・回復する(migrate()手順8の「次回契機で自動リトライ」の設計意図と整合)。
-- 有効化フック・`after_switch_theme`・WP-CLIの各契機は現行どおり例外を伝播させる(失敗を即座に顕在化すべき文脈)。契機ごとにエラー方針が2種(admin_init=非致死捕捉/それ以外=伝播)となる旨はrules/に1行記載する。
+`listen()`はMigrator・Connectionを解決しない(グローバルの`$wpdb`に触れない)。そのため、WordPressなしのユニットテストでもKernelをbootでき、`$wpdb`の代役を置く必要が無い。MigratorとConnectionは、最初に使う時点(ModelInitializerが`#[AsModel]`のクラスを登録する時点、通知を確かめる時点、`wp tmswp migrate`の実行時)に、`$kernel`のContainerから解決する。そのときに`$wpdb`が無ければ、`Connection::fromGlobal()`が`QueryException`を投げる(代わりの接続は使わない)。
+
+**管理画面の通知(`noticeChangedDefinitions`)**:
+
+```
+1. if (!current_user_can('manage_options')) return     // 通知を見せる権限のある管理者のリクエストだけで確かめる
+2. try:
+     $changed = $kernel->container()->get(Migrator::class)->status() のうち current が false のテーブル
+   catch (Throwable $e):
+     if ($kernel->config()->debug) throw $e
+     $kernel->logger()->error('tmswp.model: failed to compare the table definitions with the database',
+         ['exceptionClass' => ..., 'exceptionAt' => 'ファイル:行', 'previousClasses' => [...]])
+     return
+3. if ($changed === []) return
+4. wp_admin_notice(
+       sprintf(__('The database tables %1$s do not match their TMSWP table definitions. Run %2$s to apply the definitions.', 'tmswp'),
+           implode(', ', $changed), 'wp tmswp migrate'),
+       ['type' => 'error'],
+   )
+```
+
+- 通知を見せる権限は`manage_options`(サイトの設定を変えられる管理者)とする。テーブルの適用はデプロイの作業で、それを指示できるのはサイトを管理する者だからである。
+- `admin_notices`は管理画面の表示でだけ発火し、ajax・cron・REST・フロントエンドでは発火しない。確かめる処理は権限の判定の後に行うため、権限の無いユーザーのリクエストではoptionも読まない。権限のある管理者のリクエストでも、DBへのクエリはoptionの読み込み(autoload対象外のため1クエリ)だけで、dbDeltaは実行しない。Modelが無いKernelはoptionも読まない。
+- 確かめる処理の失敗(optionの破損・DBのエラー等)はエラー方針(00-overview.md §5.6)で隔離する。debugの判定は`WP_DEBUG`を直接見ず、`listen()`に渡したKernelの`KernelConfig::$debug`で行う。debugでは例外をそのまま投げ、本番ではそのKernelのログにerrorで記録して通知をやめる。ログの文脈には、例外のクラス名と投げられた場所(ファイル:行)、previousのクラス名だけを入れ、例外のオブジェクト・メッセージ・トレースは入れない(05-formのログと同じ)。
+- テーブル名はR1のベアテーブル名(英小文字・数字・`_`)のため、HTMLとして解釈される文字を含まない。通知の文言はFWのテキストドメイン`tmswp`で翻訳する。
 
 #### エッジケース
 
-- `migrateAll()`内の1モデルで`MigrationException`が発生したら即座に伝播し、後続モデルは処理しない(fail fast。部分適用済みテーブルのハッシュは更新済み、失敗テーブルは未更新なので再実行で収束する)。`admin_init`契機ではこの伝播例外をlisten()手順4のtry/catchが非致死に捕捉する(他契機は伝播のまま)。
+- `migrateAll()`内の1モデルで`MigrationException`が発生したら即座に伝播し、後続モデルは処理しない(fail fast。適用済みのテーブルのハッシュは更新済み、失敗テーブルは未更新なので再実行で収束する)。
+- `dropTable()`は保存済みのハッシュにそのテーブルが無ければoptionを書かない。
 - 旧iwf2bのoptionキー`{table_name}_schema_hash`は読み取らない(DR-03: 互換なし)。
 
 ---
@@ -1005,7 +1080,7 @@ final class Migrator
 
 #### 役割
 
-WP-CLIコマンド`wp tmswp migrate`の実装。`Migrator`のプロセス内レジストリを横断して全テーブルを移行する。
+WP-CLIコマンド`wp tmswp migrate`の実装。`Kernel::all()`の全KernelのMigratorを横断して全テーブルを移行する。テーマ+複数プラグインがそれぞれKernelをbootしていても、1コマンドで全テーブルが対象になる。独自テーブルの定義を適用する唯一の経路である。
 
 #### シグネチャ
 
@@ -1016,27 +1091,26 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Model;
 
-/**
- * 独自テーブルのマイグレーションを実行する。
- *
- * ## OPTIONS
- *
- * [--force]
- * : ハッシュ比較をスキップして全テーブルにdbDeltaを実行する
- *
- * [--dry-run]
- * : 実行せず、差分のあるテーブル一覧のみ表示する
- *
- * ## EXAMPLES
- *
- *     wp tmswp migrate
- *     wp tmswp migrate --force
- *     wp tmswp migrate --dry-run
- */
 final class MigrateCommand
 {
+    /** WP-CLI環境(WP_CLI定数が真でWP_CLIクラスがある)なら'tmswp migrate'を登録する。プロセスで1回。Migrator::listen()が呼ぶ */
+    public static function register(): void;
+
+    /** @internal 登録済みフラグを戻す(Kernel::reset()が呼ぶ) */
+    public static function reset(): void;
+
     /**
-     * @param list<string> $args 位置引数(未使用)
+     * Applies the table definitions of the models of all booted TMSWP kernels.
+     *
+     * ## OPTIONS
+     *
+     * [--force]
+     * : Run dbDelta for every table, even if its definition hash matches the stored hash.
+     *
+     * [--dry-run]
+     * : List the tables whose definition hash differs from the stored hash, without changing the database.
+     *
+     * @param list<string> $args 位置引数(受け付けない)
      * @param array<string, mixed> $assocArgs --force / --dry-run
      */
     public function __invoke(array $args, array $assocArgs): void;
@@ -1045,10 +1119,12 @@ final class MigrateCommand
 
 #### 振る舞い仕様
 
-1. `--dry-run`: 各Migratorの`status()`を集約し、`WP_CLI::log()`で「`{テーブル名}: changed|up-to-date`」を1行ずつ出力して終了(終了コード0)。
-2. 通常/`--force`: 各Migratorの`migrateAll($force)`を呼び、適用テーブルは「`Migrated: {テーブル名}`」、スキップは「`Skipped: {テーブル名} (up to date)`」を出力。最後に`WP_CLI::success('{n} table(s) migrated, {m} skipped.')`。
-3. `MigrationException`発生時は`WP_CLI::error($e->getMessage())`(非0終了)。
-4. 登録Migratorが0件(テーマ・プラグインのどのKernelもModelを持たない)の場合は`WP_CLI::warning('No models registered.')`で正常終了。
+1. 位置引数、または`--force`・`--dry-run`以外の引数があれば`WP_CLI::error('Usage: wp tmswp migrate [--force] [--dry-run]')`。フラグは値を取らない。WP-CLIは`--force`を`true`、`--no-force`を`false`として渡し、`false`は指定なしとして扱う。`true`・`false`以外の値(`--force=0`等)は`WP_CLI::error('--force does not take a value')`(`--dry-run`も同じ)。指定した(`true`の)`--force`と`--dry-run`の併用は`WP_CLI::error('--force and --dry-run cannot be used together')`(いずれも非0終了)。
+2. Modelを1つ以上登録したMigratorが無い(テーマ・プラグインのどのKernelもModelを持たない)場合は`WP_CLI::warning('No models registered.')`で正常終了する。
+3. `--dry-run`: 各Migratorの`status()`を、Kernelの登録順・Modelの登録順に`WP_CLI::log()`で「`{ベアテーブル名}: changed`」または「`{ベアテーブル名}: up-to-date`」と1行ずつ出力して終了する(終了コード0)。DBは変えない。
+4. 通常/`--force`: 各Migratorの`migrateAll($force)`を呼び、`MigrationAction::Migrated`は「`Migrated: {ベアテーブル名}`」、`MigrationAction::Skipped`は「`Skipped: {ベアテーブル名} (up to date)`」を`WP_CLI::log()`で出力する。最後に`WP_CLI::success('{n} table(s) migrated, {m} skipped.')`。
+5. `MigrationException`発生時は`WP_CLI::error($e->getMessage())`(非0終了)。後続のテーブルは処理しない(§5エッジケース)。
+6. 人間向けの出力(使い方・エラー・警告・各行・集計)は、ソースの英語の文をFWのテキストドメイン`tmswp`のgettextで翻訳する(01-architecture.md §7.1)。テーブル名・件数・フラグ名はプレースホルダで埋める。`MigrationException`のメッセージ(テーブル名・列名・DBのエラー)は翻訳しない。
 
 ---
 
@@ -1056,10 +1132,10 @@ final class MigrateCommand
 
 本文書はKernel/Discoveryの内部仕様を定義しないが、Model層が機能するためにKernel側が満たすべき契約を以下に固定する(Kernel設計書はこれを実装する)。
 
-1. Containerに`Connection::class`(デフォルトファクトリ`Connection::fromGlobal()`、共有インスタンス)と`Migrator::class`(共有インスタンス)を束縛する。
-2. Discoveryが`#[AsModel]`属性を持つクラスを発見したら、`Migrator::register($class)`を呼ぶ。属性クラス`TMSWP\Core\Attribute\AsModel`は引数なし(`#[Attribute(Attribute::TARGET_CLASS)]`)。
-3. boot完了時(DR-04のWPフック整合タイミング)に`Migrator::listen($isTheme, $pluginFile)`を1回呼ぶ。`$isTheme`/`$pluginFile`は`KernelConfig::theme()`/`KernelConfig::plugin()`の文脈から導出する。
-4. `#[AsModel]`クラスは`Model`のサブクラスであること。違反は`Migrator::register()`が`SchemaException`で報告する(Discoveryの探索失敗エラー方針と整合)。
+1. Containerに`Connection::class`(デフォルトファクトリ`Connection::fromGlobal()`、共有インスタンス)と`Migrator::class`(共有インスタンス)を束縛する。どちらもファクトリで、bootでは解決しない。
+2. Discoveryが`#[AsModel]`属性を持つクラスを発見したら、その初期化(ModelInitializer。ブート用最速フックのpriority 1)で`Migrator::register($class)`を呼ぶ。属性クラス`TMSWP\Core\Attribute\AsModel`は引数なし(`#[Attribute(Attribute::TARGET_CLASS)]`)。
+3. boot時(コアのフックの登録の段階。02-kernel.md §3の手順6b)に`Migrator::listen($kernel)`を1回呼ぶ。`$kernel`はbootしたKernel自身で、通知の失敗の扱い(debugの判定)とログの記録先に使う。プラグインの有効化のサンドボックス(`WP_SANDBOX_SCRAPING`)では呼ばない(有効化のリクエストは通知を表示せずにリダイレクトするため)。
+4. `#[AsModel]`クラスは`Model`のサブクラスであること。違反はModelInitializerが`DiscoveryException`で報告する(Discoveryの探索失敗エラー方針と整合)。`Migrator::register()`を直接呼んだ場合の違反は`SchemaException`。
 
 Modelクラス自体は登録以外の初期化を必要としない(静的ファサードのため、利用時に`connection()`が遅延解決する)。
 
@@ -1370,7 +1446,7 @@ $migrator->dropTable(\App\Model\InquiryModel::class);
 | **SQLインジェクション**: `make_conditions()`(AbstractModel.php L337-382)が`$wpdb->prepare`を一切使わず`"{$key} = '{$value}'"`と直接補間(L364-377)。IN句・join・orderby・fieldsも未検証の生文字列 | 全クエリを`Connection::prepare`経由に強制。識別子はR1検証、値はR3写像、raw断片はR2でクォート文字禁止+プレースホルダ数検証+literal-string静的検査(規約4)。エスケープなし補間のコードパスが存在しない |
 | `find_by()`のlimit/offsetが整数キャストなしで直接補間(L242-247)。offset単独指定で不正SQL生成 | limit/offsetは`int`型宣言+`%d`バインド。offset単独はビルド時`InvalidQueryException` |
 | `__callStatic`によるwpdb透過プロキシ(L97-114)。IDE補完・静的解析・AI支援が効かない | マジックメソッド全面禁止(共通規約)。明示APIのみ。緊急避難は`Connection::wpdb()`に一本化 |
-| 毎リクエスト`init`フックでmigrate実行。有効化フック・アンインストール機構なし(T03指摘) | 契機を有効化フック/`after_switch_theme`/`admin_init`(管理画面のみ・ハッシュ比較)/WP-CLIに限定。`dropTable()`でuninstall対応 |
+| 毎リクエスト`init`フックでmigrate実行。有効化フック・アンインストール機構なし(T03指摘) | 適用を`wp tmswp migrate`に限定し、管理画面はハッシュ比較の食い違いを管理者に通知するだけにする。`dropTable()`でuninstall対応 |
 | optionキー`{table_name}_schema_hash`がprefixなしで衝突リスク、autoload無制御 | 単一option `tmswp_schema_hashes`(autoload=false)に集約 |
 | `$sql`文字列形式の脆い行パース、dbDeltaフォーマット要件がユーザー任せ | fluent宣言から決定的に生成し、dbDelta要件(1行1定義・`PRIMARY KEY  `2スペース・`KEY`+名前必須・小文字型名等)を生成側で全充足 |
 | 表現力不足で生SQLフォールバック多発: T18の空行INSERT(`TranslationGroupModel::create()`)・手書きLEFT JOIN(`ACF.php` terms_clauses)、T16の文字列連結DELETE(`AbstractQueueModel::clear()` L303) | `insert([])`の空行INSERT対応、`innerJoin/leftJoin(+Raw)`、ビルダレベル`update()/delete()`、`selectRaw+groupBy`集計で全事例をprepare経由で表現可能(利用例2・3で実証) |
@@ -1409,14 +1485,15 @@ $migrator->dropTable(\App\Model\InquiryModel::class);
 
 **Model / Migrator / CLI**
 - [ ] `Model::insert([])`が`INSERT INTO {t} () VALUES ()`を発行しinsert_idを返す(統合テスト)
-- [ ] 初回`migrateAll()`でテーブルが作成され、無変更の2回目はdbDeltaが実行されない(`status()`が全テーブルfalse)
+- [ ] 初回`migrateAll()`でテーブルが作成され、無変更の2回目はdbDeltaが実行されない(結果が`MigrationAction::Skipped`で、`status()`が全テーブル`current`)
 - [ ] スキーマ宣言にカラム追加後の`migrateAll()`でALTERが適用され、ハッシュが更新される
-- [ ] dbDelta後の残差分検出(検証2)が機能し、失敗時はハッシュ未更新のまま`MigrationException`が投げられる
+- [ ] dbDelta後の`lastError()`の検出(検証1)と残差分検出(検証2)が機能し、失敗時はハッシュ未更新のまま`MigrationException`が投げられる(統合テスト)
 - [ ] optionが`tmswp_schema_hashes`単一キー・autoload=falseで保存される
-- [ ] プラグイン有効化フック/`after_switch_theme`/`admin_init`で移行が走り、フロントエンドのリクエストではマイグレーション関連処理が一切実行されない
-- [ ] `admin_init`契機の`migrateAll()`で`MigrationException`が発生しても管理画面はfatalにならず、`wp_admin_notice()`(`type: error`)が無条件で表示され、Kernelのdebugがtrueのときは`wp_trigger_error`(E_USER_WARNING)も発火する。ハッシュは未更新のままで、原因解消後の次回`admin_init`で移行が自動再試行される(統合テスト)
-- [ ] 有効化フック/`after_switch_theme`/WP-CLI契機では`MigrationException`が捕捉されず伝播する
-- [ ] `wp tmswp migrate` / `--force` / `--dry-run`が仕様どおり動作する(wp-env統合テスト)
+- [ ] プラグイン有効化フック/`after_switch_theme`/`admin_init`/ajax/cronでは移行が走らず、フロントエンドのリクエストではマイグレーション関連処理が一切実行されない
+- [ ] テーブル定義のハッシュが保存済みのハッシュと食い違うと、`manage_options`を持つユーザーにだけ`admin_notices`で`wp_admin_notice()`(`type: error`)が表示され、テーブルは変わらない(統合テスト)
+- [ ] 通知の確認の失敗は、`listen()`に渡したKernelのdebugがtrueなら例外、falseならそのKernelのログに例外のクラス名と場所だけを記録して通知をやめる(`WP_DEBUG`を参照しない)
+- [ ] WordPressなしのユニットテストで、グローバルの`$wpdb`を置かずにKernelをbootできる
+- [ ] `wp tmswp migrate` / `--force` / `--dry-run`が§6の出力どおり動作し、`MigrationException`は`WP_CLI::error()`で非0終了する(ユニットテストとwp-envでの実行)
 - [ ] 利用例2(キュー)・例3(自己結合JOIN/LEFT JOIN+集計)のコードが動作する統合テストが存在する(旧生SQLフォールバック事例の置換実証)
 
 **品質ゲート**

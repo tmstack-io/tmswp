@@ -256,7 +256,7 @@ final class MemoryMetaStorageExtension implements ExtensionInterface
 }
 ```
 
-`tests/Unit/ProductPriceTest.php`。WordPressなしで boot するため、`$wp_version`・`$wp_actions`・`$wpdb` のグローバルを置き、フック関数は Brain Monkey に任せる。`WP_Post` と `wpdb` は Mockery の代役にする。
+`tests/Unit/ProductPriceTest.php`。WordPressなしで boot するため、`$wp_version`・`$wp_actions` のグローバルを置き、フック関数は Brain Monkey に任せる。boot は `$wpdb` を要さない。`WP_Post` は Mockery の代役にする。
 
 ```php
 <?php
@@ -276,7 +276,6 @@ use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Meta\ObjectType;
 use WP_Post;
-use wpdb;
 
 final class ProductPriceTest extends TestCase
 {
@@ -288,13 +287,12 @@ final class ProductPriceTest extends TestCase
         Monkey\setUp();
         $GLOBALS['wp_version'] = '7.0';
         $GLOBALS['wp_actions'] = [];
-        $GLOBALS['wpdb'] = Mockery::mock(wpdb::class);
     }
 
     protected function tearDown(): void
     {
         Kernel::reset();
-        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions'], $GLOBALS['wpdb']);
+        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions']);
         Monkey\tearDown();
         parent::tearDown();
     }

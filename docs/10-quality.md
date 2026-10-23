@@ -1327,7 +1327,7 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 
 | 対象 | 層 | 最低限の検証項目 |
 |---|---|---|
-| `Model` / `QueryBuilder` / `TableDefinition` / `Migrator` | Unit + Integration | 全クエリが `wpdb->prepare` を通ること(生 SQL 流出の禁止)、dbDelta スキーマ生成、バージョン比較マイグレーション |
+| `Model` / `QueryBuilder` / `TableDefinition` / `Migrator` | Unit + Integration | 全クエリが `wpdb->prepare` を通ること(生 SQL 流出の禁止)、dbDelta スキーマ生成、`wp tmswp migrate` によるハッシュ比較のマイグレーションと管理画面の通知 |
 | `Form`(ライフサイクル) | Unit | バインド → 検証 → `FormStep` 遷移、CSRF 自動検証(Brain Monkey で wp_nonce モック) |
 | `ConfirmToken` | Unit | HMAC 署名生成 / 検証、改ざん検知、期限切れ |
 | `UploadedFile` / `TempFileStore` | Unit | トークン発行 / 取出し、**ユーザー入力からのパス再構築が不可能であること**(パストラバーサル試行の拒否) |

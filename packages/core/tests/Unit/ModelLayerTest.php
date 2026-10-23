@@ -19,11 +19,10 @@ use TMSWP\Core\Attribute\AsModel;
 use TMSWP\Core\Exception\HydrationException;
 use TMSWP\Core\Exception\InvalidQueryException;
 use TMSWP\Core\Exception\KernelException;
-use TMSWP\Core\Exception\MigrationException;
 use TMSWP\Core\Exception\QueryException;
 use TMSWP\Core\Exception\SchemaException;
 use TMSWP\Core\Model\Connection;
-use TMSWP\Core\Model\MigrationResult;
+use TMSWP\Core\Model\MigrationStatus;
 use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Model\Model;
 use TMSWP\Core\Model\ModelInitializer;
@@ -576,17 +575,25 @@ SQL, $definition->toSql($connection));
         (new QueryBuilder(new Connection($wpdb), 'contacts'))->as(TestNoteRow::class)->get();
     }
 
-    public function testMigratorRegistersModelsAndBuildsDryRunPlan(): void
+    public function testMigratorRegistersModelsAndReportsStatusWithoutMigrating(): void
     {
         Functions\when('get_option')->justReturn(false);
+        $wpdb = WpdbTestDouble::create();
+        // 保存済みのハッシュの読み取りは、グローバルの $wpdb でデータベースのエラーを確かめる
+        $GLOBALS['wpdb'] = $wpdb;
 
-        $migrator = new Migrator(new Connection(WpdbTestDouble::create()));
-        $migrator->register(TestContactModel::class);
-        $results = $migrator->migrateAll(dryRun: true);
+        try {
+            $migrator = new Migrator(new Connection($wpdb));
+            $migrator->register(TestContactModel::class);
+            $statuses = $migrator->status();
+        } finally {
+            unset($GLOBALS['wpdb']);
+        }
 
-        self::assertContainsOnlyInstancesOf(MigrationResult::class, $results);
-        self::assertSame('contacts', $results[0]->table);
-        self::assertSame('pending', $results[0]->action);
+        self::assertContainsOnlyInstancesOf(MigrationStatus::class, $statuses);
+        self::assertSame('contacts', $statuses[0]->table);
+        self::assertFalse($statuses[0]->current);
+        self::assertNull($statuses[0]->storedHash);
         self::assertSame([TestContactModel::class], $migrator->models());
     }
 
@@ -595,7 +602,7 @@ SQL, $definition->toSql($connection));
         $migrator = new Migrator(new Connection(WpdbTestDouble::create()));
         $migrator->register(TestContactModel::class);
 
-        $this->expectException(MigrationException::class);
+        $this->expectException(SchemaException::class);
         $migrator->register(DuplicateContactModel::class);
     }
 

@@ -11,7 +11,7 @@ use TMSWP\Core\Tests\Support\RecordedComponent;
 
 /**
  * Initializer の呼び出しの記録用。初期化は RecordingInitializer が記録してから ModelInitializer に委ねる
- * (Migrator への登録。テーブルは有効化・管理画面のリクエストで作られる)。
+ * (Migrator への登録。テーブルは `wp tmswp migrate` で作られる)。
  */
 #[RecordedComponent(AsModel::class)]
 final class SpiedModel extends Model

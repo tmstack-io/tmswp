@@ -43,6 +43,14 @@ final class WpdbTestDouble extends wpdb
     /** @var string */
     public $last_error = '';
 
+    /**
+     * 実 wpdb が実行したクエリの数。この代役のメソッドは数えない(WpDatabaseGuard は、呼び出しの間に増えたときだけ
+     * last_error を見る)。データベースのエラーを再現するテストが、エラーと一緒に増やす。
+     *
+     * @var int
+     */
+    public $num_queries = 0;
+
     /** @var list<string> */
     private array $tmswpQueries = [];
 

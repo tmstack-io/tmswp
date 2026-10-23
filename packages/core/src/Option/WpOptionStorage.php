@@ -106,8 +106,10 @@ final class WpOptionStorage implements OptionStorageInterface
      *   空の配列のときだけ消す(WP は空の alloptions を毎回読み直すが、wp_cache_add() は既存のキーを上書きしないため、
      *   消さないと空の配列が残り続ける)。
      * その名前のキャッシュ(グループ options、キー $name)は、SELECT が成功したときだけ書かれるため消さない。
+     *
+     * @internal このクラスと Migrator(保存済みのハッシュの読み取り)だけが使う。
      */
-    private static function forgetFailedRead(string $name): void
+    public static function forgetFailedRead(string $name): void
     {
         $name = trim($name);
         $notoptions = wp_cache_get('notoptions', 'options');

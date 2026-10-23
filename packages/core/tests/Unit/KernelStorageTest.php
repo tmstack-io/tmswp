@@ -13,6 +13,7 @@ use stdClass;
 use TMSWP\Core\Attribute\AsOptionGroup;
 use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Exception\ContainerException;
+use TMSWP\Core\Exception\QueryException;
 use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
@@ -22,13 +23,13 @@ use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Meta\MetaStorageInterface;
 use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Core\Meta\WpMetaStorage;
+use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Option\OptionStorageInterface;
 use TMSWP\Core\Option\WpOptionStorage;
 use TMSWP\Core\Tests\Support\MemoryMetaStorage;
 use TMSWP\Core\Tests\Support\MemoryOptionStorage;
 use TMSWP\Core\Tests\Support\StorageExtension;
 use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
 use WP_Post;
 
 /**
@@ -46,7 +47,9 @@ final class KernelStorageTest extends UnitTestCase
     {
         parent::setUp();
 
-        $GLOBALS['wpdb'] = WpdbTestDouble::create();
+        // boot に要るグローバルは $wp_version と $wp_actions だけで、$wpdb は置かない(Migrator の配線が
+        // Connection を解決しない)。前のテストの `global $wpdb;` が残したキーも消しておく
+        unset($GLOBALS['wpdb']);
         $GLOBALS['wp_version'] = '7.0';
         $GLOBALS['wp_actions'] = [];
         require_once __DIR__ . '/../fixtures/storage/swap-app.php';
@@ -54,7 +57,7 @@ final class KernelStorageTest extends UnitTestCase
 
     protected function tearDown(): void
     {
-        unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions']);
+        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions']);
         Kernel::reset();
         parent::tearDown();
     }
@@ -96,6 +99,23 @@ final class KernelStorageTest extends UnitTestCase
 
         self::assertInstanceOf(WpMetaStorage::class, $kernel->container()->get(MetaStorageInterface::class));
         self::assertInstanceOf(WpOptionStorage::class, $kernel->container()->get(OptionStorageInterface::class));
+    }
+
+    /**
+     * グローバルの $wpdb が無くても boot できる。Migrator(と Connection)は使う時点で解決し、そのときに $wpdb が
+     * 無ければ代わりの接続を使わずに例外にする。
+     */
+    public function testBootDoesNotRequireGlobalWpdbAndMigratorFailsWithoutIt(): void
+    {
+        $kernel = $this->boot([]);
+
+        try {
+            $kernel->container()->get(Migrator::class);
+            self::fail('ContainerException was not thrown');
+        } catch (ContainerException $exception) {
+            // Container は factory の例外を previous に入れて投げる
+            self::assertStringContainsString(QueryException::class . ': global wpdb is not available', $exception->getMessage());
+        }
     }
 
     /** @return iterable<string, array{Closure(Kernel): void, string}> */

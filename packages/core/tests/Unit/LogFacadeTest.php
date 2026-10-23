@@ -12,7 +12,6 @@ use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Log\LoggerRegistry;
 use TMSWP\Core\Tests\Support\RecordingLogger;
 use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
 
 /**
  * Log の静的な呼び出しと tms_log() が、呼び出したファイルを含むルートの Kernel に記録することを確かめる。
@@ -23,7 +22,6 @@ final class LogFacadeTest extends UnitTestCase
     {
         parent::setUp();
 
-        $GLOBALS['wpdb'] = WpdbTestDouble::create();
         $GLOBALS['wp_version'] = '7.0';
         $GLOBALS['wp_actions'] = [];
         // テーマ形態の Kernel は子テーマのディレクトリも forFile() の判定に使う。既定は子テーマ無し(親と同じ)
@@ -33,7 +31,7 @@ final class LogFacadeTest extends UnitTestCase
 
     protected function tearDown(): void
     {
-        unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions']);
+        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions']);
         Kernel::reset();
         parent::tearDown();
     }

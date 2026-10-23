@@ -373,7 +373,7 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所のみ差
 ```
 
 3. 「テンプレートパーツ」関連の記述: テーマの `parts/` ではなく「`templates/` がプラグイン同梱フォールバック。テーマ側に同名ファイルがあればテーマが優先される(rules/view.md参照)」と差し替え。
-4. 「禁止事項」3項のテンプレート階層の説明は維持(プラグインでも `template_include` 乗っ取り禁止)。加えて「有効化フックで必要な処理(Modelのマイグレーション)はFWが自動配線するため、`register_activation_hook` を直接書かない(rules/model.md参照)」を追記。
+4. 「禁止事項」3項のテンプレート階層の説明は維持(プラグインでも `template_include` 乗っ取り禁止)。加えて「Modelのテーブル定義は`wp tmswp migrate`で適用する(有効化では適用しない)。独自マイグレーション用に`register_activation_hook`を直接書かない(rules/model.md参照)」を追記。
 5. **テンプレートの前処理クラスはプラグインでは使わない**。プラグインはトップレベルのテンプレートを供給しないため、タスク対応表の「テンプレートの前処理」行・「ロジックの置き場(配置決定木)」節の前処理クラスの項・プロジェクト構成ツリーの `Page/` を削除する。テンプレートの外で前処理が必要なら `app/Hook/` の `#[AsHook]` クラス(rules/hooks.md)で行う。
 6. テキストドメイン: 「プラグイン本体ヘッダのText Domainを使う」。
 
@@ -769,7 +769,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 require_once __DIR__ . '/vendor/autoload.php';
 
 // FWブート: app/ 配下のAttribute付きクラスを自動探索・登録する。ここにロジックを足さないこと。
-// file: __FILE__ により、有効化フック(Modelマイグレーション等)とtemplates/フォールバックが自動配線される。
+// file: __FILE__ により、有効化・無効化のフックとtemplates/フォールバックが自動配線される。
 // logChannels はこのプラグインの Kernel だけのログの出力先(テーマや他のプラグインの設定とは別)。SimpleLogger の
 // 既定の出力先は WP_CONTENT_DIR/tmswp-logs で、ファイル名は {date}-{推測できない接尾辞}.log が日次生成される
 \TMSWP\Core\Kernel\Kernel::boot(

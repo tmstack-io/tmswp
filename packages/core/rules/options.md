@@ -168,7 +168,7 @@ final class MemoryOptionStorageExtension implements ExtensionInterface
 }
 ```
 
-`tests/Unit/ContactEmailTest.php`。WordPressなしで boot するため、`$wp_version`・`$wp_actions`・`$wpdb` のグローバルを置き、フック関数は Brain Monkey に任せる。`wpdb` は Mockery の代役にする。
+`tests/Unit/ContactEmailTest.php`。WordPressなしで boot するため、`$wp_version`・`$wp_actions` のグローバルを置き、フック関数は Brain Monkey に任せる。boot は `$wpdb` を要さない。
 
 ```php
 <?php
@@ -181,12 +181,10 @@ use App\Option\SiteOption;
 use App\Tests\Support\MemoryOptionStorage;
 use App\Tests\Support\MemoryOptionStorageExtension;
 use Brain\Monkey;
-use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use PHPUnit\Framework\TestCase;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
-use wpdb;
 
 final class ContactEmailTest extends TestCase
 {
@@ -198,13 +196,12 @@ final class ContactEmailTest extends TestCase
         Monkey\setUp();
         $GLOBALS['wp_version'] = '7.0';
         $GLOBALS['wp_actions'] = [];
-        $GLOBALS['wpdb'] = Mockery::mock(wpdb::class);
     }
 
     protected function tearDown(): void
     {
         Kernel::reset();
-        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions'], $GLOBALS['wpdb']);
+        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions']);
         Monkey\tearDown();
         parent::tearDown();
     }

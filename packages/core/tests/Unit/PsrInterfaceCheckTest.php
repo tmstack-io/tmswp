@@ -14,7 +14,6 @@ use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Log\LoggerRegistry;
 use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
 
 /**
  * 他のプラグインや WP-CLI の phar が古い psr/container・psr/log を先に読み込んだ構成で、boot が Fatal error ではなく
@@ -28,14 +27,13 @@ final class PsrInterfaceCheckTest extends UnitTestCase
     {
         parent::setUp();
 
-        $GLOBALS['wpdb'] = WpdbTestDouble::create();
         $GLOBALS['wp_version'] = '7.0';
         $GLOBALS['wp_actions'] = [];
     }
 
     protected function tearDown(): void
     {
-        unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions']);
+        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions']);
         Kernel::reset();
         parent::tearDown();
     }

@@ -48,9 +48,6 @@ final class KernelBootIntegrationTest extends IntegrationTestCase
     use BootsKernelBeforeInit;
     use UsesTempDirectories;
 
-    /** fixture のテーマの Contact(#[AsModel])のテーブル。テーマの有効化で Migrator が作る */
-    private const FIXTURE_CONTACTS_TABLE = 'tmswp_fixture_contacts';
-
     /** productionThemeConfig()・productionPluginConfig() の Kernel のログを記録するロガー */
     private RecordingLogger $logger;
 
@@ -69,8 +66,6 @@ final class KernelBootIntegrationTest extends IntegrationTestCase
             $this->set_permalink_structure('');
         }
 
-        // テスト中の CREATE TABLE はテストライブラリにより一時テーブルになり、接続が続く限り残るため削除する
-        self::wpdb()->query('DROP TABLE IF EXISTS ' . self::wpdb()->prefix . self::FIXTURE_CONTACTS_TABLE);
         $this->cleanupTempDirectories();
         parent::tear_down();
     }

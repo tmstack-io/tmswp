@@ -11,7 +11,6 @@ use TMSWP\Core\Kernel\InstalledVersionCheck;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
 
 /**
  * Kernel::VERSION と、読み込まれた vendor の installed.php にある tmswp/core の版の照合を確かめる。
@@ -24,7 +23,6 @@ final class InstalledVersionCheckTest extends UnitTestCase
     {
         parent::setUp();
 
-        $GLOBALS['wpdb'] = WpdbTestDouble::create();
         $GLOBALS['wp_version'] = '7.0';
         $GLOBALS['wp_actions'] = [];
     }
@@ -32,7 +30,7 @@ final class InstalledVersionCheckTest extends UnitTestCase
     protected function tearDown(): void
     {
         $this->extraLoader?->unregister();
-        unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions']);
+        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions']);
         Kernel::reset();
         parent::tearDown();
     }

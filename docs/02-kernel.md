@@ -41,7 +41,7 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
 - 01 全体アーキテクチャ文書(リポジトリ構成・コーディング規約・例外方針) — 例外基底の整合を取ること
 - エンティティ定義文書(PostType / Taxonomy / UserRole) — `AsPostType` / `AsTaxonomy` / `AsUserRole` 属性と各 Initializer の定義元
 - Meta / Option 文書 — `AsOptionGroup` 属性と OptionGroup Initializer の定義元
-- Model 文書 — `AsModel` 属性・`Migrator`(有効化時/admin_init 版数比較・WP-CLI)の定義元
+- Model 文書 — `AsModel` 属性・`Migrator`(`wp tmswp migrate` による適用と、管理画面の通知)の定義元
 - Log 文書 — `Log::error()` 等の静的ファサード(本文書は PSR-3 レベル名の静的メソッド `Log::error(string|\Stringable $message, array $context = []): void` が存在することを前提とする)
 - QA 文書 — `composer test` / `composer qa` 等の検証コマンド定義元
 
@@ -124,7 +124,7 @@ enum KernelContext: string
 
 - テーマの `functions.php` は `setup_theme` と `after_setup_theme` の間にロードされるため、テーマで利用可能な最速フックは `after_setup_theme`。
 - プラグイン本体は通常リクエストでは `plugins_loaded` 発火前にロードされるため、プラグインの最速フックは `plugins_loaded`。mu-plugins も `plugins_loaded` 前にロードされるため Plugin コンテキストをそのまま使える(後述のmu-plugin注意点参照)。
-- WordPressのプラグイン有効化サンドボックス(`WP_SANDBOX_SCRAPING`)では、プラグイン本体が `plugins_loaded` 後に読み込まれる。この経路では通常の属性初期化スケジューリングは行わず、`register_activation_hook` / `register_deactivation_hook` と Model migrator の購読だけを登録する。拡張の `register()` も呼ばないが、既定のメタ・オプションのストレージは通常の boot と同じく解決して固定する(§3 手順7a。boot の後の差し替えを受け付けない)。通常リクエストの遅延bootは引き続き例外とする。
+- WordPressのプラグイン有効化サンドボックス(`WP_SANDBOX_SCRAPING`)では、プラグイン本体が `plugins_loaded` 後に読み込まれる。この経路では通常の属性初期化スケジューリングは行わず、`register_activation_hook` / `register_deactivation_hook` だけを登録する(Migrator の管理画面の通知(§3 手順6b)も登録しない。有効化のリクエストは通知を表示せずにリダイレクトするため)。拡張の `register()` も呼ばないが、既定のメタ・オプションのストレージは通常の boot と同じく解決して固定する(§3 手順7a。boot の後の差し替えを受け付けない)。通常リクエストの遅延bootは引き続き例外とする。
 
 ## 2. KernelConfig
 
@@ -365,6 +365,8 @@ boot(config):
         container->set(LoggerRegistry::class, logger)                    // 即値(Kernel::logger() と同一)
         container->set(MetaStorageInterface::class, WpMetaStorage::class)      // 既定のメタのストレージ(04 §4.16)
         container->set(OptionStorageInterface::class, WpOptionStorage::class)  // 既定のオプションのストレージ(04 §4.16)
+        container->set(Connection::class, fn() => Connection::fromGlobal())     // 06-model §7。boot では解決しない
+        container->set(Migrator::class, fn(Container c) => new Migrator(c->get(Connection::class)))
         container->set(Discovery::class, fn(Container c) => new Discovery(
             config, c->get(DiscoveryFile::class),
         ))
@@ -380,6 +382,8 @@ boot(config):
     6. kernel.registerLifecycleHooks()  // コンテキスト別運用フック(下記)
     6a. TempFileGc::register(kernel)    // フォームの一時ファイルの gc を WP-Cron のフックと tmswp/deactivated に登録する
                                         // (プロセスで1回。05-form §WP-Cronによるgc)。フック登録のみ
+    6b. Migrator::listen(kernel)        // Model のテーブル定義と DB の食い違いの通知(admin_notices)と wp tmswp migrate を
+                                        // 登録する(06-model §5)。フック登録のみで、Migrator・Connection を解決しない
     7. config.extensions を渡した順に extension->register(kernel)    // §3.10。キャッチアップより前
     7a. container->get(MetaStorageInterface::class)                  // 既定のストレージを解決して固定する(04 §4.16)。
         container->get(OptionStorageInterface::class)                // 拡張が登録した実装、無ければ WpMetaStorage・WpOptionStorage。
@@ -410,7 +414,7 @@ boot(config):
 - 例外発生時、レジストリには残らない。手順8のレジストリ登録は手順1〜7がすべて成功してから行い、その後の手順8の boot 時の初期化(§7)か手順8aのキャッチアップ(§3.3)で例外が起きれば、レジストリから取り除いてから例外を投げ直す。
 - debug の遅延boot(§3.3)の検査は、手順5 `scheduleAll` の最初、どのフックの登録(`#[Action]`/`#[Filter]` の `add_filter` を含む)よりも先に行う。そのため遅延bootの例外では、フックは1つも登録されず、初期化も実行されない。
 - 手順5で、探索結果ファイルの属性を復元できない場合(`DiscoveryException`)も、どのフックの登録よりも先に例外になる。
-- 本番の遅延bootのキャッチアップ(§3.3)で初期化が例外(設定の誤り。§7)を投げた場合は、それまでに登録したフックと実行済みの初期化が残る。設定の誤りは直すまで起動できない構成のバグであり、これは許容する。手順6 `registerLifecycleHooks`・手順6a `TempFileGc::register` はフック登録のみで例外を投げない。手順7の拡張の `register()` が投げた例外も同じく設定の誤りとしてそのまま伝わり、それまでに登録したフックは残る。
+- 本番の遅延bootのキャッチアップ(§3.3)で初期化が例外(設定の誤り。§7)を投げた場合は、それまでに登録したフックと実行済みの初期化が残る。設定の誤りは直すまで起動できない構成のバグであり、これは許容する。手順6 `registerLifecycleHooks`・手順6a `TempFileGc::register`・手順6b `Migrator::listen` はフック登録のみで例外を投げない。手順7の拡張の `register()` が投げた例外も同じく設定の誤りとしてそのまま伝わり、それまでに登録したフックは残る。
 
 #### 3.2 複数Kernel共存時の独立性(テーマ+プラグイン併用)
 
@@ -450,19 +454,19 @@ boot(config):
 | ブート用最速フック | `after_setup_theme` | `plugins_loaded` |
 | 有効化契機 | `after_switch_theme` アクション | `register_activation_hook(pluginFile, ...)` |
 | 無効化契機 | `switch_theme` アクション(切替元テーマ側で発火) | `register_deactivation_hook(pluginFile, ...)` |
-| 有効化時処理 | `delete_option('rewrite_rules')` + `tmswp/activated` の発火(Migrator実行通知) | `delete_option('rewrite_rules')` + `tmswp/activated` の発火(Migrator実行通知) |
+| 有効化時処理 | `delete_option('rewrite_rules')` + `tmswp/activated` の発火 | `delete_option('rewrite_rules')` + `tmswp/activated` の発火 |
 | 無効化時処理 | `delete_option('rewrite_rules')` + `tmswp/deactivated` の発火 | `delete_option('rewrite_rules')` + `tmswp/deactivated` の発火 |
 
 具体仕様:
 
-1. **Plugin コンテキスト**: `register_activation_hook($config->pluginFile, $callback)` を登録する。callback は (a) `delete_option('rewrite_rules')` (b) `do_action('tmswp/activated', $kernel)` を行う。(b) は Model文書の Migrator が購読してスキーマ適用を行うための契約フックである(Kernel自身はマイグレーションの中身を知らない)。`register_deactivation_hook` の callback は `delete_option('rewrite_rules')` と `do_action('tmswp/deactivated', $kernel)` を行う。`tmswp/deactivated` は Form の `TempFileGc` が購読し、無効になる Kernel がレジストリの最後の1つなら、一時ファイルの gc の WP-Cron のイベントを解除する(05-form §WP-Cronによるgc)。
+1. **Plugin コンテキスト**: `register_activation_hook($config->pluginFile, $callback)` を登録する。callback は (a) `delete_option('rewrite_rules')` (b) `do_action('tmswp/activated', $kernel)` を行う。(b) はアプリと拡張が有効化時の処理を購読するための契約フックである。Model のテーブル定義は有効化では適用しない(適用は `wp tmswp migrate` だけ。Model文書 §5)。`register_deactivation_hook` の callback は `delete_option('rewrite_rules')` と `do_action('tmswp/deactivated', $kernel)` を行う。`tmswp/deactivated` は Form の `TempFileGc` が購読し、無効になる Kernel がレジストリの最後の1つなら、一時ファイルの gc の WP-Cron のイベントを解除する(05-form §WP-Cronによるgc)。
 2. **Theme コンテキスト**: `add_action('after_switch_theme', ...)` で (a) `delete_option('rewrite_rules')` (b) `do_action('tmswp/activated', $kernel)`。`add_action('switch_theme', ...)`(切替「元」テーマの最終リクエストで発火)で `delete_option('rewrite_rules')` と `do_action('tmswp/deactivated', $kernel)` を行う。
 3. **rewrite ルールの作り直し**: Kernel はルールをその場で作り直さず、`rewrite_rules` のオプションを消すだけにする。WordPress は `rewrite_rules` が空なら、次にルールが必要になったときに作り直す(`WP_Rewrite::wp_rewrite_rules()`)。そのとき `wp_loaded` がまだなら、ルールが揃っていないため保存せず、`wp_loaded` で作り直して保存する(`WP_Rewrite::refresh_rewrite_rules()` と `flush_rules()`。WP 7.0 の wp-includes/class-wp-rewrite.php)。`wp_loaded` は `init` より後なので、作り直したルールはそのリクエストで登録された CPT・タクソノミーを反映する。
    - 有効化の次のリクエストでは、有効にしたテーマ・プラグインの CPT を含むルールになる(有効化のリクエストでは CPT が未登録のため、その場で作り直すと新しいルールが入らない)。
    - 無効化の次のリクエストでは、無効にしたテーマ・プラグインは読み込まれないため、その CPT のルールが残らない(無効化のリクエストでは CPT が登録されたままなので、その場で `flush_rewrite_rules()` するとルールが残る)。
    - 有効化の確認のためのオプションや、毎リクエストの `init` での確認は持たない。通常のリクエストで Kernel が DB のクエリを増やさない。
    - 同じリクエストのうち `delete_option` の後(`wp_loaded` の後)に他のコードがルールを求めると、WordPress はそのリクエストの登録状態でルールを作って保存する。有効化・無効化のリクエストは通常、直後にリダイレクトするため、この経路は通らない。
-4. **mu-plugin**: `KernelConfig::plugin()` で動作するが、mu-plugin には有効化フックが発火しない。この場合マイグレーションは (a) WP-CLI `wp tmswp migrate`(Model文書) (b) Migrator の admin_init 版数比較、で代替される。rules/ にこの注意を記載する。
+4. **mu-plugin**: `KernelConfig::plugin()` で動作するが、mu-plugin には有効化フックが発火しない(`tmswp/activated` も発火しない)。Model のテーブル定義の適用は、mu-plugin でも通常のプラグイン・テーマと同じく `wp tmswp migrate`(Model文書 §6)で行う。
 
 #### 3.5 get() / forClass() / all() / reset()
 
@@ -958,7 +962,8 @@ final readonly class Filter
 - **WordPress に登録する引数の数**: `#[Action]` は acceptedArgs のまま登録する。`#[Filter]` は `max(1, acceptedArgs)` で登録し、引数を宣言しないメソッドでも第1引数(フィルタ対象の値)を受け取る。本番で失敗したときに元の値を返すためである(下記「失敗の隔離」)。どちらも、メソッドには受け取った引数を acceptedArgs の数に切り詰めて(`array_slice($args, 0, acceptedArgs)`)渡す。
 - `#[Action]` と `#[Filter]` に機構上の差はない(WPの `add_action()` は `add_filter()` の別名であり、登録はどちらも `add_filter()` で行う。§7)。意味の区別を宣言として残すために2クラスへ分ける。`#[Filter]` メソッドは必ず値を返すこと(rules/ に記載)。
 - **呼び出しの型変換**: フック発火時、Kernel はメソッドを `call_user_func_array([$handler, $method], $args)` で呼ぶ。WordPress の `WP_Hook` と同じく内部関数を経由して呼ぶため、strict_types に関係なく WordPress 本来の弱い型変換が効く(数値文字列を `int` 引数に渡すフックが通る)。`$callback(...$args)` や名前空間付きの `\call_user_func_array()` は、PHP がコンパイル時に直接の呼び出しへ置き換え、Kernel のファイルの strict_types が効いて TypeError になるため使わない(php-cs-fixer の `native_function_invocation` から `call_user_func_array` を除外している)。
-- **失敗の隔離**: メソッドの呼び出し(Container からのハンドラの解決を含む)が例外を投げた場合、エラー方針(00-overview §5.6)に従う。debug 時はそのまま投げる。本番はその Kernel のロガー(`$this->logger->error('tmswp.kernel: hook method {class}::{method} failed on {hook}', [class, method, hook, exception])`)に記録してそのメソッドだけをスキップし、第1引数をそのまま返す(filter の値を変えない。action の戻り値は WordPress が使わない)。同じフックの他のコールバックは WordPress がそのまま続けて呼ぶ。`#[Filter]` は引数を宣言しないメソッドでも第1引数を受け取るため、常に元の値を返せる。引数を宣言しない `#[Action]` は第1引数を受け取らないため `null` を返す(action の戻り値は使われない)。
+- **失敗の隔離**: メソッドの呼び出し(Container からのハンドラの解決を含む)が例外を投げた場合、エラー方針(00-overview §5.6)に従う。debug 時はそのまま投げる。本番はその Kernel のロガー(`$this->logger->error('tmswp.kernel: hook method {class}::{method} failed on {hook}', [class, method, hook, exceptionClass, exceptionAt, previousClasses])`)に記録してそのメソッドだけをスキップし、第1引数をそのまま返す(filter の値を変えない。action の戻り値は WordPress が使わない)。同じフックの他のコールバックは WordPress がそのまま続けて呼ぶ。`#[Filter]` は引数を宣言しないメソッドでも第1引数を受け取るため、常に元の値を返せる。引数を宣言しない `#[Action]` は第1引数を受け取らないため `null` を返す(action の戻り値は使われない)。
+- **失敗のログの文脈**: 本番のログの文脈には、例外のクラス名(`exceptionClass`)と、例外が投げられた場所(`exceptionAt`。`ファイル:行`)と、previous の例外のクラス名(`previousClasses`)だけを入れる。例外のオブジェクト・メッセージ・トレースは入れない。フックのメソッドはアプリのコードで、例外のメッセージやトレースの引数に利用者の入力値や秘密が入りうるためである(05-form のログと同じ)。開発者は debug で元の例外を見られる。
 - 真に動的な登録(ループでフック名を生成する等、メソッド属性で表現できないケース)に限り、Hook 基底の `register()` オーバーライドを例外手段として使う(次項)。`register()` をオーバーライドしたクラスのみが初期化タイミング表(§7)の priority 0 でインスタンス化される。rules/・利用例の第一級の書き方は `#[Action]` / `#[Filter]` に一本化する。
 
 ### #[AsHook] / Hook 基底 / HookInitializer(本文書が正準定義)
@@ -1171,7 +1176,7 @@ MetaSchema の WordPress への登録(`MetaSchemaRegistry::registerAll()`。`reg
 - **メタスキーマは boot の中で集め、WordPress へは `init` 20 で登録する(確定判断)。** エンティティの Initializer は `BootInitializerInterface`(§5)を実装し、boot の手順8で `MetaSchemaRegistry::registerEntity()` を呼ぶ(エンティティの一覧は探索結果ファイル(本番)か走査(debug)の components から取る。スキーマ自体は探索結果ファイルに載せず、エンティティのクラスの定数と属性(`#[MetaSchema]`・`#[UseMetaStorage]`・`#[WithMetaRevisions]`)をリフレクションで読む。04-meta-options §4.9)。そのため、boot の後なら init の前でも、同じ priority でエンティティの登録より先に動く app の `#[Action('init')]` の中でも `meta()` が使え、スキーマの宣言の誤りは debug に関係なく boot の例外になる。ただし `sanitize` を宣言したキーへの書き込みは、WordPress が sanitize を適用する `init` 20 の登録の後でなければ `LogicException` になる(04-meta-options §4.8)。WordPress への登録を `init` 20 にするのは、(1) acf-bridge が `init` 6 で外部管理のキーを申告した後に流すため(`#[MetaSchema]` と同じキーの申告は、スキーマが boot で揃っているため申告の時点で `DuplicateMetaKeyException` になり、`register_*_meta` に進まない。09-acf-bridge §7.3)、(2) WordPress の `register_meta()` は `revisions_enabled` を `post_type_supports($subtype, 'revisions')` で確かめるため、投稿タイプの登録(`init` 10)より後でなければならないためである。boot 時の初期化はエンティティのクラスを読み込み、`definition()` を呼ぶ(スラッグと `supports` の取得)。`definition()` は WP 関数を呼ばない純粋関数とする規約(03-entities)はこのためにも必要である。
 - **UserRole(11) を PostType(10) の後に登録する(確定判断)。** 同じ priority に置くと FQCN の順で混ざるため、priority で順序を固定する。
 - **Taxonomy(9) を PostType(10) より先に登録する(確定判断)。** 根拠: `register_post_type()` の `taxonomies` 引数は内部で `register_taxonomy_for_object_type()` を呼ぶが、これは**未登録のタクソノミー名に対して false を返して黙って失敗する**。逆方向(`register_taxonomy()` の `$object_type` に未登録のCPT名を渡す)は文字列として保持され後から解決されるため問題ない。したがって「Taxonomy先・PostType後」が唯一安全な順序である。WPコアの `create_initial_post_types` / `create_initial_taxonomies` は init 0 で動くため、5/9/10 はいずれもコア登録より後になる。
-- `#[AsModel]` のスキーマ適用(dbDelta)契機は (a) `tmswp/activated` アクション(§3.4) (b) `admin_init` での版数比較 (c) WP-CLI、であり Model 文書の Migrator が定義する。本表の plugins_loaded(1) は「`InquiryModel::query()` が呼べるようにレジストリへ載せる」だけの軽量処理である。
+- `#[AsModel]` のスキーマ適用(dbDelta)の契機は WP-CLI の `wp tmswp migrate` だけであり、Model 文書の Migrator が定義する。起動時・`admin_init`・ajax・cron・有効化では適用せず、テーブル定義のハッシュが DB と食い違えば `admin_notices` で権限のある管理者に通知する。本表の plugins_loaded(1) は「`InquiryModel::query()` が呼べるようにレジストリへ載せる」だけの軽量処理である。
 - `#[MetaSchema]` / `#[UseMetaStorage]` / `#[WithMetaRevisions]` / `#[OptionSchema]` は独立コンポーネントではなく、親コンポーネントの Initializer が処理する(前の3つはエンティティの Initializer の boot 時の初期化、`#[OptionSchema]` は `#[AsOptionGroup]` の Initializer の初期化)。Discovery の発見対象にはならない(`ComponentAttributeInterface` を実装しない)。
 - AsHook(0。`register()` 例外手段)と AsModel(1) を別priorityに分離しているのは依存関係のためではなく、決定的順序を priority レベルで固定するためである。Hookクラスのコンストラクタでモデルのインスタンスが必要な場合も、モデルは静的ファサード(`InquiryModel::query()`)であり実際のレジストリ参照はクエリ実行時まで遅延するため問題にならない。
 
@@ -1807,6 +1812,8 @@ final class ContainerTest extends TestCase
 - [ ] init の前の boot で、エンティティのメタスキーマが `MetaSchemaRegistry` に登録され、`register_post_meta()` は呼ばれない。`#[MetaSchema]` と同じキーの外部管理の申告(`markExternallyManaged()`)は、その時点で `DuplicateMetaKeyException` になる
 - [ ] コンポーネントの初期化の失敗(Initializer の例外、`ComponentInitializerInterface` を実装しない Initializer、探索結果ファイルの属性を復元できない)が、本番(debug=false)でも例外になる(例: `PostType` を継承しない `#[AsPostType]` のコンポーネントは、boot 時の初期化で boot の例外になる)。属性を復元できない場合(属性クラスが無い・`ComponentAttributeInterface` を実装しない・属性の生成で例外が起きる)は、メッセージに探索結果ファイルの作り直しの案内(`wp tmswp discover`)を含む `DiscoveryException` になり、属性の生成で起きた例外(引数の不一致による `ArgumentCountError`・`TypeError` 等の Error を含む)を previous に持つ。本番のキャッチアップ中の失敗では boot が例外になる
 - [ ] `#[Action]`/`#[Filter]` メソッドの失敗(Container での解決の失敗を含む)が、debug では例外のまま伝わり、本番ではその Kernel のロガー(`$kernel->logger()`)に `error` で記録されてそのメソッドだけスキップされ、第1引数が返る。引数を宣言しない `#[Filter]` も第1引数を受け取って登録され、失敗時は元の値を、成功時はメソッドの戻り値を返し、メソッドには引数を渡さない(宣言引数数に切り詰める)
+- [ ] 本番の `#[Action]`/`#[Filter]` メソッドの失敗のログの文脈が、`class`・`method`・`hook`・`exceptionClass`・`exceptionAt`(ファイル:行)・`previousClasses` だけで、例外のオブジェクト・メッセージ・トレースを含まない
+- [ ] WordPress なしのユニットテストで、グローバルの `$wpdb` を置かずに Kernel を boot できる(boot は `$wp_version` と `$wp_actions` だけを要し、Migrator・Connection を解決しない)
 - [ ] 有効化・無効化のコールバックが `delete_option('rewrite_rules')` と `tmswp/activated`・`tmswp/deactivated` の発火だけを行い(`flush_rewrite_rules()`・`add_option()` を呼ばない)、boot が毎リクエストの確認(`init` での `get_option()` 等)を登録しない
 - [ ] PHPStan ルールが、PHPUnit の `TestCase` の子孫クラスの外からの `Kernel::reset()` の参照(静的呼び出し、インスタンス経由の呼び出し、両者の第一級 callable、定数文字列のメソッド名、`class-string<Kernel>`・定数文字列のクラス名)を報告し、子孫クラスの中(クロージャを含む)、Kernel 以外の `reset()`、定数に定まらない名前、callable の配列・文字列は報告しない(§3.5)
 

@@ -131,3 +131,59 @@ msgstr "送信内容を確認できませんでした。お手数ですが再度
 #: Form/Form.php:730
 msgid "{label} contains characters that cannot be used."
 msgstr "{label}に使用できない文字が含まれています。"
+
+#. translators: 1: comma-separated database table names, 2: WP-CLI command
+#: Model/Migrator.php:205
+#, php-format
+msgid "The database tables %1$s do not match their TMSWP table definitions. Run %2$s to apply the definitions."
+msgstr "データベースのテーブル%1$sがTMSWPのテーブル定義と一致しません。%2$sを実行して定義を適用してください。"
+
+#. translators: %s: command synopsis
+#: Model/MigrateCommand.php:71
+#, php-format
+msgid "Usage: %s"
+msgstr "使い方: %s"
+
+#. translators: %s: command-line flag such as force
+#: Model/MigrateCommand.php:79
+#, php-format
+msgid "--%s does not take a value"
+msgstr "--%sは値を取りません"
+
+#: Model/MigrateCommand.php:87
+msgid "--force and --dry-run cannot be used together"
+msgstr "--forceと--dry-runは同時に指定できません"
+
+#: Model/MigrateCommand.php:101
+msgid "No models registered."
+msgstr "登録されたModelがありません。"
+
+#. translators: %s: database table name
+#: Model/MigrateCommand.php:116
+#, php-format
+msgid "%s: up-to-date"
+msgstr "%s: 最新"
+
+#. translators: %s: database table name
+#: Model/MigrateCommand.php:118
+#, php-format
+msgid "%s: changed"
+msgstr "%s: 変更あり"
+
+#. translators: %s: database table name
+#: Model/MigrateCommand.php:132
+#, php-format
+msgid "Migrated: %s"
+msgstr "適用しました: %s"
+
+#. translators: %s: database table name
+#: Model/MigrateCommand.php:136
+#, php-format
+msgid "Skipped: %s (up to date)"
+msgstr "スキップしました: %s(最新)"
+
+#. translators: 1: number of migrated tables, 2: number of skipped tables
+#: Model/MigrateCommand.php:146
+#, php-format
+msgid "%1$d table(s) migrated, %2$d skipped."
+msgstr "%1$d件のテーブルを適用し、%2$d件をスキップしました。"

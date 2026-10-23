@@ -476,8 +476,8 @@ CI は PHP 8.3 / 8.5 でテストし、PHPStan は 8.3〜8.5 を解析範囲と�
 対応範囲は WordPress 7.0 以上(DR-02)。FW が使う WP API はすべて 7.0 より前に導入済みであり(§5.3)、7.0 を下限とすれば引数互換の心配なく使える。導入が比較的新しく、FW の機能が前提とする API は次の 3 つ:
 
 1. `register_post_meta()` の `revisions_enabled` 引数(**6.4**)— `#[WithMetaRevisions]`(プレビュー時メタ保存)はリビジョンへのメタ保存機構の上に実装する。
-2. `wp_trigger_error()`(**6.4**)— Log(SimpleLogger)がファイルの書き込み・ローテーションに失敗したときの初回の通知(07-support)、Migrator の `admin_init` での移行失敗の開発時の通知(06-model)に使用。`WP_DEBUG` が偽なら WordPress は何も出さない。Discovery の探索失敗と Container の循環依存は通知ではなく、`DiscoveryException`・`CircularDependencyException` として投げる(02-kernel)。
-3. `wp_admin_notice()`(**6.4**)— Migrator の移行失敗通知、acf-bridge のドリフト検知通知等の管理画面表示に使用。
+2. `wp_trigger_error()`(**6.4**)— Log(SimpleLogger)がファイルの書き込み・ローテーションに失敗したときの初回の通知(07-support)に使用。`WP_DEBUG` が偽なら WordPress は何も出さない。Discovery の探索失敗と Container の循環依存は通知ではなく、`DiscoveryException`・`CircularDependencyException` として投げる(02-kernel)。
+3. `wp_admin_notice()`(**6.4**)— Migrator のテーブル定義と DB の食い違いの通知(06-model)、acf-bridge のドリフト検知通知等の管理画面表示に使用。
 
 ### 5.3 WP API 下限棚卸し表
 
@@ -486,9 +486,9 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 | FW 機能(担当文書) | WP API / 引数 | 導入 WP | 用途・備考 |
 |---|---|---|---|
 | Kernel | `add_action` / `add_filter` | 1.2 / 0.71 | フック整合ブート(DR-04) |
-| Log / Migrator | `wp_trigger_error()` | **6.4 ★** | Log の書き込み・ローテーションの失敗の初回の通知、Migrator(`admin_init`)の移行失敗の開発時の通知 |
+| Log | `wp_trigger_error()` | **6.4 ★** | Log の書き込み・ローテーションの失敗の初回の通知 |
 | Kernel / Migrator / acf-bridge | `wp_admin_notice()` | **6.4 ★** | 管理画面通知の標準 API |
-| Kernel(プラグインモード) | `register_activation_hook()` | 2.0 | 有効化時マイグレーション契機(DR-08) |
+| Kernel(プラグインモード) | `register_activation_hook()` | 2.0 | 有効化時の処理(`rewrite_rules` の削除と `tmswp/activated` の発火。02-kernel §3.4) |
 | PostType | `register_post_type()` の `show_in_rest` | 4.7(REST コントローラは 5.0) | Gutenberg 対応 CPT |
 | PostType | `register_post_type()` の `template` / `template_lock` | 5.0 | ブロックテンプレート指定 |
 | Taxonomy | `register_taxonomy()` の `default_term` | 5.5 | デフォルトターム宣言 |
@@ -512,7 +512,7 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 | Form / FileExtension | `wp_check_filetype_and_ext()` | 3.0 | アップロードされたファイルの中身と拡張子の照合 |
 | Form / MaxFileSize | `size_format()` | 2.3 | エラーメッセージの上限サイズの表示 |
 | Model / QueryBuilder | `$wpdb->prepare()` の `%i` プレースホルダ | **6.2 ★** | テーブル名・カラム名の識別子エスケープ。旧 FW の生 SQL 連結(SQL インジェクション源)の根治に必須 |
-| Model / Migrator | `dbDelta()` | 1.5 | スキーマ宣言からの自動マイグレーション |
+| Model / Migrator | `dbDelta()` | 1.5 | スキーマ宣言からのマイグレーション(`wp tmswp migrate`) |
 | Model / Connection | `$wpdb` 各メソッド | 0.71〜 | 全クエリが prepare 経由(DR-08) |
 | View / Template | `get_template_part()` の `$args` 引数 | 5.5 | `Template::part()` のデータ受け渡し。extract() 禁止(規約)の代替 |
 | View / Template | `load_template()` の `$args` 引数 | 5.5 | プラグイン同梱テンプレート fallback の描画 |

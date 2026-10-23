@@ -11,6 +11,7 @@ use Brain\Monkey\Filters;
 use Brain\Monkey\Functions;
 use Closure;
 use Error;
+use LogicException;
 use Mockery;
 use ParseError;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -45,7 +46,6 @@ use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
 use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
 use TypeError;
 
 final class KernelTest extends UnitTestCase
@@ -57,7 +57,6 @@ final class KernelTest extends UnitTestCase
     {
         parent::setUp();
 
-        $GLOBALS['wpdb'] = WpdbTestDouble::create();
         // WordPress が wp-includes/version.php と plugin.php で用意するグローバル。boot はこれで版と発火済みのフックを知る
         $GLOBALS['wp_version'] = '7.0';
         $GLOBALS['wp_actions'] = [];
@@ -70,7 +69,7 @@ final class KernelTest extends UnitTestCase
             spl_autoload_unregister($autoloader);
         }
 
-        unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions']);
+        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions']);
         Kernel::reset();
         parent::tearDown();
     }
@@ -83,8 +82,10 @@ final class KernelTest extends UnitTestCase
         Actions\expectAdded('init')->once()->with(Mockery::type(Closure::class), 1, 0);
         Actions\expectAdded('after_switch_theme')->once()->with(Mockery::type(Closure::class), 10, 0);
         Actions\expectAdded('switch_theme')->once()->with(Mockery::type(Closure::class), 10, 0);
-        Actions\expectAdded('tmswp/activated')->once()->with(Mockery::type(Closure::class), 10, 1);
-        Actions\expectAdded('admin_init')->once()->with(Mockery::type(Closure::class), 5, 0);
+        // Migrator は有効化・admin_init でテーブルを自動適用せず、管理画面の通知だけを登録する(06-model §5)
+        Actions\expectAdded('tmswp/activated')->never();
+        Actions\expectAdded('admin_init')->never();
+        Actions\expectAdded('admin_notices')->once()->with(Mockery::type(Closure::class), 10, 0);
         // テンプレート階層には介入しない(テンプレートの前処理はテンプレートの先頭で明示的に呼ぶ)
         Filters\expectAdded('template_include')->never();
 
@@ -303,8 +304,11 @@ PHP);
         Functions\expect('TMSWP\Core\Kernel\register_activation_hook')->once()->with(Mockery::type('string'), Mockery::type(Closure::class));
         Functions\expect('TMSWP\Core\Kernel\register_deactivation_hook')->once()->with(Mockery::type('string'), Mockery::type(Closure::class));
         Actions\expectAdded('init')->never();
-        Actions\expectAdded('tmswp/activated')->once()->with(Mockery::type(Closure::class), 10, 1);
-        Actions\expectAdded('admin_init')->once()->with(Mockery::type(Closure::class), 5, 0);
+        // 有効化でテーブルを自動適用しない。有効化のリクエストは通知を表示せずにリダイレクトするため、Migrator の
+        // 通知も登録しない
+        Actions\expectAdded('tmswp/activated')->never();
+        Actions\expectAdded('admin_init')->never();
+        Actions\expectAdded('admin_notices')->never();
         Functions\expect('did_action')->never();
 
         try {
@@ -845,8 +849,16 @@ PHP);
         self::assertSame('tmswp.kernel: hook method {class}::{method} failed on {hook}', $logger->records[0]['message']);
         self::assertSame(KernelTestHookProbe::class, $logger->records[0]['context']['class'] ?? null);
         self::assertSame('fail', $logger->records[0]['context']['method'] ?? null);
-        self::assertSame('tmswp_failing_filter', $logger->records[0]['context']['hook'] ?? null);
-        self::assertInstanceOf(RuntimeException::class, $logger->records[0]['context']['exception'] ?? null);
+        // 文脈には例外のクラス名と投げられた場所(previous はクラス名)だけを入れ、例外のオブジェクト・メッセージ・
+        // トレースは入れない(メッセージには利用者の入力値が入りうる)
+        self::assertSame([
+            'class' => KernelTestHookProbe::class,
+            'method' => 'fail',
+            'hook' => 'tmswp_failing_filter',
+            'exceptionClass' => RuntimeException::class,
+            'exceptionAt' => __FILE__ . ':' . KernelTestHookProbe::$failLine,
+            'previousClasses' => [LogicException::class],
+        ], $logger->records[0]['context']);
     }
 
     public function testFailingActionWithoutArgumentsIsSkippedInProduction(): void
@@ -1425,9 +1437,16 @@ final class KernelTestHookProbe
         return $value + 1;
     }
 
+    /** fail() が例外を投げる行。ログの文脈の exceptionAt と照らし合わせる */
+    public static int $failLine = 0;
+
     public function fail(string $value, string $extra): string
     {
-        throw new RuntimeException('hook method failed');
+        // 例外が投げられた場所は、例外を生成した行になる
+        self::$failLine = __LINE__ + 1;
+        $exception = new RuntimeException("hook method failed with {$value}", previous: new LogicException("previous failure with {$extra}"));
+
+        throw $exception;
     }
 
     public function failWithoutArguments(): void

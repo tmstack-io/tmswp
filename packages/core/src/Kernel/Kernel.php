@@ -146,7 +146,6 @@ final class Kernel
 
         if ($kernel->isPluginActivationSandbox()) {
             $kernel->registerLifecycleHooks();
-            $kernel->registerModelMigrator();
             $kernel->resolveDefaultStorages();
             self::$kernels[$config->appNamespace] = $kernel;
 
@@ -158,8 +157,9 @@ final class Kernel
             $missed = $kernel->scheduleAll();
             $kernel->registerTemplateFallback();
             $kernel->registerLifecycleHooks();
-            $kernel->registerModelMigrator();
             TempFileGc::register($kernel);
+            // 管理画面の通知と wp tmswp migrate の登録だけで、Migrator と Connection(グローバルの $wpdb)は解決しない
+            Migrator::listen($kernel);
             self::registerTextdomainLoader();
             // 拡張が Container に入れるサービスを、キャッチアップの初期化でも使えるよう、キャッチアップより先に登録する
             $kernel->registerExtensions();
@@ -590,6 +590,9 @@ final class Kernel
      *
      * 失敗はエラー方針(00-overview.md §5.6)で隔離する。debug では例外をそのまま投げ、本番ではこの Kernel のログに
      * error で記録してこのメソッドだけをスキップし、第1引数をそのまま返す(filter の値を変えない。action の戻り値は使われない)。
+     * ログの文脈には、例外のクラス名と投げられた場所(previous はクラス名)だけを入れ、例外のオブジェクト・メッセージ・
+     * トレースは入れない。フックのメソッドはアプリのコードで、メッセージやトレースの引数に利用者の入力値や秘密が
+     * 入りうるため(本番のログに残さない。Form の §ログ と同じ)。開発者は debug で元の例外を見られる。
      *
      * @param array<int|string, mixed> $args WordPress から受け取った引数
      */
@@ -608,11 +611,19 @@ final class Kernel
                 throw $exception;
             }
 
+            $previous = [];
+
+            for ($current = $exception->getPrevious(); $current !== null; $current = $current->getPrevious()) {
+                $previous[] = $current::class;
+            }
+
             $this->logger->error('tmswp.kernel: hook method {class}::{method} failed on {hook}', [
                 'class' => $hookMethod->class,
                 'method' => $hookMethod->method,
                 'hook' => $hookMethod->hook,
-                'exception' => $exception,
+                'exceptionClass' => $exception::class,
+                'exceptionAt' => $exception->getFile() . ':' . $exception->getLine(),
+                'previousClasses' => $previous,
             ]);
 
             return $args[0] ?? null;
@@ -790,13 +801,6 @@ final class Kernel
         if (is_dir($templatesDir)) {
             Template::locator()->addFallbackDir($templatesDir);
         }
-    }
-
-    private function registerModelMigrator(): void
-    {
-        $migrator = $this->container->get(Migrator::class);
-
-        $migrator->listen($this);
     }
 
     private static function registerCliCommand(): void

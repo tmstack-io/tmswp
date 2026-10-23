@@ -36,7 +36,7 @@ TMSWP は、開発者が約10年・15プロジェクト(テーマ11+プラグイ
 | 1 | **規約ベース起動**: 「WPエンティティ1種=1クラスを app/ に置くだけ」で Loader が自動発見・初期化。composer=vendor/、ビジネスロジック=app/、ブートは functions.php / プラグイン本体の数行という構成 | 全15プロジェクトが完全に同一構造。ブートコードは全件コピペ定型 | 踏襲。PHP 8 Attribute + クラスマップ走査 + ビルド時に生成する探索結果ファイルで再実装(DR-04)。「app/ に置くだけ」体験は維持 |
 | 2 | **宣言的 CPT / Taxonomy / Role 定義**: static プロパティ宣言 → register_post_type / register_taxonomy 自動実行、ラベル自動生成、スコープ付きクエリヘルパ、テンプレートからの静的呼び出し(`BookPost::get_archive_link()` 等) | AbstractPost 継承 58クラス(11プロジェクト)、AbstractTax 継承 42クラス(11プロジェクト)、AbstractUser 継承 5クラス(3プロジェクト)。テンプレート静的呼び出しは T04 単体で100箇所超 | 踏襲(本FW最大の価値)。`PostTypeDefinition` 等の型付き定義オブジェクト + Attribute へモダン化(文書03) |
 | 3 | **フォーム定義+バリデーション**: フィールド定義・値バインド・一括検証・エラー集約・確認画面遷移 | Field 参照 142(8プロジェクト)、RequiredRule 104 / MaxLengthRule 88 / ChoiceRule 50 参照。最大利用の T05 は会員登録3ステップ等30本のフォーム | 踏襲しつつ再設計。「ライフサイクルの持ち主」として Form オブジェクトを新設(DR-07、文書05) |
-| 4 | **独自テーブル対応(Model)**: スキーマ宣言 → dbDelta 自動マイグレーション + 静的 CRUD ファサード | AbstractModel 継承 9クラス(5プロジェクト)。キューテーブル・翻訳グループ等 | 踏襲。クエリビルダ(常時 `wpdb->prepare`)でブラッシュアップ(DR-08、文書06) |
+| 4 | **独自テーブル対応(Model)**: スキーマ宣言 → dbDelta マイグレーション + 静的 CRUD ファサード | AbstractModel 継承 9クラス(5プロジェクト)。キューテーブル・翻訳グループ等 | 踏襲。クエリビルダ(常時 `wpdb->prepare`)でブラッシュアップ(DR-08、文書06) |
 
 このほか、チャンネル式ログ(全15プロジェクトがブートで設定、`iwf_log()` 呼び出し300箇所/8プロジェクト)、テンプレートを汚さずロジックを分離する actions ファイルパターンの思想、プラグイン同梱テンプレートへのフォールバック付きパーシャル読込(View::element)も、形を変えて踏襲する。
 
@@ -70,7 +70,7 @@ TMSWP は、開発者が約10年・15プロジェクト(テーマ11+プラグイ
 3. **AI が自立実装できる FW**: コード自体が自己記述的(型・Attribute・final・strict_types)+ 規約が機械可読(AGENTS.md / rules/)+ 定型が雛形化(スターター)+ 検証が同一コマンド(composer qa)の4点で実現する。
 4. **テーマ・プラグイン両対応**: 同一の Kernel ブート API(`KernelConfig::theme()` / `KernelConfig::plugin()`)で両者をサポートする。
 5. **コアの最小化と拡張の分離**: コアの runtime 依存は psr/log ^3 と psr/container ^2 のみ。付帯機能は composer で追加導入する拡張パッケージ(DR-15)。
-6. **フォーム・Model のモダン化**: フォームはライフサイクル集約+確認画面の改ざん防止(HMAC)+CSRF 自動化。Model はスキーマ宣言→自動マイグレーション+安全なクエリビルダ。
+6. **フォーム・Model のモダン化**: フォームはライフサイクル集約+確認画面の改ざん防止(HMAC)+CSRF 自動化。Model はスキーマ宣言→`wp tmswp migrate` によるマイグレーション+安全なクエリビルダ。
 
 ### 2.2 非ゴール(意図的に作らないもの)
 
@@ -131,7 +131,7 @@ tmswp/core は WordPress コアと PSR インターフェース(psr/log ^3、psr
 | DR-05 | meta/option 定義 | 非 ACF 時は属性付き定数(`#[MetaSchema]`)+型付きアクセサ(MetaBag)。型指定は文字列でなく公開 enum `TMSWP\Core\Meta\MetaValueType` を属性引数へ直接渡す(不正値は言語/静的解析が実行前に拒否し、ブート時の型文字列検証は持たない)。register_post_meta / register_term_meta / register_user_meta へ自動登録。FW 同梱の PHPStan 拡張でスキーマから型ナローイング。頻出フィールドは明示アクセサメソッドを書く規約を rules/ に明記 | 04 |
 | DR-06 | ACF 統合 | acf-json が存在する場合は acf-json が真実源。tmswp/acf-bridge のコードジェネレータが型付きアクセサクラス(app/Acf/*Fields.php、@generated)を生成。return_format から戻り値型を決定、repeater は PHPDoc array shape。AcfMetaStorage が読み書きを get_field / update_field へ委譲。ACF 管理下フィールドは register_*_meta を発行しない。CI でドリフト検知。PHP 手書き宣言との同一キー重複はエラー | 09 |
 | DR-07 | フォーム | Form オブジェクトにライフサイクル(バインド/検証/CSRF/状態遷移)を集約。確認画面は署名付き hidden 再 POST(HMAC、用途別に派生させた鍵で改ざん防止)、ファイルはトークン付き一時保管(ユーザ入力からのパス再構築は全面禁止)。CSRF(wp_nonce)は自動埋込み・自動検証。確認画面の有無に関係なく、使い捨ての送信トークン(確認画面ありは確認トークンの jti に一本化)を wp_options へのアトミックな INSERT で1回だけ受け付け、二重送信を防ぐ。フォームのあるページは自動でページキャッシュから外す(`nocache_headers()` と `DONOTCACHEPAGE`)。スパム対策(honeypot・Turnstile 等)は差し込む口だけをコアに置き、実装の手本は rules/ に置く。完了処理(onComplete)の例外はエラー方針(§5.6)に従い、本番ではフォームを作ったファイルの Kernel のロガーに記録して汎用の送信失敗エラーを出し、再送できる状態に戻す。ウィザード形式(4画面以上)は対象外。レンダリングは純関数(echo 書き味は維持)。3層コールバック合成(旧 FormRenderer)は廃止 | 05 |
-| DR-08 | 独自テーブル | スキーマ宣言→自動マイグレーション(dbDelta)は維持。クエリは必ず `wpdb->prepare` を通すクエリビルダ。フル ORM(リレーション・自動ハイドレーション)は実装しない(任意の軽量 DTO ハイドレーションはオプション)。マイグレーション契機は有効化フック+バージョン比較+WP-CLI | 06 |
+| DR-08 | 独自テーブル | スキーマ宣言→マイグレーション(dbDelta)は維持。クエリは必ず `wpdb->prepare` を通すクエリビルダ。フル ORM(リレーション・自動ハイドレーション)は実装しない(任意の軽量 DTO ハイドレーションはオプション)。マイグレーションは WP-CLI の `wp tmswp migrate` で適用し、起動時・管理画面・有効化では自動適用しない。テーブル定義のハッシュが DB と食い違えば管理画面で管理者に通知する | 06 |
 | DR-09 | DI | PSR-11 準拠の軽量コンテナを内部に持ち、テンプレート向けには静的ファサード(例: `ProductPost::permalink()`)を提供する二層構成。旧 AbstractSingleton(final private __construct)は廃止しテスト可能な設計へ | 02 |
 | DR-10 | Hook 解体 | 日本語サイト対応(日本語スラッグ・全角スペース検索正規化・wptexturize 無効化)は tmswp/ja-toolkit 公式拡張のオプトインモジュールへ。WP クリーンアップ(管理画面整理・wp_head 掃除等)は削除対象がテーマ毎に異なるため FW コードに収載せず、rules/hooks.md のレシピ(app 側 Hook クラス)で提供。ACF/CF7/Yoast 連携コードはコアから完全排除(ACF は acf-bridge のみ)。template_include 乗っ取り+exit+グローバル変数展開(load_global)は完全廃止 | 08 |
 | DR-11 | リポジトリ | monorepo(packages/ 配下に core+各拡張)+Packagist へ read-only split 配布。SemVer+リリースタグ運用必須 | 01 |
@@ -341,7 +341,7 @@ InquiryModel::query()->where('email', $email)->orderByDesc('id')->limit(10)->get
 | **TempFileStore** | アップロードファイルのトークン付き一時保管。ユーザ入力からのファイルパス再構築は全面禁止。 |
 | **FormHtml** | フォーム部品の純関数レンダラ(型+値+属性 → エスケープ済み HTML 文字列)。テンプレートでの echo 書き味を担保する。コールバック合成は持たない。 |
 | **QueryBuilder** | Model 層の流暢クエリビルダ。生成 SQL は必ず `wpdb->prepare` を通す。 |
-| **Migrator** | TableDefinition から dbDelta ベースで自動マイグレーションを行う機構。契機は有効化フック+バージョン比較+WP-CLI(毎リクエスト実行はしない)。 |
+| **Migrator** | TableDefinition から dbDelta ベースでマイグレーションを行う機構。適用は `wp tmswp migrate` だけで行い、テーブル定義のハッシュが DB と食い違えば管理画面で管理者に通知する(自動では適用しない)。 |
 | **Template(View)** | `View\Template` の part()/render()。WP テンプレート階層を一切変更しない薄い読込ヘルパで、プラグイン同梱テンプレートへの fallback を持つ。 |
 | **テンプレートの前処理クラス** | テンプレートが使う値の用意・フォームの駆動・PRG リダイレクトを担う app 層のクラス(`app/Page/` に置く `final` クラス。例: `App\Page\ContactPage`)。`public static function handle(): self` が、テンプレートで使う値を readonly のプロパティで持つ DTO として自身を返す。テンプレートの先頭(`get_header()` の前)で `$vm = ContactPage::handle();` と1回だけ明示的に呼び、パーツへは `$args` で渡す。FW の基底クラス・属性・Discovery は関与しない(DR-19)。 |
 | **ja-toolkit** | 日本語サイト向け公式拡張(tmswp/ja-toolkit)。日本語スラッグ・全角スペース検索正規化・wptexturize 無効化をオプトインモジュールとして提供。WP クリーンアップは FW コードでは提供せず rules/hooks.md のレシピで行う。コアは一切のクリーンアップを行わない。 |
