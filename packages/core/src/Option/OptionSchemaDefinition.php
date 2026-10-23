@@ -47,49 +47,4 @@ final readonly class OptionSchemaDefinition
     {
         return $this->default !== null;
     }
-
-    /** @return array<string, mixed> */
-    public function toArray(): array
-    {
-        return [
-            'ownerClass' => $this->ownerClass,
-            'caseName' => $this->caseName,
-            'key' => $this->key,
-            'type' => $this->type->value,
-            'default' => $this->default,
-            'autoload' => $this->autoload,
-        ];
-    }
-
-    /** @param array<string, mixed> $data */
-    public static function fromArray(array $data): self
-    {
-        foreach (['ownerClass', 'caseName', 'key', 'type', 'default', 'autoload'] as $field) {
-            if (!\array_key_exists($field, $data)) {
-                throw new InvalidSchemaException("option schema cache payload is missing {$field}");
-            }
-        }
-
-        if (!\is_string($data['ownerClass']) || !class_exists($data['ownerClass'])) {
-            throw new InvalidSchemaException('invalid option schema owner class in cache payload');
-        }
-
-        if (
-            !\is_string($data['caseName'])
-            || !\is_string($data['key'])
-            || !\is_string($data['type'])
-            || !\is_bool($data['autoload'])
-        ) {
-            throw new InvalidSchemaException('invalid option schema cache payload');
-        }
-
-        return new self(
-            $data['ownerClass'],
-            $data['caseName'],
-            $data['key'],
-            MetaValueType::from($data['type']),
-            $data['default'],
-            $data['autoload'],
-        );
-    }
 }

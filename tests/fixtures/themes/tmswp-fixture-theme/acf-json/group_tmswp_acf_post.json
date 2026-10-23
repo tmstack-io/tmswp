@@ -1,0 +1,28 @@
+{
+    "key": "group_tmswp_acf_post",
+    "title": "TMSWP ACF post",
+    "fields": [
+        {
+            "key": "field_tmswp_acf_post_price",
+            "label": "Price",
+            "name": "price",
+            "type": "text"
+        },
+        {
+            "key": "field_tmswp_acf_post_subtitle",
+            "label": "Subtitle",
+            "name": "subtitle",
+            "type": "text"
+        }
+    ],
+    "location": [
+        [
+            {
+                "param": "post_type",
+                "operator": "==",
+                "value": "tmswp_acf_post"
+            }
+        ]
+    ],
+    "active": true
+}

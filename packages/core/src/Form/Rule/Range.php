@@ -37,7 +37,7 @@ final class Range extends Rule
 
     public function defaultMessage(): string
     {
-        return $this->translate('{label} must be between {min} and {max}.');
+        return __('{label} must be between {min} and {max}.', 'tmswp');
     }
 
     public function messageParams(): array

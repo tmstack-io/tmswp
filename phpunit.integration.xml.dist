@@ -4,9 +4,10 @@
          bootstrap="tests/bootstrap-integration.php"
          backupGlobals="false"
          colors="true"
-         convertDeprecationsToExceptions="false"
+         convertDeprecationsToExceptions="true"
          failOnWarning="true"
-         beStrictAboutTestsThatDoNotTestAnything="true">
+         beStrictAboutTestsThatDoNotTestAnything="true"
+         testdox="true">
     <testsuites>
         <testsuite name="core">
             <directory>packages/core/tests/Integration</directory>
@@ -24,4 +25,13 @@
             <directory>packages/ja-toolkit/tests/Integration</directory>
         </testsuite>
     </testsuites>
+    <coverage>
+        <include>
+            <directory suffix=".php">packages/core/src</directory>
+            <directory suffix=".php">packages/thumbnail/src</directory>
+            <directory suffix=".php">packages/settings-page/src</directory>
+            <directory suffix=".php">packages/acf-bridge/src</directory>
+            <directory suffix=".php">packages/ja-toolkit/src</directory>
+        </include>
+    </coverage>
 </phpunit>

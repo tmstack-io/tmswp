@@ -4,44 +4,74 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Kernel;
 
+use Closure;
 use TMSWP\Core\Exception\KernelException;
+use TMSWP\Core\Label\LabelLanguage;
+use TMSWP\Core\Log\LogChannel;
 
 final readonly class KernelConfig
 {
+    private const DISCOVERY_FILE_NAME = 'tmswp-discovery.php';
+
+    /**
+     * @param list<ExtensionInterface> $extensions
+     * @param (Closure(): array<string, LogChannel>)|null $logChannels
+     */
     private function __construct(
         public KernelContext $context,
         public string $appDir,
         public string $appNamespace,
         public ?string $pluginFile,
-        public string $cacheDir,
         public bool $debug,
-        public bool $actions,
+        public array $extensions,
+        public ?Closure $logChannels,
+        public LabelLanguage $labelLanguage,
     ) {}
 
+    /**
+     * @param list<ExtensionInterface> $extensions この Kernel で有効にする拡張。同じクラスは1つまで
+     * @param (Closure(): array<string, LogChannel>)|null $logChannels ログのチャネル(チャネル名 => 設定)を返すクロージャ。
+     *                                                                 boot 中に1回呼ぶ。null なら default チャネル(SimpleLogger)を遅延生成する
+     * @param LabelLanguage $labelLanguage labelLanguage() を指定しない PostTypeDefinition・TaxonomyDefinition のラベル言語
+     *
+     * @throws KernelException 引数が不正な場合
+     */
     public static function theme(
         string $appDir,
         string $appNamespace = 'App',
-        ?string $cacheDir = null,
         ?bool $debug = null,
-        bool $actions = true,
+        array $extensions = [],
+        ?Closure $logChannels = null,
+        LabelLanguage $labelLanguage = LabelLanguage::En,
     ): self {
         return new self(
             KernelContext::Theme,
             self::resolveAppDir($appDir),
             self::normalizeNamespace($appNamespace),
             null,
-            self::resolveCacheDir($cacheDir),
             self::resolveDebug($debug),
-            $actions,
+            self::validateExtensions($extensions),
+            $logChannels,
+            $labelLanguage,
         );
     }
 
+    /**
+     * @param list<ExtensionInterface> $extensions この Kernel で有効にする拡張。同じクラスは1つまで
+     * @param (Closure(): array<string, LogChannel>)|null $logChannels ログのチャネル(チャネル名 => 設定)を返すクロージャ。
+     *                                                                 boot 中に1回呼ぶ。null なら default チャネル(SimpleLogger)を遅延生成する
+     * @param LabelLanguage $labelLanguage labelLanguage() を指定しない PostTypeDefinition・TaxonomyDefinition のラベル言語
+     *
+     * @throws KernelException 引数が不正な場合
+     */
     public static function plugin(
         string $file,
         string $appDir,
         string $appNamespace = 'App',
-        ?string $cacheDir = null,
         ?bool $debug = null,
+        array $extensions = [],
+        ?Closure $logChannels = null,
+        LabelLanguage $labelLanguage = LabelLanguage::En,
     ): self {
         $pluginFile = realpath($file);
 
@@ -54,15 +84,52 @@ final readonly class KernelConfig
             self::resolveAppDir($appDir),
             self::normalizeNamespace($appNamespace),
             $pluginFile,
-            self::resolveCacheDir($cacheDir),
             self::resolveDebug($debug),
-            false,
+            self::validateExtensions($extensions),
+            $logChannels,
+            $labelLanguage,
         );
     }
 
-    public function instanceId(): string
+    /**
+     * テーマ・プラグインのルートディレクトリ(appDir の親ディレクトリ)。探索結果ファイルの置き場で、Log の静的な呼び出しが
+     * 記録先の Kernel を決める範囲でもある。
+     */
+    public function rootDir(): string
     {
-        return strtolower(str_replace('\\', '-', $this->appNamespace)) . '-' . substr(md5($this->appDir), 0, 12);
+        return \dirname($this->appDir);
+    }
+
+    /**
+     * 探索結果ファイルの絶対パス。appDir の親ディレクトリ(テーマ・プラグインのルート)直下に固定する。
+     */
+    public function discoveryFile(): string
+    {
+        return $this->rootDir() . '/' . self::DISCOVERY_FILE_NAME;
+    }
+
+    /**
+     * @param list<ExtensionInterface> $extensions
+     *
+     * @throws KernelException 同じクラスの拡張が2つ以上ある場合(設定の誤り)
+     *
+     * @return list<ExtensionInterface>
+     */
+    private static function validateExtensions(array $extensions): array
+    {
+        $classes = [];
+
+        foreach ($extensions as $extension) {
+            $class = $extension::class;
+
+            if (\array_key_exists($class, $classes)) {
+                throw new KernelException("extension {$class} is registered more than once in the same kernel");
+            }
+
+            $classes[$class] = true;
+        }
+
+        return $extensions;
     }
 
     private static function normalizeNamespace(string $appNamespace): string
@@ -95,25 +162,13 @@ final readonly class KernelConfig
         return rtrim($realPath, '/\\');
     }
 
-    private static function resolveCacheDir(?string $cacheDir): string
-    {
-        if ($cacheDir !== null) {
-            return rtrim($cacheDir, '/\\');
-        }
-
-        if (\defined('WP_CONTENT_DIR')) {
-            return rtrim(WP_CONTENT_DIR, '/\\') . '/cache/tmswp';
-        }
-
-        return rtrim(sys_get_temp_dir(), '/\\') . '/tmswp-cache';
-    }
-
     private static function resolveDebug(?bool $debug): bool
     {
         if ($debug !== null) {
             return $debug;
         }
 
-        return \defined('WP_DEBUG') && WP_DEBUG === true;
+        // && は真偽値を返すため、WP_DEBUG が 1 や 'true' 等の真値でも true になる(true との厳密比較はしない)
+        return \defined('WP_DEBUG') && WP_DEBUG;
     }
 }

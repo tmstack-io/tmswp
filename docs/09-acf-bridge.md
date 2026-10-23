@@ -6,7 +6,7 @@ Advanced Custom Fields (ACF / ACF Pro) と TMSWP を統合する唯一の公式�
 
 1. **acf-json を真実源としたコードジェネレータ** — フィールドグループ定義から型付きアクセサクラス(`app/Acf/*Fields.php` 等)を生成し、PHPStan level max で型検査可能な ACF アクセスを実現する(DR-06)。
 2. **`AcfMetaStorage`** — コアの `MetaStorageInterface` 実装。`#[UseMetaStorage]` によるエンティティ単位の明示オプトインで、`MetaBag` の読み書きを `get_field`/`update_field` へ委譲する(DR-18)。
-3. **`register_*_meta` 発行スキップ連携** — ACF 管理下のメタキーをコアの `MetaSchemaRegistry` に通知し、二重登録を防ぐ。PHP 手書き `#[MetaSchema]` との同一キー重複は即エラーとする。
+3. **`register_*_meta`発行スキップ連携** — ACF管理下のメタキーをコアの`MetaSchemaRegistry`に申告する。`#[MetaSchema]`の宣言が無いキーはWordPressに登録しない(`register_*_meta`しない)。`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティが`#[MetaSchema]`で宣言したキーは、宣言どおり登録する。別のストレージのエンティティが`#[MetaSchema]`で宣言したキーだけを、同一キーの重複として即エラーにする(§7.3)。
 4. **ドリフト検知** — `wp tmswp acf check` で acf-json と生成コードの乖離を検出し、CI で強制する。
 
 コア(`tmswp/core`)は ACF を一切知らない。ACF の API・データ形式・挙動に関する知識はすべて本パッケージに閉じる(DR-10)。
@@ -23,7 +23,7 @@ Advanced Custom Fields (ACF / ACF Pro) と TMSWP を統合する唯一の公式�
 |---|---|
 | 全体アーキテクチャ/リポジトリ構成 | monorepo レイアウト、拡張パッケージの配布形態(DR-11, DR-15) |
 | Kernel・Discovery 設計書 | `Kernel::boot()` / `KernelConfig`(appDir・appNamespace の取得元)、ブートのフック整合規約(DR-04) |
-| Meta/Option 定義層設計書 | `MetaStorageInterface`、`MetaSchemaRegistry`、`MetaBag`、`ObjectType`、`#[MetaSchema]`、`#[UseMetaStorage]`。`PreviewMetaSupport`(§4.11)は §8.3 の責務分担の参照のみ(コアはプレビュー用の独自フックを発火せず、本拡張もそれに依存しない) |
+| Meta/Option 定義層設計書 | `MetaStorageInterface`、`MetaSchemaRegistry`、`MetaBag`、`ObjectType`、`#[MetaSchema]`、`#[UseMetaStorage]`。`#[WithMetaRevisions]`(§4.11)は §8.3 の責務分担の参照のみ(コアはプレビュー用の独自フックを発火せず、本拡張もそれに依存しない) |
 | QA/CI 設計書 | `composer qa` 系コマンド、GitHub Actions マトリクス(DR-12) |
 
 ---
@@ -39,9 +39,10 @@ Advanced Custom Fields (ACF / ACF Pro) と TMSWP を統合する唯一の公式�
 
 ## 1.2 対応バージョン
 
-- ACF 6.0+ / ACF Pro 6.0+(WP 6.4+ / PHP 8.2+ は DR-02 に従う)。
+- ACF 6.2+ / ACF Pro 6.2+(WP 7.0以上 / PHP 8.3〜8.5はDR-02に従う)。下限を6.2にするのは、acf-jsonの保存先を制御するフック`acf/json/save_paths`(§2.1の手順4)がACF 6.2で入ったためである。6.2より古いACFでは、プラグインや親テーマのacf-jsonから読み込んだグループの保存先を、読み込んだacf-jsonに向けられない。
+- 有効なACFの版(`ACF_VERSION`)が6.2より古いことは設定の誤り(文書00 §5.6)であり、AcfBridgeは、すべてのプラグインを読み込んだ後(`plugins_loaded`。テーマのKernelと本番の遅延bootでは、発火済みの`plugins_loaded`への予約として、bootの最後のKernelのキャッチアップの中)に`AcfBridgeRuntimeException`を投げる。ACFが無効なとき(`ACF_VERSION`が無い)は版を確かめない(§10)。
 - ACF 無印では Pro 専用フィールド型(repeater / flexible_content / gallery / clone / options_page)は acf-json に現れないため、生成側の分岐は不要。
-- ACF は composer 依存にしない(WP プラグインとして導入される前提)。`composer.json` の `require` は `tmswp/core` と `php: >=8.2` のみ。`suggest` に ACF を記載する。
+- ACF は composer 依存にしない(WP プラグインとして導入される前提)。`composer.json` の `require` は `tmswp/core` と `php: >=8.3` のみ。`suggest` に ACF を記載する。
 
 ## 1.3 処理フロー全体図
 
@@ -56,10 +57,11 @@ Advanced Custom Fields (ACF / ACF Pro) と TMSWP を統合する唯一の公式�
   wp tmswp acf check → 再生成して差分があれば exit 1 → ビルド失敗
 
 [実行時]
-  AcfBridge::boot()
-    → acf/settings/load_json でプラグイン側 acf-json を登録(テーマは ACF 標準挙動)
-    → init(prio 6) で生成済み AcfManifest::managedKeys() を読み MetaSchemaRegistry へ
-      「ACF管理下キー」を通知 → register_*_meta スキップ + 重複キー検出
+  Kernel::boot()(KernelConfigのextensionsにnew AcfBridge())
+    → AcfBridge::register($kernel): acf/settings/load_jsonにjsonDirsを登録(テーマのstylesheetはACF標準挙動)、
+      acf/json/save_pathsで読み込んだacf-jsonへ書き戻す
+    → init(prio 6)で生成済みAcfManifest::managedKeys()を読み、登録したKernelのMetaSchemaRegistryへ
+      「ACF管理下キー」を申告 → 宣言の無いキーはregister_*_metaしない + 重複キー検出
   テンプレート/app コード
     → ProductFields::of($post)->price() … 型付きアクセサ(get_field 委譲)
     → ProductPost::meta($post) … #[UseMetaStorage(AcfMetaStorage::class)] 時は
@@ -72,7 +74,7 @@ Advanced Custom Fields (ACF / ACF Pro) と TMSWP を統合する唯一の公式�
 packages/acf-bridge/
 ├── composer.json            # tmswp/acf-bridge
 ├── src/
-│   ├── AcfBridge.php            # エントリポイント(boot)
+│   ├── AcfBridge.php            # エントリポイント(ExtensionInterface。Kernelごとに登録)
 │   ├── BridgeConfig.php
 │   ├── AcfFieldAccess.php       # trait: 生成クラスの読み書き基盤
 │   ├── AcfTypes.php             # @phpstan-type 定義専用クラス
@@ -96,11 +98,13 @@ packages/acf-bridge/
 │   │   ├── GeneratedFile.php
 │   │   └── Report.php           # エラー/警告レポート
 │   ├── Manifest/
-│   │   └── ManagedKey.php       # 生成物 AcfManifest.php(§7.1)が返すDTO
+│   │   ├── ManagedKey.php       # 生成物AcfManifest.php(§7.1)が返すDTO
+│   │   └── ManagedKeyCollector.php  # フィールドグループから管理キーを集める(checkのE101。§7.3)
 │   ├── Cli/
 │   │   └── AcfCommand.php       # wp tmswp acf sync|check
 │   └── Exception/
-│       ├── AcfBridgeException.php    # 基底 (extends \RuntimeException)
+│       ├── AcfBridgeException.php    # 基底 (extends TMSWP\Core\Exception\RuntimeException)
+│       ├── AcfBridgeRuntimeException.php  # 構成・登録・CLIの誤り(AcfBridge・BridgeConfig・AcfCommand)
 │       ├── AcfNotActiveException.php
 │       └── GenerationException.php
 └── tests/
@@ -111,8 +115,8 @@ packages/acf-bridge/
 ```json
 {
     "name": "tmswp/acf-bridge",
-    "require": { "php": ">=8.2", "tmswp/core": "^1.0" },
-    "suggest": { "advanced-custom-fields-pro": "ACF Pro 6.0+ をWPプラグインとして導入すること" },
+    "require": { "php": ">=8.3", "tmswp/core": "^1.0" },
+    "suggest": { "advanced-custom-fields-pro": "ACF Pro 6.2+ をWPプラグインとして導入すること" },
     "autoload": { "psr-4": { "TMSWP\\AcfBridge\\": "src/" } }
 }
 ```
@@ -123,37 +127,49 @@ packages/acf-bridge/
 
 ## 2.1 `TMSWP\AcfBridge\AcfBridge`
 
-役割: 拡張のブート。実行時フック登録と WP-CLI コマンド登録を行う。
+役割: 拡張の登録。`KernelConfig::theme()` / `plugin()`の`extensions`に渡し、Kernelごとに登録する(文書12 §1.6。拡張の共通の入口`ExtensionInterface`はKernel設計書)。テーマとプラグインがそれぞれ登録すれば、それぞれのacf-json・生成先・名前空間で別々に動く。
 
 ```php
-final class AcfBridge
+final class AcfBridge implements \TMSWP\Core\Kernel\ExtensionInterface
 {
-    private static ?BridgeConfig $config = null;
+    /** nullなら登録したKernelの構成から既定値を決める(BridgeConfig::forKernel()) */
+    public function __construct(?BridgeConfig $explicitConfig = null);
 
-    private function __construct() {}
+    /** Kernelのboot中に1回呼ばれる */
+    public function register(\TMSWP\Core\Kernel\Kernel $kernel): void;
 
-    /**
-     * Kernel::boot() の直後に functions.php / プラグイン本体から呼び出す。
-     * 2回目以降の呼び出しは TMSWP\AcfBridge\Exception\AcfBridgeException を投げる。
-     */
-    public static function boot(?BridgeConfig $config = null): void;
+    /** Kernelに登録したAcfBridge。無ければAcfBridgeRuntimeException */
+    public static function forKernel(\TMSWP\Core\Kernel\Kernel $kernel): self;
 
-    /** boot 済みでない場合は AcfBridgeException を投げる。 */
-    public static function config(): BridgeConfig;
+    /** 構成。未登録ならAcfBridgeRuntimeException */
+    public function config(): BridgeConfig;
 
-    /** テスト用リセット。WP実行時には使用しない。 */
-    public static function reset(): void;
+    /** 登録したKernel。未登録ならAcfBridgeRuntimeException */
+    public function kernel(): \TMSWP\Core\Kernel\Kernel;
 }
 ```
 
-`boot()` の振る舞い(DR-04 のフック整合に従い、即時の重い処理はしない):
+```php
+// テーマのfunctions.php
+Kernel::boot(KernelConfig::theme(__DIR__ . '/app', 'App', extensions: [new AcfBridge()]));
 
-1. `$config ?? BridgeConfig::fromKernel()` を保持する。`Kernel::boot()` 未実行で `$config` も省略された場合は `AcfBridgeException`(メッセージ: `AcfBridge::boot() must be called after Kernel::boot(), or pass BridgeConfig explicitly.`)。
-2. `BridgeConfig::$registerLoadJsonDirs === true` のとき `acf/settings/load_json` フィルタを登録し、`BridgeConfig::$jsonDirs` のうちテーマ標準ディレクトリ(ACF が自動認識する `{stylesheet}/acf-json`)以外を追加する。ACF 未導入時はフィルタが発火しないだけで無害。
-3. `init` priority **6** に Manifest 連携(§7)のコールバックを登録する(ACF の `acf/init` は `init` priority 5 で発火するため、その直後)。
-4. `defined('WP_CLI') && WP_CLI` のとき `WP_CLI::add_command('tmswp acf', Cli\AcfCommand::class)` を実行する。
-5. `BridgeConfig::$previewMeta === true` のとき `PreviewAcfSupport::register()` を呼ぶ(§8.3)。
-6. ACF が無効(`function_exists('acf') === false`)でも `boot()` 自体は成功する。手順 3 のコールバックは ACF 不在時に何もせず return する(生成クラスへのアクセス時のみ例外。§10)。
+// プラグインの本体ファイル
+Kernel::boot(KernelConfig::plugin(__FILE__, __DIR__ . '/app', 'Vendor\Plugin', extensions: [new AcfBridge()]));
+```
+
+`register()`の振る舞い(DR-04のフック整合に従い、即時の重い処理はしない):
+
+1. 構成を決める(渡した`BridgeConfig`、無ければ`BridgeConfig::forKernel($kernel->config())`)。同じインスタンスを2つ目のKernelに登録した場合と、構成の`namespace`がKernelの`appNamespace`(またはその配下)でない場合は`AcfBridgeRuntimeException`(設定の誤り。debugに関係なくbootの例外になる)。
+2. KernelのContainerに自身を`AcfBridge::class`で登録する(acf-bridgeのクラスが登録したKernelを引けるようにする)。
+3. `BridgeConfig::$registerLoadJsonDirs === true`のとき`acf/settings/load_json`フィルタを登録し、`BridgeConfig::$jsonDirs`のうち存在して未登録のディレクトリを加える。
+4. `acf/json/save_paths`フィルタ(ACF 6.2+)を登録する。ACFが実際に読み込んだJSONファイル(`acf_get_local_json_files()`。ACFは`load_json`の並びで後のディレクトリのファイルを使う)が、この構成の`jsonDirs`のどれかにあるグループ等は、管理画面で保存したときの書き込み先をそのディレクトリだけにする。プラグインや親テーマのacf-jsonから読み込んだグループを、ACFの既定の保存先(子テーマの`{stylesheet}/acf-json`)へ書かず、読み込んだacf-jsonへ書き戻すためである。保存のフィルタに渡るグループの配列は読み込み元(`local_file`)を持たないため、ACFの読み込みの結果で判定する。ACFが別のKernelのacf-jsonから読み込んだもの、ACFが読み込んでいないもの(管理画面で新しく作ったグループ)は、保存先を変えない。テーマとプラグインのacf-jsonに同じkeyのファイルがある場合も、ACFが読み込んだ側にだけ書き、もう一方のファイルを上書きしない。プラグインで新しく作ったグループは、そのファイルをプラグインのacf-jsonへ移してからsyncする。
+5. `$kernel->defer('plugins_loaded', 10, ...)`で、有効なACFの版の確認を予約する。ACFはプラグインの読み込み時に`ACF_VERSION`を定義するため、すべてのプラグインを読み込んだ後に確かめる。`ACF_VERSION`が6.2より古ければ`AcfBridgeRuntimeException`(設定の誤り。§1.2)。ACFが無効(`ACF_VERSION`が無い)なら確かめない。
+6. `$kernel->defer('init', 6, ...)`でManifest連携(§7.2)を予約する(ACFの`acf/init`は`init` priority 5で発火するため、その直後)。手順5・6の予約は、発火済みのフックへの予約なら(テーマのKernelの手順5、本番の遅延boot(フックの発火後のboot)の手順5・6)、bootの最後のKernelのキャッチアップの中で(最初に発火した順, priority)の位置で実行される(MetaSchemaのWordPressへの登録(`init` 20)より前。Kernel設計書§3.3)。
+7. `defined('WP_CLI') && WP_CLI`のとき`WP_CLI::add_command('tmswp acf', new Cli\AcfCommand())`を実行する(テーマとプラグインの両方が登録しても1つのコマンドで、対象は`--app=`で選ぶ。§5.1)。
+8. `BridgeConfig::$previewMeta === true`のとき`PreviewAcfSupport::register()`を呼ぶ(§8.3)。
+
+- ACFが無効でも`register()`は成功する(手順3・4のフィルタはACFが無ければ発火せず、手順5は版を確かめない)。手順6の申告もACFに依存せず行う(§7.2)。
+- debugによる分岐とログは、登録したKernelの`$kernel->config()->debug`と`$kernel->logger()`に従う(`AcfBridge::kernel()`から引く)。`WP_DEBUG`を直接参照して分岐しない(文書12 §1.7)。
 
 ## 2.2 `TMSWP\AcfBridge\BridgeConfig`
 
@@ -161,11 +177,12 @@ final class AcfBridge
 final readonly class BridgeConfig
 {
     /**
-     * @param list<string>          $jsonDirs       acf-json 探索ディレクトリ(絶対パス)
+     * @param list<string>          $jsonDirs       acf-json探索ディレクトリ(絶対パス)。並びの先を優先する
      * @param string                $outputDir      生成先ディレクトリ(絶対パス)
      * @param string                $namespace      生成クラスの名前空間
      * @param array<string, string> $classMap       グループkey → クラス短名の明示指定
      * @param array<string, string> $methodNameMap  "{groupKey}.{fieldName}" → メソッド名の明示指定
+     * @param array<string, string> $optionsPagePostIds オプションページのmenu_slug → ACFのpost_id(§5.4)
      * @param bool                  $previewMeta    プレビュー時ACF値保存の有効化
      * @param bool                  $registerLoadJsonDirs acf/settings/load_json への自動登録
      */
@@ -175,6 +192,7 @@ final readonly class BridgeConfig
         public string $namespace,
         public array $classMap = [],
         public array $methodNameMap = [],
+        public array $optionsPagePostIds = [],
         public bool $previewMeta = false,
         public bool $registerLoadJsonDirs = true,
     ) {}
@@ -185,12 +203,19 @@ final readonly class BridgeConfig
      * - プラグイン: jsonDirs = [dirname(pluginFile) . '/acf-json']
      * - outputDir = {appDir}/Acf、namespace = {appNamespace}\Acf
      */
-    public static function fromKernel(): self;
+    public static function forKernel(
+        \TMSWP\Core\Kernel\KernelConfig $config,
+        array $classMap = [],
+        array $methodNameMap = [],
+        array $optionsPagePostIds = [],
+        bool $previewMeta = false,
+    ): self;
 }
 ```
 
-- `fromKernel()` はコア Kernel 文書が定義するブート済み構成アクセサ(本文書では `Kernel::config(): KernelConfig` と仮定。名称が異なる場合は Kernel 文書に従う)から値を解決する。
+- コンストラクタは入力を検証し、誤りは`AcfBridgeRuntimeException`(設定の誤り)にする。`jsonDirs`・`outputDir`は絶対パス(`/`または`C:\`等で始まる)、`namespace`は前後に`\`の無いPHPの名前空間、`classMap`・`methodNameMap`・`optionsPagePostIds`は空でない文字列から空でない文字列への対応であること。
 - `jsonDirs` のうち存在しないディレクトリは無視する(エラーにしない。acf-json 未使用プロジェクトでも boot 可能にするため)。
+- 既定値以外(`classMap`等)を使うときは、`new AcfBridge(new BridgeConfig(...))`で全体を渡す。
 
 ---
 
@@ -337,11 +362,12 @@ ACF の `location` は「ORグループの配列 × 各ORグループ内は AND 
 
 | コマンド | 説明 |
 |---|---|
-| `wp tmswp acf sync [--dry-run]` | acf-json から `app/Acf/` 配下の全クラスを再生成する。`--dry-run` は書き込まず生成予定と差分を表示 |
-| `wp tmswp acf check [--strict]` | メモリ上で再生成しディスクと比較。差分があれば exit 1。`--strict` は警告(W*)でも exit 1 |
+| `wp tmswp acf sync [--app=<namespace>] [--dry-run]` | acf-jsonから`app/Acf/`配下の全クラスを再生成する。`--dry-run`は書き込まず生成予定と差分を表示 |
+| `wp tmswp acf check [--app=<namespace>] [--strict]` | メモリ上で再生成しディスクと比較。差分があればexit 1。`--strict`は警告(W*)でもexit 1 |
 
-- WP-CLI 経由のため WP・テーマ(またはプラグイン)・`AcfBridge::boot()` がロード済みであり、`BridgeConfig` はブート時の値が使われる。`boot()` 未実行の場合は exit 2(`AcfBridge is not booted. Call AcfBridge::boot() in functions.php / plugin bootstrap.`)。
-- ACF プラグイン自体は **sync/check に必須ではない**(生成は acf-json ファイルのみから行う)。ただしオプションページの `post_id` 解決(§5.4)に ACF runtime を使えない場合はフォールバック値を使う。
+- WP-CLI経由のためWP・テーマ・プラグインと、それらのKernelのboot(`AcfBridge`の登録を含む)が済んでおり、`BridgeConfig`は登録時の値が使われる。
+- 対象は`--app=<namespace>`(Kernelの`appNamespace`)で選んだKernelに登録した`AcfBridge`。`AcfBridge`を登録したKernelが1つなら省略できる。登録したKernelが無い・2つ以上あるのに`--app=`が無い・`--app=`のKernelに登録が無い場合はexit 2。
+- ACFプラグイン自体は **sync/checkに必須ではない**(生成はacf-jsonファイルと`BridgeConfig`だけから行い、ACFの実行時には問い合わせない。生成結果を環境に依存させないため。§5.4)。
 - 終了コード: `sync` = 0(成功。W* 含む)/ 1(E* 発生。ファイルは一切書き込まない)/ 2(環境・設定エラー)。`check` = 0(差分なし)/ 1(差分あり、または `--strict` 時に W* あり)/ 2(E* または環境エラー)。
 
 composer スクリプト(スターターの `composer.json` に同梱。QA 文書の `composer qa` 系と同列):
@@ -355,7 +381,7 @@ composer スクリプト(スターターの `composer.json` に同梱。QA 文�
 }
 ```
 
-wp コマンドが PATH にない環境(wp-env 等)では各プロジェクトでスクリプトを上書きする(例: `"acf:check": "wp-env run cli wp tmswp acf check"`)。
+wp コマンドが PATH にない環境(wp-env 等)では各プロジェクトでスクリプトを上書きする。wp-env を使うプロジェクトは `@wordpress/env` を package.json で版を固定して `npm ci` で入れ、コマンド名ではなくパスで呼ぶ(例: `"acf:check": "node node_modules/@wordpress/env/bin/wp-env run cli wp tmswp acf check"`)。コマンド名 `wp-env` を PATH や npx で解決すると、第三者のパッケージやグローバルの同名コマンドを実行しうるためである。
 
 ## 5.2 出力ファイル仕様
 
@@ -455,7 +481,7 @@ final class ProductFields
 ## 5.4 ACF オプションページ → Options クラス生成
 
 - location `options_page == {menu_slug}` から `{studly(menu_slug)}Options` を生成する(§4.3)。
-- 内部 ACF id の決定順: (1) `ui_options_page_*.json` の `post_id` 設定 → (2) 生成時に ACF runtime が利用可能なら `acf_get_options_page($menu_slug)['post_id']` → (3) `'option'`。(2) を使った場合、ヘッダの sources に `runtime: acf_get_options_page('{slug}')` と明記する。
+- 内部ACF idの決定順: (1) `ui_options_page_*.json`の`post_id`設定 → (2) `BridgeConfig::$optionsPagePostIds[$menu_slug]`(PHPで登録したオプションページ用) → (3) `'option'`。(1)と(2)が同じページに違う`post_id`を指定した場合はE102(exit 2)。生成時にACFの実行時(`acf_get_options_page()`)には問い合わせない(開発環境とCIで生成結果が変わらないようにするため)。
 - 生成される Options クラスはコアのオプショングループ enum(`OptionAccess` trait を用いる backed enum)としては **宣言しない**。理由: オプショングループ enum はコアの `OptionRepository`/`WpOptionStorage` を保存主体とする宣言層であり、ACF オプションページの保存主体は ACF 自身であるため、二重管理を避ける。ACF オプションページの値アクセスは生成 Options クラスに一本化し、同じ値を `#[OptionSchema]` で重複宣言することは rules/ で禁止する。
 - オプションページの登録自体(`acf_add_options_page`)は acf-json(`ui_options_page_*.json`、ACF Pro 6.2+)に任せる。それ以前の PHP 登録運用の場合も生成は location の menu_slug だけで可能。
 
@@ -488,13 +514,13 @@ final class NameConverter
 final readonly class GeneratorContext
 {
     /**
-     * @param array<string, string> $optionsPagePostIds menu_slug → post_id
-     * @param \Closure(string): ?string $runtimePostIdResolver  ACF runtime 解決(CLI実行時のみ注入)
+     * @param array<string, string> $optionsPagePostIds menu_slug → post_id(acf-jsonのui_options_pageと
+     *                                                  BridgeConfig::$optionsPagePostIdsから作る。§5.4)
      */
     public function __construct(
         public BridgeConfig $config,
         public array $optionsPagePostIds,
-        public ?\Closure $runtimePostIdResolver = null,
+        public string $sourceHash = '',
     ) {}
 }
 
@@ -533,6 +559,9 @@ final class Report
     public function hasErrors(): bool;
 }
 ```
+
+- `AcfManifest.php`(§7.1)の管理キーは、cloneを解決したグループから`Manifest\ManagedKeyCollector`で集める。`wp tmswp acf check`のE101(§7.3)も同じ収集を使うため、生成物の管理キーとE101で照合するキーは常に一致する。
+- オプションページの`post_id`は`GeneratorContext::$optionsPagePostIds`だけで決め、GeneratorはACFの実行時に問い合わせない(§5.4)。
 
 ## 5.7 エラー・警告コード表
 
@@ -768,40 +797,54 @@ final class AcfManifest
 
 ## 7.2 register_*_meta 発行スキップ連携
 
-コアの `MetaSchemaRegistry`(Meta/Option 定義層文書)は `#[MetaSchema]` 宣言を `init` priority 10 で `register_post_meta`/`register_term_meta`/`register_user_meta` へ流し込む。本拡張は **`init` priority 6**(`acf/init` = priority 5 の直後)で以下を実行する。
+コアの`MetaSchemaRegistry`(Meta/Option定義層文書)は`#[MetaSchema]`宣言をKernelのbootの中で集め、`init` priority 20で`register_post_meta`/`register_term_meta`/`register_meta('user', ...)`へ流し込む(Kernel設計書§7)。本拡張は、登録したKernelの **`init` priority 6**(`acf/init` = priority 5の直後)で、そのKernelのレジストリに以下を実行する(`AcfBridge::markManagedKeys()`)。
 
 ```
 $manifestClass = $config->namespace . '\\AcfManifest';
-$keys = class_exists($manifestClass) ? $manifestClass::managedKeys() : [];
+if (!class_exists($manifestClass)) {
+    WP-CLIなら警告を出してreturn、それ以外はAcfBridgeRuntimeException
+}
+$keys = $manifestClass::managedKeys();  // ManagedKey以外の要素があればAcfBridgeRuntimeException
 
 foreach ($keys as $key) {
-    if ($key->objectType === null) continue;  // options はコアregistry対象外
-    $registry->markExternallyManaged(
-        $key->objectType, $key->objectSubtype, $key->metaKey, 'tmswp/acf-bridge'
-    );
+    if ($key->objectType === null) continue;  // optionsはメタではないためコアregistryの対象外
+    $origin = "ACF field group '{$key->groupKey}'";
+    if ($key->objectSubtype === 'all') {      // ACF の location の 'all'(taxonomy==all 等)は全サブタイプ
+        $registry->markExternallyManagedInAllSubtypes($key->objectType, $key->metaKey, AcfMetaStorage::class, $origin);
+        continue;
+    }
+    $registry->markExternallyManaged($key->objectType, $key->objectSubtype, $key->metaKey, AcfMetaStorage::class, $origin);
 }
 ```
 
-- `AcfManifest` クラスが未生成(sync 未実行)の場合は空リストへ縮退し、何もマークしない(ACF 不在時(§10)と同じ縮退。`#[MetaSchema]` 宣言があればそれが通常どおり register される)。
+- `AcfManifest`クラスが無い(sync未実行、または生成物のデプロイ漏れ)ことは設定の誤りであり、debugに関係なく`AcfBridgeRuntimeException`にする(文書00 §5.6)。黙ってマーク無しに縮退すると、重複の検出が働かないまま動くためである。ただしWP-CLIでは、生成物を作る`wp tmswp acf sync`自体がWordPressの読み込み(`init`)を経て動くため、例外にするとsyncを実行できない。WP-CLIに限り`WP_CLI::warning()`で警告して申告しない(黙らない)。
+- `managedKeys()`が`ManagedKey`以外の要素を返した場合も、黙って飛ばさず`AcfBridgeRuntimeException`にする(生成物の改変。syncで作り直す)。
+- 申告はACFの有効・無効に関係なく行う。申告に使うのはコミット済みの生成物`AcfManifest`だけで、ACFの実行時に依存しないためである(ACFが無効なときの値へのアクセスは§10の`AcfNotActiveException`で防護される)。`function_exists('acf')`で申告を飛ばす経路は持たない。
 
-本文書がコア `MetaSchemaRegistry` に要求する API(正準シグネチャは Meta/Option 定義層文書が確定する。差異があればそちらが優先):
+本文書がコア`MetaSchemaRegistry`に要求するAPI(正準シグネチャはMeta/Option定義層文書4.9):
 
 ```php
-public function markExternallyManaged(ObjectType $objectType, string $objectSubtype, string $metaKey, string $managedBy): void;
-public function isExternallyManaged(ObjectType $objectType, string $objectSubtype, string $metaKey): bool;
+public function markExternallyManaged(ObjectType $objectType, string $subtype, string $key, string $storageClass, string $origin): void;
+public function markExternallyManagedInAllSubtypes(ObjectType $objectType, string $key, string $storageClass, string $origin): void;
+public function isExternallyManaged(ObjectType $objectType, string $subtype, string $key): bool;
 ```
 
-- `markExternallyManaged` 済みのキーについて registry は `register_*_meta` を**発行しない**(DR-06「ACF 管理下フィールドは register_*_meta を発行しない」)。
-- `objectSubtype` が `'all'`(taxonomy==all)の場合は当該 ObjectType の全サブタイプに対するマークとして扱う。
-- ACF 不在(`function_exists('acf') === false`)時はマーク処理全体をスキップする(acf-json があっても ACF が読み込まないため値は素の postmeta としては存在しない。生成クラス経由のアクセスは §10 の例外で防護される)。
+- `$storageClass`はそのキーを読み書きするストレージ(本拡張は`AcfMetaStorage::class`)、`$origin`は重複の例外のメッセージに使う申告元の説明(本拡張は`ACF field group '{groupKey}'`)。
+- 申告したキーのうち`#[MetaSchema]`の宣言が無いものについて、registryは`register_*_meta`を**発行しない**(DR-06)。`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティが宣言したキーは、宣言どおり`register_*_meta`される(型・既定値・sanitize・`show_in_rest`・リビジョンは宣言に従う。§7.3)。
+- `ManagedKey::$objectSubtype` が ACF の location の値 `'all'`(taxonomy==all 等)の場合は、本拡張が `markExternallyManagedInAllSubtypes()` で当該 ObjectType の全サブタイプに対するマークとして申告する。コアの `markExternallyManaged()` の `objectSubtype` は文字列どおりの1サブタイプだけを表し、`'all'` を特別扱いしない。
+- 申告先は登録したKernelのレジストリだけである。テーマとプラグインがそれぞれ登録すれば、それぞれの`AcfManifest`をそれぞれのレジストリに申告する。
 
 ## 7.3 `#[MetaSchema]` との同一キー重複検出(エラー)
 
-同一 `(ObjectType, objectSubtype, metaKey)` が「`#[MetaSchema]` 宣言」と「ACF 管理下キー」の両方に存在する状態は**構成エラー**であり、フェイルファストする(DR-06)。旧 FW の「ACF とコアのメタ層が同じキーを別経路で読み書きして挙動不明」という事故の再発防止が目的。
+ACF管理下キーは、`#[MetaSchema]`と`#[UseMetaStorage(AcfMetaStorage::class)]`で宣言してよい(文書04「メタ・設定の使い分け」)。読み書きの経路がACFの1つに揃うためである。一方、同一`(ObjectType, objectSubtype, metaKey)`を、読み書きのストレージが`AcfMetaStorage`でないエンティティ(`#[UseMetaStorage]`の無いエンティティ等)が`#[MetaSchema]`で宣言している状態は**構成エラー**であり、フェイルファストする(DR-06)。旧FWの「ACFとコアのメタ層が同じキーを別経路で読み書きして挙動不明」という事故の再発防止が目的。ストレージは`#[UseMetaStorage]`の指定(無ければ既定のストレージ)をContainerで解決したインスタンスのクラスで比べる。
 
-- **実行時**: `MetaSchemaRegistry` が flush(`init` prio 10)時に、`markExternallyManaged` 済みキーと `#[MetaSchema]` 宣言キーの積集合を検査し、非空なら例外(コア例外。`TMSWP\Core\Exception\` 配下、Meta/Option 文書定義)を投げる。例外メッセージには衝突キー・宣言クラス・定数名・ACF グループ key の全対応を含めること。
-- **静的(CI)**: `wp tmswp acf check` も同じ検査を行い、検出時は E101・exit 2 で報告する(実行時例外より早く CI で気づける)。check は `MetaSchemaRegistry` から宣言済みスキーマ一覧を取得して照合する(要求 API: `public function schemas(): list<RegisteredMetaSchema>` 相当。正準形は Meta/Option 文書に従う)。
-- 解消方法は二択であり、エラーメッセージに明記する: (a) `#[MetaSchema]` 定数を削除して生成アクセサ(`XxxFields`)へ一本化する、(b) acf-json から当該フィールドを削除して PHP 宣言へ一本化する。
+- **実行時**: `MetaSchemaRegistry`は、`#[MetaSchema]`の宣言と外部管理の申告(`markExternallyManaged`・`markExternallyManagedInAllSubtypes`)のうち後から行われた側の時点で、同じキーをストレージの違うエンティティが宣言していないかを検査し、あれば`DuplicateMetaKeyException`(コア例外。Meta/Option文書定義)を投げる。宣言はKernelのbootの中で揃うため、本拡張が`init` 6で申告した時点で検出され、`register_*_meta`(`init` 20)には進まない。この検査は、AcfBridgeを登録したKernelのレジストリの中だけで行う(申告先がそのレジストリだけのため。§7.2)。テーマの`#[MetaSchema]`とプラグインのフィールドグループのような、Kernelをまたぐ重複は実行時には検出しない。
+- **静的(CI)**: `wp tmswp acf check`も同じ検査を行い、検出時はE101・exit 2で報告する(実行時例外より早くCIで気づける。`sync`はE101があれば書き込まずにexit 1)。管理キーは、acf-jsonのグループのcloneを解決してから`ManagedKeyCollector`で集める(Generatorが生成する`AcfManifest`の行と同じキー。seamlessのcloneが展開したキーも含む)。判定は、`--app=`で選んだKernelだけでなく起動中の全Kernelの`MetaSchemaRegistry`の複製に実行時と同じ申告(`AcfBridge::markManagedKey()`)を行い、その`DuplicateMetaKeyException`のメッセージを`E101: `に続けて出す。複製に申告するため、起動中のレジストリは変えない。全Kernelと照合するため、実行時には検出しないKernelをまたぐ重複もE101で検出する。
+- 例外のメッセージ(E101も同じ)は、衝突したキー・(ObjectType, サブタイプ)・宣言クラスと`#[MetaSchema]`の定数名・ACFのフィールドグループのkey・両方のストレージのクラスと、次の解消方法を含む。(a)エンティティに`#[UseMetaStorage(AcfMetaStorage::class)]`を付けてACFの保存規約に揃える、(b) `#[MetaSchema]`定数を削除して生成アクセサ(`XxxFields`)へ一本化する、(c) acf-jsonから当該フィールドを削除してPHP宣言へ一本化する。例:
+
+```
+externally managed meta key 'price' for post:product is already declared by App\Post\ProductPost::PRICE with meta storage TMSWP\Core\Meta\WpMetaStorage; ACF field group 'group_product' manages it with meta storage TMSWP\AcfBridge\AcfMetaStorage. Add #[UseMetaStorage(\TMSWP\AcfBridge\AcfMetaStorage::class)] to App\Post\ProductPost, remove the #[MetaSchema] constant PRICE, or remove the key from ACF field group 'group_product'
+```
 
 ---
 
@@ -826,7 +869,7 @@ final class AcfMetaStorage implements \TMSWP\Core\Meta\MetaStorageInterface
 - ACF id 変換: `Post` → `(int) $objectId`、`Term` → `"term_{$objectId}"`、`User` → `"user_{$objectId}"`。
 - `get()` は **raw 値**(`get_field($key, $acfId, false)`)を返す。理由: `MetaBag` の型付きアクセサ(`int()`/`string()` 等)は DB 保存型を前提としており、フォーマット済み値(image の array 等)は `MetaBag` の型コントラクトを壊す。フォーマット済み値が必要な場面では生成アクセサクラス(`XxxFields`)を使う。この役割分担を rules/ に明記する。
 - `has()` は `get_field($key, $acfId, false) !== null` で判定する(WP メタは `null` を保存できないため raw `null` = 未保存と同値)。**`get()` と `has()` は分離されており、`null` をセンチネルに使うフォールスルーは存在しない**(DR-18)。
-- `set()` は `update_field($key, $value, $acfId)` へ委譲し bool を返す。`delete()` は `delete_field($key, $acfId)` へ委譲する。
+- `set()` は `update_field($key, $value, $acfId)` へ委譲する。`delete()` は `delete_field($key, $acfId)` へ委譲する。戻り値と例外はコアの `MetaStorageInterface` の契約(Meta/Option 文書 §4.5: 書き込みは「書き込んだか」を bool で返し、書き込まなかった場合(同じ値・フィルタによる中止)は false、データベースのエラー等の書き込みの失敗は例外、`null` は保存しない)に従う。
 - 全メソッドは冒頭で `function_exists('get_field')` を検査し、偽なら `AcfNotActiveException` を投げる(§10)。
 - 旧 FW の `iwf2b/meta/get` グローバルフィルタ委譲(全エンティティ一括・null センチネル・実際には配線バグで不動作)は採用しない。適用は次項のエンティティ単位オプトインのみ。
 
@@ -843,17 +886,18 @@ final class ProductPost extends PostType
 {
     public static function definition(): PostTypeDefinition
     {
-        return PostTypeDefinition::create('product')->label('製品')->hasArchive();
+        return PostTypeDefinition::create('product')->label('製品')->labelLanguage(LabelLanguage::Ja)->hasArchive();
     }
 }
 ```
 
 - これにより `ProductPost::meta($post)` の `MetaBag` が `AcfMetaStorage` 経由になる。
-- `#[UseMetaStorage(AcfMetaStorage::class)]` と `#[MetaSchema]` 定数の併用は可能だが、当該キーが ACF 管理下(§7.3)なら重複エラーになるため、実質「ACF 管理外のキーを ACF の保存規約(`update_field`)で読み書きしたい」場合に限られる。推奨は生成アクセサクラスへの一本化であり、rules/ には「ACF 利用エンティティでは `XxxFields` を第一選択、`UseMetaStorage` は補助」と記載する。
+- `#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティは、ACF管理下のキー(ACFのフィールドグループのフィールド)も`#[MetaSchema]`定数で宣言できる。本拡張の申告(§7.2)とストレージが同じため重複エラーにならず(§7.3)、宣言どおり`register_*_meta`される。`#[UseMetaStorage]`の無いエンティティ(既定の`WpMetaStorage`)が同じキーを宣言すると重複エラーになる。
+- 使い分けは文書04「メタ・設定の使い分け」(文書12 §1.9)に従う。単純な値(文字列・数値・真偽・日付・単一画像ID等)は、ACFの画面で編集する場合も`#[MetaSchema]`で宣言し、エンティティに`#[UseMetaStorage(AcfMetaStorage::class)]`を付けて、アプリは`MetaBag`だけで読み書きする(ACFに完全には依存させない)。ACF固有の複合型(repeater・flexible_content・group・gallery・relationship)は生成アクセサ(`XxxFields`)で扱う。同じキーを`MetaBag`と生成アクセサの両方から読み書きしない。
 
 ## 8.3 `PreviewAcfSupport`(プレビュー時 ACF 値保存・オプトイン)
 
-旧 FW `AbstractHook::save_preview_post` + `acf_save_preview_postmeta` の後継。コアの `Meta\PreviewMetaSupport`(Meta/Option 文書 §4.11)は WP 6.4 の `register_post_meta(..., ['revisions_enabled' => true])` に全面委譲する有効化レイヤであり、**FW 独自のフックを一切発火しない**。ACF 管理下キーはそもそも `register_post_meta` されない(§7.2)ためこのコア経路には乗らず、Meta/Option 文書も「ACF フィールドのプレビュー対応は acf-bridge 側の責務」と明記している。よって本クラスはコアの tmswp/* アクションに依存せず、WP 標準フックへ直接登録する**acf-bridge 完結**の実装とする。
+旧 FW `AbstractHook::save_preview_post` + `acf_save_preview_postmeta` の後継。コアの `#[WithMetaRevisions]`(Meta/Option 文書 §4.11)は WP 6.4 の `register_post_meta(..., ['revisions_enabled' => true])` に全面委譲する有効化レイヤであり、**FW 独自のフックを一切発火しない**。ACF 管理下キーはそもそも `register_post_meta` されない(§7.2)ためこのコア経路には乗らず、Meta/Option 文書も「ACF フィールドのプレビュー対応は acf-bridge 側の責務」と明記している。よって本クラスはコアの tmswp/* アクションに依存せず、WP 標準フックへ直接登録する**acf-bridge 完結**の実装とする。
 
 ```php
 final class PreviewAcfSupport
@@ -862,7 +906,7 @@ final class PreviewAcfSupport
 }
 ```
 
-- `register()` は `add_action('wp_insert_post', ...)` でコールバックを登録する(旧 FW と同一の契機)。プレビュー時の WP のオートセーブ/リビジョン保存は `wp_create_post_autosave()` → `_wp_put_post_revision()` → `wp_insert_post()` を経由するため、このフックでリビジョン保存を検知できる。コア `PreviewMetaSupport` の有効・無効とは独立に動作する(両者は対象キーが重複しない補完関係: コア = `#[MetaSchema]` 登録キー、本クラス = ACF 管理下キー)。
+- `register()` は `add_action('wp_insert_post', ...)` でコールバックを登録する(旧 FW と同一の契機)。プレビュー時の WP のオートセーブ/リビジョン保存は `wp_create_post_autosave()` → `_wp_put_post_revision()` → `wp_insert_post()` を経由するため、このフックでリビジョン保存を検知できる。コアの `#[WithMetaRevisions]` の有無とは独立に動作する(両者は対象キーが重複しない補完関係: コア = `#[MetaSchema]` 登録キー、本クラス = ACF 管理下キー)。
 - コールバック擬似手順(引数 `int $postId`)。判定順序を変えないこと — リビジョン判定を nonce 検証より先に行うのは、通常の投稿保存経路で ACF 自身の nonce を消費しない(`acf_verify_nonce` は成功時に nonce を無効化するため、ACF 本体の `save_post` 処理と競合させない)ためである。
   1. `$parentId = wp_is_post_revision($postId)` が false なら return(リビジョン保存以外は対象外。下書きプレビューは投稿本体が保存され ACF の通常 `save_post` 処理が値を保存するため、本クラスの関与は不要)。
   2. `$_POST['acf']` が非空配列でなければ return(ブロックエディタの REST オートセーブ等、ACF 入力を含まないリクエストはここで抜ける)。
@@ -879,10 +923,10 @@ final class PreviewAcfSupport
 ## 9.1 check のアルゴリズム
 
 ```
-1. AcfBridge::config() を取得(未boot → exit 2)
-2. AcfJsonRepository で全グループ読込(構文エラー → E102, exit 2)
+1. --app=(省略時はAcfBridgeを登録した唯一のKernel)のAcfBridgeの構成を取得(対象が決まらない・引数の誤り → exit 2。§5.1)
+2. AcfJsonRepositoryで全グループ読込(構文エラー → E102, exit 2)。オプションページのpost_idは§5.4(食い違い → E102, exit 2)
 3. Generator::generate() をメモリ上で実行(E* → exit 2)
-4. §7.3 の MetaSchema 重複検査(E101 → exit 2)
+4. §7.3のMetaSchema重複検査。起動中の全Kernelの宣言と照合する(E101 → exit 2)
 5. 期待ファイル集合 vs outputDir 実ファイルを比較:
    a. 期待にあるが実在しない → 「missing」
    b. 内容がバイト不一致       → 「modified」(統一diffの先頭40行を表示)
@@ -905,11 +949,11 @@ final class PreviewAcfSupport
 
 ## 9.3 CI 組み込み
 
-QA 文書の GitHub Actions に以下のステップを追加する(acf-json を持つプロジェクト/スターターで有効化)。
+QA 文書の GitHub Actions に以下のステップを追加する(acf-json を持つプロジェクト/スターターで有効化)。例は wp-env を使うプロジェクトのもので、§5.1 のとおり `@wordpress/env` を package.json で版を固定し、`npm ci` で入れておく。
 
 ```yaml
 - name: ACF drift check
-  run: wp-env run cli wp tmswp acf check --strict
+  run: node node_modules/@wordpress/env/bin/wp-env run cli wp tmswp acf check --strict
 ```
 
 - monorepo 側(acf-bridge パッケージ自体)の CI は、フィクスチャ acf-json を使った Generator のスナップショットテストで同等の検証を行う(wp-env 不要のユニット層)。
@@ -921,12 +965,17 @@ QA 文書の GitHub Actions に以下のステップを追加する(acf-json を
 
 | 状況 | 挙動 |
 |---|---|
-| `AcfBridge::boot()` | 成功する(フック登録のみ)。ACF 不在を理由に boot を失敗させない |
+| `AcfBridge::register()`(Kernelのboot) | 成功する(フック登録のみ)。ACF不在を理由にbootを失敗させない |
 | 生成クラスのアクセサ呼び出し(`ProductFields::of($post)->price()` 等) | `AcfNotActiveException` を投げる |
 | `AcfMetaStorage` の全メソッド | `AcfNotActiveException` を投げる |
-| Manifest 連携(§7.2) | 何もしない(マークなし。`AcfManifest` クラス未生成=sync 未実行時も同様にマークなしへ縮退する。`#[MetaSchema]` 宣言があればそれが通常どおり register される) |
-| `wp tmswp acf sync` / `check` | 実行可能(acf-json から生成するため)。オプションページ post_id の runtime 解決のみフォールバック(§5.4) |
+| Manifest連携(§7.2) | ACFが有効なときと同じく申告する(生成物`AcfManifest`だけで決まり、ACFの実行時に依存しないため)。重複は§7.3の例外になる。`AcfManifest`が無いことはACFの有無に関係なく設定の誤り(WP-CLIを除き`AcfBridgeRuntimeException`。§7.2) |
+| `wp tmswp acf sync` / `check` | 実行可能(acf-jsonと`BridgeConfig`だけから生成し、ACFの実行時に問い合わせない。§5.4) |
 | `PreviewAcfSupport` | 何もしない(フック登録はされるが、コールバックが §8.3 手順 3 の `function_exists('acf_verify_nonce')` で早期 return) |
+
+登録・申告・生成の扱いは、文書00 §5.6のエラー方針に次のとおり当てはめる。
+
+- ACFが無効であることは、それだけでは設定の誤りとしない。ACFの更新や一時的な無効化で、ACFの値を使わないページまで止めないためである。登録(§2.1)・Manifest連携(§7.2)・生成(§5)はACFの実行時に依存しないため、ACFの有無で処理を変えない。`function_exists()`でACFの有無を調べて黙って処理を飛ばす経路は持たない。
+- 生成物`AcfManifest`が無いこと、`managedKeys()`が`ManagedKey`以外を返すこと、`#[MetaSchema]`との重複(§7.3)は設定の誤りであり、debugに関係なく例外にする。有効なACFの版が6.2より古いことも設定の誤りとして例外にする(§1.2・§2.1の手順5)。`AcfManifest`が無い場合のWP-CLIの扱いは§7.2のとおり。
 
 `AcfNotActiveException` の正準仕様:
 
@@ -935,7 +984,7 @@ final class AcfNotActiveException extends AcfBridgeException
 {
     public static function forCall(string $callable): self;
     // メッセージ正準形:
-    // "{callable} requires Advanced Custom Fields (ACF) 6.0+ to be installed and active.
+    // "{callable} requires Advanced Custom Fields (ACF) 6.2+ to be installed and active.
     //  Install/activate the ACF plugin, or remove tmswp/acf-bridge usages."
 }
 ```
@@ -1003,10 +1052,13 @@ trait AcfFieldAccess
 ## 12.1 ブート(テーマ functions.php)
 
 ```php
-\TMSWP\Core\Kernel::boot(
-    \TMSWP\Core\Kernel\KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App')
+\TMSWP\Core\Kernel\Kernel::boot(
+    \TMSWP\Core\Kernel\KernelConfig::theme(
+        appDir: __DIR__ . '/app',
+        appNamespace: 'App',
+        extensions: [new \TMSWP\AcfBridge\AcfBridge()], // 既定構成(acf-json/ → app/Acf/, App\Acf)
+    ),
 );
-\TMSWP\AcfBridge\AcfBridge::boot(); // 既定構成(acf-json/ → app/Acf/, App\Acf)
 ```
 
 ## 12.2 テンプレートでの読み取り(WP 標準テーマ手法のまま)
@@ -1077,8 +1129,8 @@ $rows = \App\Acf\ShopFields::of($post)->value('店舗情報リピート');
 - **acf-export 自動エクスポート運用が前身**: T04 等の `acf-export-*.json` 運用は「フィールド定義をファイルで Git 管理する」という正しい狙いを独自形式で実装したものだった。本拡張は同じ狙いを ACF 標準の Local JSON(acf-json/)に乗せ換え、さらに型付きアクセサ生成・ドリフト検知まで引き上げた(DR-06)。テーマ直下への独自 JSON 書き出し・`show_acf` クッキーによる管理画面トグル・テーマ同梱 ACF Pro のパス解決は後継を作らず廃止する。
 - **null センチネル委譲の全廃**: 旧 `iwf2b/meta/get` 系フィルタは「null を返したら次へ」方式のため正当な null/false を外部ストレージから返せず、さらに `clear` 系はフィルタ名不一致(`iwf2b/meta/delete` 発火 vs `iwf2b/meta/clear` 登録)とシグネチャ不整合で**実際には機能していなかった**。本拡張は `has()`/`get()` 分離の `MetaStorageInterface` 実装 + `#[UseMetaStorage]` の明示オプトインに置き換え、グローバルフィルタ委譲は提供しない(DR-18)。
 - **実利用実態への適合**: 実案件 15 件中、テーマでの `get_field`/ACF API 直接利用は数千箇所規模(T10 5,662 件等)であり「ACF を使わせない」のは非現実的。一方で型検査ゼロ・フィールド名タイポの実行時無反応が恒常的な事故源だった。生成アクセサ + PHPStan level max でこれを静的検査に引き上げる。
-- **マニフェストのライフサイクル一本化**: ACF 管理下キーのマニフェストは当初、実行時に acf-json を走査して `WP_CONTENT_DIR/cache/` 配下へ自前キャッシュする方式だったが、acf-json の純関数である派生物のうちこれだけが別ライフサイクルを採る非対称があった。他の生成クラスと同じ「sync 生成物としてコミットし check で鮮度を強制する」方式へ一本化し、キャッシュ検証・アトミック書込・書込不可フォールバックの各機構を削除した(モダン化監査 2026-06-13。DR-06 の大枠=acf-json 真実源+コード生成は維持し、実現方式を実行時キャッシュから sync 生成物へ変更)。あわせて全生成ファイルへ埋めていた集約 source-hash を `AcfManifest.php` 1 箇所へ集約し、acf-json 1 ファイル編集時に無関係な全生成クラスのヘッダが変化する diff ノイズと、§9.1(一段の全文比較)と矛盾する「ハッシュ早期判定」のプロセ記述を除去した。
-- **プレビュー時 ACF 保存の継承**: 旧 `acf_save_preview_postmeta` は有用機能だったため継承する。ただしコアの `PreviewMetaSupport` は WP 6.4 の `revisions_enabled` への有効化レイヤであり独自フックを発火しない(Meta/Option 文書 §4.11)ため、旧 FW のような「コアが独自アクションを発火し ACF 実装が購読する」分割は採らず、本拡張の `PreviewAcfSupport` が旧 FW と同じ `wp_insert_post` 契機で acf-bridge 完結に実装する。旧実装に無かった nonce(`acf_verify_nonce`)と `edit_post` capability の検証を追加し、無検証の `$_POST['acf']` リビジョン書き込み経路を塞いだ(§8.3)。
+- **マニフェストのライフサイクル一本化**: ACF 管理下キーのマニフェストは acf-json の純関数である派生物なので、実行時に acf-json を走査して自前キャッシュする方式は採らず、他の生成クラスと同じ「sync 生成物としてコミットし check で鮮度を強制する」方式に揃える(DR-06)。キャッシュ検証・アトミック書込・書込不可フォールバックの機構は持たない。集約 source-hash は `AcfManifest.php` 1 箇所だけに置き、各生成クラスには埋め込まない。acf-json 1 ファイルの編集で無関係な生成クラスのヘッダが変化する diff ノイズを生まないためである。
+- **プレビュー時 ACF 保存の継承**: 旧 `acf_save_preview_postmeta` は有用機能だったため継承する。ただしコアの `#[WithMetaRevisions]` は WP 6.4 の `revisions_enabled` への有効化レイヤであり独自フックを発火しない(Meta/Option 文書 §4.11)ため、旧 FW のような「コアが独自アクションを発火し ACF 実装が購読する」分割は採らず、本拡張の `PreviewAcfSupport` が旧 FW と同じ `wp_insert_post` 契機で acf-bridge 完結に実装する。旧実装に無かった nonce(`acf_verify_nonce`)と `edit_post` capability の検証を追加し、無検証の `$_POST['acf']` リビジョン書き込み経路を塞いだ(§8.3)。
 
 ---
 
@@ -1088,7 +1140,7 @@ $rows = \App\Acf\ShopFields::of($post)->value('店舗情報リピート');
 
 - [ ] `tmswp/core` のソースコードに `acf` という文字列(識別子・フック名・コメント)が存在しない(`grep -ri acf packages/core/src` が 0 件)
 - [ ] `packages/acf-bridge/composer.json` の require が `php` と `tmswp/core` のみで、ACF が composer 依存に含まれない
-- [ ] `AcfBridge::boot()` が ACF 不在環境でも例外なく完了する
+- [ ] `KernelConfig`の`extensions`に渡した`AcfBridge`の登録(Kernelのboot)がACF不在環境でも例外なく完了し、ACF不在でも管理キーの申告(§7.2)が行われる
 - [ ] テーマ/プラグイン両コンテキストで acf-json が §3.1 の規則どおり発見される(子テーマ優先・`BridgeConfig::$jsonDirs` 追加を含む)
 - [ ] `post_type_*.json` / `taxonomy_*.json` / `active:false` グループが生成対象外となり、対応する W001/W011 が出る
 - [ ] §4.2 の location 解決表どおりにターゲットが決まる(複数 OR グループ → 複数クラス生成、`!=` 無視、AND 内優先順位、非対応 param スキップをフィクスチャでそれぞれ検証)
@@ -1107,9 +1159,9 @@ $rows = \App\Acf\ShopFields::of($post)->value('店舗情報リピート');
 - [ ] `AcfMetaStorage` が has/get/set/delete を ACF へ委譲し、`get()` が raw 値を返す。null センチネルのフォールスルーが存在しない
 - [ ] `#[UseMetaStorage(AcfMetaStorage::class)]` 付与エンティティの `meta()` が ACF 経由になる(wp-env 統合テスト)
 - [ ] `BridgeConfig::$previewMeta = true` 時、プレビュー保存(リビジョン作成)で `$_POST['acf']` の値がリビジョンへ保存され、§8.3 の判定順序どおり「非リビジョン保存」「nonce 不正」「`edit_post` 権限なし」の各ケースで書き込まれない(統合テスト)。コアの `tmswp/` プレビュー用アクションへの依存が存在しない(`grep -r 'tmswp/preview' packages/acf-bridge/src` が 0 件)
-- [ ] ACF 管理下キーが `register_*_meta` されない(統合テスト: `registered_meta_key_exists()` が false)
-- [ ] `#[MetaSchema]` と ACF 管理下キーの重複が実行時例外および `check` の E101(exit 2)の両方で検出される
-- [ ] `wp tmswp acf sync` が `AcfManifest.php` を生成し、`managedKeys()` が acf-json 由来の ACF 管理下キー一覧を返す。`AcfManifest` クラス未生成時は Manifest 連携がマークなしへ縮退する
+- [ ] `#[MetaSchema]`の宣言が無いACF管理下キーは`register_*_meta`されず(統合テスト: `registered_meta_key_exists()`がfalse)、`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティが宣言したACF管理下キーは`register_*_meta`される(統合テスト: `registered_meta_key_exists()`がtrue)
+- [ ] 別のストレージ(`AcfMetaStorage`でない)のエンティティの`#[MetaSchema]`とACF管理下キーの重複が、実行時例外および`check`のE101(exit 2)の両方で検出される
+- [ ] `wp tmswp acf sync`が`AcfManifest.php`を生成し、`managedKeys()`がacf-json由来のACF管理下キー一覧を返す。`AcfManifest`クラスが無いとき、Manifest連携(§7.2)は`AcfBridgeRuntimeException`になり、WP-CLIのときだけ`WP_CLI::warning()`で警告して申告しない
 - [ ] 実行時に `WP_CONTENT_DIR` 配下への Manifest キャッシュ書き込み・acf-json ディレクトリ走査が存在しない(grep/コードレビュー検証)
 - [ ] ACF 不在環境で生成クラス/AcfMetaStorage へのアクセスが `AcfNotActiveException`(正準メッセージ)になる
 - [ ] `wp tmswp acf check` が、差分なし=0 / 差分あり=1 / E*=2 の終了コードを返し、`--strict` で警告も 1 になる

@@ -4,20 +4,19 @@ includes:
   - vendor/phpstan/phpstan-phpunit/rules.neon
   - vendor/phpstan/phpstan-strict-rules/rules.neon
   - vendor/phpstan/phpstan-deprecation-rules/rules.neon
-  - packages/core/extension.neon
+  - packages/core/phpstan/extension.neon
 
 parameters:
   level: max
 
   phpVersion:
-    min: 80200
-    max: 80400
+    min: 80300
+    max: 80500
 
   paths:
     - packages/core/src
     - packages/core/phpstan/src
     - packages/core/tests
-    - packages/core/bin
     - packages/thumbnail/src
     - packages/thumbnail/tests
     - packages/settings-page/src
@@ -30,17 +29,18 @@ parameters:
     - starters/plugin/app
     - bin
     - tools
+    - tests/Unit
 
   excludePaths:
     - packages/*/tests/fixtures/*
     - packages/*/tests/*/fixtures/*
 
   scanDirectories:
-    - vendor-bin/wp-tests/vendor/wp-phpunit/wp-phpunit/includes
     - vendor-bin/wp-tests/vendor/yoast/phpunit-polyfills/src
 
   scanFiles:
     - vendor/php-stubs/acf-pro-stubs/acf-pro-stubs.php
+    - vendor/php-stubs/wordpress-tests-stubs/wordpress-tests-stubs.php
 
   treatPhpDocTypesAsCertain: false
   reportUnmatchedIgnoredErrors: true

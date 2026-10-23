@@ -6,42 +6,34 @@ namespace TMSWP\Core\Log;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\LoggerTrait;
-use Psr\Log\LogLevel;
 use Stringable;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\UnknownLogChannelException;
 
+/**
+ * 1つの Kernel のログのチャネルを持ち、記録をレベルとスコープで振り分ける。Kernel ごとに1つ作られる(`Kernel::logger()`)。
+ */
 final class LoggerRegistry implements LoggerInterface
 {
     use LoggerTrait;
 
     /** @var array<string, LogChannel> */
-    private array $channels = [];
-
-    private bool $configured = false;
+    private array $channels;
 
     /**
-     * @param list<string> $levels
-     * @param list<string> $scopes
+     * @param array<string, LogChannel> $channels チャネル名 => 設定。空なら最初の記録の時点で default チャネル(SimpleLogger)を作る
+     *
+     * @throws InvalidArgumentException チャネル名が空文字のとき
      */
-    public function set(string $channel, LoggerInterface $logger, array $levels = [], array $scopes = []): void
+    public function __construct(array $channels = [])
     {
-        if ($channel === '') {
-            throw new InvalidArgumentException('log channel must not be empty');
-        }
-
-        foreach ($levels as $level) {
-            $this->assertKnownLevel($level);
-        }
-
-        foreach ($scopes as $scope) {
-            if ($scope === '') {
-                throw new InvalidArgumentException('log scope must not be empty');
+        foreach (array_keys($channels) as $name) {
+            if ($name === '') {
+                throw new InvalidArgumentException('log channel must not be empty');
             }
         }
 
-        $this->channels[$channel] = new LogChannel($logger, $levels, $scopes);
-        $this->configured = true;
+        $this->channels = $channels;
     }
 
     public function has(string $channel): bool
@@ -56,11 +48,6 @@ final class LoggerRegistry implements LoggerInterface
         }
 
         return $this->channels[$channel]->logger;
-    }
-
-    public function remove(string $channel): void
-    {
-        unset($this->channels[$channel]);
     }
 
     public function scope(string $scope): LoggerInterface
@@ -82,14 +69,19 @@ final class LoggerRegistry implements LoggerInterface
     }
 
     /**
+     * @internal ScopedLog から呼ばれる振り分けの本体
+     *
      * @param array<mixed> $context
      */
     public function dispatch(mixed $level, string|Stringable $message, array $context, ?string $scope): void
     {
-        $this->assertKnownLevel($level);
+        if (!\is_string($level) || !\in_array($level, LogChannel::LEVELS, true)) {
+            throw new \Psr\Log\InvalidArgumentException('unknown log level: ' . get_debug_type($level));
+        }
 
-        if ($this->channels === [] && !$this->configured) {
-            $this->set('default', new SimpleLogger());
+        // チャネルを宣言していない Kernel は、最初の記録の時点で default チャネルを作る(遅延デフォルトチャネル)
+        if ($this->channels === []) {
+            $this->channels['default'] = new LogChannel(new SimpleLogger());
         }
 
         if ($scope !== null && !\array_key_exists('_scope', $context)) {
@@ -104,28 +96,5 @@ final class LoggerRegistry implements LoggerInterface
                 $channel->logger->log($level, $message, $context);
             }
         }
-    }
-
-    /** @throws \Psr\Log\InvalidArgumentException */
-    private function assertKnownLevel(mixed $level): void
-    {
-        if (!\is_string($level) || !\in_array($level, self::levels(), true)) {
-            throw new \Psr\Log\InvalidArgumentException('unknown log level: ' . get_debug_type($level));
-        }
-    }
-
-    /** @return list<string> */
-    private static function levels(): array
-    {
-        return [
-            LogLevel::DEBUG,
-            LogLevel::INFO,
-            LogLevel::NOTICE,
-            LogLevel::WARNING,
-            LogLevel::ERROR,
-            LogLevel::CRITICAL,
-            LogLevel::ALERT,
-            LogLevel::EMERGENCY,
-        ];
     }
 }

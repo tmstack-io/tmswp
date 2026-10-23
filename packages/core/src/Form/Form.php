@@ -4,8 +4,15 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Form;
 
+use Psr\Log\LogLevel;
+use Throwable;
 use TMSWP\Core\Exception\Form\FormConfigException;
+use TMSWP\Core\Exception\Form\TempFileException;
+use TMSWP\Core\Exception\KernelException;
+use TMSWP\Core\Exception\LogicException;
+use TMSWP\Core\Exception\RuntimeException;
 use TMSWP\Core\Form\Composite\CompositeField;
+use TMSWP\Core\Kernel\Kernel;
 
 final class Form
 {
@@ -13,11 +20,12 @@ final class Form
     public const FIELD_STEP = '_step';
     public const FIELD_NONCE = '_nonce';
     public const FIELD_CONFIRM_TOKEN = '_confirm_token';
+    public const FIELD_SUBMIT_TOKEN = '_submit_token';
 
     /** @var array<string, mixed> */
     private array $values = [];
 
-    /** @var array<string, mixed> */
+    /** @var array<string, string|list<string>> */
     private array $defaultOverrides = [];
 
     /** @var array<string, list<string>> */
@@ -26,23 +34,47 @@ final class Form
     /** @var list<string> */
     private array $formErrors = [];
 
+    /**
+     * 取り込み(bind())の段階で見つけた、利用者の入力の不正(不正な UTF-8・不正な形のファイルのエントリ)。
+     * 項目名 => エラーメッセージ。validate() が、その項目の検証の結果に代えて項目のエラーにする。
+     *
+     * @var array<string, string>
+     */
+    private array $inputErrors = [];
+
     private FormStep $step = FormStep::Input;
 
     private ?FormResult $result = null;
 
     private string $confirmToken = '';
 
+    /**
+     * `new Form()` を書いたファイル。ログの記録先と debug の判定に使う Kernel を、このファイルを含むルートを持つ
+     * Kernel に決める(Kernel::forFile()。Log の静的な呼び出しと同じ規則)。
+     */
+    private readonly string $creatorFile;
+
+    private ?Kernel $kernel = null;
+
     public function __construct(private readonly FormDefinition $definition)
     {
+        $this->creatorFile = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1)[0]['file'] ?? '';
         $this->values = $this->defaultValues();
     }
 
+    /**
+     * バインド・CSRF の検証・送信トークンの検証・スパム対策・値の検証・状態遷移・完了処理を行う。
+     * 2回目以降の呼び出しは、初回の FormResult をそのまま返す。
+     *
+     * @throws Throwable debug のとき、onComplete が投げた例外と、JtiStore のデータベースのエラー
+     */
     public function handle(?FormRequest $request = null): FormResult
     {
         if ($this->result instanceof FormResult) {
             return $this->result;
         }
 
+        $this->excludeFromPageCache();
         $request ??= FormRequest::fromGlobals();
 
         if (!$request->isPost() || $this->requestString($request, self::FIELD_FORM_ID) !== $this->definition->id) {
@@ -53,7 +85,8 @@ final class Form
 
         if (!$this->verifyNonce($request)) {
             $this->bind($request);
-            $this->formErrors[] = $this->translate('Your session has expired. Please submit the form again.');
+            $this->formErrors[] = __('Your session has expired. Please submit the form again.', 'tmswp');
+            $this->log(LogLevel::WARNING, 'the CSRF check (nonce) of form {form} failed');
 
             return $this->finish(FormStep::Input);
         }
@@ -70,9 +103,16 @@ final class Form
             $action = FormAction::Submit;
         }
 
+        if ($action === FormAction::Back && !$this->definition->isConfirmEnabled()) {
+            // 確認画面の無いフォームに戻る操作は無い。不明な _step と同じく、検証せずに入力画面を再表示する
+            $this->bind($request);
+
+            return $this->finish(FormStep::Input);
+        }
+
         return match ($action) {
             FormAction::Confirm => $this->handleConfirm($request),
-            FormAction::Submit => $this->handleSubmit($request),
+            FormAction::Submit => $this->definition->isConfirmEnabled() ? $this->handleConfirmedSubmit($request) : $this->handleDirectSubmit($request),
             FormAction::Back => $this->handleBack($request),
         };
     }
@@ -96,21 +136,59 @@ final class Form
         return $views;
     }
 
-    /** @param array<string, mixed> $attrs */
-    public function open(array $attrs = []): string
+    /**
+     * 確認画面に出す項目の FieldView(定義の順)。hidden とパスワードの項目(パスワードの部品を含む複合フィールドを
+     * 含む)と、FormDefinition::hideOnConfirm() で指定した項目を除く。
+     *
+     * @return array<string, FieldView>
+     */
+    public function confirmFields(): array
     {
-        $attrs = ['method' => 'post', 'action' => ''] + $attrs;
+        $views = [];
 
-        if ($this->definition->hasFileField()) {
-            $attrs['enctype'] = 'multipart/form-data';
+        foreach ($this->definition->confirmFields() as $name => $_field) {
+            $views[$name] = $this->field($name);
         }
 
-        $html = FormHtml::openTag($attrs);
+        return $views;
+    }
+
+    /**
+     * `<form>` の開始タグと、必須の hidden(_form_id・_nonce、確認画面の無いフォームでは _submit_token、確認画面では
+     * _confirm_token)を返す。入力画面では、登録したスパム対策の HTML も続けて返す。
+     *
+     * @param array<array-key, mixed> $attrs action は送信先を指定できる(既定は '' で、自分のページ)。method は常に
+     *                                       post、enctype はファイルの項目の有無で決まるため、どちらも指定できない
+     *
+     * @throws FormConfigException method・enctype を指定した場合と、action が文字列にできない値の場合
+     */
+    public function open(array $attrs = []): string
+    {
+        $this->excludeFromPageCache();
+        $attrs = FormHtml::normalizeAttributes($attrs);
+        $action = '';
+
+        if (\array_key_exists('action', $attrs)) {
+            $action = Validator::stringValue($attrs['action']) ?? throw new FormConfigException("attribute 'action' must be scalar or Stringable");
+            unset($attrs['action']);
+        }
+
+        $html = FormHtml::openTag($action, $this->definition->hasFileField(), $attrs);
         $html .= FormHtml::hidden(self::FIELD_FORM_ID, $this->definition->id);
         $html .= FormHtml::hidden(self::FIELD_NONCE, $this->createNonce());
 
+        if (!$this->definition->isConfirmEnabled()) {
+            $html .= FormHtml::hidden(self::FIELD_SUBMIT_TOKEN, SubmitToken::issue($this->definition->id));
+        }
+
         if ($this->step === FormStep::Confirm) {
             $html .= FormHtml::hidden(self::FIELD_CONFIRM_TOKEN, $this->confirmToken);
+        }
+
+        if ($this->step === FormStep::Input) {
+            foreach ($this->definition->spamGuards() as $guard) {
+                $html .= $guard->render($this->definition->id);
+            }
         }
 
         return $html;
@@ -137,15 +215,24 @@ final class Form
         return $this->values;
     }
 
-    /** @param array<string, mixed> $values */
+    /**
+     * 項目の既定値を差し替える(設定画面で保存済みの値を初期表示する等)。handle() より前に呼ぶ。
+     *
+     * @param array<string, mixed> $values 項目名 => 値。単一の値の項目と複合フィールド(正準値)は string、
+     *                                     複数選択(checkboxes)は list<string>
+     *
+     * @throws LogicException handle() の後に呼んだ場合
+     * @throws \TMSWP\Core\Exception\Form\UnknownFieldException フォームに無い項目を指定した場合
+     * @throws FormConfigException 値の型が項目の受け付ける形と違う場合と、ファイルの項目を指定した場合
+     */
     public function applyDefaults(array $values): void
     {
-        foreach ($values as $name => $value) {
-            if (!$this->definition->has($name)) {
-                throw new FormConfigException("unknown form field default: {$name}");
-            }
+        if ($this->result instanceof FormResult) {
+            throw new LogicException("applyDefaults() of form '{$this->definition->id}' must be called before handle()");
+        }
 
-            $this->defaultOverrides[$name] = $value;
+        foreach ($values as $name => $value) {
+            $this->defaultOverrides[$name] = $this->defaultOverride($this->definition->field($name), $value);
         }
 
         $this->values = $this->defaultValues();
@@ -171,90 +258,334 @@ final class Form
     private function handleConfirm(FormRequest $request): FormResult
     {
         $this->bind($request);
+
+        if (!$this->passesSpamGuards($request)) {
+            return $this->finish(FormStep::Input);
+        }
+
+        $this->validate();
+
+        try {
+            if ($this->fieldErrors !== []) {
+                // 他の項目のエラーで入力画面に戻るときも、検証を通ったファイルは保管してトークンで引き回す(選び直させない)
+                $this->storeValidUploadedFiles();
+
+                return $this->finish(FormStep::Input);
+            }
+
+            $this->storeUploadedFiles();
+        } catch (TempFileException $exception) {
+            return $this->failSubmission('failed to store the uploaded files of form {form}', $exception);
+        }
+
+        $this->confirmToken = ConfirmToken::issue($this->definition->id, $this->tokenValues());
+
+        return $this->finish(FormStep::Confirm);
+    }
+
+    /**
+     * 確認画面からの送信。トークンの検証 → 全項目の復元とファイルの存在の確認 → 今の規則での再検証 → jti の claim
+     * → onComplete の順。復元できない(ファイルの消失・項目の食い違い)ときと再検証に失敗したときは、jti を claim
+     * せずに入力画面へ戻す。ただし、ファイルが消えていて jti が claim 済みなら、完了の後の再送として拒否する。
+     */
+    private function handleConfirmedSubmit(FormRequest $request): FormResult
+    {
+        $token = ConfirmToken::verify($this->definition->id, $this->requestString($request, self::FIELD_CONFIRM_TOKEN), $this->definition->ttl());
+
+        if ($token->status === TokenStatus::Invalid) {
+            $this->values = $this->defaultValues();
+            $this->formErrors[] = __('The form could not be resubmitted. Please start again.', 'tmswp');
+            $this->log(LogLevel::WARNING, 'the confirm token of form {form} was rejected as invalid (malformed, tampered or issued for another form)');
+
+            return $this->finish(FormStep::Input);
+        }
+
+        $restored = $this->restoreValues($token->values);
+
+        if ($token->status === TokenStatus::Expired) {
+            return $this->returnToInput(__('The confirmation screen has expired. Please review your entries and continue again.', 'tmswp'));
+        }
+
+        if ($restored['changed']) {
+            $this->log(LogLevel::NOTICE, 'the confirm token of form {form} does not match the current fields of the form');
+
+            return $this->returnToInput(__('The confirmation screen has expired. Please review your entries and continue again.', 'tmswp'));
+        }
+
+        if ($restored['missingFiles'] !== []) {
+            return $this->rejectMissingFiles($token->jti, $restored['missingFiles']);
+        }
+
+        // 確認の後のデプロイで規則や選択肢が変わっていることがあるため、署名済みの値も今の規則で検証し直す
+        $errors = (new Validator())->validate($this->definition, $this->valuesForValidation());
+
+        if ($errors !== []) {
+            $this->fieldErrors = $errors;
+            $this->decomposeCompositeValues();
+            $this->log(LogLevel::NOTICE, 'the values in the confirm token of form {form} do not pass the current rules: {fields}', ['fields' => implode(', ', array_keys($errors))]);
+
+            return $this->finish(FormStep::Input);
+        }
+
+        return $this->complete($token->jti, $this->definition->ttl() + 60);
+    }
+
+    /**
+     * 確認画面の無いフォームの送信。送信トークンの検証 → スパム対策 → 値の検証 → jti の claim → ファイルの保管 →
+     * onComplete の順(ファイルの保管は complete() が行う)。
+     */
+    private function handleDirectSubmit(FormRequest $request): FormResult
+    {
+        $token = SubmitToken::verify($this->definition->id, $this->requestString($request, self::FIELD_SUBMIT_TOKEN));
+        $this->bind($request);
+
+        if ($token->status !== TokenStatus::Valid) {
+            $this->formErrors[] = __('Your session has expired. Please submit the form again.', 'tmswp');
+
+            if ($token->status === TokenStatus::Invalid) {
+                $this->log(LogLevel::WARNING, 'the submit token of form {form} was rejected as invalid (missing, malformed, tampered or issued for another form)');
+            }
+
+            return $this->finish(FormStep::Input);
+        }
+
+        if (!$this->passesSpamGuards($request)) {
+            return $this->finish(FormStep::Input);
+        }
+
         $this->validate();
 
         if ($this->fieldErrors !== []) {
             return $this->finish(FormStep::Input);
         }
 
-        $this->storeUploadedFiles();
-        $this->confirmToken = ConfirmToken::issue($this->definition->id, $this->tokenValues());
-
-        return $this->finish(FormStep::Confirm);
+        return $this->complete($token->jti, SubmitToken::TTL + 60);
     }
 
-    private function handleSubmit(FormRequest $request): FormResult
+    /**
+     * jti を claim し、ファイルを保管してから onComplete を呼び、onComplete が消費しなかった一時ファイルを消す。
+     *
+     * claim を先にするのは、並行した二重の POST で onComplete を1回だけ実行するため。ファイルの保管を claim の後に
+     * するのは、再送として拒否する POST のファイルを保管しないため(確認画面ありのフォームは確認の時点で保管済みで、
+     * ここでは何もしない)。保管と onComplete が例外で終わったら jti を手放し、同じトークンで再送できるようにする。
+     * このとき一時ファイルは消さない(再送で使う)。
+     */
+    private function complete(string $jti, int $ttl): FormResult
     {
-        if ($this->definition->isConfirmEnabled()) {
-            $token = ConfirmToken::verify($this->definition->id, $this->requestString($request, self::FIELD_CONFIRM_TOKEN), $this->definition->ttl());
+        $store = new JtiStore();
 
-            if ($token->status === ConfirmTokenStatus::Invalid) {
-                $this->values = $this->defaultValues();
-                $this->formErrors[] = $this->translate('The form could not be resubmitted. Please start again.');
+        try {
+            $claim = $store->claim($jti, $ttl);
+        } catch (RuntimeException $exception) {
+            return $this->failSubmission('failed to claim the submission ID of form {form}', $exception);
+        }
 
-                return $this->finish(FormStep::Input);
-            }
+        if ($claim === JtiClaim::Duplicate) {
+            return $this->rejectResubmission();
+        }
 
-            if ($token->status === ConfirmTokenStatus::Expired) {
-                $this->restoreValues($token->values);
-                $this->formErrors[] = $this->translate('The confirmation screen has expired. Please review your entries and continue again.');
+        try {
+            $this->storeUploadedFiles();
+        } catch (TempFileException $exception) {
+            $this->release($store, $jti, $exception);
 
-                return $this->finish(FormStep::Input);
-            }
-
-            if (!$this->consumeJti($token->jti, $this->definition->ttl() + 60)) {
-                $this->values = $this->defaultValues();
-                $this->formErrors[] = $this->translate('This form has already been submitted.');
-
-                return $this->finish(FormStep::Input);
-            }
-
-            if (!$this->restoreFileTokens($token->values)) {
-                $this->formErrors[] = $this->translate('The confirmation screen has expired. Please review your entries and continue again.');
-
-                return $this->finish(FormStep::Input);
-            }
-        } else {
-            $this->bind($request);
-            $this->validate();
-
-            if ($this->fieldErrors !== []) {
-                return $this->finish(FormStep::Input);
-            }
+            return $this->failSubmission('failed to store the uploaded files of form {form}', $exception);
         }
 
         $handler = $this->definition->completeHandler();
 
         if ($handler !== null) {
-            $handler($this->values, $this);
+            try {
+                $handler($this->values, $this);
+            } catch (Throwable $exception) {
+                $this->release($store, $jti, $exception);
+
+                return $this->failSubmission('onComplete of form {form} threw an exception', $exception);
+            }
         }
 
+        $this->deleteUnconsumedFiles();
+
         return $this->finish(FormStep::Complete);
+    }
+
+    private function rejectResubmission(): FormResult
+    {
+        $this->values = $this->defaultValues();
+        $this->formErrors[] = __('This form has already been submitted.', 'tmswp');
+        $this->log(LogLevel::NOTICE, 'a resubmission of form {form} was rejected');
+
+        return $this->finish(FormStep::Input);
+    }
+
+    /**
+     * 一時ファイルが消えていた確認画面からの送信。jti が claim 済みなら、送信の完了の後(完了の後始末でファイルを
+     * 消した後)の再送として拒否する。claim されていなければ(gc による消失等)、jti を claim せずに入力画面に戻す。
+     *
+     * @param list<string> $fields ファイルが消えていた項目
+     */
+    private function rejectMissingFiles(string $jti, array $fields): FormResult
+    {
+        try {
+            $claimed = (new JtiStore())->isClaimed($jti);
+        } catch (RuntimeException $exception) {
+            return $this->failSubmission('failed to look up the submission ID of form {form}', $exception);
+        }
+
+        if ($claimed) {
+            return $this->rejectResubmission();
+        }
+
+        $this->log(LogLevel::WARNING, 'temporary files of form {form} were missing at submission: {fields}', ['fields' => implode(', ', $fields)]);
+
+        return $this->returnToInput(__('The confirmation screen has expired. Please review your entries and continue again.', 'tmswp'));
+    }
+
+    /**
+     * 送信の完了の後、onComplete が移動(moveTo())も添付化(toAttachment())もしなかった一時ファイルを消す。
+     * 利用者の送信は成功しているため、削除の失敗は debug でも例外にせず、Kernel のロガーに error で記録して残りを続ける
+     * (残ったファイルは gc() が消す)。
+     */
+    private function deleteUnconsumedFiles(): void
+    {
+        foreach ($this->values as $value) {
+            if (!$value instanceof StoredFile) {
+                continue;
+            }
+
+            try {
+                $value->delete();
+            } catch (TempFileException $exception) {
+                $this->log(LogLevel::ERROR, 'failed to delete a temporary file of form {form} after completion', self::exceptionContext($exception));
+            }
+        }
+    }
+
+    /**
+     * onComplete の例外・ファイルの保管の失敗の後に jti を手放す。手放しに失敗したら記録し、元の失敗の扱い(debug なら
+     * 投げる)を優先する。この場合、同じトークンでの再送は再送として拒否される。
+     *
+     * @param Throwable $failure onComplete が投げた例外か、保管の失敗(Kernel を決められないとき、previous に入れて投げる)
+     */
+    private function release(JtiStore $store, string $jti, Throwable $failure): void
+    {
+        try {
+            $store->release($jti);
+        } catch (RuntimeException $exception) {
+            $this->kernelKeeping($failure)->logger()->log(
+                LogLevel::ERROR,
+                'tmswp.form: failed to release the submission ID of form {form}; the same token cannot be resubmitted',
+                ['form' => $this->definition->id] + self::exceptionContext($exception),
+            );
+        }
+    }
+
+    /**
+     * 送信の失敗をエラー方針(00-overview.md §5.6)に従って扱う。debug では例外を投げ、本番では Kernel のロガーに
+     * error で記録し、汎用の送信失敗のエラーを付けて入力画面に戻す。
+     *
+     * @throws Throwable debug のとき
+     */
+    private function failSubmission(string $message, Throwable $exception): FormResult
+    {
+        if ($this->kernelKeeping($exception)->config()->debug) {
+            throw $exception;
+        }
+
+        $this->log(LogLevel::ERROR, $message, self::exceptionContext($exception));
+
+        return $this->returnToInput(__('The form could not be sent. Please try again.', 'tmswp'));
+    }
+
+    /**
+     * Form の Kernel を返す。Kernel を決められないときも、送信の失敗の元の例外を失わないよう、previous に入れて投げる。
+     *
+     * @throws KernelException `new Form()` を書いたファイルが、どの Kernel のルートにも含まれない場合
+     */
+    private function kernelKeeping(Throwable $failure): Kernel
+    {
+        try {
+            return $this->kernel();
+        } catch (KernelException $exception) {
+            throw new KernelException($exception->getMessage(), previous: $failure);
+        }
+    }
+
+    /**
+     * ログの文脈に入れる例外の情報。例外のメッセージ・トレース・オブジェクトは入れない。onComplete が利用者の入力値を
+     * メッセージに含めた例外を投げることがあり、トレースの引数には jti 等が入りうるため(本番のログに残さない)。
+     * 開発者は debug で元の例外を見られる。
+     *
+     * @return array{exceptionClass: class-string<Throwable>, exceptionAt: string, previousClasses: list<class-string<Throwable>>}
+     */
+    private static function exceptionContext(Throwable $exception): array
+    {
+        $previous = [];
+
+        for ($current = $exception->getPrevious(); $current !== null; $current = $current->getPrevious()) {
+            $previous[] = $current::class;
+        }
+
+        return [
+            'exceptionClass' => $exception::class,
+            'exceptionAt' => $exception->getFile() . ':' . $exception->getLine(),
+            'previousClasses' => $previous,
+        ];
     }
 
     private function handleBack(FormRequest $request): FormResult
     {
         $token = ConfirmToken::verify($this->definition->id, $this->requestString($request, self::FIELD_CONFIRM_TOKEN), $this->definition->ttl());
 
-        if ($token->status === ConfirmTokenStatus::Invalid) {
+        if ($token->status === TokenStatus::Invalid) {
             $this->values = $this->defaultValues();
+            $this->formErrors[] = __('The form could not be resubmitted. Please start again.', 'tmswp');
+            $this->log(LogLevel::WARNING, 'the confirm token of form {form} was rejected as invalid on going back (malformed, tampered or issued for another form)');
 
             return $this->finish(FormStep::Input);
         }
 
+        // 入力画面へ戻り、確認からやり直すため、項目の食い違いやファイルの消失はここでは扱わない
         $this->restoreValues($token->values);
+        $this->decomposeCompositeValues();
 
         return $this->finish(FormStep::Input);
     }
 
+    private function passesSpamGuards(FormRequest $request): bool
+    {
+        foreach ($this->definition->spamGuards() as $guard) {
+            if (!$guard->passes($request)) {
+                $this->formErrors[] = __('Your submission could not be verified. Please try again.', 'tmswp');
+                $this->log(LogLevel::NOTICE, 'spam guard {guard} rejected a submission of form {form}', ['guard' => $guard::class]);
+
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function returnToInput(string $formError): FormResult
+    {
+        $this->decomposeCompositeValues();
+        $this->formErrors[] = $formError;
+
+        return $this->finish(FormStep::Input);
+    }
+
+    /**
+     * POST の値を項目に取り込む。不正な UTF-8 と不正な形のファイルのエントリは、例外にせず、その項目の値を空にして
+     * $inputErrors に積む(validate() で項目のエラーになる)。ログには項目名だけを残し、入力値は残さない。
+     */
     private function bind(FormRequest $request): void
     {
         $values = [];
+        $this->inputErrors = [];
 
         foreach ($this->definition->fields() as $name => $field) {
             if ($field instanceof CompositeField) {
-                $raw = $request->post($name);
-                $values[$name] = \is_array($raw) ? $raw : [];
+                $values[$name] = $this->bindComposite($field, $request);
                 continue;
             }
 
@@ -262,15 +593,61 @@ final class Form
         }
 
         $this->values = $values;
+
+        if ($this->inputErrors !== []) {
+            $this->log(LogLevel::NOTICE, 'the request to form {form} has malformed input (invalid UTF-8 or a malformed file upload) in: {fields}', ['fields' => implode(', ', array_keys($this->inputErrors))]);
+        }
     }
 
+    /**
+     * 不正な UTF-8 の部品があれば $inputErrors に積み、値を空にする。
+     *
+     * @return array<array-key, mixed> 部品の値(検証の時に正準値へ合成する)
+     *
+     * @phpstan-impure
+     */
+    private function bindComposite(CompositeField $field, FormRequest $request): array
+    {
+        $raw = $request->post($field->name);
+
+        if (!\is_array($raw)) {
+            return [];
+        }
+
+        foreach ($field->parts() as $partName => $_part) {
+            $part = Validator::stringValue($raw[$partName] ?? '');
+
+            if ($part !== null && !self::isValidUtf8($part)) {
+                $this->inputErrors[$field->name] = self::invalidCharactersMessage($field->label);
+
+                return [];
+            }
+        }
+
+        return $raw;
+    }
+
+    /**
+     * 入力の不正(不正な UTF-8・不正な形のファイルのエントリ)があれば $inputErrors に積み、値を空にする。
+     *
+     * @phpstan-impure
+     */
     private function bindField(Field $field, FormRequest $request): mixed
     {
         if ($field->type === FieldType::File) {
             $file = $request->files[$field->name] ?? null;
 
-            if (\is_array($file) && ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
-                return UploadedFile::fromFilesEntry($this->fileEntry($file));
+            // error の無いエントリも、ファイルを選ばなかった送信ではなく不正な形として扱う
+            if ($file !== null && !(\array_key_exists('error', $file) && $file['error'] === UPLOAD_ERR_NO_FILE)) {
+                $uploaded = self::uploadedFile($file);
+
+                if ($uploaded === null) {
+                    $this->inputErrors[$field->name] = __('The file upload failed.', 'tmswp');
+
+                    return '';
+                }
+
+                return $uploaded;
             }
 
             $token = $this->requestString($request, $field->name . '__token');
@@ -291,6 +668,12 @@ final class Form
             foreach ($items as $item) {
                 $value = $this->normalizeScalar($item);
 
+                if (!self::isValidUtf8($value)) {
+                    $this->inputErrors[$field->name] = self::invalidCharactersMessage($field->label);
+
+                    return [];
+                }
+
                 foreach ($field->filters as $filter) {
                     $value = $filter($value);
                 }
@@ -303,6 +686,12 @@ final class Form
 
         $value = $this->normalizeScalar($raw);
 
+        if (!self::isValidUtf8($value)) {
+            $this->inputErrors[$field->name] = self::invalidCharactersMessage($field->label);
+
+            return '';
+        }
+
         foreach ($field->filters as $filter) {
             $value = $filter($value);
         }
@@ -311,29 +700,34 @@ final class Form
     }
 
     /**
-     * @param array<string, mixed> $file
+     * $_FILES のエントリから UploadedFile を作る。1つのファイルの形(name・type・tmp_name が文字列、error・size が
+     * 整数)でないエントリ(`resume[]` のような配列のファイル等)と、ファイル名が不正な UTF-8 のエントリは null。
      *
-     * @return array{name: string, type: string, tmp_name: string, error: int, size: int}
+     * @param array<array-key, mixed> $file
      */
-    private function fileEntry(array $file): array
+    private static function uploadedFile(array $file): ?UploadedFile
     {
-        if (
-            !\is_string($file['name'] ?? null)
-            || !\is_string($file['type'] ?? null)
-            || !\is_string($file['tmp_name'] ?? null)
-            || !\is_int($file['error'] ?? null)
-            || !\is_int($file['size'] ?? null)
-        ) {
-            throw new FormConfigException('uploaded file entry is invalid');
+        $name = $file['name'] ?? null;
+        $type = $file['type'] ?? null;
+        $tmpName = $file['tmp_name'] ?? null;
+        $error = $file['error'] ?? null;
+        $size = $file['size'] ?? null;
+
+        if (!\is_string($name) || !\is_string($type) || !\is_string($tmpName) || !\is_int($error) || !\is_int($size) || !self::isValidUtf8($name)) {
+            return null;
         }
 
-        return [
-            'name' => $file['name'],
-            'type' => $file['type'],
-            'tmp_name' => $file['tmp_name'],
-            'error' => $file['error'],
-            'size' => $file['size'],
-        ];
+        return UploadedFile::fromFilesEntry(['name' => $name, 'type' => $type, 'tmp_name' => $tmpName, 'error' => $error, 'size' => $size]);
+    }
+
+    private static function isValidUtf8(string $value): bool
+    {
+        return preg_match('//u', $value) === 1;
+    }
+
+    private static function invalidCharactersMessage(string $label): string
+    {
+        return strtr(__('{label} contains characters that cannot be used.', 'tmswp'), ['{label}' => $label]);
     }
 
     private function normalizeScalar(mixed $value): string
@@ -341,19 +735,57 @@ final class Form
         return Validator::stringValue($value) ?? '';
     }
 
+    /**
+     * 値を検証する。取り込みの段階で入力の不正があった項目は、検証の結果に代えてその不正をエラーにする。アップロードに
+     * 失敗したファイル(サイズの超過等)は、項目の規則に関係なく、規則のエラーより先にエラーにする(検証を通ったファイルを
+     * 必ず保管できるようにするため。失敗したアップロードに拡張子等の規則のエラーを出さないため)。
+     */
     private function validate(): void
     {
-        $this->fieldErrors = (new Validator())->validate($this->definition, $this->values);
+        $errors = (new Validator())->validate($this->definition, $this->values);
+        $this->fieldErrors = [];
+
+        foreach ($this->definition->fields() as $name => $_field) {
+            $value = $this->values[$name] ?? null;
+
+            if (\array_key_exists($name, $this->inputErrors)) {
+                $this->fieldErrors[$name] = [$this->inputErrors[$name]];
+            } elseif ($value instanceof UploadedFile && !$value->isValid()) {
+                $this->fieldErrors[$name] = [$value->errorMessage()];
+            } elseif (\array_key_exists($name, $errors)) {
+                $this->fieldErrors[$name] = $errors[$name];
+            }
+        }
 
         if ($this->fieldErrors === []) {
             $this->normalizeCompositeValues();
         }
     }
 
+    /**
+     * 値が UploadedFile の項目を保管して StoredFile に差し替える。validate() を通った後に呼ぶ(アップロードに失敗した
+     * ファイルは validate() でエラーになっている)。
+     *
+     * @throws TempFileException 保管の失敗
+     */
     private function storeUploadedFiles(): void
     {
         foreach ($this->values as $name => $value) {
             if ($value instanceof UploadedFile) {
+                $this->values[$name] = $this->definition->store()->store($value);
+            }
+        }
+    }
+
+    /**
+     * 自身の項目にエラーが無く、アップロードに成功したファイルだけを保管する(他の項目にエラーがあるとき)
+     *
+     * @throws TempFileException 保管の失敗
+     */
+    private function storeValidUploadedFiles(): void
+    {
+        foreach ($this->values as $name => $value) {
+            if ($value instanceof UploadedFile && !\array_key_exists($name, $this->fieldErrors) && $value->isValid()) {
                 $this->values[$name] = $this->definition->store()->store($value);
             }
         }
@@ -407,63 +839,125 @@ final class Form
         return $values;
     }
 
-    /** @param array<string, string|list<string>|array{__tmsfile: string}> $values */
-    private function restoreValues(array $values): void
+    /**
+     * 署名済みの値を全項目復元する。複合フィールドは正準値(文字列)のまま、ファイルは一時保管から解決する
+     * (消えていたら '')。トークンに無い項目は既定値になる。
+     *
+     * @param array<string, string|list<string>|array{__tmsfile: string}> $tokenValues
+     *
+     * @return array{changed: bool, missingFiles: list<string>} changed はトークンの項目と値の形がフォームの現在の
+     *                                                          項目と食い違うこと(デプロイをまたいだ送信等)
+     */
+    private function restoreValues(array $tokenValues): array
     {
         $this->values = $this->defaultValues();
+        $fields = $this->definition->fields();
+        $changed = array_diff_key($tokenValues, $fields) !== [] || array_diff_key($fields, $tokenValues) !== [];
+        $missingFiles = [];
 
-        foreach ($values as $name => $value) {
-            if (!$this->definition->has($name)) {
-                throw new FormConfigException("unknown form field in confirm token: {$name}");
-            }
-
-            $field = $this->definition->field($name);
-
-            if (\is_array($value) && \array_key_exists('__tmsfile', $value)) {
-                $this->values[$name] = $this->definition->store()->exists($value['__tmsfile'])
-                    ? $this->definition->store()->resolve($value['__tmsfile'])
-                    : '';
+        foreach ($tokenValues as $name => $value) {
+            if (!\array_key_exists($name, $fields)) {
                 continue;
             }
 
-            $this->values[$name] = $field instanceof CompositeField && \is_string($value) ? $field->decompose($value) : $value;
-        }
-    }
+            if (!$this->matchesTokenShape($fields[$name], $value)) {
+                $changed = true;
+                continue;
+            }
 
-    /** @param array<string, string|list<string>|array{__tmsfile: string}> $values */
-    private function restoreFileTokens(array $values): bool
-    {
-        $this->values = $this->defaultValues();
-
-        foreach ($values as $name => $value) {
             if (\is_array($value) && \array_key_exists('__tmsfile', $value)) {
-                if (!$this->definition->has($name)) {
-                    throw new FormConfigException("unknown form field in confirm token: {$name}");
-                }
-
-                if (!$this->definition->store()->exists($value['__tmsfile'])) {
+                if ($this->definition->store()->exists($value['__tmsfile'])) {
+                    $this->values[$name] = $this->definition->store()->resolve($value['__tmsfile']);
+                } else {
                     $this->values[$name] = '';
-
-                    return false;
+                    $missingFiles[] = $name;
                 }
 
-                $this->values[$name] = $this->definition->store()->resolve($value['__tmsfile']);
                 continue;
-            }
-
-            if (!$this->definition->has($name)) {
-                throw new FormConfigException("unknown form field in confirm token: {$name}");
             }
 
             $this->values[$name] = $value;
         }
 
-        return true;
+        return ['changed' => $changed, 'missingFiles' => $missingFiles];
     }
 
-    private function consumeJti(string $jti, int $ttl): bool
+    /** @param string|list<string>|array{__tmsfile: string} $value */
+    private function matchesTokenShape(Field|CompositeField $field, string|array $value): bool
     {
-        return (new JtiStore())->claim($jti, $ttl);
+        if ($field instanceof CompositeField) {
+            return \is_string($value);
+        }
+
+        if ($field->type === FieldType::File) {
+            return $value === '' || (\is_array($value) && \array_key_exists('__tmsfile', $value));
+        }
+
+        if ($field->multiple) {
+            return \is_array($value) && !\array_key_exists('__tmsfile', $value);
+        }
+
+        return \is_string($value);
+    }
+
+    /**
+     * 復元した値を Validator に渡す形にする。Validator は複合フィールドを部品の値で受け取るため、正準値を分解する。
+     *
+     * @return array<string, mixed>
+     */
+    private function valuesForValidation(): array
+    {
+        $values = $this->values;
+
+        foreach ($this->definition->fields() as $name => $field) {
+            if ($field instanceof CompositeField && \is_string($values[$name] ?? null)) {
+                $values[$name] = $field->decompose($values[$name]);
+            }
+        }
+
+        return $values;
+    }
+
+    /** 入力画面に再表示するため、複合フィールドの正準値を部品の値に戻す */
+    private function decomposeCompositeValues(): void
+    {
+        foreach ($this->definition->fields() as $name => $field) {
+            if ($field instanceof CompositeField && \is_string($this->values[$name] ?? null)) {
+                $this->values[$name] = $field->decompose($this->values[$name]);
+            }
+        }
+    }
+
+    /** @return string|list<string> */
+    private function defaultOverride(Field|CompositeField $field, mixed $value): string|array
+    {
+        if ($field instanceof Field && $field->type === FieldType::File) {
+            throw new FormConfigException("file field '{$field->name}' cannot have a default value");
+        }
+
+        if ($field instanceof Field && $field->multiple) {
+            if (!\is_array($value) || !array_is_list($value)) {
+                throw new FormConfigException("default value of field '{$field->name}' must be a list of strings, " . get_debug_type($value) . ' given');
+            }
+
+            $items = [];
+
+            foreach ($value as $item) {
+                if (!\is_string($item)) {
+                    throw new FormConfigException("default value of field '{$field->name}' must be a list of strings, an item is " . get_debug_type($item));
+                }
+
+                $items[] = $item;
+            }
+
+            return $items;
+        }
+
+        if (!\is_string($value)) {
+            throw new FormConfigException("default value of field '{$field->name}' must be a string, " . get_debug_type($value) . ' given');
+        }
+
+        return $value;
     }
 
     /** @return array<string, mixed> */
@@ -472,16 +966,14 @@ final class Form
         $values = [];
 
         foreach ($this->definition->fields() as $name => $field) {
+            $override = $this->defaultOverrides[$name] ?? null;
+
             if ($field instanceof CompositeField) {
-                $values[$name] = $field->decompose('');
+                $values[$name] = $field->decompose(\is_string($override) ? $override : '');
                 continue;
             }
 
-            $values[$name] = $field->default;
-        }
-
-        foreach ($this->defaultOverrides as $name => $value) {
-            $values[$name] = $value;
+            $values[$name] = $override ?? $field->default;
         }
 
         return $values;
@@ -495,9 +987,40 @@ final class Form
         return $this->result;
     }
 
-    private function translate(string $message): string
+    /**
+     * フォームのあるページをページキャッシュから外す。未ログインの利用者の nonce は全訪問者で共通かつ12〜24時間
+     * 有効のため、キャッシュに載ると期限切れの nonce が配られて送信が失敗する。
+     * nocache_headers() は出力の開始後には何もしない(WordPress の仕様)ため、出力の前に呼ぶ handle() でも付ける。
+     */
+    private function excludeFromPageCache(): void
     {
-        return \function_exists('__') ? __($message, 'tmswp') : $message;
+        if (!\defined('DONOTCACHEPAGE')) {
+            \define('DONOTCACHEPAGE', true);
+        }
+
+        nocache_headers();
+    }
+
+    /**
+     * Form の Kernel のロガーに記録する。利用者の入力値は記録しない。
+     *
+     * @param array<string, mixed> $context
+     */
+    private function log(string $level, string $message, array $context = []): void
+    {
+        $this->kernel()->logger()->log($level, 'tmswp.form: ' . $message, ['form' => $this->definition->id] + $context);
+    }
+
+    /**
+     * @throws KernelException `new Form()` を書いたファイルが、どの Kernel のルートにも含まれない場合
+     */
+    private function kernel(): Kernel
+    {
+        if ($this->creatorFile === '') {
+            throw new KernelException("cannot determine the file that created form '{$this->definition->id}' to find its TMSWP kernel");
+        }
+
+        return $this->kernel ??= Kernel::forFile($this->creatorFile);
     }
 
     private function verifyNonce(FormRequest $request): bool

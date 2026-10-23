@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\View;
 
+use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\InvalidTemplateSlugException;
 
 final class TemplateLocator
@@ -16,13 +17,17 @@ final class TemplateLocator
 
     public function addFallbackDir(string $dir): void
     {
-        $dir = rtrim($dir, '/\\');
+        $trimmed = rtrim($dir, '/\\');
 
-        if ($dir === '' || \in_array($dir, $this->fallbackDirs, true)) {
+        if ($trimmed === '') {
+            throw new InvalidArgumentException("template fallback directory must not be empty: '{$dir}'");
+        }
+
+        if (\in_array($trimmed, $this->fallbackDirs, true)) {
             return;
         }
 
-        $this->fallbackDirs[] = $dir;
+        $this->fallbackDirs[] = $trimmed;
         $this->flush();
     }
 
@@ -85,7 +90,12 @@ final class TemplateLocator
         return $paths;
     }
 
-    private function assertSlug(string $slug): void
+    /**
+     * slug が形式の規則に合うかを確かめる。
+     *
+     * @throws InvalidTemplateSlugException slug が形式の規則に合わないとき
+     */
+    public function assertSlug(string $slug): void
     {
         if (preg_match('/\A[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*\z/', $slug) === 1) {
             return;

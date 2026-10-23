@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Unit;
 
+use PHPUnit\Framework\Attributes\DataProvider;
+use ReflectionMethod;
 use TMSWP\Core\Attribute\AsOptionGroup;
 use TMSWP\Core\Attribute\OptionSchema;
 use TMSWP\Core\Container\Container;
+use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\InvalidSchemaException;
 use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Option\OptionAccess;
@@ -61,6 +64,100 @@ final class OptionRepositoryTest extends UnitTestCase
         self::assertFalse($repository->has('maintenance_mode'));
     }
 
+    public function testDeleteAllReturnsOnlyTheOptionsThatExisted(): void
+    {
+        $storage = new ArrayOptionStorage();
+        $repository = $this->factory($storage)->for(SiteOptionFixture::class);
+        $repository->set('maintenance_mode', true);
+
+        self::assertSame(['site_maintenance_mode'], $repository->deleteAll());
+        self::assertSame([], $repository->deleteAll());
+    }
+
+    public function testSetRejectsNullAndKeepsTheStoredValue(): void
+    {
+        $storage = new ArrayOptionStorage();
+        $repository = $this->factory($storage)->for(SiteOptionFixture::class);
+        $repository->set('contact_email', 'kept@example.com');
+
+        foreach (['contact_email', 'legacy_key'] as $key) {
+            try {
+                $repository->set($key, null);
+                self::fail("null を set できてしまいました: {$key}");
+            } catch (InvalidArgumentException $exception) {
+                self::assertSame("option '{$key}' cannot be set to null; use delete() to remove it", $exception->getMessage());
+            }
+        }
+
+        self::assertSame(['site_contact_email' => 'kept@example.com'], $storage->values);
+    }
+
+    public function testSetRejectsValuesThatDoNotMatchTheSchemaType(): void
+    {
+        $storage = new ArrayOptionStorage();
+        $repository = $this->factory($storage)->for(SiteOptionFixture::class);
+
+        foreach ([['maintenance_mode', '1', 'boolean', 'string'], ['contact_email', ['a@example.com'], 'string', 'array']] as [$key, $value, $expected, $actual]) {
+            try {
+                $repository->set($key, $value);
+                self::fail("スキーマの型に合わない値を set できてしまいました: {$key}");
+            } catch (InvalidArgumentException $exception) {
+                self::assertSame("option '{$key}' expects {$expected}, got {$actual}", $exception->getMessage());
+            }
+        }
+
+        self::assertSame([], $storage->values);
+    }
+
+    public function testOptionSchemaOnANonCaseConstantIsRejected(): void
+    {
+        $this->expectException(InvalidSchemaException::class);
+        $this->expectExceptionMessage('#[OptionSchema] must be placed on enum cases, not on a constant: ' . ConstantOptionSchemaFixture::class . '::DEFAULT_EMAIL');
+
+        $this->factory(new ArrayOptionStorage())->for(ConstantOptionSchemaFixture::class);
+    }
+
+    /**
+     * enum 自身・メソッド・引数への付与は PHP の属性ターゲット(クラス定数)にも反するため、
+     * PHPStan の解析対象の外の fixture に置く。
+     */
+    #[DataProvider('misplacedOptionSchemaProvider')]
+    public function testOptionSchemaOutsideEnumCasesIsRejected(string $groupClass, string $message): void
+    {
+        require_once __DIR__ . '/../fixtures/option/misplaced-option-schema.php';
+
+        if (!enum_exists($groupClass)) {
+            self::fail("fixture enum が見つかりません: {$groupClass}");
+        }
+
+        $this->expectException(InvalidSchemaException::class);
+        $this->expectExceptionMessage($message);
+
+        $this->factory(new ArrayOptionStorage())->for($groupClass);
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function misplacedOptionSchemaProvider(): iterable
+    {
+        $namespace = 'TMSWP\\Core\\Tests\\Fixtures\\Option\\';
+
+        yield 'enum itself' => [$namespace . 'EnumLevelOptionSchema', "#[OptionSchema] must be placed on enum cases, not on the option group itself: {$namespace}EnumLevelOptionSchema"];
+        yield 'method' => [$namespace . 'MethodOptionSchema', "#[OptionSchema] must be placed on enum cases, not on a method: {$namespace}MethodOptionSchema::contactEmail()"];
+        yield 'parameter' => [$namespace . 'ParameterOptionSchema', "#[OptionSchema] must be placed on enum cases, not on a parameter: {$namespace}ParameterOptionSchema::withDefault(\$value)"];
+    }
+
+    public function testOptionAccessRejectsEnumsThatAreNotStringBacked(): void
+    {
+        // repository() が先に string backed でない enum を拒否するため、キーの解決は公開の API からは届かない。
+        // 型の確認そのものが設定の誤りとして InvalidSchemaException を投げることを、リフレクションで確かめる。
+        $method = new ReflectionMethod(IntBackedOptionAccessFixture::Key, 'optionKey');
+
+        $this->expectException(InvalidSchemaException::class);
+        $this->expectExceptionMessage('OptionAccess requires a string backed enum: ' . IntBackedOptionAccessFixture::class);
+
+        $method->invoke(IntBackedOptionAccessFixture::Key);
+    }
+
     public function testFactoryRejectsInvalidOptionGroup(): void
     {
         $this->expectException(InvalidSchemaException::class);
@@ -108,6 +205,27 @@ enum IntBackedOptionFixture: int
     case Key = 1;
 }
 
+#[AsOptionGroup(prefix: 'const_', storage: ArrayOptionStorage::class)]
+enum ConstantOptionSchemaFixture: string
+{
+    #[OptionSchema(type: MetaValueType::String)]
+    public const DEFAULT_EMAIL = 'info@example.com';
+
+    #[OptionSchema(type: MetaValueType::String, default: self::DEFAULT_EMAIL)]
+    case ContactEmail = 'contact_email';
+}
+
+#[AsOptionGroup(prefix: 'int_access_', storage: ArrayOptionStorage::class)]
+enum IntBackedOptionAccessFixture: int
+{
+    use OptionAccess;
+
+    case Key = 1;
+}
+
+/**
+ * OptionStorageInterface の契約(書き込みは変えたかどうかを返す)に従う、プロセス内配列への保存実装。
+ */
 final class ArrayOptionStorage implements OptionStorageInterface
 {
     /** @var array<string, mixed> */
@@ -132,16 +250,18 @@ final class ArrayOptionStorage implements OptionStorageInterface
 
     public function set(string $name, mixed $value, ?bool $autoload = null): bool
     {
+        $changed = !$this->has($name) || $this->values[$name] !== $value;
         $this->values[$name] = $value;
         $this->autoloads[$name] = $autoload;
 
-        return true;
+        return $changed;
     }
 
     public function delete(string $name): bool
     {
+        $existed = $this->has($name);
         unset($this->values[$name], $this->autoloads[$name]);
 
-        return true;
+        return $existed;
     }
 }

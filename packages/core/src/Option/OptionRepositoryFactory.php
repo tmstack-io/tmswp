@@ -10,6 +10,7 @@ use ReflectionEnumBackedCase;
 use TMSWP\Core\Attribute\AsOptionGroup;
 use TMSWP\Core\Attribute\OptionSchema;
 use TMSWP\Core\Exception\InvalidSchemaException;
+use UnitEnum;
 
 final class OptionRepositoryFactory
 {
@@ -44,6 +45,8 @@ final class OptionRepositoryFactory
         if ($attributes === []) {
             throw new InvalidSchemaException("option group enum requires #[AsOptionGroup]: {$groupClass}");
         }
+
+        $this->assertOptionSchemaOnlyOnCases($reflection, $groupClass);
 
         $attribute = $attributes[0]->newInstance();
         $storage = $this->container->get($attribute->storage);
@@ -97,5 +100,36 @@ final class OptionRepositoryFactory
     public function preload(string $groupClass): void
     {
         $this->for($groupClass);
+    }
+
+    /**
+     * #[OptionSchema] は enum ケースからしか読まないため、グループの enum のケース以外(enum 自身・ケースでない定数・
+     * メソッド・その引数)に付いたものは、黙って無視せず宣言の誤りにする。
+     *
+     * @param ReflectionEnum<UnitEnum> $reflection
+     */
+    private function assertOptionSchemaOnlyOnCases(ReflectionEnum $reflection, string $groupClass): void
+    {
+        if ($reflection->getAttributes(OptionSchema::class) !== []) {
+            throw new InvalidSchemaException("#[OptionSchema] must be placed on enum cases, not on the option group itself: {$groupClass}");
+        }
+
+        foreach ($reflection->getReflectionConstants() as $constant) {
+            if (!$constant->isEnumCase() && $constant->getAttributes(OptionSchema::class) !== []) {
+                throw new InvalidSchemaException("#[OptionSchema] must be placed on enum cases, not on a constant: {$groupClass}::{$constant->getName()}");
+            }
+        }
+
+        foreach ($reflection->getMethods() as $method) {
+            if ($method->getAttributes(OptionSchema::class) !== []) {
+                throw new InvalidSchemaException("#[OptionSchema] must be placed on enum cases, not on a method: {$groupClass}::{$method->getName()}()");
+            }
+
+            foreach ($method->getParameters() as $parameter) {
+                if ($parameter->getAttributes(OptionSchema::class) !== []) {
+                    throw new InvalidSchemaException("#[OptionSchema] must be placed on enum cases, not on a parameter: {$groupClass}::{$method->getName()}(\${$parameter->getName()})");
+                }
+            }
+        }
     }
 }

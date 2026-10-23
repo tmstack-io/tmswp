@@ -11,7 +11,6 @@ use TMSWP\Core\Form\Rule\Email;
 use TMSWP\Core\Form\Rule\FileExtension;
 use TMSWP\Core\Form\Rule\MaxFileSize;
 use TMSWP\Core\Form\Rule\Required;
-use TMSWP\Core\Form\Rule\UploadFile;
 use TMSWP\Core\Form\StoredFile;
 use UnexpectedValueException;
 
@@ -26,7 +25,6 @@ final class ContactForm
                 ->textarea('message', 'お問い合わせ内容', [new Required()])
                 ->file('attachment', '添付ファイル', [
                     new Required(),
-                    new UploadFile(),
                     new FileExtension(['txt']),
                     MaxFileSize::mb(1),
                 ])
@@ -37,7 +35,6 @@ final class ContactForm
                     $attachmentName = null;
 
                     if ($attachment instanceof StoredFile) {
-                        self::loadMediaFunctions();
                         $attachmentId = $attachment->toAttachment();
                         $attachmentName = $attachment->clientName;
                     }
@@ -64,20 +61,5 @@ final class ContactForm
         }
 
         return $value;
-    }
-
-    private static function loadMediaFunctions(): void
-    {
-        if (\function_exists('media_handle_sideload')) {
-            return;
-        }
-
-        if (!\defined('ABSPATH')) {
-            throw new UnexpectedValueException('ABSPATH must be defined before handling attachments');
-        }
-
-        require_once ABSPATH . 'wp-admin/includes/file.php';
-        require_once ABSPATH . 'wp-admin/includes/image.php';
-        require_once ABSPATH . 'wp-admin/includes/media.php';
     }
 }

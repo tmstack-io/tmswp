@@ -8,6 +8,7 @@ use Brain\Monkey\Functions;
 use DateTimeImmutable;
 use Generator;
 use JsonSerializable;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Stringable;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Support\Arr;
@@ -46,6 +47,8 @@ final class SupportTest extends UnitTestCase
         self::assertSame('Hello Taro {nested}', Str::replace('Hello {name}', ['name' => 'Taro {nested}', 'nested' => 'ignored']));
         self::assertSame('あいう…', Str::truncate('あいうえお', 3));
         self::assertSame("a\nb\nc", Str::convertEol("a\r\nb\rc"));
+        self::assertSame("a\r\nb\r\nc\r\nd", Str::convertEol("a\r\nb\rc\nd", "\r\n"));
+        self::assertSame('a<br>b<br>c', Str::convertEol("a\r\nb\rc", '<br>'));
         self::assertSame('product_post', Str::snake('ProductPost'));
         self::assertSame('product-post', Str::kebab('ProductPost'));
         self::assertSame('ProductPost', Str::pascal('product-post'));
@@ -92,11 +95,54 @@ final class SupportTest extends UnitTestCase
         self::assertSame('btn btn-lg is-active', Html::classes('btn btn-lg', ['btn', 'is-active' => true]));
     }
 
+    public function testHtmlEscapesUrlAttributesWithEscUrl(): void
+    {
+        $this->stubUrlEscaping();
+
+        self::assertSame(
+            ' href="https://example.com/?a=1&amp;b=2" SRC="/img/a.png" action="" ping="https://a.example/p https://b.example/p" title="javascript:void(0)"',
+            Html::attributes([
+                'href' => 'https://example.com/?a=1&b=2',
+                'SRC' => '/img/a.png',
+                'action' => '',
+                'ping' => ['https://a.example/p', 'https://b.example/p'],
+                'title' => 'javascript:void(0)',
+            ]),
+        );
+    }
+
+    /** @return iterable<string, array{array<string, mixed>}> */
+    public static function disallowedUrlProvider(): iterable
+    {
+        yield 'href' => [['href' => 'javascript:alert(1)']];
+        yield 'uppercase name' => [['FormAction' => 'javascript:alert(1)']];
+        yield 'url in list' => [['ping' => 'https://a.example/p javascript:alert(1)']];
+    }
+
+    /** @param array<string, mixed> $attributes */
+    #[DataProvider('disallowedUrlProvider')]
+    public function testHtmlRejectsUrlWithDisallowedProtocol(array $attributes): void
+    {
+        $this->stubUrlEscaping();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('disallowed protocol: javascript:alert(1)');
+
+        Html::attributes($attributes);
+    }
+
     public function testHtmlRejectsInvalidAttributeName(): void
     {
         $this->expectException(InvalidArgumentException::class);
 
         Html::attributes(['bad name' => 'x']);
+    }
+
+    /** esc_url() の代わり。WordPress と同じく、許可されないプロトコルの URL を空文字にする */
+    private function stubUrlEscaping(): void
+    {
+        Functions\when('esc_attr')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
+        Functions\when('esc_url')->alias(static fn(string $url): string => preg_match('/\A\s*javascript:/i', $url) === 1 ? '' : htmlspecialchars($url, ENT_QUOTES, 'UTF-8'));
     }
 
     /** @return Generator<int, string> */

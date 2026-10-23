@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tax;
 
-use TMSWP\Core\Entity\WpBridge;
+use TMSWP\Core\Entity\WpErrorHandler;
+use TMSWP\Core\Exception\EntityDataException;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Exception\EntityPersistenceException;
-use TMSWP\Core\Exception\KernelException;
+use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Kernel\Kernel;
-use TMSWP\Core\Log\Log;
 use TMSWP\Core\Meta\MetaBag;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
 use WP_Error;
@@ -18,6 +18,9 @@ use WP_Term;
 
 abstract class Taxonomy
 {
+    /** parents() がたどる親の数の上限。超えたら parent の循環等のデータの不整合として扱う */
+    private const int MAX_PARENT_DEPTH = 100;
+
     /** @var array<class-string<self>, TaxonomyDefinition> */
     private static array $definitions = [];
 
@@ -28,13 +31,21 @@ abstract class Taxonomy
         return self::definitionFor(static::class)->slug();
     }
 
-    final public static function register(): void
+    /**
+     * タクソノミーを登録する。TaxonomyInitializer が、このクラスを探索した Kernel を渡して呼ぶ。
+     */
+    final public static function register(Kernel $kernel): void
     {
         $definition = self::definitionFor(static::class);
         $slug = $definition->slug();
 
         if ($definition->isBuiltin()) {
-            self::registerBuiltinObjectTypes($definition);
+            // アダプタ先が無いのは設定の誤り(スラッグの誤り・登録が init 9 より後等)。objectType() の有無に関係なく例外にする
+            if (!taxonomy_exists($slug)) {
+                throw new EntityDefinitionException("builtin taxonomy does not exist: {$slug}");
+            }
+
+            self::registerBuiltinObjectTypes($definition, $kernel);
 
             return;
         }
@@ -43,7 +54,7 @@ abstract class Taxonomy
             throw new EntityDefinitionException("taxonomy is already registered: {$slug}");
         }
 
-        $registered = WpBridge::call('register_taxonomy', $slug, $definition->resolvedObjectTypes(), $definition->toArgs());
+        $registered = register_taxonomy($slug, $definition->resolvedObjectTypes(), $definition->toArgs($kernel->config()->labelLanguage));
 
         if ($registered instanceof WP_Error) {
             throw new EntityDefinitionException($registered->get_error_message());
@@ -61,6 +72,10 @@ abstract class Taxonomy
         }
 
         $resolved = get_term($term, static::slug());
+
+        if ($resolved instanceof WP_Error) {
+            return WpErrorHandler::handle($resolved, static::class, 'get_term', null);
+        }
 
         if (!$resolved instanceof WP_Term || $resolved->taxonomy !== static::slug()) {
             return null;
@@ -103,20 +118,23 @@ abstract class Taxonomy
         return static::query()->hideEmpty($hideEmpty)->get();
     }
 
-    /** @return MetaBag<static> */
+    /**
+     * 対象のタームのメタの MetaBag を返す。対象が無い、またはこのクラスのスコープ外の場合は、存在しない対象へのメタの
+     * 書き込みを防ぐため、呼び出しの誤りとして例外にする(存在は get()・is() で確かめてから呼ぶ)。
+     *
+     * @throws InvalidArgumentException 対象が無い、またはこのクラスのスコープ外の場合
+     *
+     * @return MetaBag<static>
+     */
     final public static function meta(WP_Term|int $term): MetaBag
     {
         $resolved = static::get($term);
 
         if (!$resolved instanceof WP_Term) {
-            throw new EntityDefinitionException('cannot create MetaBag for missing or mismatched term');
+            throw new InvalidArgumentException('cannot create MetaBag for missing or mismatched term');
         }
 
         $registry = Kernel::forClass(static::class)->container()->get(MetaSchemaRegistry::class);
-
-        if (!$registry instanceof MetaSchemaRegistry) {
-            throw new KernelException('container entry MetaSchemaRegistry must resolve to MetaSchemaRegistry');
-        }
 
         return $registry->bagFor(static::class, $resolved);
     }
@@ -131,7 +149,11 @@ abstract class Taxonomy
 
         $url = get_term_link($resolved);
 
-        return $url instanceof WP_Error ? null : $url;
+        if ($url instanceof WP_Error) {
+            return WpErrorHandler::handle($url, static::class, 'get_term_link', null);
+        }
+
+        return $url;
     }
 
     /** @return list<WP_Term> */
@@ -143,31 +165,49 @@ abstract class Taxonomy
             return [];
         }
 
-        $parents = $includeSelf ? [$resolved] : [];
+        $parents = [];
         $current = $resolved;
 
-        for ($depth = 0; $depth < 100; ++$depth) {
-            if ((int) $current->parent <= 0) {
-                return array_reverse($parents);
-            }
-
+        while ((int) $current->parent > 0) {
             $parent = static::get((int) $current->parent);
 
             if (!$parent instanceof WP_Term) {
-                return array_reverse($parents);
+                break;
+            }
+
+            // 上限ちょうどの数の祖先は正常に返し、その先にさらに親があるときだけ超過にする
+            if (\count($parents) === self::MAX_PARENT_DEPTH) {
+                return self::parentDepthExceeded($resolved->term_id);
             }
 
             $parents[] = $parent;
             $current = $parent;
         }
 
-        throw new EntityDefinitionException('term parent depth exceeded 100');
+        $ancestors = array_reverse($parents);
+
+        return $includeSelf ? [...$ancestors, $resolved] : $ancestors;
     }
 
-    /** @param array<string, mixed> $args */
+    /**
+     * タームを作る。名前と値は元の(slash していない)値を渡す。
+     *
+     * $args は php-stubs/wordpress-stubs の wp_insert_term() の $args(`@phpstan-param`)と同じ配列の形。
+     *
+     * wp_insert_term() は名前と description を slash 済み($_POST と同じ形)として受け取り、wp_unslash() して保存する。
+     * 元の値を保存するため、この2つを slash して渡す。slug・alias_of は unslash されずにそのまま使われるため、slash しない。
+     *
+     * @param array{alias_of?: string, description?: string, parent?: int, slug?: string} $args
+     *
+     * @throws EntityPersistenceException wp_insert_term() が WP_Error を返した場合
+     */
     final public static function create(string $name, array $args = []): int
     {
-        $result = WpBridge::call('wp_insert_term', $name, static::slug(), $args);
+        if (\array_key_exists('description', $args)) {
+            $args['description'] = wp_slash($args['description']);
+        }
+
+        $result = wp_insert_term(wp_slash($name), static::slug(), $args);
 
         if ($result instanceof WP_Error) {
             throw EntityPersistenceException::fromWpError($result);
@@ -204,7 +244,14 @@ abstract class Taxonomy
         return self::$definitions[$class];
     }
 
-    private static function registerBuiltinObjectTypes(TaxonomyDefinition $definition): void
+    /**
+     * builtin のタクソノミーを objectType() の投稿タイプに紐付ける。
+     *
+     * 紐付け先が同じ Kernel の init 10 で登録する投稿タイプなら、init 9 のこの時点ではまだ無く失敗する。失敗した
+     * 投稿タイプだけを init 11 で1回だけ再試行し、それでも失敗したら Kernel のロガーに warning で記録する。再試行は
+     * Kernel::defer() で予約するため、本番の遅延 boot のキャッチアップでも、投稿タイプの登録の後に実行される。
+     */
+    private static function registerBuiltinObjectTypes(TaxonomyDefinition $definition, Kernel $kernel): void
     {
         $retry = [];
 
@@ -218,12 +265,39 @@ abstract class Taxonomy
             return;
         }
 
-        add_action('init', static function () use ($definition, $retry): void {
+        $logger = $kernel->logger();
+
+        $kernel->defer('init', 11, static function () use ($definition, $retry, $logger): void {
             foreach ($retry as $objectType) {
                 if (!register_taxonomy_for_object_type($definition->slug(), $objectType)) {
-                    Log::warning("failed to attach taxonomy '{$definition->slug()}' to post type '{$objectType}'");
+                    $logger->warning("failed to attach taxonomy '{$definition->slug()}' to post type '{$objectType}'");
                 }
             }
-        }, 11, 0);
+        });
+    }
+
+    /**
+     * 親の深さの超過(parent の循環等のデータの不整合)を、エラー方針(00-overview.md §5.6)の実行時のデータ取得の
+     * 失敗として扱う。debug では例外を投げ、本番ではこのクラスの Kernel のロガーに error で記録して空配列を返す。
+     *
+     * @throws EntityDataException debug の場合
+     *
+     * @return list<WP_Term>
+     */
+    private static function parentDepthExceeded(int $termId): array
+    {
+        $kernel = Kernel::forClass(static::class);
+
+        if ($kernel->config()->debug) {
+            throw new EntityDataException("term parent depth of term {$termId} exceeded " . self::MAX_PARENT_DEPTH . ' (' . static::class . ')');
+        }
+
+        $kernel->logger()->error('tmswp.taxonomy: term parent depth of term {term} exceeded {limit} ({class})', [
+            'term' => $termId,
+            'limit' => self::MAX_PARENT_DEPTH,
+            'class' => static::class,
+        ]);
+
+        return [];
     }
 }

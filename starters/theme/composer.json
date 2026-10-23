@@ -4,7 +4,7 @@
   "type": "project",
   "license": "proprietary",
   "require": {
-    "php": ">=8.2",
+    "php": ">=8.3",
     "tmswp/core": "^0.1"
   },
   "require-dev": {
@@ -33,15 +33,10 @@
     "qa": [
       "@lint",
       "@analyse",
-      "@tms:check",
       "@test"
     ],
     "acf:check": "wp tmswp acf check",
     "acf:sync": "wp tmswp acf sync",
-    "tms:check": [
-      "phpstan analyse -c phpstan-actions.neon --memory-limit=1G",
-      "@php vendor/bin/tms-check actions ."
-    ],
     "post-create-project-cmd": "@php bin/setup.php"
   },
   "config": {

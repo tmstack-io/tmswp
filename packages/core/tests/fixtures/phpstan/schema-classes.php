@@ -27,7 +27,7 @@ final class PHPStanProductPost extends PostType
 
     public static function definition(): PostTypeDefinition
     {
-        return PostTypeDefinition::create('phpstan_product')->label('PHPStan Product');
+        return PostTypeDefinition::create('phpstan_product')->label('PHPStan Product', 'PHPStan Products');
     }
 }
 
@@ -39,7 +39,7 @@ final class PHPStanOtherPost extends PostType
 
     public static function definition(): PostTypeDefinition
     {
-        return PostTypeDefinition::create('phpstan_other')->label('PHPStan Other');
+        return PostTypeDefinition::create('phpstan_other')->label('PHPStan Other', 'PHPStan Others');
     }
 }
 
@@ -53,4 +53,19 @@ enum PHPStanSiteOption: string
 
     #[OptionSchema(type: MetaValueType::Boolean, default: false)]
     case Maintenance = 'maintenance';
+}
+
+/** OptionAccess を use しつつ get() を自分で定義した enum。PHP では enum 自身の get() が trait の get() より優先される。 */
+#[AsOptionGroup(prefix: 'phpstan_overridden_')]
+enum PHPStanOverriddenGetOption: string
+{
+    use OptionAccess;
+
+    #[OptionSchema(type: MetaValueType::String, default: 'text')]
+    case Text = 'text';
+
+    public function get(mixed $default = null): int
+    {
+        return 123;
+    }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Option;
 
+use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Meta\ValueCaster;
 
 final class OptionRepository
@@ -96,19 +97,42 @@ final class OptionRepository
         return $values;
     }
 
+    /**
+     * 値を保存する。宣言済みのキーはスキーマの型に合う値だけを受け付ける。
+     *
+     * @throws InvalidArgumentException null、スキーマの型に合わない値
+     * @throws \TMSWP\Core\Exception\RuntimeException データベースのエラー
+     *
+     * @return bool 書き込んだら true、書き込まなかったら false(保存値は変わっていない)
+     */
     public function set(string $key, mixed $value): bool
     {
+        if ($value === null) {
+            throw new InvalidArgumentException("option '{$key}' cannot be set to null; use delete() to remove it");
+        }
+
         $schema = $this->schemas->get($key);
+
+        if ($schema instanceof OptionSchemaDefinition && !ValueCaster::accepts($schema->type, $value)) {
+            throw new InvalidArgumentException("option '{$key}' expects {$schema->type->value}, got " . get_debug_type($value));
+        }
 
         return $this->storage->set($this->name($key), $value, $schema instanceof OptionSchemaDefinition ? $schema->autoload : null);
     }
 
+    /**
+     * @return bool 削除したら true、元々オプションが無かった・削除しなかったら false
+     */
     public function delete(string $key): bool
     {
         return $this->storage->delete($this->name($key));
     }
 
-    /** @return list<string> */
+    /**
+     * 宣言済みの全キーを削除する(アンインストール用)。
+     *
+     * @return list<string> 実際に削除した実オプション名(元々無かったものは含まない)
+     */
     public function deleteAll(): array
     {
         $deleted = [];

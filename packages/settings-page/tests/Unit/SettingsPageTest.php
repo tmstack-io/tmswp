@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\SettingsPage\Tests\Unit;
 
 use Brain\Monkey\Actions;
+use Brain\Monkey\Functions;
 use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Form\Form;
 use TMSWP\Core\Form\FormDefinition;
@@ -51,6 +52,7 @@ final class SettingsPageTest extends UnitTestCase
 
     public function testFormApplyDefaultsSurvivesGetHandle(): void
     {
+        Functions\when('nocache_headers')->justReturn();
         $form = new Form(FormDefinition::create('site')->text('title', 'Title'));
 
         $form->applyDefaults(['title' => 'Configured']);

@@ -17,6 +17,10 @@ $finder = (new Finder())
     ->name('*.php')
     ->notPath('#^core/src/Exception/#')
     ->notPath('#tests/(.+/)?fixtures/#')
+    // packages/*/languages/ の .l10n.php は `wp i18n make-php` の生成物で、出力をそのままコミットする
+    ->notPath('#^[^/]+/languages/#')
+    // fixtureのテーマ・プラグインのacf-bridgeの生成物は、`wp tmswp acf sync`の出力をそのままコミットし、checkがバイト単位で照合する
+    ->notPath('#^fixtures/(themes|plugins)/[^/]+/app/Acf/(AcfManifest|[A-Za-z0-9]+(Fields|Options))\.php$#')
     ->append([__FILE__, __DIR__ . '/monorepo-builder.php']);
 
 return (new Config())
@@ -46,6 +50,9 @@ return (new Config())
         ],
         'native_function_invocation' => [
             'include' => ['@compiler_optimized'],
+            // `\call_user_func_array()` はコンパイル時に直接の呼び出しへ置き換わり、呼び出し元の strict_types が
+            // コールバックの引数に効く。Kernel はフックメソッドを WordPress と同じ弱い型変換で呼ぶため、名前空間を付けない
+            'exclude' => ['call_user_func_array'],
             'scope' => 'namespaced',
         ],
         'array_syntax' => ['syntax' => 'short'],

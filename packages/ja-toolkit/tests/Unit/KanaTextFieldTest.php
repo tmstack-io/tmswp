@@ -9,7 +9,9 @@ use TMSWP\Core\Form\Form;
 use TMSWP\Core\Form\FormDefinition;
 use TMSWP\Core\Form\FormRequest;
 use TMSWP\Core\Form\FormStep;
+use TMSWP\Core\Form\SubmitToken;
 use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Core\Tests\Support\WpdbTestDouble;
 use TMSWP\JaToolkit\Form\KanaTextField;
 use TMSWP\JaToolkit\Form\KanaType;
 
@@ -19,9 +21,17 @@ final class KanaTextFieldTest extends UnitTestCase
     {
         parent::setUp();
 
-        Functions\when('__')->alias(static fn(string $message): string => $message);
         Functions\when('wp_verify_nonce')->justReturn(1);
         Functions\when('wp_salt')->justReturn('secret');
+        Functions\when('nocache_headers')->justReturn();
+        $GLOBALS['wpdb'] = WpdbTestDouble::create();
+    }
+
+    protected function tearDown(): void
+    {
+        unset($GLOBALS['wpdb']);
+
+        parent::tearDown();
     }
 
     public function testKatakanaFieldConvertsBeforeValidation(): void
@@ -34,7 +44,27 @@ final class KanaTextFieldTest extends UnitTestCase
             Form::FIELD_FORM_ID => 'kana',
             Form::FIELD_NONCE => 'nonce',
             Form::FIELD_STEP => 'submit',
+            Form::FIELD_SUBMIT_TOKEN => SubmitToken::issue('kana'),
             'kana_name' => ' ﾀﾛｳ ',
+        ]));
+
+        self::assertSame(FormStep::Complete, $result->step);
+        self::assertSame('タロウ', $result->values['kana_name']);
+    }
+
+    public function testKatakanaFieldConvertsHiraganaInputToKatakanaBeforeValidation(): void
+    {
+        $definition = FormDefinition::create('kana')
+            ->add(KanaTextField::create('kana_name', 'Name in katakana', KanaType::Katakana, maxLength: 20));
+        $form = new Form($definition);
+
+        // 入力値の日本語はテストの対象そのもの(片仮名の項目に、ひらがなで入力された値)
+        $result = $form->handle(new FormRequest('POST', [
+            Form::FIELD_FORM_ID => 'kana',
+            Form::FIELD_NONCE => 'nonce',
+            Form::FIELD_STEP => 'submit',
+            Form::FIELD_SUBMIT_TOKEN => SubmitToken::issue('kana'),
+            'kana_name' => ' たろう ',
         ]));
 
         self::assertSame(FormStep::Complete, $result->step);
@@ -51,6 +81,7 @@ final class KanaTextFieldTest extends UnitTestCase
             Form::FIELD_FORM_ID => 'kana',
             Form::FIELD_NONCE => 'nonce',
             Form::FIELD_STEP => 'submit',
+            Form::FIELD_SUBMIT_TOKEN => SubmitToken::issue('kana'),
             'kana_name' => ' アイウ ',
         ]));
 

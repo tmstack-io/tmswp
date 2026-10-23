@@ -11,7 +11,7 @@
 
 ## ブートストラップ例
 
-`functions.php` / プラグインのエントリポイントでは `Kernel::boot()` の直後に、使う拡張だけを明示登録する。
+`functions.php` / プラグインのエントリポイントで、使う拡張だけを明示登録する。acf-bridgeは`KernelConfig`の`extensions`に渡してKernelごとに登録し、それ以外の拡張は`Kernel::boot()`の直後に登録する。
 
 ```php
 <?php
@@ -19,15 +19,18 @@
 declare(strict_types=1);
 
 use TMSWP\AcfBridge\AcfBridge;
+use TMSWP\Core\Kernel\Kernel;
+use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\JaToolkit\JaToolkit;
 use TMSWP\JaToolkit\Module\FullwidthSearchNormalizer;
 use TMSWP\JaToolkit\Module\JapaneseSlug;
 use TMSWP\SettingsPage\SettingsPages;
 use TMSWP\Thumbnail\Thumbnail;
 
+Kernel::boot(KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App', extensions: [new AcfBridge()]));
+
 Thumbnail::register();
 SettingsPages::register();
-AcfBridge::boot();
 JaToolkit::enable([
     JapaneseSlug::class,
     FullwidthSearchNormalizer::class,
@@ -96,7 +99,22 @@ $url = tms_thumb(get_post_thumbnail_id(), 480, 320, ['fit' => 'crop']);
 ## ACF連携例
 
 `acf-json/` を置いたうえで `wp tmswp acf sync` を実行し、生成された `App\Acf\*` クラスを使う。
-ACF管理キーは `#[MetaSchema]` と重複宣言しない。
+テーマとプラグインの両方でacf-bridgeを使うときは、それぞれの`KernelConfig`の`extensions`に`new AcfBridge()`を渡し、`wp tmswp acf sync --app=<名前空間>`でKernelごとに生成する。
+
+```php
+<?php
+
+declare(strict_types=1);
+
+use TMSWP\AcfBridge\AcfBridge;
+use TMSWP\Core\Kernel\Kernel;
+use TMSWP\Core\Kernel\KernelConfig;
+
+// プラグインの本体ファイル。acf-jsonはプラグインのディレクトリのacf-json/、生成先はapp/Acf/
+Kernel::boot(KernelConfig::plugin(__FILE__, __DIR__ . '/app', 'Vendor\Plugin', extensions: [new AcfBridge()]));
+```
+
+ACFのフィールドグループで管理するキーを`#[MetaSchema]`で宣言するエンティティには、`#[UseMetaStorage(AcfMetaStorage::class)]`を付ける(rules/meta.mdの「ACFのフィールドグループで管理するキー」)。
 
 ## してはいけないこと
 

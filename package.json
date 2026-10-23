@@ -1,0 +1,9 @@
+{
+  "name": "tmswp",
+  "private": true,
+  "description": "TMStack WordPress Framework (monorepo) development tooling",
+  "license": "GPL-2.0-or-later",
+  "devDependencies": {
+    "@wordpress/env": "11.17.0"
+  }
+}

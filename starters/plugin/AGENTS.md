@@ -12,9 +12,11 @@
 |---|---|
 | カスタム投稿タイプを追加する | `vendor/tmswp/core/rules/post-type.md` |
 | カスタムタクソノミーを追加する | `vendor/tmswp/core/rules/taxonomy.md` |
+| ユーザーロールを追加する | `vendor/tmswp/core/rules/user-role.md` |
 | 投稿/ターム/ユーザーにカスタムフィールドを持たせる | `vendor/tmswp/core/rules/meta.md` |
 | ACFでフィールドを管理する | `vendor/tmswp/core/rules/acf.md` |
 | フォームを実装する | `vendor/tmswp/core/rules/form.md` |
+| フォームの完了処理でメールを送る | `vendor/tmswp/core/rules/form-mail.md` |
 | 独自DBテーブルを作る | `vendor/tmswp/core/rules/model.md` |
 | サイト設定値を定義する | `vendor/tmswp/core/rules/options.md` |
 | add_action/add_filter をまとめる | `vendor/tmswp/core/rules/hooks.md` |
@@ -27,7 +29,7 @@
 - `app/`: PHPクラス。名前空間は `PluginApp\`。
 - `templates/`: プラグイン同梱テンプレート。テーマ側の同名ファイルが優先される。
 
-プラグインでは `actions/` 規約を使わない。テンプレート単位の前処理が必要な場合は `app/Hook/` に置く。
+プラグインはトップレベルのテンプレートを持たないため、テンプレートの前処理クラス(`vendor/tmswp/core/rules/page.md`)は使わない。ショートコード等の前処理は `app/Hook/` に置く。
 レシピ内の `App\` は、このプラグインでは `PluginApp\` に読み替える。
 
 ## 必須コマンド
@@ -46,7 +48,7 @@ composer test
 - `vendor/` 配下を編集しない。
 - プラグイン本体ファイルにロジックを足さない。
 - `register_post_type` / `register_taxonomy` / `register_post_meta` / `add_role` を直接呼ばない。
-- 独自マイグレーション用に `register_activation_hook` を直接書かない。ModelのマイグレーションはFWが配線する。
+- 独自マイグレーション用に `register_activation_hook` を直接書かない。Modelのテーブル定義は `wp tmswp migrate` で適用する。
 - `$wpdb` を直接使わない。独自テーブルは `Model` を使う。
 - `template_include` でテンプレート階層を迂回しない。
 - `__call` / `__callStatic` / `extract()` を使わない。

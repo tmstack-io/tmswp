@@ -12,10 +12,12 @@
 |---|---|
 | カスタム投稿タイプを追加する | `vendor/tmswp/core/rules/post-type.md` |
 | カスタムタクソノミーを追加する | `vendor/tmswp/core/rules/taxonomy.md` |
+| ユーザーロールを追加する | `vendor/tmswp/core/rules/user-role.md` |
 | 投稿/ターム/ユーザーにカスタムフィールドを持たせる | `vendor/tmswp/core/rules/meta.md` |
 | ACFでフィールドを管理する | `vendor/tmswp/core/rules/acf.md` |
 | フォームを実装する | `vendor/tmswp/core/rules/form.md` |
-| テンプレートの前処理を分離する | `vendor/tmswp/core/rules/actions.md` |
+| フォームの完了処理でメールを送る | `vendor/tmswp/core/rules/form-mail.md` |
+| テンプレートの前処理(値の用意・フォームの駆動)を書く | `vendor/tmswp/core/rules/page.md` |
 | 独自DBテーブルを作る | `vendor/tmswp/core/rules/model.md` |
 | サイト設定値を定義する | `vendor/tmswp/core/rules/options.md` |
 | add_action/add_filter をまとめる | `vendor/tmswp/core/rules/hooks.md` |
@@ -26,16 +28,14 @@
 
 - `functions.php`: FWブートのみ。ロジックを書かない。
 - `index.php` など: WordPress標準テンプレート階層。
-- `actions/`: テンプレート前処理。テンプレートと同じ相対パスで置く。
 - `parts/`: テンプレートパーツ。
-- `app/`: PHPクラス。名前空間は `App\`。
+- `app/`: PHPクラス。名前空間は `App\`。テンプレートの前処理クラスは `app/Page/` に置き、テンプレートの先頭で呼ぶ。
 
 ## 必須コマンド
 
 ```bash
 composer qa
 composer analyse
-composer tms:check
 composer fix
 composer test
 ```

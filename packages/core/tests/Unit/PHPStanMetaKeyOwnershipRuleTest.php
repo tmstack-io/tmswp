@@ -9,8 +9,7 @@ use PHPStan\Testing\RuleTestCase;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use TMSWP\Core\PHPStan\MetaKeyOwnershipRule;
-
-require_once __DIR__ . '/../fixtures/phpstan/schema-classes.php';
+use TMSWP\Core\Tests\Support\PHPStanFixtureAutoloader;
 
 /**
  * @extends RuleTestCase<MetaKeyOwnershipRule>
@@ -24,10 +23,16 @@ final class PHPStanMetaKeyOwnershipRuleTest extends RuleTestCase
         return self::getContainer()->getByType(MetaKeyOwnershipRule::class);
     }
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        PHPStanFixtureAutoloader::register();
+    }
+
     /** @return list<string> */
     public static function getAdditionalConfigFiles(): array
     {
-        return [__DIR__ . '/../../extension.neon'];
+        return [__DIR__ . '/../../phpstan/extension.neon'];
     }
 
     public function testReportsForeignEntityConstantsAndDeclaredStringLiterals(): void
@@ -42,5 +47,21 @@ final class PHPStanMetaKeyOwnershipRuleTest extends RuleTestCase
                 13,
             ],
         ]);
+    }
+
+    public function testRuleDoesNotLoadAnalysedClasses(): void
+    {
+        $this->analyse([__DIR__ . '/../fixtures/phpstan/side-effect-meta-key-rule.php'], [
+            [
+                "Use TMSWP\Core\Tests\Unit\PHPStanSideEffectPost::META_COUNT instead of string literal 'count'.",
+                12,
+            ],
+            [
+                'Meta key TMSWP\Core\Tests\Unit\PHPStanSideEffectPost::META_COUNT does not belong to entity TMSWP\Core\Tests\Unit\PHPStanProductPost.',
+                13,
+            ],
+        ]);
+
+        self::assertTrue(PHPStanFixtureAutoloader::sideEffectClassesAreUnloaded());
     }
 }

@@ -58,7 +58,7 @@ final class AcfMetaStorageInactiveTest extends TestCase
     public function testItThrowsWhenAcfIsNotActive(): void
     {
         $this->expectException(AcfNotActiveException::class);
-        $this->expectExceptionMessage('requires Advanced Custom Fields (ACF) 6.0+');
+        $this->expectExceptionMessage('requires Advanced Custom Fields (ACF) 6.2+');
 
         (new AcfMetaStorage())->get(ObjectType::Post, 10, 'price');
     }

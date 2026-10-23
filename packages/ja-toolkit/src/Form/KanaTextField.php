@@ -26,8 +26,8 @@ final class KanaTextField
             ? '/\A[ァ-ヶー・\s\x{3000}]*\z/u'
             : '/\A[ぁ-んー・\s\x{3000}]*\z/u';
         $message = $type === KanaType::Katakana
-            ? self::translate('Please enter {label} in katakana.')
-            : self::translate('Please enter {label} in hiragana.');
+            ? __('Please enter {label} in katakana.', 'tmswp')
+            : __('Please enter {label} in hiragana.', 'tmswp');
         $mode = $type === KanaType::Katakana ? 'KVC' : 'KVc';
 
         return Field::text(
@@ -42,10 +42,5 @@ final class KanaTextField
     private static function convertFilter(string $mode): Closure
     {
         return static fn(string $value): string => mb_convert_kana($value, $mode, 'UTF-8');
-    }
-
-    private static function translate(string $message): string
-    {
-        return \function_exists('__') ? __($message, 'tmswp') : $message;
     }
 }

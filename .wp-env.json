@@ -1,7 +1,10 @@
 {
   "core": null,
-  "phpVersion": "8.2",
-  "plugins": [],
+  "phpVersion": "8.3",
+  "testsEnvironment": false,
+  "plugins": [
+    "https://downloads.wordpress.org/plugin/advanced-custom-fields.6.8.10.zip"
+  ],
   "mappings": {
     "wp-content/plugins/tmswp": "."
   },

@@ -115,7 +115,7 @@ final class ValueCaster
     public static function accepts(MetaValueType $type, mixed $value): bool
     {
         return match ($type) {
-            MetaValueType::String => \is_scalar($value) || $value instanceof Stringable,
+            MetaValueType::String => \is_scalar($value),
             MetaValueType::Boolean => \is_bool($value),
             MetaValueType::Integer => \is_int($value),
             MetaValueType::Number => \is_int($value) || \is_float($value),
