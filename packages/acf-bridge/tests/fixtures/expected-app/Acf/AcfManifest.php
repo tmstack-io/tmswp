@@ -7,7 +7,7 @@
  * source-hash: sha256:14b87e20d08b3c8319110dd7d992017a39355a32c3498c81c5f33388487d00fd
  *
  * このファイルは自動生成。手で編集しないこと(次回syncで上書きされる)。
- * 再生成: wp tmswp acf sync (composer acf:sync)
+ * 再生成: composer acf:sync (vendor/bin/tms-acf sync)
  *
  * sources:
  *   group_clone_source.json (cloneの参照元)

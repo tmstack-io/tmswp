@@ -92,6 +92,33 @@ final readonly class KernelConfig
     }
 
     /**
+     * KernelConfigを返すPHPファイル(テーマ・プラグインのルートのtmswp-kernel.php)を読み込み、そのKernelConfigを返す。
+     * functions.php・プラグインの本体ファイルのbootと、WordPressを起動しないtms-acf(tmswp/acf-bridge)が同じこの関数で
+     * 読むため、ファイルの中ではWordPressの関数を呼ばない。
+     *
+     * 相対パスはカレントディレクトリを基準にした絶対パス(realpath())に確定し、検査したそのファイルを読み込む。相対パスの
+     * まま読み込むと、PHPがinclude_pathを先に探し、別の同じ名前のファイルを読みうるためである。
+     *
+     * @throws KernelException ファイルが無い・読めない場合と、ファイルがKernelConfigを返さない場合
+     */
+    public static function load(string $file): self
+    {
+        $path = realpath($file);
+
+        if ($path === false || !is_file($path) || !is_readable($path)) {
+            throw new KernelException("kernel config file not found or not readable: {$file}; put a file that returns KernelConfig::theme() or KernelConfig::plugin() there");
+        }
+
+        $config = (static fn(string $absolutePath): mixed => require $absolutePath)($path);
+
+        if (!$config instanceof self) {
+            throw new KernelException("kernel config file {$file} must return " . self::class . ', got ' . get_debug_type($config));
+        }
+
+        return $config;
+    }
+
+    /**
      * テーマ・プラグインのルートディレクトリ(appDir の親ディレクトリ)。探索結果ファイルの置き場で、Log の静的な呼び出しが
      * 記録先の Kernel を決める範囲でもある。
      */

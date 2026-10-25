@@ -35,8 +35,6 @@
       "@analyse",
       "@test"
     ],
-    "acf:check": "wp tmswp acf check",
-    "acf:sync": "wp tmswp acf sync",
     "post-create-project-cmd": "@php bin/setup.php"
   },
   "config": {

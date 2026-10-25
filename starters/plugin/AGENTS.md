@@ -25,7 +25,8 @@
 
 ## 構成
 
-- `{{project_slug}}.php`: プラグインヘッダとFWブートのみ。
+- `{{project_slug}}.php`: プラグインヘッダとFWブートのみ(`Kernel::boot(KernelConfig::load(__DIR__ . '/tmswp-kernel.php'))`)。
+- `tmswp-kernel.php`: Kernelの構成(`KernelConfig::plugin()`)を返す。拡張(`extensions`)はここに書く。WordPressを起動しない`tms-acf`(tmswp/acf-bridge)も読むため、WordPressの関数を呼ばない。
 - `app/`: PHPクラス。名前空間は `PluginApp\`。
 - `templates/`: プラグイン同梱テンプレート。テーマ側の同名ファイルが優先される。
 

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\AcfBridge\Tests\Unit;
 
-use Brain\Monkey\Functions;
 use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\AcfBridge\BridgeConfig;
 use TMSWP\AcfBridge\Exception\AcfBridgeRuntimeException;
@@ -49,18 +48,19 @@ final class BridgeConfigTest extends UnitTestCase
         self::assertSame(['theme-settings' => 'theme_settings'], $config->optionsPagePostIds);
     }
 
-    /** テーマの既定値: 子テーマのacf-jsonを先、親テーマのacf-jsonを後にし、生成先はappDir/Acf、名前空間は{app}\Acf。 */
-    public function testForKernelResolvesThemeDefaultsWithChildTheme(): void
+    /**
+     * テーマの既定値: acf-jsonはルート(appDirの親)の`acf-json`だけ(WordPressの関数を使わない。子テーマのacf-jsonは
+     * jsonDirsに明示する)、生成先はappDir/Acf、名前空間は{app}\Acf。
+     */
+    public function testForKernelResolvesThemeDefaultsFromTheRoot(): void
     {
-        $appDir = $this->createTempDirectory('bridge-config-theme') . '/app';
-        self::assertTrue(mkdir($appDir));
-        Functions\when('get_stylesheet_directory')->justReturn('/themes/child/');
-        Functions\when('get_template_directory')->justReturn('/themes/parent');
+        $root = (string) realpath($this->createTempDirectory('bridge-config-theme'));
+        self::assertTrue(mkdir($root . '/app'));
 
-        $config = BridgeConfig::forKernel(KernelConfig::theme($appDir, 'App'), optionsPagePostIds: ['theme-settings' => 'theme_settings']);
+        $config = BridgeConfig::forKernel(KernelConfig::theme($root . '/app', 'App'), optionsPagePostIds: ['theme-settings' => 'theme_settings']);
 
-        self::assertSame(['/themes/child/acf-json', '/themes/parent/acf-json'], $config->jsonDirs);
-        self::assertSame(realpath($appDir) . '/Acf', $config->outputDir);
+        self::assertSame([$root . '/acf-json'], $config->jsonDirs);
+        self::assertSame($root . '/app/Acf', $config->outputDir);
         self::assertSame('App\Acf', $config->namespace);
         self::assertSame(['theme-settings' => 'theme_settings'], $config->optionsPagePostIds);
     }

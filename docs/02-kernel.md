@@ -185,6 +185,9 @@ final readonly class KernelConfig
         LabelLanguage $labelLanguage = LabelLanguage::En,
     ): self;
 
+    /** KernelConfigを返すPHPファイル(tmswp-kernel.php)を読み込む(利用例) */
+    public static function load(string $file): self;
+
     /**
      * テーマ・プラグインのルートディレクトリ = dirname(appDir)。探索結果ファイルの置き場で、
      * Log の静的な呼び出しが記録先の Kernel を決める範囲でもある(Kernel::forFile())。
@@ -559,6 +562,7 @@ interface ExtensionInterface
 - 拡張の `register()` は、Kernel の既定のメタ・オプションのストレージ(Container の `MetaStorageInterface`・`OptionStorageInterface` の id)を別の実装に差し替える唯一の場所でもある(04-meta-options §4.16。テストでメモリの実装に差し替える用途)。boot は手順7aでこの2つの id を解決して固定するため、boot の後の差し替えは Container が `ContainerException` にする。プラグインの有効化のサンドボックス(`WP_SANDBOX_SCRAPING`。§1)では、コンポーネントの初期化と同じく呼ばない。`register()` の中から別の Kernel を boot すると `KernelException` になる(boot の再入の禁止。§3.1)。
 - 拡張は、受け取った Kernel の debug に従い(`WP_DEBUG` を直接見ない)、ログは受け取った Kernel の `logger()` に記録する(07-support §5.1)。拡張のクラスは先に読み込まれた tmswp/* の1組が全 Kernel で共有されるため、プロセス全体の static な状態に Kernel ごとの設定を持たない。
 - 同じ Kernel に同じクラスの拡張を2回登録すると、`KernelConfig` の生成時に例外になる(§2 手順6)。テーマとプラグインが、それぞれの Kernel に同じクラスの拡張を登録するのは正当である。
+- 拡張のコンストラクタはWordPressの関数を呼ばない。WordPressに触れる処理(フック・オプション・テーマやプラグインのパスの取得等)は`register()`以降で行う。拡張は`tmswp-kernel.php`(利用例)の中で`KernelConfig`と一緒に生成され、このファイルはWordPressを起動しない`tms-acf`(09-acf-bridge §5.1)も読むためである。`KernelConfig::theme()`・`plugin()`もWordPressの関数を呼ばない。
 
 ## 4. Discovery
 
@@ -1576,21 +1580,31 @@ class CircularDependencyException extends ContainerException
 
 # 利用例(app側コード)
 
-### テーマの functions.php
+### テーマのtmswp-kernel.phpとfunctions.php
+
+Kernelの構成は、テーマ・プラグインのルート(探索結果ファイル`tmswp-discovery.php`と同じ場所。§6)の`tmswp-kernel.php`に置き、このファイルが`KernelConfig`を返す。functions.php・プラグイン本体は`Kernel::boot(KernelConfig::load(__DIR__ . '/tmswp-kernel.php'))`でbootする。`KernelConfig::load($file)`はファイルを読み込み、戻り値が`KernelConfig`ならそれを返す。ファイルが無い・読めない場合と、戻り値が`KernelConfig`でない場合は、ファイルのパス(後者は受け取った型も)を含む`KernelException`を投げる(代わりの構成は使わない)。`require`の戻り値を`Kernel::boot()`に直接渡さないのは、戻り値の型が`mixed`になり、PHPStanが型を確かめられないためである。WordPressを起動しない`tms-acf`(09-acf-bridge §5.1)も同じ`load()`でこのファイルを読むため、WordPressの関数を呼ばない(拡張のコンストラクタも同じ。§3.10)。
 
 ```php
 <?php
+// tmswp-kernel.php
+
+declare(strict_types=1);
+
+return \TMSWP\Core\Kernel\KernelConfig::theme(
+    appDir: __DIR__ . '/app',
+    appNamespace: 'App',
+);
+```
+
+```php
+<?php
+// functions.php
 
 declare(strict_types=1);
 
 require_once __DIR__ . '/vendor/autoload.php';
 
-\TMSWP\Core\Kernel\Kernel::boot(
-    \TMSWP\Core\Kernel\KernelConfig::theme(
-        appDir: __DIR__ . '/app',
-        appNamespace: 'App',
-    ),
-);
+\TMSWP\Core\Kernel\Kernel::boot(\TMSWP\Core\Kernel\KernelConfig::load(__DIR__ . '/tmswp-kernel.php'));
 ```
 
 テーマの composer.json(スターターが生成):
@@ -1602,25 +1616,35 @@ require_once __DIR__ . '/vendor/autoload.php';
 }
 ```
 
-### プラグイン本体(配布・併用前提なので名前空間を固有化)
+### プラグインのtmswp-kernel.phpと本体(配布・併用前提なので名前空間を固有化)
+
+プラグイン本体のパスは`tmswp-kernel.php`の位置から決める(`__FILE__`は使わない)。プラグインのbootと`tms-acf`のどちらから読んでも同じ値になる。
+
+```php
+<?php
+// tmswp-kernel.php
+
+declare(strict_types=1);
+
+return \TMSWP\Core\Kernel\KernelConfig::plugin(
+    file: __DIR__ . '/my-shop.php',
+    appDir: __DIR__ . '/app',
+    appNamespace: 'MyShopPlugin',
+);
+```
 
 ```php
 <?php
 /**
  * Plugin Name: My Shop
  */
+// my-shop.php
 
 declare(strict_types=1);
 
 require_once __DIR__ . '/vendor/autoload.php';
 
-\TMSWP\Core\Kernel\Kernel::boot(
-    \TMSWP\Core\Kernel\KernelConfig::plugin(
-        file: __FILE__,
-        appDir: __DIR__ . '/app',
-        appNamespace: 'MyShopPlugin',
-    ),
-);
+\TMSWP\Core\Kernel\Kernel::boot(\TMSWP\Core\Kernel\KernelConfig::load(__DIR__ . '/tmswp-kernel.php'));
 ```
 
 ### app/ にクラスを置くだけで発見される
@@ -1772,7 +1796,7 @@ final class ContainerTest extends TestCase
 
 # 受け入れ基準
 
-実装は以下をすべて満たすこと。検証は `composer qa`(= lint + analyse + discover:check + test)および wp-env 統合テストで行う。
+実装は以下をすべて満たすこと。検証は`composer qa`(= lint + analyse + acf:check:fixtures + discover:check + test)およびwp-env統合テストで行う。
 
 ## 機能(ユニットテストで検証)
 
@@ -1860,7 +1884,7 @@ final class ContainerTest extends TestCase
 composer lint     # php-cs-fixer (@PER-CS2x0 + strict_types)
 composer analyse  # PHPStan level max
 composer test     # test:unit(PHPUnit 11 ユニット層、Brain Monkey)+ test:integration(wp-env 統合層)
-composer qa       # lint + analyse + discover:check + test を一括
+composer qa       # lint + analyse + acf:check:fixtures + discover:check + testを一括
 # 統合層
 composer wp:start && composer test:integration   # 正式コマンド名はQA文書に従う
 composer discover:check                            # fixture の探索結果ファイルの照合(wp-env)

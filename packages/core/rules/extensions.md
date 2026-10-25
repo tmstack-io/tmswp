@@ -11,7 +11,9 @@
 
 ## ブートストラップ例
 
-`functions.php` / プラグインのエントリポイントで、使う拡張だけを明示登録する。acf-bridgeは`KernelConfig`の`extensions`に渡してKernelごとに登録し、それ以外の拡張は`Kernel::boot()`の直後に登録する。
+使う拡張だけを明示登録する。acf-bridgeはテーマ・プラグインのルートの`tmswp-kernel.php`が返す`KernelConfig`の`extensions`に渡してKernelごとに登録し、それ以外の拡張は`functions.php` / プラグインのエントリポイントで`Kernel::boot()`の直後に登録する。`tmswp-kernel.php`はWordPressを起動しない`tms-acf`も読むため、WordPressの関数を呼ばない。
+
+`tmswp-kernel.php`:
 
 ```php
 <?php
@@ -19,6 +21,18 @@
 declare(strict_types=1);
 
 use TMSWP\AcfBridge\AcfBridge;
+use TMSWP\Core\Kernel\KernelConfig;
+
+return KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App', extensions: [new AcfBridge()]);
+```
+
+`functions.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\JaToolkit\JaToolkit;
@@ -27,7 +41,7 @@ use TMSWP\JaToolkit\Module\JapaneseSlug;
 use TMSWP\SettingsPage\SettingsPages;
 use TMSWP\Thumbnail\Thumbnail;
 
-Kernel::boot(KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App', extensions: [new AcfBridge()]));
+Kernel::boot(KernelConfig::load(__DIR__ . '/tmswp-kernel.php'));
 
 Thumbnail::register();
 SettingsPages::register();
@@ -98,8 +112,8 @@ $url = tms_thumb(get_post_thumbnail_id(), 480, 320, ['fit' => 'crop']);
 
 ## ACF連携例
 
-`acf-json/` を置いたうえで `wp tmswp acf sync` を実行し、生成された `App\Acf\*` クラスを使う。
-テーマとプラグインの両方でacf-bridgeを使うときは、それぞれの`KernelConfig`の`extensions`に`new AcfBridge()`を渡し、`wp tmswp acf sync --app=<名前空間>`でKernelごとに生成する。
+`acf-json/`を置いたうえで`composer acf:sync`(`vendor/bin/tms-acf sync`)を実行し、生成された`App\Acf\*`クラスを使う。
+テーマとプラグインの両方でacf-bridgeを使うときは、それぞれの`tmswp-kernel.php`の`extensions`に`new AcfBridge()`を渡し、それぞれのルートで`tms-acf sync`を実行してKernelごとに生成する。
 
 ```php
 <?php
@@ -107,11 +121,11 @@ $url = tms_thumb(get_post_thumbnail_id(), 480, 320, ['fit' => 'crop']);
 declare(strict_types=1);
 
 use TMSWP\AcfBridge\AcfBridge;
-use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 
-// プラグインの本体ファイル。acf-jsonはプラグインのディレクトリのacf-json/、生成先はapp/Acf/
-Kernel::boot(KernelConfig::plugin(__FILE__, __DIR__ . '/app', 'Vendor\Plugin', extensions: [new AcfBridge()]));
+// プラグインのtmswp-kernel.php。本体ファイルのパスはこのファイルの位置から決める。
+// acf-jsonはプラグインのディレクトリのacf-json/、生成先はapp/Acf/
+return KernelConfig::plugin(__DIR__ . '/my-plugin.php', __DIR__ . '/app', 'Vendor\Plugin', extensions: [new AcfBridge()]);
 ```
 
 ACFのフィールドグループで管理するキーを`#[MetaSchema]`で宣言するエンティティには、`#[UseMetaStorage(AcfMetaStorage::class)]`を付ける(rules/meta.mdの「ACFのフィールドグループで管理するキー」)。

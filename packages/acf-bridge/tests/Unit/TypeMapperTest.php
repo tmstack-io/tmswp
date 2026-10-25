@@ -130,10 +130,11 @@ final class TypeMapperTest extends UnitTestCase
                 ],
             ]), self::imports(), self::imports()),
         );
+        $flexibleImports = self::imports();
         $this->assertMapping(
             new TypeMapping(
                 'array',
-                "list<array{acf_fc_layout: 'hero', title: string, image: int|null}|array{acf_fc_layout: 'body', body: string}>",
+                'list<TestField_Hero|TestField_Body>',
                 'acfLayouts',
                 'array',
                 'list<array<string, mixed>>',
@@ -155,8 +156,39 @@ final class TypeMapperTest extends UnitTestCase
                         ],
                     ],
                 ],
-            ]), self::imports(), self::imports()),
+            ]), $flexibleImports, $flexibleImports),
         );
+        // レイアウトのshapeは、生成クラスの型の別名`{Studly(フィールドの名前)}_{Studly(レイアウトの名前)}`として宣言する
+        self::assertSame([
+            " * @phpstan-type TestField_Hero array{acf_fc_layout: 'hero', title: string, image: int|null}",
+            " * @phpstan-type TestField_Body array{acf_fc_layout: 'body', body: string}",
+        ], $flexibleImports->localAliasLines());
+    }
+
+    /**
+     * レイアウトの型の別名は、クラスの中で一意でなければならない。同じ名前の別の型と、生成クラス・参照するクラスと
+     * 大文字小文字を区別せずに重なる名前は、宣言できないこととして記録する(生成時のE002)。
+     */
+    public function testLayoutAliasesThatCannotBeDeclaredAreRecorded(): void
+    {
+        $imports = new ClassImports('Wp_PostFields');
+        $mapper = new TypeMapper();
+        $flexible = fn(string $name, string $layout, string $subField): FieldDefinition => $this->field([
+            'name' => $name,
+            'type' => 'flexible_content',
+            'layouts' => [['name' => $layout, 'sub_fields' => [['key' => 'field_' . $subField, 'name' => $subField, 'label' => $subField, 'type' => 'text']]]],
+        ]);
+
+        $mapper->map($flexible('blocks', 'quote', 'text'), $imports, $imports);
+        $mapper->map($flexible('blocks', 'quote', 'text'), $imports, $imports);
+        self::assertSame([], $imports->localAliasConflicts());
+
+        $mapper->map($flexible('blocks', 'quote', 'body'), $imports, $imports);
+        $mapper->map($flexible('wp', 'post', 'text'), $imports, $imports);
+        self::assertSame([
+            "the type alias 'Blocks_Quote' is declared for two different layouts (array{acf_fc_layout: 'quote', text: string} and array{acf_fc_layout: 'quote', body: string})",
+            "the type alias 'Wp_Post' collides with 'WP_Post'",
+        ], $imports->localAliasConflicts());
     }
 
     /**
@@ -165,15 +197,20 @@ final class TypeMapperTest extends UnitTestCase
      */
     public function testEmptyLayoutNameKeepsTheDiscriminator(): void
     {
+        $imports = self::imports();
         $mapping = (new TypeMapper())->map($this->field([
             'type' => 'flexible_content',
             'layouts' => [
                 ['name' => 'quote', 'sub_fields' => [['key' => 'field_text', 'name' => 'text', 'label' => '本文', 'type' => 'text']]],
                 ['name' => '', 'sub_fields' => [['key' => 'field_caption', 'name' => 'caption', 'label' => '説明', 'type' => 'text']]],
             ],
-        ]), self::imports(), self::imports());
+        ]), $imports, $imports);
 
-        self::assertSame("list<array{acf_fc_layout: 'quote', text: string}|array{acf_fc_layout: '', caption: string}>", $mapping->getterDocType);
+        self::assertSame('list<TestField_Quote|TestField_>', $mapping->getterDocType);
+        self::assertSame([
+            " * @phpstan-type TestField_Quote array{acf_fc_layout: 'quote', text: string}",
+            " * @phpstan-type TestField_ array{acf_fc_layout: '', caption: string}",
+        ], $imports->localAliasLines());
     }
 
     public function testUnknownTypesBecomeMixed(): void
@@ -220,8 +257,12 @@ final class TypeMapperTest extends UnitTestCase
 
         self::assertSame("array{AcfImage: AcfImageType|null, 'name-AcfImage': AcfImageType|null, WP_Post: WP_Post|null}|null", $mapper->map($imageGroup, new ClassImports('AcfImage'), new ClassImports('AcfImage'))->getterDocType);
         self::assertSame("array{AcfImage: AcfImage|null, 'name-AcfImage': AcfImage|null, WP_Post: WP_Post|null}|null", $mapper->map($imageGroup, self::imports(), self::imports())->getterDocType);
-        self::assertSame("list<array{acf_fc_layout: 'AcfImage', AcfImage: AcfImageType|null}>", $mapper->map($layouts, new ClassImports('Acfimage'), new ClassImports('Acfimage'))->getterDocType);
-        self::assertSame("list<array{acf_fc_layout: 'AcfImage', AcfImage: AcfImage|null}>", $mapper->map($layouts, self::imports(), self::imports())->getterDocType);
+        $clashing = new ClassImports('Acfimage');
+        self::assertSame('list<TestField_Acfimage>', $mapper->map($layouts, $clashing, $clashing)->getterDocType);
+        self::assertSame([" * @phpstan-type TestField_Acfimage array{acf_fc_layout: 'AcfImage', AcfImage: AcfImageType|null}"], $clashing->localAliasLines());
+        $plain = self::imports();
+        self::assertSame('list<TestField_Acfimage>', $mapper->map($layouts, $plain, $plain)->getterDocType);
+        self::assertSame([" * @phpstan-type TestField_Acfimage array{acf_fc_layout: 'AcfImage', AcfImage: AcfImage|null}"], $plain->localAliasLines());
 
         $date = $mapper->map($this->field(['type' => 'date_picker', 'name' => 'DateTimeInterface']), new ClassImports('DateTimeInterface'), new ClassImports('DateTimeInterface'));
         self::assertSame('string|\\DateTimeInterface|null', $date->setterNativeType);

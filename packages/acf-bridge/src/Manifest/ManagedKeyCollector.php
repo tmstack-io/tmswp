@@ -59,7 +59,7 @@ final class ManagedKeyCollector
                 }
 
                 foreach ($group->fields as $field) {
-                    if (!$this->types->storesValue($field) || $field->name === '' || $field->type === 'clone') {
+                    if (!$this->types->storesValue($field) || $field->name === '') {
                         continue;
                     }
 

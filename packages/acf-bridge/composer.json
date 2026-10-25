@@ -10,6 +10,9 @@
   "suggest": {
     "advanced-custom-fields-pro": "ACF Pro 6.2+ をWPプラグインとして導入すること"
   },
+  "bin": [
+    "bin/tms-acf"
+  ],
   "autoload": {
     "psr-4": {
       "TMSWP\\AcfBridge\\": "src/"

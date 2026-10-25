@@ -52,11 +52,71 @@ final class AcfBridgeKernelIntegrationTest extends IntegrationTestCase
         self::assertNotSame($theme, $plugin);
         self::assertSame(self::themeKernel(), $theme->kernel());
         self::assertSame(self::pluginKernel(), $plugin->kernel());
-        self::assertSame([get_stylesheet_directory() . '/acf-json'], $theme->config()->jsonDirs);
+        self::assertSame([self::themeKernel()->config()->rootDir() . '/acf-json'], $theme->config()->jsonDirs);
+        self::assertSame(get_stylesheet_directory() . '/acf-json', $theme->config()->jsonDirs[0]);
         self::assertSame([\dirname((string) self::pluginKernel()->config()->pluginFile) . '/acf-json'], $plugin->config()->jsonDirs);
         self::assertSame(self::THEME_NAMESPACE . '\Acf', $theme->config()->namespace);
         self::assertSame(self::PLUGIN_NAMESPACE . '\Acf', $plugin->config()->namespace);
         self::assertSame(self::pluginKernel()->config()->appDir . '/Acf', $plugin->config()->outputDir);
+    }
+
+    /**
+     * テーマの既定のjsonDirsはテーマのルートのacf-jsonだけ(WordPressの関数を使わない)。子テーマを有効にしたときに
+     * ACFが既定で読む`{stylesheet}/acf-json`(子テーマのacf-json)に同じkeyのJSONがあっても、ACFはAcfBridgeのjsonDirsの
+     * ファイルを使い、生成(AcfJsonRepository)と同じファイルになる。子テーマのacf-jsonにだけあるグループはACFが読み込むが、
+     * jsonDirsに明示しない限り生成しない(docs/09 §3.1)。ACFの既定の読み込み先は、ACFがload_jsonの設定に入れる値を
+     * 子テーマのacf-jsonに見立てたディレクトリに差し替えて再現する。
+     */
+    public function testAcfDefaultStylesheetJsonDoesNotReplaceTheGeneratedFile(): void
+    {
+        $themeDir = AcfBridge::forKernel(self::themeKernel())->config()->jsonDirs[0];
+        $childDir = $this->createTempDirectory('acf-child-theme') . '/acf-json';
+        self::assertTrue(mkdir($childDir));
+        $files = [
+            $childDir . '/group_tmswp_child_shared.json' => 'child',
+            $themeDir . '/group_tmswp_child_shared.json' => 'parent',
+            $childDir . '/group_tmswp_child_only.json' => 'child only',
+        ];
+        $localJson = acf_get_instance('ACF_Local_JSON');
+        self::assertInstanceOf(ACF_Local_JSON::class, $localJson);
+        $acf = acf();
+        self::assertIsObject($acf);
+        $defaultLoadJson = $acf->get_setting('load_json');
+        self::assertSame([get_stylesheet_directory() . '/acf-json'], $defaultLoadJson);
+
+        try {
+            foreach ($files as $file => $title) {
+                $key = basename($file, '.json');
+                $this->writeFile($file, '{"key": "' . $key . '", "title": "' . $title . '", "fields": [], "location": [], "active": true}');
+            }
+
+            acf_update_setting('load_json', [$childDir]);
+            $localJson->scan_files();
+            $acfFiles = acf_get_local_json_files();
+            $generated = [];
+
+            foreach ((new AcfJsonRepository(AcfBridge::forKernel(self::themeKernel())->config()->jsonDirs))->load()->fieldGroups as $group) {
+                $generated[$group->key] = $group->sourceFile;
+            }
+
+            self::assertSame($themeDir . '/group_tmswp_child_shared.json', $acfFiles['group_tmswp_child_shared'] ?? null);
+            self::assertSame($themeDir . '/group_tmswp_child_shared.json', $generated['group_tmswp_child_shared'] ?? null);
+            self::assertSame($childDir . '/group_tmswp_child_only.json', $acfFiles['group_tmswp_child_only'] ?? null);
+            self::assertArrayNotHasKey('group_tmswp_child_only', $generated);
+        } finally {
+            acf_update_setting('load_json', $defaultLoadJson);
+
+            foreach (array_keys($files) as $file) {
+                if (is_file($file)) {
+                    unlink($file);
+                }
+            }
+
+            $localJson->scan_files();
+        }
+
+        self::assertArrayNotHasKey('group_tmswp_child_shared', acf_get_local_json_files());
+        self::assertArrayNotHasKey('group_tmswp_child_only', acf_get_local_json_files());
     }
 
     /**

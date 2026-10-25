@@ -72,7 +72,6 @@ final class Generator
     {
         $errors = [];
         $warnings = [];
-        $infos = [];
         $groups = (new CloneResolver())->resolve($groups, $errors);
         $buckets = $this->buckets($groups, $context->config, $errors, $warnings);
         $files = [];
@@ -84,13 +83,18 @@ final class Generator
                 $bucket->target->className . '.php',
                 $this->renderClass($bucket, $accessors, $context, $imports),
             );
+
+            // flexible_contentのレイアウトの型の別名(docs/09 §6.4)は、クラスの中で一意に宣言できなければならない
+            foreach ($imports->localAliasConflicts() as $conflict) {
+                $errors[] = "E002: class {$bucket->target->className} cannot declare the layout type aliases of flexible_content fields: {$conflict}; rename the flexible_content field or the layout in ACF";
+            }
         }
 
         $files[] = new GeneratedFile('AcfManifest.php', $this->renderManifest($groups, $context));
 
         usort($files, static fn(GeneratedFile $a, GeneratedFile $b): int => $a->relativePath <=> $b->relativePath);
 
-        return new Report($files, $errors, $warnings, $infos);
+        return new Report($files, $errors, $warnings);
     }
 
     /**
@@ -187,7 +191,7 @@ final class Generator
             }
 
             foreach ($group->fields as $field) {
-                if (!$this->types->storesValue($field) || $field->name === '' || $field->type === 'clone') {
+                if (!$this->types->storesValue($field) || $field->name === '') {
                     continue;
                 }
 
@@ -232,11 +236,6 @@ final class Generator
         foreach ($bucket->groups() as $group) {
             foreach ($group->fields as $field) {
                 if (!$this->types->storesValue($field)) {
-                    continue;
-                }
-
-                if ($field->type === 'clone') {
-                    $errors[] = "E004: clone field '{$field->name}' in group '{$group->key}' cannot be resolved yet";
                     continue;
                 }
 
@@ -413,8 +412,7 @@ final class Generator
         }
 
         $studly = ucfirst($methodName);
-        // 衝突の検査の前に使うのはdateTimeAccessorだけのため、生成クラスのuseを記録しないClassImportsで型を決める
-        $dateTimeMethodName = $this->types->map($field, ClassImports::discarding(), ClassImports::discarding())->dateTimeAccessor ? $methodName . 'AsDateTime' : null;
+        $dateTimeMethodName = $this->types->hasDateTimeAccessor($field) ? $methodName . 'AsDateTime' : null;
         $declaredMethods = array_filter([$methodName, 'set' . $studly, $dateTimeMethodName, 'has' . $studly, 'delete' . $studly], static fn(?string $name): bool => $name !== null);
         $declaredConstants = [$constName, 'KEY_' . $constName];
         $collisions = [];
@@ -505,10 +503,13 @@ final class Generator
             $this->sourceLines($bucket->groups()),
         );
         $lines = [...$lines, ...$imports->useLines(), ''];
+        $localAliases = $imports->localAliasLines();
         $typeImports = $imports->typeImportLines();
+        // php-cs-fixerのphpdoc_separationと同じく、`@phpstan-type`と`@phpstan-import-type`の間を空行で分ける
+        $typeLines = $localAliases !== [] && $typeImports !== [] ? [...$localAliases, ' *', ...$typeImports] : [...$localAliases, ...$typeImports];
 
-        if ($typeImports !== []) {
-            $lines = [...$lines, '/**', ...$typeImports, ' */'];
+        if ($typeLines !== []) {
+            $lines = [...$lines, '/**', ...$typeLines, ' */'];
         }
 
         $lines = [...$lines, "final class {$target->className}", '{', "    use {$traitName};", ...$body, '}'];
@@ -557,7 +558,7 @@ final class Generator
 
         $lines[] = ' *';
         $lines[] = ' * このファイルは自動生成。手で編集しないこと(次回syncで上書きされる)。';
-        $lines[] = ' * 再生成: wp tmswp acf sync (composer acf:sync)';
+        $lines[] = ' * 再生成: composer acf:sync (vendor/bin/tms-acf sync)';
         $lines[] = ' *';
         $lines[] = ' * sources:';
 

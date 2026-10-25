@@ -11,13 +11,4 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/vendor/autoload.php';
 
-TMSWP\Core\Kernel\Kernel::boot(
-    TMSWP\Core\Kernel\KernelConfig::plugin(
-        file: __FILE__,
-        appDir: __DIR__ . '/app',
-        appNamespace: 'PluginApp',
-        logChannels: static fn(): array => [
-            'default' => new TMSWP\Core\Log\LogChannel(new TMSWP\Core\Log\SimpleLogger()),
-        ],
-    ),
-);
+TMSWP\Core\Kernel\Kernel::boot(TMSWP\Core\Kernel\KernelConfig::load(__DIR__ . '/tmswp-kernel.php'));

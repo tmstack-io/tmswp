@@ -6,7 +6,6 @@ namespace TMSWP\AcfBridge;
 
 use TMSWP\AcfBridge\Exception\AcfBridgeRuntimeException;
 use TMSWP\Core\Kernel\KernelConfig;
-use TMSWP\Core\Kernel\KernelContext;
 
 /**
  * acf-bridgeの構成。既定値は登録したKernelの構成からforKernel()で決める。生成の入力・出力の場所と、生成の調整
@@ -53,17 +52,17 @@ final readonly class BridgeConfig
     }
 
     /**
-     * Kernelの構成から既定の構成を作る。
+     * Kernelの構成から既定の構成を作る。WordPressの関数を使わないため、WordPressを起動しないtms-acfでも同じ値になる。
      *
-     * - テーマ: jsonDirs = [{stylesheet}/acf-json](子テーマのときは{template}/acf-jsonも後ろに加える)
-     * - プラグイン: jsonDirs = [dirname(pluginFile)/acf-json]
+     * - jsonDirs = [{ルート}/acf-json](ルートはKernelConfig::rootDir()。テーマもプラグインも同じ。子テーマのacf-jsonを
+     *   使うときは、BridgeConfigのjsonDirsに明示する)
      * - outputDir = {appDir}/Acf、namespace = {appNamespace}\Acf
      *
      * @param array<string, string> $classMap
      * @param array<string, string> $methodNameMap
      * @param array<string, string> $optionsPagePostIds
      *
-     * @throws AcfBridgeRuntimeException プラグインのKernelにpluginFileが無い場合、または入力が不正な場合
+     * @throws AcfBridgeRuntimeException 入力が不正な場合
      */
     public static function forKernel(
         KernelConfig $config,
@@ -72,23 +71,8 @@ final readonly class BridgeConfig
         array $optionsPagePostIds = [],
         bool $previewMeta = false,
     ): self {
-        if ($config->context === KernelContext::Theme) {
-            $jsonDirs = [rtrim(get_stylesheet_directory(), '/\\') . '/acf-json'];
-            $templateDir = rtrim(get_template_directory(), '/\\') . '/acf-json';
-
-            if ($templateDir !== $jsonDirs[0]) {
-                $jsonDirs[] = $templateDir;
-            }
-        } else {
-            if ($config->pluginFile === null) {
-                throw new AcfBridgeRuntimeException('the plugin kernel has no plugin file to locate its acf-json directory');
-            }
-
-            $jsonDirs = [\dirname($config->pluginFile) . '/acf-json'];
-        }
-
         return new self(
-            jsonDirs: $jsonDirs,
+            jsonDirs: [$config->rootDir() . '/acf-json'],
             outputDir: $config->appDir . '/Acf',
             namespace: $config->appNamespace . '\Acf',
             classMap: $classMap,

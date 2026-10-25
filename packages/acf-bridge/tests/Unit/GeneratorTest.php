@@ -162,7 +162,7 @@ final class GeneratorTest extends UnitTestCase
         $files = $this->filesByPath($this->generateFixture()->files());
 
         foreach ($files as $path => $contents) {
-            self::assertStringContainsString(" * このファイルは自動生成。手で編集しないこと(次回syncで上書きされる)。\n * 再生成: wp tmswp acf sync (composer acf:sync)\n", $contents, $path);
+            self::assertStringContainsString(" * このファイルは自動生成。手で編集しないこと(次回syncで上書きされる)。\n * 再生成: composer acf:sync (vendor/bin/tms-acf sync)\n", $contents, $path);
             self::assertStringNotContainsString('  (', $contents, $path);
         }
 
@@ -412,6 +412,31 @@ final class GeneratorTest extends UnitTestCase
         $report = (new Generator())->generate([$this->group('group_names', 'product', $fields)], $this->context($methodNameMap));
 
         self::assertSame([$error], $report->errors());
+    }
+
+    /**
+     * flexible_contentのレイアウトの型の別名(`{Studly(フィールド)}_{Studly(レイアウト)}`。docs/09 §6.4)を、クラスの中で
+     * 一意に宣言できない場合はE002にする。同じ名前で同じshapeのレイアウトは、1つの別名を共有するためエラーにしない。
+     */
+    public function testLayoutTypeAliasConflictsAreGenerationErrors(): void
+    {
+        $flexible = static fn(string $key, string $subField): array => [
+            'key' => $key,
+            'name' => 'blocks',
+            'label' => 'blocks',
+            'type' => 'flexible_content',
+            'layouts' => [['name' => 'quote', 'sub_fields' => [self::text($subField)]]],
+        ];
+        $rows = static fn(array $subField): array => ['key' => 'field_rows', 'name' => 'rows', 'label' => 'rows', 'type' => 'repeater', 'sub_fields' => [$subField]];
+
+        $shared = (new Generator())->generate([$this->group('group_names', 'product', [$flexible('field_blocks', 'text'), $rows($flexible('field_row_blocks', 'text'))])], $this->context());
+        self::assertSame([], $shared->errors());
+        self::assertSame(1, substr_count($this->filesByPath($shared->files())['ProductFields.php'] ?? '', '@phpstan-type Blocks_Quote '));
+
+        $report = (new Generator())->generate([$this->group('group_names', 'product', [$flexible('field_blocks', 'text'), $rows($flexible('field_row_blocks', 'body'))])], $this->context());
+        self::assertSame([
+            "E002: class ProductFields cannot declare the layout type aliases of flexible_content fields: the type alias 'Blocks_Quote' is declared for two different layouts (array{acf_fc_layout: 'quote', text: string} and array{acf_fc_layout: 'quote', body: string}); rename the flexible_content field or the layout in ACF",
+        ], $report->errors());
     }
 
     /** @return iterable<string, array{list<array<string, mixed>>, array<string, string>, string}> */
@@ -684,7 +709,8 @@ final class GeneratorTest extends UnitTestCase
             "'name-AcfImage' => \$this->acfImageOf(\$group['name-AcfImage'] ?? null, \$path . '.name-AcfImage'),",
         ]];
         yield 'layout name like a type alias' => ['App\Imports\LayoutLiteral', 'AcfImage', [['key' => 'field_sections', 'name' => 'sections', 'label' => 'sections', 'type' => 'flexible_content', 'layouts' => [['name' => 'AcfImage', 'sub_fields' => [$image('photo')]]]]], [
-            "@return list<array{acf_fc_layout: 'AcfImage', photo: AcfImageType|null}>",
+            " * @phpstan-type Sections_Acfimage array{acf_fc_layout: 'AcfImage', photo: AcfImageType|null}",
+            '@return list<Sections_Acfimage>',
             "'AcfImage' => fn(array \$row, string \$path): array => [",
             "'acf_fc_layout' => 'AcfImage',",
         ]];

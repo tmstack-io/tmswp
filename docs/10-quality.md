@@ -72,7 +72,8 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 | `composer discover:build` | fixture のテーマ・プラグインの探索結果ファイルを `wp tmswp discover` で生成する(wp-env の `cli` コンテナ内。4.6) | **必要** |
 | `composer discover:check` | fixture の探索結果ファイルが最新かを `wp tmswp discover --check` で照合する(古ければ非 0) | **必要** |
 | `composer qa:fast` | `lint` → `analyse` → `test:unit`(Docker 不要の全 QA) | 不要 |
-| `composer qa` | `lint` → `analyse` → `discover:check` → `test`(全 QA) | 必要 |
+| `composer acf:check:fixtures` | fixtureのテーマ・プラグインのacf-bridgeの生成物を、WordPressを起動しない`tms-acf check --strict`で照合する(1.2) | 不要 |
+| `composer qa` | `lint` → `analyse` → `acf:check:fixtures` → `discover:check` → `test`(全QA) | 必要 |
 | `composer monorepo:validate` | パッケージ間バージョン整合検査 | 不要 |
 | `composer wp:start` / `wp:stop` | wp-env の起動 / 停止(`npm ci` で入れたローカルの @wordpress/env を使う。1.1 補足) | 必要 |
 | `composer wp:start:coverage` | Xdebug をカバレッジのモードで有効にして wp-env を起動(`--xdebug=coverage`。4.8) | 必要 |
@@ -171,7 +172,11 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
         "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
         "test": ["@test:unit", "@test:integration"],
         "qa:fast": ["@lint", "@analyse", "@test:unit"],
-        "qa": ["@lint", "@analyse", "@discover:check", "@test"],
+        "acf:check:fixtures": [
+            "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/themes/tmswp-fixture-theme",
+            "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/plugins/tmswp-fixture-plugin"
+        ],
+        "qa": ["@lint", "@analyse", "@acf:check:fixtures", "@discover:check", "@test"],
         "monorepo:validate": "monorepo-builder validate",
         "monorepo:merge": "monorepo-builder merge",
         "wp:start": "node node_modules/@wordpress/env/bin/wp-env start",
@@ -221,21 +226,22 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 }
 ```
 
-### 1.2 `acf:sync` スクリプト
+### 1.2 `acf:sync`・`acf:check`スクリプト
 
-`acf:sync` は acf-bridge のコードジェネレータ(DR-06)を実行するスクリプトで、**アプリ(テーマ/プラグイン)側の composer.json に定義する**。WP-CLI コマンド名 `wp tmswp acf sync` の正準仕様は acf-bridge 文書が定義する。
+`acf:sync`・`acf:check`はacf-bridgeのコードジェネレータ(DR-06)を実行するスクリプトで、**アプリ(テーマ/プラグイン)側のcomposer.jsonに定義する**。WordPressを起動しない`vendor/bin/tms-acf`を呼び、テーマ・プラグインのルートの`tmswp-kernel.php`の構成で生成・照合する。コマンドの正準仕様(WP-CLIの`wp tmswp acf sync|check`との違いを含む)はacf-bridge文書 §5.1が定義する。
 
-スターター(starters/theme, starters/plugin)の composer.json scripts に追加する定義:
+acf-bridgeを入れたアプリのcomposer.json scriptsに足す定義(スターター(starters/theme, starters/plugin)はacf-bridgeに依存しないため、既定では含めない。手順は11-ai-docs §8.2):
 
 ```json
 {
     "scripts": {
-        "acf:sync": "wp tmswp acf sync"
+        "acf:check": "tms-acf check",
+        "acf:sync": "tms-acf sync"
     }
 }
 ```
 
-wp-env 利用時は `node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/themes/<theme> wp tmswp acf sync` の形で実行する(wp-env はプロジェクトの package.json で版を固定して導入する。1.1 補足)。monorepo ルートには `acf:sync` を置かない(acf-json はアプリ資産であり FW リポジトリには存在しないため)。acf-bridge 自身のジェネレータ検証は `packages/acf-bridge/tests/` のフィクスチャ acf-json に対するユニット/統合テストで行う。
+`tms-acf`はWordPressを起動しないため、wp-envは要らない。`#[MetaSchema]`との重複(E101)は`tms-acf`では検査しないため、WordPressの環境で`wp tmswp acf check`を実行する(wp-env利用時は`node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/themes/<theme> wp tmswp acf check`。wp-envはプロジェクトのpackage.jsonで版を固定して導入する。1.1補足)。monorepoルートには`acf:sync`を置かない(acf-jsonはアプリ資産でありFWリポジトリには存在しないため)。acf-bridge自身のジェネレータ検証は`packages/acf-bridge/tests/`のフィクスチャacf-jsonに対するユニット/統合テストで行い、fixtureのテーマ・プラグインの生成物は`composer acf:check:fixtures`(`tms-acf check --strict`。`composer qa`に含む)で照合する。
 
 ---
 
@@ -274,6 +280,7 @@ parameters:
         - packages/settings-page/src
         - packages/settings-page/tests
         - packages/acf-bridge/src
+        - packages/acf-bridge/bin/tms-acf
         - packages/acf-bridge/tests
         - packages/ja-toolkit/src
         - packages/ja-toolkit/tests
@@ -370,7 +377,7 @@ $finder = (new Finder())
     ->notPath('#tests/(.+/)?fixtures/#')
     // packages/*/languages/ の .l10n.php は `wp i18n make-php` の生成物で、出力をそのままコミットする
     ->notPath('#^[^/]+/languages/#')
-    ->append([__FILE__, __DIR__ . '/monorepo-builder.php']);
+    ->append([__FILE__, __DIR__ . '/monorepo-builder.php', __DIR__ . '/packages/acf-bridge/bin/tms-acf']);
 
 return (new Config())
     ->setRiskyAllowed(true)
@@ -928,6 +935,8 @@ jobs:
           coverage: none
       - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
       - run: composer analyse
+      # WordPressを起動しないtms-acfで、fixtureのテーマとプラグインの生成物とacf-jsonの一致を確かめる(--strict)
+      - run: composer acf:check:fixtures
 
   monorepo:
     name: Monorepo Validate
@@ -1452,7 +1461,7 @@ final class EmailRuleTest extends UnitTestCase
 ### チェックリスト
 
 - [ ] `composer install` 一発で `vendor/` と `vendor-bin/wp-tests/vendor/` の両方が揃う
-- [ ] `composer lint` / `fix` / `analyse` / `test:unit` / `test:integration` / `test` / `test:coverage`(`:unit` / `:integration` / `:check`)/ `discover:build` / `discover:check` / `qa:fast` / `qa` / `monorepo:validate` / `wp:start:coverage` が本書 1 章の表どおりに動作する
+- [ ] `composer lint` / `fix` / `analyse` / `test:unit` / `test:integration` / `test` / `test:coverage`(`:unit` / `:integration` / `:check`)/ `discover:build` / `discover:check` / `acf:check:fixtures` / `qa:fast` / `qa` / `monorepo:validate` / `wp:start:coverage`が本書1章の表どおりに動作する
 - [ ] fixture のテーマ・プラグインの探索結果ファイルがコミットされ、探索対象(fixture の app/)だけを変えて探索結果ファイルを更新しない場合に `composer discover:check`・`composer qa`・CI の `coverage` ジョブが失敗する
 - [ ] `phpstan.neon.dist` が level max で、`packages/core/phpstan/extension.neon`(04 文書の FW 拡張)と szepeviktor/phpstan-wordpress を include している
 - [ ] リポジトリに `phpstan-baseline*` が存在せず、qa.yml がその存在を fail にする

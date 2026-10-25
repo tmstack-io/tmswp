@@ -22,6 +22,7 @@ parameters:
     - packages/settings-page/src
     - packages/settings-page/tests
     - packages/acf-bridge/src
+    - packages/acf-bridge/bin/tms-acf
     - packages/acf-bridge/tests
     - packages/ja-toolkit/src
     - packages/ja-toolkit/tests

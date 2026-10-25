@@ -10,6 +10,7 @@ $finder = (new PhpCsFixer\Finder())
         __DIR__ . '/functions.php',
         __DIR__ . '/header.php',
         __DIR__ . '/index.php',
+        __DIR__ . '/tmswp-kernel.php',
     ]);
 
 return (new PhpCsFixer\Config())

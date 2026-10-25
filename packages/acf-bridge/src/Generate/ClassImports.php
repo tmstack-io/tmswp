@@ -41,6 +41,12 @@ final class ClassImports
     /** @var array<string, string> 取り込む型の別名 => 生成コードで使う名前 */
     private array $aliases = [];
 
+    /** @var array<string, string> 生成クラスが宣言する型の別名(`@phpstan-type`) => 型。宣言した順 */
+    private array $localAliases = [];
+
+    /** @var list<string> 宣言できなかった型の別名の説明(生成時のE002) */
+    private array $localAliasConflicts = [];
+
     public function __construct(private readonly string $className) {}
 
     /**
@@ -93,6 +99,56 @@ final class ClassImports
         }
 
         return $this->aliases[$alias];
+    }
+
+    /**
+     * 生成クラスが`@phpstan-type`で宣言する型の別名$nameを$typeとして加え、$nameを返す(flexible_contentのレイアウトの
+     * shape。docs/09 §6.4)。同じ名前を違う型で加える場合と、名前が生成クラスの短名・参照するクラス・取り込む型の別名と
+     * 大文字小文字を区別せずに重なる場合は、宣言できないことを記録する(localAliasConflicts())。
+     */
+    public function localAlias(string $name, string $type): string
+    {
+        $registered = $this->localAliases[$name] ?? null;
+
+        if ($registered === null) {
+            foreach ([$this->className, ...self::TYPE_ALIASES, ...array_keys(self::CLASSES)] as $other) {
+                if ($other !== '' && strcasecmp($name, $other) === 0) {
+                    $this->localAliasConflicts[] = "the type alias '{$name}' collides with '{$other}'";
+                }
+            }
+
+            $this->localAliases[$name] = $type;
+        } elseif ($registered !== $type) {
+            $this->localAliasConflicts[] = "the type alias '{$name}' is declared for two different layouts ({$registered} and {$type})";
+        }
+
+        return $name;
+    }
+
+    /**
+     * 宣言できなかった型の別名の説明(重複を除く)。
+     *
+     * @return list<string>
+     */
+    public function localAliasConflicts(): array
+    {
+        return array_values(array_unique($this->localAliasConflicts));
+    }
+
+    /**
+     * `@phpstan-type`の行(docblockの中の行。宣言した順)。
+     *
+     * @return list<string>
+     */
+    public function localAliasLines(): array
+    {
+        $lines = [];
+
+        foreach ($this->localAliases as $name => $type) {
+            $lines[] = " * @phpstan-type {$name} {$type}";
+        }
+
+        return $lines;
     }
 
     /**

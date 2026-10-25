@@ -764,7 +764,7 @@ v0.3.0(v0.2.0 を含む)
 - 対象ファイル領域: packages/acf-bridge/src/Json/、packages/acf-bridge/src/Mapping/、packages/acf-bridge/src/Generate/{CloneResolver,Report,TargetBucket,GeneratedFile}.php、packages/acf-bridge/bin/(tms-acf を新設)、packages/acf-bridge/composer.json(bin)、docs/09 §3・§4・§11
 - 完了条件:
   - jsonDirs の並び順で先勝ちになり、配列形式の JSON と非配列の JSON が報告され、LocationResolver が正しい候補に解決し、post_template に対応する。
-  - cloneの展開(保存名・ラベル・cloneのcloneの名前・管理キー)を実物のACF Proで確認して揃える。cloneが合成するkeyの定義はメモリ上だけにありACFに登録されないため、生成アクセサ(KEY_定数)と管理キーは元のkeyと保存名を使う。docs/09 にある未実装の機能(I001 / I002、type_map フィルタ、check の diff、W002、E101 の文言、型エイリアス、ClassPrinter)がある。
+  - cloneの展開(保存名・ラベル・cloneのcloneの名前・管理キー)を実物のACF Proで確認して揃える。cloneが合成するkeyの定義はメモリ上だけにありACFに登録されないため、生成アクセサ(KEY_定数)と管理キーは元のkeyと保存名を使う。docs/09にある未実装の機能(I002、checkのdiff、W002、E101の文言、型エイリアス)がある。
   - WP を起動しない `vendor/bin/tms-acf` の sync / check があり、page_template の単一ターゲットはテンプレート別のクラスになる。
   - location の block は非対応と明記され、独自ブロックは §1.11 の方式を案内している。
 - 検証コマンド: `composer test:unit`、`vendor/bin/tms-acf check`(fixture で実行)、`composer test:integration`

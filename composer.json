@@ -95,9 +95,14 @@
       "@analyse",
       "@test:unit"
     ],
+    "acf:check:fixtures": [
+      "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/themes/tmswp-fixture-theme",
+      "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/plugins/tmswp-fixture-plugin"
+    ],
     "qa": [
       "@lint",
       "@analyse",
+      "@acf:check:fixtures",
       "@discover:check",
       "@test"
     ],

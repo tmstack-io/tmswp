@@ -26,7 +26,8 @@
 
 ## 構成
 
-- `functions.php`: FWブートのみ。ロジックを書かない。
+- `functions.php`: FWブートのみ(`Kernel::boot(KernelConfig::load(__DIR__ . '/tmswp-kernel.php'))`)。ロジックを書かない。
+- `tmswp-kernel.php`: Kernelの構成(`KernelConfig::theme()`)を返す。拡張(`extensions`)はここに書く。WordPressを起動しない`tms-acf`(tmswp/acf-bridge)も読むため、WordPressの関数を呼ばない。
 - `index.php` など: WordPress標準テンプレート階層。
 - `parts/`: テンプレートパーツ。
 - `app/`: PHPクラス。名前空間は `App\`。テンプレートの前処理クラスは `app/Page/` に置き、テンプレートの先頭で呼ぶ。

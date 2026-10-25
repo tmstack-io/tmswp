@@ -39,6 +39,8 @@ jobs:
           coverage: none
       - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
       - run: composer analyse
+      # WordPressを起動しないtms-acfで、fixtureのテーマとプラグインの生成物とacf-jsonの一致を確かめる(--strict)
+      - run: composer acf:check:fixtures
 
   monorepo:
     name: Monorepo Validate

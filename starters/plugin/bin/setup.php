@@ -12,6 +12,7 @@ replacePlaceholders($root . '/AGENTS.md', $name, $slug, $projectNameToken, $proj
 replacePlaceholders($root . '/composer.json', $name, $slug, $projectNameToken, $projectSlugToken);
 replacePlaceholders($root . '/README.md', $name, $slug, $projectNameToken, $projectSlugToken);
 replacePlaceholders($root . '/plugin.php', $name, $slug, $projectNameToken, $projectSlugToken);
+replacePlaceholders($root . '/tmswp-kernel.php', $name, $slug, $projectNameToken, $projectSlugToken);
 renamePluginFile($root, $slug);
 
 function replacePlaceholders(string $file, string $name, string $slug, string $projectNameToken, string $projectSlugToken): void

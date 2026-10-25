@@ -61,6 +61,15 @@ final class TypeMapper
         };
     }
 
+    /**
+     * `{getter}AsDateTime()`を生成する型(date_picker・date_time_picker)か。map()のTypeMapping::$dateTimeAccessorと同じ値で、
+     * 型を組み立てずに(生成クラスのuseに記録せずに)決める。
+     */
+    public function hasDateTimeAccessor(FieldDefinition $field): bool
+    {
+        return \in_array($field->type, ['date_picker', 'date_time_picker'], true);
+    }
+
     public function storesValue(FieldDefinition $field): bool
     {
         return !\in_array($field->type, self::NO_VALUE_TYPES, true);
@@ -95,9 +104,9 @@ final class TypeMapper
         $dateSetter = static fn(): string => 'string|' . $setterImports->ref('DateTimeInterface') . '|null';
 
         return match ($field->type) {
-            'date_picker' => new TypeMapping('string', 'string', 'acfString', $dateSetter(), '', true, 'Ymd'),
-            'date_time_picker' => new TypeMapping('string', 'string', 'acfString', $dateSetter(), '', true, 'Y-m-d H:i:s'),
-            'time_picker' => new TypeMapping('string', 'string', 'acfString', $dateSetter(), '', false, 'H:i:s'),
+            'date_picker' => new TypeMapping('string', 'string', 'acfString', $dateSetter(), '', $this->hasDateTimeAccessor($field), 'Ymd'),
+            'date_time_picker' => new TypeMapping('string', 'string', 'acfString', $dateSetter(), '', $this->hasDateTimeAccessor($field), 'Y-m-d H:i:s'),
+            'time_picker' => new TypeMapping('string', 'string', 'acfString', $dateSetter(), '', $this->hasDateTimeAccessor($field), 'H:i:s'),
             default => new TypeMapping('string', 'string', 'acfString', 'string'),
         };
     }
@@ -216,16 +225,19 @@ final class TypeMapper
         return 'array{' . implode(', ', $parts) . '}';
     }
 
-    /** レイアウトごとのshape(acf_fc_layoutはレイアウトの名前のリテラル)のunion。レイアウトは1つ以上。 */
+    /**
+     * レイアウトごとのshape(acf_fc_layoutはレイアウトの名前のリテラル)を、生成クラスの型の別名
+     * `{Studly(フィールドの名前)}_{Studly(レイアウトの名前)}`(`@phpstan-type`)にしたunion。レイアウトは1つ以上。
+     */
     private function flexibleUnion(FieldDefinition $field, ClassImports $imports): string
     {
-        $shapes = [];
+        $aliases = [];
 
         foreach ($field->layouts as $layout) {
-            $shapes[] = $this->shape($layout->subFields, $imports, $layout->name);
+            $aliases[] = $imports->localAlias(NameConverter::studly($field->name) . '_' . NameConverter::studly($layout->name), $this->shape($layout->subFields, $imports, $layout->name));
         }
 
-        return implode('|', $shapes);
+        return implode('|', $aliases);
     }
 
     private function defaultReturnFormat(FieldDefinition $field): string

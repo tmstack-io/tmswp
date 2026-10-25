@@ -7,7 +7,7 @@
  * source-hash: sha256:9742331952ef152e06b4dd3519eb96ca7f90d41ea30df9427ff2caf52d984fb2
  *
  * このファイルは自動生成。手で編集しないこと(次回syncで上書きされる)。
- * 再生成: wp tmswp acf sync (composer acf:sync)
+ * 再生成: composer acf:sync (vendor/bin/tms-acf sync)
  *
  * sources:
  *   group_tmswp_plugin_post.json (TMSWP plugin post)

@@ -9,6 +9,7 @@ use TMSWP\AcfBridge\Exception\AcfBridgeRuntimeException;
 use TMSWP\AcfBridge\Manifest\ManagedKey;
 use TMSWP\Core\Kernel\ExtensionInterface;
 use TMSWP\Core\Kernel\Kernel;
+use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
 use WP_CLI;
 
@@ -48,13 +49,7 @@ final class AcfBridge implements ExtensionInterface
             throw new AcfBridgeRuntimeException("this AcfBridge instance is already registered to the kernel '{$this->kernel->config()->appNamespace}'; create one AcfBridge per kernel");
         }
 
-        $kernelConfig = $kernel->config();
-        $config = $this->explicitConfig ?? BridgeConfig::forKernel($kernelConfig);
-
-        if (!str_starts_with($config->namespace . '\\', $kernelConfig->appNamespace . '\\')) {
-            throw new AcfBridgeRuntimeException("ACF bridge namespace '{$config->namespace}' must be inside the app namespace '{$kernelConfig->appNamespace}' of the kernel that registers it");
-        }
-
+        $config = $this->configFor($kernel->config());
         $this->kernel = $kernel;
         $this->config = $config;
         $kernel->container()->set(self::class, $this);
@@ -81,6 +76,24 @@ final class AcfBridge implements ExtensionInterface
         if ($config->previewMeta) {
             PreviewAcfSupport::register();
         }
+    }
+
+    /**
+     * Kernelの構成$kernelConfigで使うacf-bridgeの構成。渡した構成、無ければBridgeConfig::forKernel()の既定。
+     * register()(WordPressの実行時)とtms-acf(WordPressを起動しないsync・check)が同じこの関数で決めるため、構成の入手元と
+     * 構成の誤りの例外は、どちらの経路でも同じになる。WordPressの関数は使わない。
+     *
+     * @throws AcfBridgeRuntimeException 構成の名前空間がKernelのアプリの名前空間の外の場合、または構成が不正な場合
+     */
+    public function configFor(KernelConfig $kernelConfig): BridgeConfig
+    {
+        $config = $this->explicitConfig ?? BridgeConfig::forKernel($kernelConfig);
+
+        if (!str_starts_with($config->namespace . '\\', $kernelConfig->appNamespace . '\\')) {
+            throw new AcfBridgeRuntimeException("ACF bridge namespace '{$config->namespace}' must be inside the app namespace '{$kernelConfig->appNamespace}' of the kernel that registers it");
+        }
+
+        return $config;
     }
 
     /**

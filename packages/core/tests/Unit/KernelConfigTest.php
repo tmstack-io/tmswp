@@ -39,6 +39,94 @@ final class KernelConfigTest extends UnitTestCase
         self::assertFalse($config->debug);
     }
 
+    /** load()は、ファイルが返すKernelConfigをそのまま返す(ファイルの中の __DIR__ はそのファイルの場所)。 */
+    public function testLoadReturnsTheKernelConfigOfTheFile(): void
+    {
+        $root = (string) realpath($this->createTempDirectory('load-root'));
+        self::assertTrue(mkdir($root . '/app'));
+        $file = $this->writeFile($root . '/tmswp-kernel.php', "<?php\n\nreturn \\TMSWP\\Core\\Kernel\\KernelConfig::theme(__DIR__ . '/app', 'Example\\\\Loaded', false);\n");
+
+        $config = KernelConfig::load($file);
+
+        self::assertSame(KernelContext::Theme, $config->context);
+        self::assertSame($root . '/app', $config->appDir);
+        self::assertSame('Example\\Loaded', $config->appNamespace);
+    }
+
+    /**
+     * 相対パスはカレントディレクトリを基準に読む。include_pathに同じ相対パスの別の構成があっても、カレントディレクトリの
+     * ファイルを読み、カレントディレクトリに無ければinclude_pathのものを読まずにKernelExceptionにする。絶対パスも同じ
+     * ファイルを読む。
+     */
+    public function testLoadResolvesRelativePathAgainstWorkingDirectoryNotIncludePath(): void
+    {
+        $cwd = (string) realpath($this->createTempDirectory('load-cwd'));
+        $searched = (string) realpath($this->createTempDirectory('load-include-path'));
+        $empty = (string) realpath($this->createTempDirectory('load-empty-cwd'));
+
+        foreach ([$cwd => 'Example\\CwdApp', $searched => 'Example\\SearchApp'] as $base => $namespace) {
+            self::assertTrue(mkdir($base . '/site/app', 0777, true));
+            $this->writeFile($base . '/site/tmswp-kernel.php', "<?php\n\nreturn \\TMSWP\\Core\\Kernel\\KernelConfig::theme(__DIR__ . '/app', '" . str_replace('\\', '\\\\', $namespace) . "', false);\n");
+        }
+
+        $originalCwd = (string) getcwd();
+        $originalIncludePath = (string) get_include_path();
+
+        try {
+            self::assertNotFalse(set_include_path($searched . PATH_SEPARATOR . $originalIncludePath));
+            self::assertTrue(chdir($cwd));
+
+            self::assertSame('Example\\CwdApp', KernelConfig::load('site/tmswp-kernel.php')->appNamespace);
+            self::assertSame($cwd . '/site/app', KernelConfig::load('site/tmswp-kernel.php')->appDir);
+            self::assertSame('Example\\CwdApp', KernelConfig::load('./site/tmswp-kernel.php')->appNamespace);
+            self::assertSame('Example\\CwdApp', KernelConfig::load($cwd . '/site/tmswp-kernel.php')->appNamespace);
+            self::assertSame('Example\\SearchApp', KernelConfig::load($searched . '/site/tmswp-kernel.php')->appNamespace);
+
+            self::assertTrue(chdir($empty));
+            $this->expectException(KernelException::class);
+            $this->expectExceptionMessage('kernel config file not found or not readable: site/tmswp-kernel.php;');
+            KernelConfig::load('site/tmswp-kernel.php');
+        } finally {
+            chdir($originalCwd);
+            set_include_path($originalIncludePath);
+        }
+    }
+
+    /** ファイルが無い場合と、ファイルでない(ディレクトリ)場合はKernelException。 */
+    public function testLoadRejectsMissingFile(): void
+    {
+        $root = $this->createTempDirectory('load-missing');
+
+        foreach ([$root . '/tmswp-kernel.php', $root] as $file) {
+            try {
+                KernelConfig::load($file);
+                self::fail("KernelException was not thrown for {$file}");
+            } catch (KernelException $exception) {
+                self::assertSame("kernel config file not found or not readable: {$file}; put a file that returns KernelConfig::theme() or KernelConfig::plugin() there", $exception->getMessage());
+            }
+        }
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function nonKernelConfigFiles(): iterable
+    {
+        yield 'array' => ["<?php\n\nreturn ['appDir' => 'app'];\n", 'array'];
+        yield 'another object' => ["<?php\n\nreturn new \\stdClass();\n", 'stdClass'];
+        yield 'no return' => ["<?php\n\n\$config = null;\n", 'int'];
+    }
+
+    /** ファイルがKernelConfigを返さない場合は、ファイルのパスと受け取った型を含むKernelException。 */
+    #[DataProvider('nonKernelConfigFiles')]
+    public function testLoadRejectsFileThatDoesNotReturnKernelConfig(string $contents, string $type): void
+    {
+        $file = $this->writeFile($this->createTempDirectory('load-invalid') . '/tmswp-kernel.php', $contents);
+
+        $this->expectException(KernelException::class);
+        $this->expectExceptionMessage("kernel config file {$file} must return " . KernelConfig::class . ", got {$type}");
+
+        KernelConfig::load($file);
+    }
+
     public function testDiscoveryFileIsPlacedNextToAppDirectory(): void
     {
         $root = $this->createTempDirectory('discovery-file-root');

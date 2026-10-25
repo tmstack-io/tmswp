@@ -7,6 +7,7 @@ $finder = (new PhpCsFixer\Finder())
     ->append([
         __FILE__,
         __DIR__ . '/plugin.php',
+        __DIR__ . '/tmswp-kernel.php',
     ]);
 
 return (new PhpCsFixer\Config())

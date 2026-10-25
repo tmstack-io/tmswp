@@ -19,7 +19,7 @@ $finder = (new Finder())
     ->notPath('#^core/tests/fixtures/#')
     // packages/*/languages/ の .l10n.php は `wp i18n make-php` の生成物で、出力をそのままコミットする
     ->notPath('#^[^/]+/languages/#')
-    ->append([__FILE__, __DIR__ . '/monorepo-builder.php']);
+    ->append([__FILE__, __DIR__ . '/monorepo-builder.php', __DIR__ . '/packages/acf-bridge/bin/tms-acf']);
 
 return (new Config())
     ->setRiskyAllowed(true)
