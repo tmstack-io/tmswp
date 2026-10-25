@@ -9,6 +9,7 @@
  * 再生成: wp tmswp acf sync  (composer acf:sync)
  *
  * sources:
+ *   group_tmswp_acf_contract.json (TMSWP ACF contract)
  *   group_tmswp_acf_post.json (TMSWP ACF post)
  */
 
@@ -18,9 +19,45 @@ namespace TmswpFixtureTheme\Acf;
 
 use TMSWP\AcfBridge\AcfFieldAccess;
 
+/**
+ * @phpstan-import-type AcfFile from \TMSWP\AcfBridge\AcfTypes
+ * @phpstan-import-type AcfImage from \TMSWP\AcfBridge\AcfTypes
+ */
 final class TmswpAcfPostFields
 {
     use AcfFieldAccess;
+
+    /** Contract absent (text, group_tmswp_acf_contract) */
+    public const TMSWP_ACF_CONTRACT_ABSENT = 'tmswp_acf_contract_absent';
+    public const KEY_TMSWP_ACF_CONTRACT_ABSENT = 'field_tmswp_acf_contract_absent';
+
+    /** Contract empty (text, group_tmswp_acf_contract) */
+    public const TMSWP_ACF_CONTRACT_EMPTY = 'tmswp_acf_contract_empty';
+    public const KEY_TMSWP_ACF_CONTRACT_EMPTY = 'field_tmswp_acf_contract_empty';
+
+    /** Contract zero (text, group_tmswp_acf_contract) */
+    public const TMSWP_ACF_CONTRACT_ZERO = 'tmswp_acf_contract_zero';
+    public const KEY_TMSWP_ACF_CONTRACT_ZERO = 'field_tmswp_acf_contract_zero';
+
+    /** Contract false (text, group_tmswp_acf_contract) */
+    public const TMSWP_ACF_CONTRACT_FALSE = 'tmswp_acf_contract_false';
+    public const KEY_TMSWP_ACF_CONTRACT_FALSE = 'field_tmswp_acf_contract_false';
+
+    /** Contract single (text, group_tmswp_acf_contract) */
+    public const TMSWP_ACF_CONTRACT_SINGLE = 'tmswp_acf_contract_single';
+    public const KEY_TMSWP_ACF_CONTRACT_SINGLE = 'field_tmswp_acf_contract_single';
+
+    /** Contract broken (text, group_tmswp_acf_contract) */
+    public const TMSWP_ACF_CONTRACT_BROKEN = 'tmswp_acf_contract_broken';
+    public const KEY_TMSWP_ACF_CONTRACT_BROKEN = 'field_tmswp_acf_contract_broken';
+
+    /** Contract json (text, group_tmswp_acf_contract) */
+    public const TMSWP_ACF_CONTRACT_JSON = 'tmswp_acf_contract_json';
+    public const KEY_TMSWP_ACF_CONTRACT_JSON = 'field_tmswp_acf_contract_json';
+
+    /** Contract array (text, group_tmswp_acf_contract) */
+    public const TMSWP_ACF_CONTRACT_ARRAY = 'tmswp_acf_contract_array';
+    public const KEY_TMSWP_ACF_CONTRACT_ARRAY = 'field_tmswp_acf_contract_array';
 
     /** Price (text, group_tmswp_acf_post) */
     public const PRICE = 'price';
@@ -30,9 +67,177 @@ final class TmswpAcfPostFields
     public const SUBTITLE = 'subtitle';
     public const KEY_SUBTITLE = 'field_tmswp_acf_post_subtitle';
 
+    /** Slashed text (text, group_tmswp_acf_post) */
+    public const SLASHED_TEXT = 'slashed_text';
+    public const KEY_SLASHED_TEXT = 'field_tmswp_acf_post_slashed_text';
+
+    /** Slashed group (group, group_tmswp_acf_post) */
+    public const SLASHED_GROUP = 'slashed_group';
+    public const KEY_SLASHED_GROUP = 'field_tmswp_acf_post_slashed_group';
+
+    /** Related posts (relationship, group_tmswp_acf_post) */
+    public const RELATED_POSTS = 'related_posts';
+    public const KEY_RELATED_POSTS = 'field_tmswp_acf_post_related_posts';
+
+    /** Picked posts (post_object, group_tmswp_acf_post) */
+    public const PICKED_POSTS = 'picked_posts';
+    public const KEY_PICKED_POSTS = 'field_tmswp_acf_post_picked_posts';
+
+    /** Picked terms (taxonomy, group_tmswp_acf_post) */
+    public const PICKED_TERMS = 'picked_terms';
+    public const KEY_PICKED_TERMS = 'field_tmswp_acf_post_picked_terms';
+
+    /** Picked users (user, group_tmswp_acf_post) */
+    public const PICKED_USERS = 'picked_users';
+    public const KEY_PICKED_USERS = 'field_tmswp_acf_post_picked_users';
+
+    /** Stock (number, group_tmswp_acf_post) */
+    public const STOCK = 'stock';
+    public const KEY_STOCK = 'field_tmswp_acf_post_stock';
+
+    /** Featured (true_false, group_tmswp_acf_post) */
+    public const FEATURED = 'featured';
+    public const KEY_FEATURED = 'field_tmswp_acf_post_featured';
+
+    /** Tags (select, group_tmswp_acf_post) */
+    public const TAGS_SELECT = 'tags_select';
+    public const KEY_TAGS_SELECT = 'field_tmswp_acf_post_tags_select';
+
+    /** Color (radio, group_tmswp_acf_post) */
+    public const COLOR_RADIO = 'color_radio';
+    public const KEY_COLOR_RADIO = 'field_tmswp_acf_post_color_radio';
+
+    /** Main image (image, group_tmswp_acf_post) */
+    public const MAIN_IMAGE = 'main_image';
+    public const KEY_MAIN_IMAGE = 'field_tmswp_acf_post_main_image';
+
+    /** Attachment file (file, group_tmswp_acf_post) */
+    public const ATTACHMENT_FILE = 'attachment_file';
+    public const KEY_ATTACHMENT_FILE = 'field_tmswp_acf_post_attachment_file';
+
     public static function of(\WP_Post|int $post): self
     {
         return new self($post instanceof \WP_Post ? (int) $post->ID : $post);
+    }
+
+    /**
+     * Contract absent (text, group_tmswp_acf_contract)
+     *
+     * @return string
+     */
+    public function tmswpAcfContractAbsent(): string
+    {
+        return $this->acfString(self::TMSWP_ACF_CONTRACT_ABSENT);
+    }
+
+    public function setTmswpAcfContractAbsent(string $value): void
+    {
+        $this->acfUpdate(self::TMSWP_ACF_CONTRACT_ABSENT, $value);
+    }
+
+    /**
+     * Contract empty (text, group_tmswp_acf_contract)
+     *
+     * @return string
+     */
+    public function tmswpAcfContractEmpty(): string
+    {
+        return $this->acfString(self::TMSWP_ACF_CONTRACT_EMPTY);
+    }
+
+    public function setTmswpAcfContractEmpty(string $value): void
+    {
+        $this->acfUpdate(self::TMSWP_ACF_CONTRACT_EMPTY, $value);
+    }
+
+    /**
+     * Contract zero (text, group_tmswp_acf_contract)
+     *
+     * @return string
+     */
+    public function tmswpAcfContractZero(): string
+    {
+        return $this->acfString(self::TMSWP_ACF_CONTRACT_ZERO);
+    }
+
+    public function setTmswpAcfContractZero(string $value): void
+    {
+        $this->acfUpdate(self::TMSWP_ACF_CONTRACT_ZERO, $value);
+    }
+
+    /**
+     * Contract false (text, group_tmswp_acf_contract)
+     *
+     * @return string
+     */
+    public function tmswpAcfContractFalse(): string
+    {
+        return $this->acfString(self::TMSWP_ACF_CONTRACT_FALSE);
+    }
+
+    public function setTmswpAcfContractFalse(string $value): void
+    {
+        $this->acfUpdate(self::TMSWP_ACF_CONTRACT_FALSE, $value);
+    }
+
+    /**
+     * Contract single (text, group_tmswp_acf_contract)
+     *
+     * @return string
+     */
+    public function tmswpAcfContractSingle(): string
+    {
+        return $this->acfString(self::TMSWP_ACF_CONTRACT_SINGLE);
+    }
+
+    public function setTmswpAcfContractSingle(string $value): void
+    {
+        $this->acfUpdate(self::TMSWP_ACF_CONTRACT_SINGLE, $value);
+    }
+
+    /**
+     * Contract broken (text, group_tmswp_acf_contract)
+     *
+     * @return string
+     */
+    public function tmswpAcfContractBroken(): string
+    {
+        return $this->acfString(self::TMSWP_ACF_CONTRACT_BROKEN);
+    }
+
+    public function setTmswpAcfContractBroken(string $value): void
+    {
+        $this->acfUpdate(self::TMSWP_ACF_CONTRACT_BROKEN, $value);
+    }
+
+    /**
+     * Contract json (text, group_tmswp_acf_contract)
+     *
+     * @return string
+     */
+    public function tmswpAcfContractJson(): string
+    {
+        return $this->acfString(self::TMSWP_ACF_CONTRACT_JSON);
+    }
+
+    public function setTmswpAcfContractJson(string $value): void
+    {
+        $this->acfUpdate(self::TMSWP_ACF_CONTRACT_JSON, $value);
+    }
+
+    /**
+     * Contract array (text, group_tmswp_acf_contract)
+     *
+     * @return string
+     */
+    public function tmswpAcfContractArray(): string
+    {
+        return $this->acfString(self::TMSWP_ACF_CONTRACT_ARRAY);
+    }
+
+    public function setTmswpAcfContractArray(string $value): void
+    {
+        $this->acfUpdate(self::TMSWP_ACF_CONTRACT_ARRAY, $value);
     }
 
     /**
@@ -63,5 +268,191 @@ final class TmswpAcfPostFields
     public function setSubtitle(string $value): void
     {
         $this->acfUpdate(self::SUBTITLE, $value);
+    }
+
+    /**
+     * Slashed text (text, group_tmswp_acf_post)
+     *
+     * @return string
+     */
+    public function slashedText(): string
+    {
+        return $this->acfString(self::SLASHED_TEXT);
+    }
+
+    public function setSlashedText(string $value): void
+    {
+        $this->acfUpdate(self::SLASHED_TEXT, $value);
+    }
+
+    /**
+     * Slashed group (group, group_tmswp_acf_post)
+     *
+     * @return array{json: string, path: string}|null
+     */
+    public function slashedGroup(): ?array
+    {
+        return $this->acfNullableArray(self::SLASHED_GROUP);
+    }
+
+    /** @param array<string, mixed>|null $value */
+    public function setSlashedGroup(?array $value): void
+    {
+        $this->acfUpdate(self::SLASHED_GROUP, $value);
+    }
+
+    /**
+     * Related posts (relationship, group_tmswp_acf_post)
+     *
+     * @return list<\WP_Post>
+     */
+    public function relatedPosts(): array
+    {
+        return $this->acfObjectList(self::RELATED_POSTS, \WP_Post::class);
+    }
+
+    /** @param list<int> $value */
+    public function setRelatedPosts(array $value): void
+    {
+        $this->acfUpdate(self::RELATED_POSTS, $value);
+    }
+
+    /**
+     * Picked posts (post_object, group_tmswp_acf_post)
+     *
+     * @return list<\WP_Post>
+     */
+    public function pickedPosts(): array
+    {
+        return $this->acfObjectList(self::PICKED_POSTS, \WP_Post::class);
+    }
+
+    /** @param list<int> $value */
+    public function setPickedPosts(array $value): void
+    {
+        $this->acfUpdate(self::PICKED_POSTS, $value);
+    }
+
+    /**
+     * Picked terms (taxonomy, group_tmswp_acf_post)
+     *
+     * @return list<\WP_Term>
+     */
+    public function pickedTerms(): array
+    {
+        return $this->acfObjectList(self::PICKED_TERMS, \WP_Term::class);
+    }
+
+    /** @param list<int> $value */
+    public function setPickedTerms(array $value): void
+    {
+        $this->acfUpdate(self::PICKED_TERMS, $value);
+    }
+
+    /**
+     * Picked users (user, group_tmswp_acf_post)
+     *
+     * @return list<\WP_User>
+     */
+    public function pickedUsers(): array
+    {
+        return $this->acfObjectList(self::PICKED_USERS, \WP_User::class);
+    }
+
+    /** @param list<int> $value */
+    public function setPickedUsers(array $value): void
+    {
+        $this->acfUpdate(self::PICKED_USERS, $value);
+    }
+
+    /**
+     * Stock (number, group_tmswp_acf_post)
+     *
+     * @return int|float|null
+     */
+    public function stock(): int|float|null
+    {
+        return $this->acfNumber(self::STOCK);
+    }
+
+    public function setStock(int|float|null $value): void
+    {
+        $this->acfUpdate(self::STOCK, $value);
+    }
+
+    /**
+     * Featured (true_false, group_tmswp_acf_post)
+     *
+     * @return bool
+     */
+    public function featured(): bool
+    {
+        return $this->acfBool(self::FEATURED);
+    }
+
+    public function setFeatured(bool $value): void
+    {
+        $this->acfUpdate(self::FEATURED, $value);
+    }
+
+    /**
+     * Tags (select, group_tmswp_acf_post)
+     *
+     * @return list<string>
+     */
+    public function tagsSelect(): array
+    {
+        return $this->acfStringList(self::TAGS_SELECT);
+    }
+
+    /** @param list<string> $value */
+    public function setTagsSelect(array $value): void
+    {
+        $this->acfUpdate(self::TAGS_SELECT, $value);
+    }
+
+    /**
+     * Color (radio, group_tmswp_acf_post)
+     *
+     * @return string|null
+     */
+    public function colorRadio(): ?string
+    {
+        return $this->acfNullableString(self::COLOR_RADIO);
+    }
+
+    public function setColorRadio(?string $value): void
+    {
+        $this->acfUpdate(self::COLOR_RADIO, $value);
+    }
+
+    /**
+     * Main image (image, group_tmswp_acf_post)
+     *
+     * @return AcfImage|null
+     */
+    public function mainImage(): ?array
+    {
+        return $this->acfImage(self::MAIN_IMAGE);
+    }
+
+    public function setMainImage(?int $value): void
+    {
+        $this->acfUpdate(self::MAIN_IMAGE, $value);
+    }
+
+    /**
+     * Attachment file (file, group_tmswp_acf_post)
+     *
+     * @return AcfFile|null
+     */
+    public function attachmentFile(): ?array
+    {
+        return $this->acfFile(self::ATTACHMENT_FILE);
+    }
+
+    public function setAttachmentFile(?int $value): void
+    {
+        $this->acfUpdate(self::ATTACHMENT_FILE, $value);
     }
 }

@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace TMSWP\AcfBridge\Tests\Unit;
 
-use Brain\Monkey\Functions;
-use DateTimeImmutable;
-use DateTimeZone;
+use Closure;
+use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\AcfBridge\AcfFieldAccess;
+use TMSWP\AcfBridge\Exception\AcfNotActiveException;
 use TMSWP\Core\Tests\Support\UnitTestCase;
 
+/**
+ * ACFを読み込まないユニットテストの環境で、AcfFieldAccessのACFに触れない部分を確かめる。値の正規化・形の不一致・
+ * has()・日時の往復は、実物の無料版ACFの統合テスト(AcfBridgeIntegrationTest)で確かめる。
+ */
 final class AcfFieldAccessTest extends UnitTestCase
 {
     public function testItKeepsAcfIdWithoutAccessingAcfRuntime(): void
@@ -19,34 +23,32 @@ final class AcfFieldAccessTest extends UnitTestCase
         self::assertSame('term_10', $access->acfId());
     }
 
-    public function testItNormalizesUnsetValues(): void
+    /**
+     * 値に触れる操作は、ACFが有効でなければ(get_fieldが無ければ)AcfNotActiveExceptionになる(docs/09 §10)。
+     *
+     * @param Closure(AcfFieldAccessFixture): mixed $call
+     */
+    #[DataProvider('valueCalls')]
+    public function testValueAccessRequiresActiveAcf(string $method, Closure $call): void
     {
-        Functions\when('get_field')->alias(static fn(string $name, int|string $postId, bool $format): mixed => match ($name) {
-            'empty_string' => false,
-            'empty_number' => '',
-            'empty_list' => null,
-            'empty_array' => [],
-            'truthy' => '1',
-            default => null,
-        });
+        self::assertFalse(\function_exists('get_field'));
 
-        $access = AcfFieldAccessFixture::make(10);
+        $this->expectException(AcfNotActiveException::class);
+        $this->expectExceptionMessage(AcfFieldAccessFixture::class . "::{$method} requires Advanced Custom Fields (ACF) 6.2+");
 
-        self::assertSame('', $access->stringValue('empty_string'));
-        self::assertNull($access->numberValue('empty_number'));
-        self::assertSame([], $access->listValue('empty_list'));
-        self::assertNull($access->nullableArrayValue('empty_array'));
-        self::assertTrue($access->boolValue('truthy'));
+        $call(AcfFieldAccessFixture::make(10));
     }
 
-    public function testItParsesRawDateWithWordPressTimezone(): void
+    /** @return iterable<string, array{string, Closure(AcfFieldAccessFixture): mixed}> */
+    public static function valueCalls(): iterable
     {
-        Functions\when('get_field')->alias(static fn(string $name, int|string $postId, bool $format): mixed => $format ? '' : '20260613');
-        Functions\when('wp_timezone')->justReturn(new DateTimeZone('Asia/Tokyo'));
-
-        $date = AcfFieldAccessFixture::make(10)->dateValue('published_at', 'Ymd');
-
-        self::assertSame('2026-06-13 00:00:00 +09:00', $date?->format('Y-m-d H:i:s P'));
+        yield 'has' => ['has', static fn(AcfFieldAccessFixture $access): bool => $access->has('price')];
+        yield 'value' => ['value', static fn(AcfFieldAccessFixture $access): mixed => $access->value('price')];
+        yield 'rawValue' => ['rawValue', static fn(AcfFieldAccessFixture $access): mixed => $access->rawValue('price')];
+        yield 'update' => ['update', static fn(AcfFieldAccessFixture $access): bool => $access->update('price', '1200')];
+        yield 'delete' => ['delete', static fn(AcfFieldAccessFixture $access): bool => $access->delete('price')];
+        yield 'acfString' => ['acfString', static fn(AcfFieldAccessFixture $access): string => $access->stringValue('price')];
+        yield 'acfUpdateDate' => ['acfUpdateDate', static fn(AcfFieldAccessFixture $access): null => $access->setDate('published_at', '20260613')];
     }
 }
 
@@ -64,30 +66,10 @@ final class AcfFieldAccessFixture
         return $this->acfString($name);
     }
 
-    public function numberValue(string $name): int|float|null
+    public function setDate(string $name, string $value): null
     {
-        return $this->acfNumber($name);
-    }
+        $this->acfUpdateDate($name, $value, 'Ymd');
 
-    /** @return list<mixed> */
-    public function listValue(string $name): array
-    {
-        return $this->acfList($name);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function nullableArrayValue(string $name): ?array
-    {
-        return $this->acfNullableArray($name);
-    }
-
-    public function boolValue(string $name): bool
-    {
-        return $this->acfBool($name);
-    }
-
-    public function dateValue(string $name, string $rawFormat): ?DateTimeImmutable
-    {
-        return $this->acfDateTime($name, $rawFormat);
+        return null;
     }
 }

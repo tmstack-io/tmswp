@@ -499,6 +499,12 @@ final class Generator
             return ["return \$this->acfObject({$const}, {$objectClass}::class);"];
         }
 
+        $listObjectClass = $this->listObjectClassFromDocType($mapping->getterDocType);
+
+        if ($listObjectClass !== null) {
+            return ["return \$this->acfObjectList({$const}, {$listObjectClass}::class);"];
+        }
+
         if ($mapping->coercionHelper === 'value') {
             return ["return \$this->value({$const});"];
         }
@@ -609,6 +615,21 @@ final class Generator
     private function optionsPostId(string $menuSlug, GeneratorContext $context): string
     {
         return $context->optionsPagePostIds[$menuSlug] ?? 'option';
+    }
+
+    /**
+     * objectのlistの型(relationship・post_object・taxonomy・userの複数・return_format=object。TypeMapperのdocTypeは
+     * `list<\WP_Post>`等)の要素のクラス。getterは、要素ごとにそのクラスを検査するacfObjectList()を使う。
+     */
+    private function listObjectClassFromDocType(string $docType): ?string
+    {
+        foreach (['\\WP_Post', '\\WP_Term', '\\WP_User'] as $class) {
+            if ($docType === "list<{$class}>") {
+                return $class;
+            }
+        }
+
+        return null;
     }
 
     private function objectClassFromDocType(string $docType): ?string

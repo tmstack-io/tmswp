@@ -126,6 +126,44 @@ final class GeneratorTest extends UnitTestCase
         self::assertStringContainsString("new ManagedKey(null, 'theme-settings', 'site_logo', 'field_logo', 'group_options')", $manifest);
     }
 
+    /**
+     * objectのlist(relationship・post_object・taxonomy・userの複数・return_format=object)のgetterは、要素のクラスを渡して
+     * acfObjectList()を呼ぶ(要素ごとにinstanceofを検査する)。単一のobjectはacfObject()、IDのlistはacfIntList()のまま。
+     */
+    public function testObjectListGettersPassTheElementClass(): void
+    {
+        $context = new GeneratorContext(
+            config: new BridgeConfig(jsonDirs: [], outputDir: $this->createTempDirectory('acf-output'), namespace: 'App\\Acf'),
+            optionsPagePostIds: [],
+            sourceHash: 'abc123',
+        );
+        $group = $this->group([
+            'key' => 'group_links',
+            'title' => 'Links',
+            'location' => [[['param' => 'post_type', 'operator' => '==', 'value' => 'product']]],
+            'fields' => [
+                ['key' => 'field_related', 'name' => 'related', 'label' => 'Related', 'type' => 'relationship', 'return_format' => 'object'],
+                ['key' => 'field_posts', 'name' => 'posts', 'label' => 'Posts', 'type' => 'post_object', 'multiple' => 1, 'return_format' => 'object'],
+                ['key' => 'field_terms', 'name' => 'terms', 'label' => 'Terms', 'type' => 'taxonomy', 'field_type' => 'checkbox', 'return_format' => 'object'],
+                ['key' => 'field_users', 'name' => 'users', 'label' => 'Users', 'type' => 'user', 'multiple' => 1, 'return_format' => 'object'],
+                ['key' => 'field_post', 'name' => 'post', 'label' => 'Post', 'type' => 'post_object', 'return_format' => 'object'],
+                ['key' => 'field_ids', 'name' => 'ids', 'label' => 'IDs', 'type' => 'relationship', 'return_format' => 'id'],
+            ],
+        ], 'acf-json/group_links.json');
+
+        $report = (new Generator())->generate([$group], $context);
+
+        self::assertSame([], $report->errors());
+        $product = $this->filesByPath($report->files())['ProductFields.php'];
+        self::assertStringContainsString('return $this->acfObjectList(self::RELATED, \\WP_Post::class);', $product);
+        self::assertStringContainsString('return $this->acfObjectList(self::POSTS, \\WP_Post::class);', $product);
+        self::assertStringContainsString('return $this->acfObjectList(self::TERMS, \\WP_Term::class);', $product);
+        self::assertStringContainsString('return $this->acfObjectList(self::USERS, \\WP_User::class);', $product);
+        self::assertStringContainsString('return $this->acfObject(self::POST, \\WP_Post::class);', $product);
+        self::assertStringContainsString('return $this->acfIntList(self::IDS);', $product);
+        self::assertStringNotContainsString('acfList(', $product);
+    }
+
     /** @return array<string, string> */
     private function expectedFixtureFiles(): array
     {

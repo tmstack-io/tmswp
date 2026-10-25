@@ -73,6 +73,8 @@ init(priority 20) → MetaSchemaRegistry::registerAll()
 
 **ACFのフィールドグループで管理するキー**: acf-bridgeは、ACFのフィールドグループで管理するキーを`markExternallyManaged()`系で外部管理として申告する(ストレージは`AcfMetaStorage`。文書09 §7)。同じキーを`#[MetaSchema]`で宣言できるのは`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティだけで、申告と衝突せず、宣言どおり`register_*_meta`される。`#[UseMetaStorage]`の無いエンティティ等、ストレージの違うエンティティが同じキーを宣言すると、起動時に`DuplicateMetaKeyException`になる(4.9)。同じキーを`MetaBag`と生成アクセサ(`XxxFields`)の両方から読み書きしない。
 
+`#[MetaSchema]`で宣言できるACFのフィールドのキーは、単純な値の型(text・number・true_false・date_picker・単一IDのimage等。文書09 §8.1の`AcfMetaStorage::SUPPORTED_FIELD_TYPES`)のフィールドだけである。`AcfMetaStorage`は、ACFの値の書き込みのAPI・フィルタとpost_idの解決を通さずに、値と参照のメタ(`_{キー}`)をこのストレージと同じ規約で直接読み書きするため、ACFの`update_value`が値を変える型(gallery・relationship・group等)のフィールドのキーの書き込みは`AcfBridgeRuntimeException`になる。それらの型は生成アクセサで読み書きする。
+
 ---
 
 ## 設計本体
@@ -425,7 +427,7 @@ final class WpMetaStorage implements MetaStorageInterface
 | `setAll()` | 置換の前に行を読み(`getAll()`)、行があれば `delete_metadata(...)`、その後 `$values` を順に `add_metadata(...)`(キーと値は `wp_slash()` して渡す)。どれもデータベースのエラーなら `RuntimeException`(ロールバックはしない。wpdbにトランザクション保証がないため、途中で失敗した場合は一部の行だけが置き換わった状態で残る)。フィルタが削除を止めた場合は、行を足すと置換にならないため何も追加せず false。置換の前後で保存された行(DB に書かれる文字列の形の list)が変わったら true、変わらなければ false。置換の前後の読み取りのデータベースのエラーも `RuntimeException`(読み取りの失敗を「行が無い」として扱わない) |
 | `delete()` | 行が無ければ false(`has()` を先行確認。この読み取りのデータベースのエラーは `RuntimeException`)。あれば `delete_metadata($type->metaType(), $objectId, wp_slash($key))` を呼び、削除できたら true、WP が false を返したら下の判定に従う(データベースのエラーなら `RuntimeException`、そうでなければ false) |
 
-- `get_metadata_raw()`(WP 5.5+)はコアの default 注入層(`get_metadata_default()` / `filter_default_metadata`)を経由しないため、`register_meta` の default 介在が原理的に起きない。default 介在の回避は実装内の順序契約(`has()` の先行呼び出し)ではなく、コアAPI 1呼び出しの保証による。同関数は `_` 接頭辞なし・`@access private` 注記なしの正規の公開関数(`@since 5.5.0`)で、コア自身が default 機構の土台として安定使用している。なおこの最適化はWP実装(`WpMetaStorage`)固有であり、`AcfMetaStorage` 等の外部ストレージ実装には適用されない。
+- `get_metadata_raw()`(WP 5.5+)はコアのdefault注入層(`get_metadata_default()` / `filter_default_metadata`)を経由しないため、`register_meta`のdefault介在が原理的に起きない。default介在の回避は実装内の順序契約(`has()`の先行呼び出し)ではなく、コアAPI 1呼び出しの保証による。同関数は`_`接頭辞なし・`@access private`注記なしの正規の公開関数(`@since 5.5.0`)で、コア自身がdefault機構の土台として安定使用している。なおこの保証はWPのメタのAPIを使う実装の性質であり、外部ストレージ実装には当てはまらない。acf-bridgeの`AcfMetaStorage`は、読み書きを`WpMetaStorage`に委ねるため、同じ保証を持つ(acf-bridge設計書§8.1)。
 - `update_metadata` を経由するため、`register_meta` で登録した `sanitize_callback` は `sanitize_meta()` フィルタとしてWPコアが自動適用する。FW側で二重適用しない(書き込みの false の判定のためにも再実行しない)。
 - **データベースのエラーの判定**(書き込み `set()`・`setAll()`・`delete()` と読み取り `has()`・`get()`・`getAll()`・`getMultiple()`。4.14 の `WpOptionStorage` も同じ。実装は内部クラス `WpDatabaseGuard`): WP の書き込み関数は「同じ値」「ほかのプラグインのフィルタ(短絡フィルタ `update_{$meta_type}_metadata` 等)による中止」「データベースのエラー」のどれでも false を返し、読み取り関数はクエリの失敗を「行が無い」と同じ結果で返す。値を比べて区別するのではなく、データベースのエラーで判定する。
   - 判定: 関数を呼ぶ前に `$wpdb->num_queries` を控え、呼び出しの間に `num_queries` が増えており、かつ `$wpdb->last_error !== ''` ならデータベースのエラーとする。キャッシュから読んでクエリを発行しなかった読み取りと、呼び出しの前の無関係なクエリのエラーは、エラーにしない。

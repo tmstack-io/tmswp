@@ -5,7 +5,7 @@
 Advanced Custom Fields (ACF / ACF Pro) と TMSWP を統合する唯一の公式拡張パッケージ `tmswp/acf-bridge` の完全仕様を定める。本拡張は以下を提供する。
 
 1. **acf-json を真実源としたコードジェネレータ** — フィールドグループ定義から型付きアクセサクラス(`app/Acf/*Fields.php` 等)を生成し、PHPStan level max で型検査可能な ACF アクセスを実現する(DR-06)。
-2. **`AcfMetaStorage`** — コアの `MetaStorageInterface` 実装。`#[UseMetaStorage]` によるエンティティ単位の明示オプトインで、`MetaBag` の読み書きを `get_field`/`update_field` へ委譲する(DR-18)。
+2. **`AcfMetaStorage`** — コアの`MetaStorageInterface`実装。`#[UseMetaStorage]`によるエンティティ単位の明示オプトインで、`MetaBag`の読み書きの保存先を、ACFのフィールドの保存先(値のメタと参照のメタ)にする。単純な値の型のフィールドだけを扱い、ACFのフィルタは通さない(§8.1、DR-18)。
 3. **`register_*_meta`発行スキップ連携** — ACF管理下のメタキーをコアの`MetaSchemaRegistry`に申告する。`#[MetaSchema]`の宣言が無いキーはWordPressに登録しない(`register_*_meta`しない)。`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティが`#[MetaSchema]`で宣言したキーは、宣言どおり登録する。別のストレージのエンティティが`#[MetaSchema]`で宣言したキーだけを、同一キーの重複として即エラーにする(§7.3)。
 4. **ドリフト検知** — `wp tmswp acf check` で acf-json と生成コードの乖離を検出し、CI で強制する。
 
@@ -594,30 +594,32 @@ final class Report
 ## 6.1 共通規則
 
 - **getter は「フォーマット済み値」**(`get_field($name, $id, true)` 相当)を返す。return_format / multiple / field_type 設定で型が決まる。
-- **未設定時の値の正規化**: ACF の `null`/`false`/`''` の揺れを生成コード側で吸収する。文字列系は `''`、配列系は `[]`、bool は `false`、それ以外は `null` に正規化する。`required` 設定は ACF では保存を強制しないため**型のナローイングには使わない**(常に未設定がありうる前提の型とする)。
-- **setter は「保存型(raw)」** を受け取る。`update_field` は raw 値(添付 ID・投稿 ID・`Ymd` 文字列等)で保存するため。`null` を渡した場合は値を空に更新する(`update_field($name, null)` 委譲。削除は trait の `delete()` を使う)。
+- **未設定時の値の正規化**: ACFの`null`/`false`/`''`の揺れを生成コード側で吸収する。文字列系は`''`、配列系は`[]`、boolは`false`、それ以外は`null`に正規化する。一度も保存していないgroupが返す空の配列も未設定として`null`にする。未設定はエラーにしない(文書00 §5.6の「データが無いこと」)。`required`設定はACFでは保存を強制しないため**型のナローイングには使わない**(常に未設定がありうる前提の型とする)。
+- **形の不一致**: ACFが未設定でない値を返し、それが本表の型に合わない場合(textに配列が保存されている、numberが数値の文字列でない、画像の配列のキーや型が`AcfImage`と違う、日付のrawが書式に合わない等)は、未設定と区別し、文書00 §5.6の「実行時のデータ取得の失敗」として扱う。生成クラスのKernel(`Kernel::forClass()`。生成クラスの名前空間は、acf-bridgeを登録したKernelのアプリの名前空間の中にある。§2.1)のdebugでは`AcfBridgeRuntimeException`を投げ、本番ではそのKernelのロガーに`error`で記録して未設定の値を返す。記録は、フィールド名・post_id・想定した型・実際の値の型と生成クラスを含み、値そのものは含まない。`list<>`の型(gallery・relationship・複数選択等)は要素ごとに検査し、本番では不一致の要素だけを記録して除き、ほかの要素は返す(1つの要素の不正で全体を捨てない)。objectのlist(relationship・post_object・taxonomy・userの複数で、return_formatがobject。getterの型は`list<\WP_Post>`・`list<\WP_Term>`・`list<\WP_User>`)は、ジェネレータが要素のクラスを渡して`acfObjectList($name, \WP_Post::class)`の形で読み、要素ごとに`instanceof`で検査する。単一のobjectは`acfObject()`で同じクラスを検査する。
+- **`has()`**: 値が保存されているかを、`get_field()`が読む保存先(`acf_get_valid_post_id()`で解決したpost_id)のメタの行(optionsのpost_idはACFが値を保存するoption)の有無で判定する。フィールドの`default_value`、`register_*_meta`の既定値、groupが返す空の配列は「保存されている」としない。
+- **setterは「保存型(raw)」** を受け取る。`update_field`はraw値(添付ID・投稿ID・`Ymd`文字列等)で保存するため。`null`を渡した場合は値を空に更新する(`update_field($name, null)`委譲。削除はtraitの`delete()`を使う)。値は`wp_slash()`してから`update_field()`に渡す。ACFは、メタでは`update_metadata()`が、optionsでは自身が`wp_unslash()`するため、slashしないとバックスラッシュが消える。setterは結果を返さない。`update_field()`の戻り値は、`update_metadata()`と同じく、同じ値で書き込まなかったとき・フィルタが中止したとき・データベースのエラーのどれでも`false`になり、区別できないためである(エスケープハッチの`update()`はこの`false`をそのまま返す)。書き込みの失敗を例外で知る必要がある単純な値は、`MetaBag`(`#[UseMetaStorage(AcfMetaStorage::class)]`。§8.1)で読み書きする。
 - array shape 内のキーはフィールド名(snake_case のまま)。サブフィールドの型は本表を再帰適用した「getter 戻り値型」。値を持たない型(message/tab/accordion)のサブフィールドは shape から除外する。
 
-`TMSWP\AcfBridge\AcfTypes`(@phpstan-type 定義専用。runtime メンバなし):
+`TMSWP\AcfBridge\AcfTypes`(@phpstan-type定義専用。runtimeメンバなし)。形はACFが実際に返す配列に合わせる。`AcfFile`・`AcfImage`の`url`は`wp_get_attachment_url()`が、`icon`は`wp_mime_type_icon()`が`false`を返しうる。`AcfImage`の`width`・`height`は、WordPressが画像の寸法を返せないとき(SVG等)に無く、`sizes`は空の配列になりうる。`AcfUserArray`の`user_avatar`は、`get_avatar()`が(アバターの表示を無効にしたサイト等で)`false`を返しうる。
 
 ```php
 /**
  * @phpstan-type AcfImage array{ID: int, id: int, title: string, filename: string,
- *   filesize: int, url: string, link: string, alt: string, author: string,
+ *   filesize: int, url: string|false, link: string, alt: string, author: string,
  *   description: string, caption: string, name: string, status: string,
  *   uploaded_to: int, date: string, modified: string, menu_order: int,
- *   mime_type: string, type: string, subtype: string, icon: string,
- *   width: int, height: int, sizes: array<string, int|string>}
+ *   mime_type: string, type: string, subtype: string, icon: string|false,
+ *   width?: int, height?: int, sizes: array<string, int|string>}
  * @phpstan-type AcfFile array{ID: int, id: int, title: string, filename: string,
- *   filesize: int, url: string, link: string, alt: string, author: string,
+ *   filesize: int, url: string|false, link: string, alt: string, author: string,
  *   description: string, caption: string, name: string, status: string,
  *   uploaded_to: int, date: string, modified: string, menu_order: int,
- *   mime_type: string, type: string, subtype: string, icon: string}
+ *   mime_type: string, type: string, subtype: string, icon: string|false}
  * @phpstan-type AcfLink array{title: string, url: string, target: string}
  * @phpstan-type AcfChoice array{value: string, label: string}
  * @phpstan-type AcfUserArray array{ID: int, user_firstname: string, user_lastname: string,
  *   nickname: string, user_nicename: string, display_name: string, user_email: string,
- *   user_url: string, user_registered: string, user_description: string, user_avatar: string}
+ *   user_url: string, user_registered: string, user_description: string, user_avatar: string|false}
  * @phpstan-type AcfColorRgba array{red: int, green: int, blue: int, alpha: float}
  */
 final class AcfTypes
@@ -717,9 +719,13 @@ date_picker / date_time_picker には return_format 適用済み string getter �
 public function {camel}AsDateTime(): ?\DateTimeImmutable;
 ```
 
-- raw 値(date_picker=`Ymd`、date_time_picker=`Y-m-d H:i:s`)を `wp_timezone()` で `\DateTimeImmutable::createFromFormat()` する。未設定・パース不能は `null`。
+- raw値(date_picker=`Ymd`、date_time_picker=`Y-m-d H:i:s`)を`wp_timezone()`で`\DateTimeImmutable::createFromFormat()`する。未設定は`null`。書式に合わないrawと、範囲外の値(`20241332`等。`createFromFormat()`は繰り上げて受け付けるため、書式に戻した文字列がrawと一致するかで判定する)は形の不一致(§6.1)として扱う。
 - time_picker には生成しない(日付情報を持たないため)。
-- setter は `\DateTimeInterface` を受けた場合、raw 形式(`Ymd` / `Y-m-d H:i:s` / `H:i:s`)へ変換して保存する。
+- setterは`\DateTimeInterface`を受けた場合、`wp_timezone()`の日時に変換してからraw形式(`Ymd` / `Y-m-d H:i:s` / `H:i:s`)へ変換して保存する。getterも`wp_timezone()`で読むため、別のタイムゾーンの`\DateTimeInterface`も同じ時刻として往復する。ただし次の例外を除く。
+- ACFの保存形式は時差を持たない現地の時刻のため、夏時間の終わり等で同じ現地の時刻が2回来る間は、1つの現地の時刻が2つの瞬間を表す。この規則は、日付と時刻の両方を保存するdate_time_picker(rawの書式が`Y-m-d H:i:s`)だけに当てはめる。日付だけ(`Ymd`)・時刻だけ(`H:i:s`)の書式は瞬間を保存しないため、当てはめない。
+  - 判定: 現地の時刻`W`について、`wp_timezone()`の`getTransitions()`で`W`の前後で使われるUTCからのオフセットを集め、オフセットごとに候補の瞬間を求めて`W`の書式に戻し、`W`と一致する瞬間を数える。2つあれば重複とし、タイムスタンプが小さい方を早い方とする。
+  - setter: 入力の瞬間が重複の遅い方なら、黙って早い方を保存せず`InvalidArgumentException`を投げる。メッセージは、現地の時刻が曖昧なことと、入力した瞬間(UTC)を含む。早い方の瞬間と、重複でない時刻は保存する。
+  - getter: 保存された`W`が重複なら、早い方の瞬間として返す(管理画面で入力された値も同じ)。そのため、setterが保存した瞬間は、つねに同じ瞬間として往復する。
 
 ## 6.4 flexible_content — レイアウト判別 union(確定方式)
 
@@ -836,7 +842,7 @@ public function isExternallyManaged(ObjectType $objectType, string $subtype, str
 
 ## 7.3 `#[MetaSchema]` との同一キー重複検出(エラー)
 
-ACF管理下キーは、`#[MetaSchema]`と`#[UseMetaStorage(AcfMetaStorage::class)]`で宣言してよい(文書04「メタ・設定の使い分け」)。読み書きの経路がACFの1つに揃うためである。一方、同一`(ObjectType, objectSubtype, metaKey)`を、読み書きのストレージが`AcfMetaStorage`でないエンティティ(`#[UseMetaStorage]`の無いエンティティ等)が`#[MetaSchema]`で宣言している状態は**構成エラー**であり、フェイルファストする(DR-06)。旧FWの「ACFとコアのメタ層が同じキーを別経路で読み書きして挙動不明」という事故の再発防止が目的。ストレージは`#[UseMetaStorage]`の指定(無ければ既定のストレージ)をContainerで解決したインスタンスのクラスで比べる。
+ACF管理下キーは、`#[MetaSchema]`と`#[UseMetaStorage(AcfMetaStorage::class)]`で宣言してよい(文書04「メタ・設定の使い分け」)。読み書きの保存先が、ACFのフィールドの保存先(値のメタと参照のメタ)の1つに揃うためである。一方、同一`(ObjectType, objectSubtype, metaKey)`を、読み書きのストレージが`AcfMetaStorage`でないエンティティ(`#[UseMetaStorage]`の無いエンティティ等)が`#[MetaSchema]`で宣言している状態は**構成エラー**であり、フェイルファストする(DR-06)。旧FWの「ACFとコアのメタ層が同じキーを別経路で読み書きして挙動不明」という事故の再発防止が目的。ストレージは`#[UseMetaStorage]`の指定(無ければ既定のストレージ)をContainerで解決したインスタンスのクラスで比べる。
 
 - **実行時**: `MetaSchemaRegistry`は、`#[MetaSchema]`の宣言と外部管理の申告(`markExternallyManaged`・`markExternallyManagedInAllSubtypes`)のうち後から行われた側の時点で、同じキーをストレージの違うエンティティが宣言していないかを検査し、あれば`DuplicateMetaKeyException`(コア例外。Meta/Option文書定義)を投げる。宣言はKernelのbootの中で揃うため、本拡張が`init` 6で申告した時点で検出され、`register_*_meta`(`init` 20)には進まない。この検査は、AcfBridgeを登録したKernelのレジストリの中だけで行う(申告先がそのレジストリだけのため。§7.2)。テーマの`#[MetaSchema]`とプラグインのフィールドグループのような、Kernelをまたぐ重複は実行時には検出しない。
 - **静的(CI)**: `wp tmswp acf check`も同じ検査を行い、検出時はE101・exit 2で報告する(実行時例外より早くCIで気づける。`sync`はE101があれば書き込まずにexit 1)。管理キーは、acf-jsonのグループのcloneを解決してから`ManagedKeyCollector`で集める(Generatorが生成する`AcfManifest`の行と同じキー。seamlessのcloneが展開したキーも含む)。判定は、`--app=`で選んだKernelだけでなく起動中の全Kernelの`MetaSchemaRegistry`の複製に実行時と同じ申告(`AcfBridge::markManagedKey()`)を行い、その`DuplicateMetaKeyException`のメッセージを`E101: `に続けて出す。複製に申告するため、起動中のレジストリは変えない。全Kernelと照合するため、実行時には検出しないKernelをまたぐ重複もE101で検出する。
@@ -857,9 +863,15 @@ externally managed meta key 'price' for post:product is already declared by App\
 ```php
 final class AcfMetaStorage implements \TMSWP\Core\Meta\MetaStorageInterface
 {
+    /** Containerが解決したインスタンスは、そのContainerのKernelを受け取る(WpMetaStorageと同じ) */
+    public function __construct(\TMSWP\Core\Kernel\Kernel $kernel);
+
     public function has(ObjectType $objectType, int $objectId, string $key): bool;
     public function get(ObjectType $objectType, int $objectId, string $key): mixed;
+    public function getAll(ObjectType $objectType, int $objectId, string $key): array;
+    public function getMultiple(ObjectType $objectType, int $objectId, array $keys): array;
     public function set(ObjectType $objectType, int $objectId, string $key, mixed $value): bool;
+    public function setAll(ObjectType $objectType, int $objectId, string $key, array $values): bool;
     public function delete(ObjectType $objectType, int $objectId, string $key): bool;
 }
 ```
@@ -867,9 +879,29 @@ final class AcfMetaStorage implements \TMSWP\Core\Meta\MetaStorageInterface
 振る舞い仕様:
 
 - ACF id 変換: `Post` → `(int) $objectId`、`Term` → `"term_{$objectId}"`、`User` → `"user_{$objectId}"`。
-- `get()` は **raw 値**(`get_field($key, $acfId, false)`)を返す。理由: `MetaBag` の型付きアクセサ(`int()`/`string()` 等)は DB 保存型を前提としており、フォーマット済み値(image の array 等)は `MetaBag` の型コントラクトを壊す。フォーマット済み値が必要な場面では生成アクセサクラス(`XxxFields`)を使う。この役割分担を rules/ に明記する。
-- `has()` は `get_field($key, $acfId, false) !== null` で判定する(WP メタは `null` を保存できないため raw `null` = 未保存と同値)。**`get()` と `has()` は分離されており、`null` をセンチネルに使うフォールスルーは存在しない**(DR-18)。
-- `set()` は `update_field($key, $value, $acfId)` へ委譲する。`delete()` は `delete_field($key, $acfId)` へ委譲する。戻り値と例外はコアの `MetaStorageInterface` の契約(Meta/Option 文書 §4.5: 書き込みは「書き込んだか」を bool で返し、書き込まなかった場合(同じ値・フィルタによる中止)は false、データベースのエラー等の書き込みの失敗は例外、`null` は保存しない)に従う。
+- 読み書きは`WpMetaStorage`(Meta/Option文書 §4.6)と同じ意味で、メタの行を直接読み書きする(ACFのフィールドのキーの扱いは下の項)。内部で、コンストラクタのKernelを渡した`WpMetaStorage`に委ねる。単独の読み取りのデータベースのエラーの扱い(debugは例外、本番はKernelのロガーに記録して行が無いときと同じ結果)も`WpMetaStorage`と同じである。
+  - `has()`はメタの行の有無で判定する。ACFのフィールドの`default_value`と、`#[MetaSchema]`の既定値(§8.2のとおり宣言したキーは`register_*_meta`され、WordPressの生の読み出しも既定値を返す)は「ある」としない。`get_field()`は値が無いとき`default_value`を返すため、`get_field() !== null`では判定しない。
+  - `get()`は保存された値(メタの先頭の行。raw)を返し、行が無ければ`null`。理由: `MetaBag`の型付きアクセサ(`int()`/`string()`等)はDB保存型を前提としており、フォーマット済み値(imageのarray等)は`MetaBag`の型コントラクトを壊す。フォーマット済み値が必要な場面では生成アクセサクラス(`XxxFields`)を使う。この役割分担をrules/に明記する。**`get()`と`has()`は分離されており、`null`をセンチネルに使うフォールスルーは存在しない**(DR-18)。
+  - `getAll()`は全行のlist(複数選択の配列も1行の値として返し、スカラーを包まない)。`setAll()`は全行を置き換える(ACFのフィールドのキーには使えない。下の`setAll()`の項)。
+- 書き込みの戻り値と例外はコアの`MetaStorageInterface`の契約(Meta/Option文書 §4.5: 書き込みは「書き込んだか」をboolで返し、書き込まなかった場合(同じ値・フィルタによる中止・`delete()`で行が無い)はfalse、データベースのエラー等の書き込みの失敗は例外、`null`は保存しない)に従う。受け取った値を元の値として保存する(バックスラッシュを含む文字列が往復する)。packages/core/tests/Supportの契約テスト(`MetaStorageContractTestCase`)を、実物のACFの統合テスト(`AcfMetaStorageContractTest`)で通す。
+- ACFの値の書き込みのAPI(`update_field()`・`delete_field()`・`acf_delete_value()`)は呼ばない。そのため、値の書き込みのフィルタとアクション(`acf/update_value`・`acf/pre_update_metadata`・`acf/pre_delete_metadata`・`acf/delete_value`等)とACFのpost_idの解決(`acf/validate_post_id`)は通らず、書き込みとフィールドの選択はつねに呼び出しの対象(ObjectTypeとID)について行う。ACFの値の書き込みの処理の中から`AcfMetaStorage`を呼んでも、`AcfMetaStorage`の中からACFの値の書き込みの処理が呼ばれることはない。ACFを呼ぶのは、フィールドの定義の取得(`acf_get_field()`・`acf_is_field_key()`)と、値のキャッシュの消去(`acf_flush_value_cache()`)、添付ファイルの結び付けのフィルタ(`acf/connect_attachment_to_post`。下の表のimage・file)だけである。
+- ACFのフィールドのキーは、ACFが値をフィールドとして読めるように、`update_field()`と同じ形で参照のメタを扱う。フィールドは、呼び出しの対象の参照のメタ(`_{キー}`)を`WpMetaStorage`で読み、それがfield keyなら`acf_get_field(そのkey)`で、参照が無いか解決しなければ`acf_get_field(キー)`(名前で探す。post_idを使わない)で選ぶ(`acf_maybe_get_field()`の参照と名前による探索と同じ順だが、`acf/validate_post_id`による解決を通さない)。どちらも、名前がキーと同じフィールドだけをACFのフィールドとする。`set()`・`delete()`・`setAll()`は同じ選び方を使う。キーはつねにメタの名前として扱い、field keyの形(`field_...`)のキーは、ACFが別の名前のフィールドに解決するため、ACFのフィールドとせず、そのキーのメタとして読み書きする。
+  - `set()`: 値を`WpMetaStorage`で書き、続けて参照のメタ(`_{キー}`)にフィールドのkeyを書く。戻り値は値の書き込みの結果。
+  - `delete()`: 値の行を`WpMetaStorage`で消し、値の行を消したときだけ参照のメタも消す。行が無ければ何もせず`false`。
+  - `setAll()`: ACFのフィールドは値を1つだけ持つため、ACFのフィールドのキーへの`setAll()`は、フィールドの型にかかわらず設定の誤りとして`AcfBridgeRuntimeException`にする。メッセージは、キーと、値を1つだけ持つため`setAll()`を使えないことと、`set()`を使うこと(`#[MetaSchema(single: false)]`で宣言していれば、値を1つの宣言に直すこと)を含む。ACFのフィールドでないキーは、`WpMetaStorage`と同じく行を置き換える。
+  - フィールドを選ぶための参照のメタの読み取り(`set()`・`delete()`・`setAll()`の中)は、`WpMetaStorage`の書き込みの中の読み取り(Meta/Option文書 §4.6)と同じく、データベースのエラーをdebugにかかわらず`RuntimeException`にし、値と参照のメタを変える前に止める。失敗した読み込みでWPが書いたメタのキャッシュも同じく消す。公開の読み取り(`has()`等)のように、本番で記録して行が無いときと同じ結果にはしない(参照が無いときの名前による探索へ進み、別のフィールドで書くのを防ぐため)。
+  - どの書き込みの後も(例外になった場合も)、ACFの値のキャッシュから、呼び出しの対象のそのキーを消す(`get_field()`が古い値を返さないように)。
+- ACFのフィルタを通さないため、`set()`・`delete()`で扱えるACFのフィールドは、保存した形が値そのもので、ACFの`update_value`が値を変えない型(`AcfMetaStorage::SUPPORTED_FIELD_TYPES`)に限る。ほかの型のフィールドのキーの`set()`・`delete()`は、設定の誤り(文書00 §5.6)として`AcfBridgeRuntimeException`にする。メッセージは、キー・フィールドのkeyと型・扱える型の一覧を含む。読み取り(`has()`・`get()`・`getAll()`・`getMultiple()`)では型を検査しない。型ごとの根拠(ACF 6.2.0と6.8.10の各フィールドの型の`update_value`)は次の表のとおり。
+
+| 型 | `update_value` | 扱い |
+|---|---|---|
+| text・textarea・email・url・password・wysiwyg・oembed・true_false・button_group・date_picker・time_picker・date_time_picker・color_picker | 無い(6.2.0・6.8.10とも) | 扱う |
+| number・range(rangeはnumberを継承) | 値が空でなく`,`を含めば`,`を取り除く | 扱う。`,`を含む文字列の値は、ACFと違う形で保存しないよう`InvalidArgumentException`にする |
+| select | `multiple`の設定にかかわらず、空でない配列の各要素を`strval`し、6.8.10は`save_options`のとき配列の値を選択肢に足す。スカラーは変えない | `multiple`でないものだけ扱う。配列の値(空の配列を含む)は`InvalidArgumentException`にし、ほかの値は共通のメタの規約(Meta/Option文書 §4.5)に従う |
+| radio | `save_other_choice`のとき、選択肢に無い値を`wp_unslash()`・`sanitize_text_field()`して選択肢に足す | `save_other_choice`でないものだけ扱う |
+| image・file(imageはfileの`update_value`を呼ぶ) | 値が空でなければ`acf_idval()`で添付ファイルのIDにし、`acf_connect_attachment_to_post()`で、`post_parent`が0の添付ファイルを投稿に結び付ける(post_idが数値のとき、すなわち投稿のときだけ)。削除の処理(`delete_value`)は無い | 単一IDのintだけ扱う。正の整数(int)でない値(数字の文字列・0・負の数・配列等)は`InvalidArgumentException`にする。投稿では、値が変わらないときも、`acf_connect_attachment_to_post()`と同じ処理で添付ファイルを結び付ける。`acf/connect_attachment_to_post`のフィルタが偽を返したら結び付けない(正常な中止で、例外にしない)。添付ファイルで`post_parent`が0のときだけ`wp_update_post(['ID' => …, 'post_parent' => 投稿のID], true)`を呼び、`WP_Error`が返れば書き込みの失敗として`RuntimeException`にする(ACFの関数は`wp_update_post()`の失敗を知らせないため、ACFの関数は呼ばない)。タームとユーザーでは結び付けない |
+| checkbox・gallery・link・post_object・page_link・relationship・taxonomy・user・group等 | 値を変える、または参照先に書く | 扱わない(生成アクセサで読み書きする) |
+
 - 全メソッドは冒頭で `function_exists('get_field')` を検査し、偽なら `AcfNotActiveException` を投げる(§10)。
 - 旧 FW の `iwf2b/meta/get` グローバルフィルタ委譲(全エンティティ一括・null センチネル・実際には配線バグで不動作)は採用しない。適用は次項のエンティティ単位オプトインのみ。
 
@@ -894,6 +926,7 @@ final class ProductPost extends PostType
 - これにより `ProductPost::meta($post)` の `MetaBag` が `AcfMetaStorage` 経由になる。
 - `#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティは、ACF管理下のキー(ACFのフィールドグループのフィールド)も`#[MetaSchema]`定数で宣言できる。本拡張の申告(§7.2)とストレージが同じため重複エラーにならず(§7.3)、宣言どおり`register_*_meta`される。`#[UseMetaStorage]`の無いエンティティ(既定の`WpMetaStorage`)が同じキーを宣言すると重複エラーになる。
 - 使い分けは文書04「メタ・設定の使い分け」(文書12 §1.9)に従う。単純な値(文字列・数値・真偽・日付・単一画像ID等)は、ACFの画面で編集する場合も`#[MetaSchema]`で宣言し、エンティティに`#[UseMetaStorage(AcfMetaStorage::class)]`を付けて、アプリは`MetaBag`だけで読み書きする(ACFに完全には依存させない)。ACF固有の複合型(repeater・flexible_content・group・gallery・relationship)は生成アクセサ(`XxxFields`)で扱う。同じキーを`MetaBag`と生成アクセサの両方から読み書きしない。
+- `#[MetaSchema]`で宣言できるACFのフィールドのキーは、単純な値の型(§8.1の`AcfMetaStorage::SUPPORTED_FIELD_TYPES`)のフィールドだけである。ほかの型(gallery・relationship・group等)のフィールドは、生成アクセサで読み書きする。
 
 ## 8.3 `PreviewAcfSupport`(プレビュー時 ACF 値保存・オプトイン)
 
@@ -972,10 +1005,13 @@ QA 文書の GitHub Actions に以下のステップを追加する(acf-json を
 | `wp tmswp acf sync` / `check` | 実行可能(acf-jsonと`BridgeConfig`だけから生成し、ACFの実行時に問い合わせない。§5.4) |
 | `PreviewAcfSupport` | 何もしない(フック登録はされるが、コールバックが §8.3 手順 3 の `function_exists('acf_verify_nonce')` で早期 return) |
 
-登録・申告・生成の扱いは、文書00 §5.6のエラー方針に次のとおり当てはめる。
+登録・申告・生成と、実行時の値の読み書きの扱いは、文書00 §5.6のエラー方針に次のとおり当てはめる。
 
 - ACFが無効であることは、それだけでは設定の誤りとしない。ACFの更新や一時的な無効化で、ACFの値を使わないページまで止めないためである。登録(§2.1)・Manifest連携(§7.2)・生成(§5)はACFの実行時に依存しないため、ACFの有無で処理を変えない。`function_exists()`でACFの有無を調べて黙って処理を飛ばす経路は持たない。
 - 生成物`AcfManifest`が無いこと、`managedKeys()`が`ManagedKey`以外を返すこと、`#[MetaSchema]`との重複(§7.3)は設定の誤りであり、debugに関係なく例外にする。有効なACFの版が6.2より古いことも設定の誤りとして例外にする(§1.2・§2.1の手順5)。`AcfManifest`が無い場合のWP-CLIの扱いは§7.2のとおり。
+- 生成クラスのアクセサが読んだ値の形の不一致(§6.1)は、実行時のデータ取得の失敗である。生成クラスのKernelのdebugでは`AcfBridgeRuntimeException`を投げ、本番ではそのKernelのロガーに`error`で記録して未設定の値を返す。`list<>`の型(objectのlistを含む)は、本番では不一致の要素ごとに記録してその要素だけを除く。未設定(§6.1)はエラーにしない。
+- `AcfMetaStorage`の読み取りのデータベースのエラーは`WpMetaStorage`と同じく実行時のデータ取得の失敗として扱い、書き込みのデータベースのエラーはdebugに関係なく例外にする(§8.1)。
+- `AcfMetaStorage`で扱えない型(§8.1)のACFのフィールドのキーへの`set()`・`delete()`は、設定の誤りとしてdebugに関係なく`AcfBridgeRuntimeException`にする。
 
 `AcfNotActiveException` の正準仕様:
 
@@ -1005,7 +1041,7 @@ trait AcfFieldAccess
     /** ACF post_id 形式の識別子(int / 'term_1' / 'user_1' / 'option' 等) */
     public function acfId(): int|string;
 
-    /** raw 値の存在判定(get_field($name, $id, false) !== null) */
+    /** 値が保存されているか。get_field()が読む保存先のメタの行(optionsはoption)の有無で判定し、default_valueは「ある」としない(§6.1) */
     public function has(string $name): bool;
 
     /** フォーマット済み値(get_field($name, $id, true))。型強制なしのエスケープハッチ */
@@ -1014,7 +1050,7 @@ trait AcfFieldAccess
     /** raw 値(get_field($name, $id, false)) */
     public function rawValue(string $name): mixed;
 
-    /** update_field($name, $value, $id)。失敗(false)時は例外にせず false を返す */
+    /** update_field($name, wp_slash($value), $id)。ACFはwp_unslash()するためslashして渡す。falseは、書き込まなかった・失敗したを区別できず、例外にせずそのまま返す(§6.1) */
     public function update(string $name, mixed $value): bool;
 
     /** delete_field($name, $id) */
@@ -1022,26 +1058,27 @@ trait AcfFieldAccess
 
     // ---- 生成コード用 型強制ヘルパ(protected) ----
 
-    protected function acfString(string $name): string;             // null/false → ''
-    protected function acfNullableString(string $name): ?string;    // ''/null/false → null
-    protected function acfNumber(string $name): int|float|null;     // ''/null/false → null、整数値はint・小数はfloat
-    protected function acfBool(string $name): bool;                 // truthy 正規化
+    protected function acfString(string $name): string;             // 未設定(null/false/'') → ''、文字列・数値以外は形の不一致(§6.1)
+    protected function acfNullableString(string $name): ?string;    // 未設定・'' → null、文字列・数値以外は形の不一致
+    protected function acfNumber(string $name): int|float|null;     // 未設定 → null、整数の文字列はint・小数と指数はfloat、数値でない値は形の不一致
+    protected function acfBool(string $name): bool;                 // スカラーとnullはtruthy正規化、配列・objectは形の不一致
     /** @return list<mixed> */
-    protected function acfList(string $name): array;                // 非配列/false/null → []
+    protected function acfList(string $name): array;                // 未設定 → []、配列でない値・文字列のキーの配列は形の不一致
     /** @return array<string, mixed>|null */
-    protected function acfNullableArray(string $name): ?array;      // 非配列/false/null → null
-    protected function acfObject(string $name, string $class): ?object; // instanceof 検査、不一致は null
+    protected function acfNullableArray(string $name): ?array;      // 未設定・[] → null、配列でない値・listは形の不一致
+    protected function acfObject(string $name, string $class): ?object; // 未設定 → null、instanceofでない値は形の不一致
     protected function acfDateTime(string $name, string $rawFormat): ?\DateTimeImmutable;
-                                                                    // rawValue を createFromFormat($rawFormat, ..., wp_timezone())
+                                                                    // rawValueをcreateFromFormat('!' . $rawFormat, ..., wp_timezone())。未設定はnull、書式に合わない値・範囲外の値は形の不一致(§6.3)
     protected function acfUpdate(string $name, mixed $value): void; // update() 委譲(戻り値破棄)
     protected function acfUpdateDate(string $name, \DateTimeInterface|string|null $value, string $rawFormat): void;
+                                                                    // DateTimeInterfaceはwp_timezone()の日時に変換してから$rawFormatで文字列にする(§6.3)
 
-    /** function_exists('get_field') 検査。偽なら AcfNotActiveException */
-    private function assertAcfActive(string $callable): void;
+    /** function_exists('get_field')検査。偽なら、呼び出したクラスとメソッドの名前(static::class . '::' . $method)でAcfNotActiveException */
+    private function assertAcfActive(string $method): void;
 }
 ```
 
-- すべての公開・保護メソッドは冒頭で `assertAcfActive(__METHOD__)` を呼ぶ。
+- すべての公開・保護メソッドは冒頭で`assertAcfActive(__FUNCTION__)`を呼ぶ。traitの中の`__METHOD__`はtraitの名前になるため、例外のメッセージは`assertAcfActive()`が`static::class`(生成クラス)とメソッドの名前で組み立てる。
 - マジックメソッドは使用しない(規約どおり `__callStatic` 等は全面禁止。アクセサはすべてジェネレータが実メソッドとして生成する)。
 - trait は `final` クラスでの使用を前提とし、状態は `$acfId` のみ(キャッシュを持たない。値キャッシュは ACF 自身の store に任せる)。
 
@@ -1156,8 +1193,8 @@ $rows = \App\Acf\ShopFields::of($post)->value('店舗情報リピート');
 - [ ] date_picker / date_time_picker に `*AsDateTime(): ?\DateTimeImmutable` が生成され、`wp_timezone()` 基準でパースされる
 - [ ] 日本語等非 ASCII フィールド名が W009 になり、`methodNameMap` 指定で生成可能になる
 - [ ] 生成コードを含む app/ が PHPStan level max(szepeviktor/phpstan-wordpress)を baseline なしで通過する
-- [ ] `AcfMetaStorage` が has/get/set/delete を ACF へ委譲し、`get()` が raw 値を返す。null センチネルのフォールスルーが存在しない
-- [ ] `#[UseMetaStorage(AcfMetaStorage::class)]` 付与エンティティの `meta()` が ACF 経由になる(wp-env 統合テスト)
+- [ ] `AcfMetaStorage`の読み書きが`WpMetaStorage`と同じ意味でメタの生の行を読み書きし、ACFの書き込みの関数とフィルタを通らない。ACFのフィールドのキーの`set()`・`delete()`は参照のメタも扱い、扱えない型(§8.1)のキーは`AcfBridgeRuntimeException`になる。nullセンチネルのフォールスルーが存在しない
+- [ ] `#[UseMetaStorage(AcfMetaStorage::class)]`付与エンティティの`meta()`が、ACFのフィールドの保存先を読み書きし、ACFがその値をフィールドとして読める(wp-env統合テスト)
 - [ ] `BridgeConfig::$previewMeta = true` 時、プレビュー保存(リビジョン作成)で `$_POST['acf']` の値がリビジョンへ保存され、§8.3 の判定順序どおり「非リビジョン保存」「nonce 不正」「`edit_post` 権限なし」の各ケースで書き込まれない(統合テスト)。コアの `tmswp/` プレビュー用アクションへの依存が存在しない(`grep -r 'tmswp/preview' packages/acf-bridge/src` が 0 件)
 - [ ] `#[MetaSchema]`の宣言が無いACF管理下キーは`register_*_meta`されず(統合テスト: `registered_meta_key_exists()`がfalse)、`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティが宣言したACF管理下キーは`register_*_meta`される(統合テスト: `registered_meta_key_exists()`がtrue)
 - [ ] 別のストレージ(`AcfMetaStorage`でない)のエンティティの`#[MetaSchema]`とACF管理下キーの重複が、実行時例外および`check`のE101(exit 2)の両方で検出される

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Meta;
 
+use Closure;
 use TMSWP\Core\Exception\RuntimeException;
 use TMSWP\Core\Kernel\Kernel;
 use wpdb;
@@ -44,7 +45,8 @@ use wpdb;
  *    false(書き込まなかった)、読み取りは成功として扱う。データベースのサーバーの障害の経路であり、wpdb の内部
  *    (接続ハンドル等)に依存して検出すると WP の版の変更で壊れやすいため、検出しない。
  *
- * @internal WpMetaStorage・WpOptionStorage と、Migrator(保存済みのハッシュの読み書き)だけが使う。
+ * @internal WpMetaStorage・WpOptionStorageと、Migrator(保存済みのハッシュの読み書き)と、acf-bridgeのAcfMetaStorage
+ *           (書き込みの中の参照のメタの読み取り)だけが使う。
  */
 final class WpDatabaseGuard
 {
@@ -137,6 +139,55 @@ final class WpDatabaseGuard
         $kernel->logger()->error('tmswp.storage: {failure}: {error}', ['failure' => $failure, 'error' => $error]);
 
         return $default;
+    }
+
+    /**
+     * 読み取りの間に WP がメタのキャッシュへ読み込んだ対象を記録し、失敗した読み込みのキャッシュを消す後始末を
+     * $guarded に渡して呼ぶ。
+     *
+     * WP 7.0 の update_meta_cache() は(wp-includes/meta.php)、update_{$meta_type}_metadata_cache フィルタが null を
+     * 返したら、渡された ID のうち wp_cache_get_multiple() がキャッシュに無い(false)とした ID を1回の SELECT で読み、
+     * SELECT が失敗しても、それらの ID を空の配列としてグループ {$meta_type}_meta に wp_cache_add_multiple() で書く。
+     * 読み込む ID は、読み取りの対象だけとは限らない(WP_Metadata_Lazyloader は、キューにあるほかの対象もまとめて
+     * 読む)。そのため、読み取りの間だけそのフィルタを最後の priority で付け、キャッシュに無かった ID を記録し、
+     * 後始末はその ID だけを消す。フィルタは $check を変えずに返し、ほかのフィルタが短絡した($check が null でない)
+     * 呼び出しは SELECT もキャッシュの書き込みもしないため記録しない。
+     *
+     * @template T
+     *
+     * @param Closure(callable(): void): T $guarded 受け取った後始末を WpDatabaseGuard に渡して読み取りを呼ぶ
+     *
+     * @return T
+     */
+    public static function forgettingFailedMetaLoads(ObjectType $type, Closure $guarded): mixed
+    {
+        $group = $type->metaType() . '_meta';
+        $hook = "update_{$type->metaType()}_metadata_cache";
+        // 読み取りの間に WP が読み込んだ(キャッシュに無かった)ID => true
+        $loaded = [];
+        $record = static function (mixed $check, mixed $objectIds) use ($group, &$loaded): mixed {
+            if ($check === null && \is_array($objectIds)) {
+                foreach (wp_cache_get_multiple($objectIds, $group) as $id => $cached) {
+                    if ($cached === false) {
+                        $loaded[(int) $id] = true;
+                    }
+                }
+            }
+
+            return $check;
+        };
+        $forgetCache = static function () use ($group, &$loaded): void {
+            foreach (array_keys($loaded) as $id) {
+                wp_cache_delete($id, $group);
+            }
+        };
+        add_filter($hook, $record, PHP_INT_MAX, 2);
+
+        try {
+            return $guarded($forgetCache);
+        } finally {
+            remove_filter($hook, $record, PHP_INT_MAX);
+        }
     }
 
     private static function assertNoDatabaseError(wpdb $wpdb, int $queriesBefore, string $failure): void

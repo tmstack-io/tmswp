@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Meta;
 
-use Closure;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Kernel\Kernel;
 
@@ -85,7 +84,7 @@ final class WpMetaStorage implements MetaStorageInterface
         }
 
         $metaType = $type->metaType();
-        $before = self::storedForms(self::forgettingFailedLoads($type, static fn(callable $forgetCache): array => WpDatabaseGuard::read(
+        $before = self::storedForms(WpDatabaseGuard::forgettingFailedMetaLoads($type, static fn(callable $forgetCache): array => WpDatabaseGuard::read(
             static fn(): array => self::allRows($type, $objectId, $key),
             "failed to read {$metaType} meta '{$key}' for object {$objectId} before replacing it",
             $forgetCache,
@@ -107,7 +106,7 @@ final class WpMetaStorage implements MetaStorageInterface
             );
         }
 
-        $after = self::forgettingFailedLoads($type, static fn(callable $forgetCache): array => WpDatabaseGuard::read(
+        $after = WpDatabaseGuard::forgettingFailedMetaLoads($type, static fn(callable $forgetCache): array => WpDatabaseGuard::read(
             static fn(): array => self::allRows($type, $objectId, $key),
             "failed to read {$metaType} meta '{$key}' for object {$objectId} after replacing it",
             $forgetCache,
@@ -119,7 +118,7 @@ final class WpMetaStorage implements MetaStorageInterface
     public function delete(ObjectType $type, int $objectId, string $key): bool
     {
         $metaType = $type->metaType();
-        $exists = self::forgettingFailedLoads($type, static fn(callable $forgetCache): bool => WpDatabaseGuard::read(
+        $exists = WpDatabaseGuard::forgettingFailedMetaLoads($type, static fn(callable $forgetCache): bool => WpDatabaseGuard::read(
             static fn(): bool => self::rows($type, $objectId, $key) !== null,
             "failed to read {$metaType} meta '{$key}' for object {$objectId} before deleting it",
             $forgetCache,
@@ -200,62 +199,13 @@ final class WpMetaStorage implements MetaStorageInterface
     {
         $kernel = $this->kernel;
 
-        return self::forgettingFailedLoads($type, static fn(callable $forgetCache): mixed => WpDatabaseGuard::readOrDefault(
+        return WpDatabaseGuard::forgettingFailedMetaLoads($type, static fn(callable $forgetCache): mixed => WpDatabaseGuard::readOrDefault(
             $kernel,
             $read,
             $default,
             "failed to read {$type->metaType()} meta '{$key}' for object {$objectId}",
             $forgetCache,
         ));
-    }
-
-    /**
-     * 読み取りの間に WP がメタのキャッシュへ読み込んだ対象を記録し、失敗した読み込みのキャッシュを消す後始末を
-     * $guarded に渡して呼ぶ。
-     *
-     * WP 7.0 の update_meta_cache() は(wp-includes/meta.php)、update_{$meta_type}_metadata_cache フィルタが null を
-     * 返したら、渡された ID のうち wp_cache_get_multiple() がキャッシュに無い(false)とした ID を1回の SELECT で読み、
-     * SELECT が失敗しても、それらの ID を空の配列としてグループ {$meta_type}_meta に wp_cache_add_multiple() で書く。
-     * 読み込む ID は、読み取りの対象だけとは限らない(WP_Metadata_Lazyloader は、キューにあるほかの対象もまとめて
-     * 読む)。そのため、読み取りの間だけそのフィルタを最後の priority で付け、キャッシュに無かった ID を記録し、
-     * 後始末はその ID だけを消す。フィルタは $check を変えずに返し、ほかのフィルタが短絡した($check が null でない)
-     * 呼び出しは SELECT もキャッシュの書き込みもしないため記録しない。
-     *
-     * @template T
-     *
-     * @param Closure(callable(): void): T $guarded 受け取った後始末を WpDatabaseGuard に渡して読み取りを呼ぶ
-     *
-     * @return T
-     */
-    private static function forgettingFailedLoads(ObjectType $type, Closure $guarded): mixed
-    {
-        $group = $type->metaType() . '_meta';
-        $hook = "update_{$type->metaType()}_metadata_cache";
-        // 読み取りの間に WP が読み込んだ(キャッシュに無かった)ID => true
-        $loaded = [];
-        $record = static function (mixed $check, mixed $objectIds) use ($group, &$loaded): mixed {
-            if ($check === null && \is_array($objectIds)) {
-                foreach (wp_cache_get_multiple($objectIds, $group) as $id => $cached) {
-                    if ($cached === false) {
-                        $loaded[(int) $id] = true;
-                    }
-                }
-            }
-
-            return $check;
-        };
-        $forgetCache = static function () use ($group, &$loaded): void {
-            foreach (array_keys($loaded) as $id) {
-                wp_cache_delete($id, $group);
-            }
-        };
-        add_filter($hook, $record, PHP_INT_MAX, 2);
-
-        try {
-            return $guarded($forgetCache);
-        } finally {
-            remove_filter($hook, $record, PHP_INT_MAX);
-        }
     }
 
     /** @return list<mixed> 全行(maybe_unserialize 済み)。行が無ければ空の配列 */
