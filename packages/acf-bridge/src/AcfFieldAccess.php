@@ -308,8 +308,15 @@ trait AcfFieldAccess
     protected function acfDateTime(string $key, string $rawFormat): ?DateTimeImmutable
     {
         $path = $this->acfFieldName(__FUNCTION__, $key);
-        $value = get_field($key, $this->acfId, false);
 
+        return $this->dateTimeOf(get_field($key, $this->acfId, false), $path, $rawFormat);
+    }
+
+    /**
+     * 保存された値(raw)$valueを、acfDateTime()と同じ規則で$rawFormatの書式のwp_timezone()の日時にする。
+     */
+    private function dateTimeOf(mixed $value, string $path, string $rawFormat): ?DateTimeImmutable
+    {
         if (self::isUnset($value)) {
             return null;
         }
@@ -365,11 +372,19 @@ trait AcfFieldAccess
     protected function acfUpdateDate(string $key, DateTimeInterface|string|null $value, string $rawFormat): void
     {
         $name = $this->acfFieldName(__FUNCTION__, $key);
+        $this->updateField($key, $this->rawDate($value, $name, $rawFormat));
+    }
 
+    /**
+     * acfUpdateDate()が保存する値。DateTimeInterfaceは$rawFormatの書式の現地の時刻の文字列にし、文字列とnullはそのまま
+     * 返す。
+     *
+     * @throws InvalidArgumentException date_time_pickerの書式で、入力が同じ現地の時刻を表す2つの瞬間の遅い方の場合
+     */
+    private function rawDate(DateTimeInterface|string|null $value, string $name, string $rawFormat): ?string
+    {
         if (!$value instanceof DateTimeInterface) {
-            $this->updateField($key, $value);
-
-            return;
+            return $value;
         }
 
         $timezone = wp_timezone();
@@ -386,7 +401,87 @@ trait AcfFieldAccess
             }
         }
 
-        $this->updateField($key, $raw);
+        return $raw;
+    }
+
+    /**
+     * cloneが`prefix_name`で保存名を変えたフィールド(docs/09 §6.6)の、フォーマット済みの値。ACFに登録された元の
+     * keyの定義を得て、`name`を保存名$nameに差し替えてから読む(ACFのacf_get_meta_field()と同じ形)。元のkeyのまま
+     * get_field()で読むと定義の名前(接頭辞の無い名前)のメタを読み、cloneが合成するkeyはACFに登録されないため、
+     * どちらのkeyでも保存名の値を読めないためである。型の検査は、受け取った値に*Of()のヘルパを使う。
+     *
+     * @throws AcfNotActiveException ACFが有効でない場合
+     * @throws AcfBridgeRuntimeException keyのフィールドがACFに登録されていない場合
+     */
+    protected function acfClonedValue(string $key, string $name): mixed
+    {
+        $field = $this->acfClonedField(__FUNCTION__, $key, $name);
+        $postId = $this->validPostId();
+
+        return acf_format_value(acf_get_value($postId, $field), $postId, $field);
+    }
+
+    /**
+     * acfClonedValue()のフィールドの保存された値(raw)を、acfDateTime()と同じ規則で日時にする。
+     *
+     * @throws AcfNotActiveException ACFが有効でない場合
+     * @throws AcfBridgeRuntimeException keyのフィールドがACFに登録されていない場合
+     */
+    protected function acfClonedDateTime(string $key, string $name, string $rawFormat): ?DateTimeImmutable
+    {
+        $field = $this->acfClonedField(__FUNCTION__, $key, $name);
+
+        return $this->dateTimeOf(acf_get_value($this->validPostId(), $field), $name, $rawFormat);
+    }
+
+    /**
+     * acfClonedValue()のフィールドへ、acfUpdate()と同じ規則(wp_slash())で保存名に保存する。
+     *
+     * @throws AcfNotActiveException ACFが有効でない場合
+     * @throws AcfBridgeRuntimeException keyのフィールドがACFに登録されていない場合
+     */
+    protected function acfClonedUpdate(string $key, string $name, mixed $value): void
+    {
+        $this->updateClonedField($this->acfClonedField(__FUNCTION__, $key, $name), $value);
+    }
+
+    /**
+     * acfClonedValue()のフィールドへ、acfUpdateDate()と同じ規則で日時を保存名に保存する。
+     *
+     * @throws AcfNotActiveException ACFが有効でない場合
+     * @throws AcfBridgeRuntimeException keyのフィールドがACFに登録されていない場合
+     * @throws InvalidArgumentException date_time_pickerの書式で、入力が同じ現地の時刻を表す2つの瞬間の遅い方の場合
+     */
+    protected function acfClonedUpdateDate(string $key, string $name, DateTimeInterface|string|null $value, string $rawFormat): void
+    {
+        $field = $this->acfClonedField(__FUNCTION__, $key, $name);
+        $this->updateClonedField($field, $this->rawDate($value, $name, $rawFormat));
+    }
+
+    /**
+     * acfClonedValue()のフィールドの値が、保存名$nameで保存されているか(has()と同じ判定)。
+     *
+     * @throws AcfNotActiveException ACFが有効でない場合
+     * @throws AcfBridgeRuntimeException keyのフィールドがACFに登録されていない場合
+     */
+    protected function acfClonedHas(string $key, string $name): bool
+    {
+        $this->acfClonedField(__FUNCTION__, $key, $name);
+
+        return $this->hasStoredValue($name);
+    }
+
+    /**
+     * acfClonedValue()のフィールドの、保存名$nameの値を消す(acf_delete_value())。消したらtrue。
+     *
+     * @throws AcfNotActiveException ACFが有効でない場合
+     * @throws AcfBridgeRuntimeException keyのフィールドがACFに登録されていない場合
+     */
+    protected function acfClonedDelete(string $key, string $name): bool
+    {
+        $field = $this->acfClonedField(__FUNCTION__, $key, $name);
+
+        return acf_delete_value($this->validPostId(), $field);
     }
 
     /** 文字列・数値は文字列にする。未設定は''。 */
@@ -694,6 +789,39 @@ trait AcfFieldAccess
         return [get_field($key, $this->acfId, true), $name];
     }
 
+    /**
+     * keyのフィールドの、ACFに登録された定義の`name`を保存名$nameに差し替えた定義(acfClonedValue()等が使う)。
+     *
+     * @throws AcfNotActiveException ACFが有効でない場合
+     * @throws AcfBridgeRuntimeException keyのフィールドがACFに登録されていない場合
+     *
+     * @return array<array-key, mixed>
+     */
+    private function acfClonedField(string $method, string $key, string $name): array
+    {
+        $this->acfFieldName($method, $key);
+        $field = acf_get_field($key);
+
+        if (!\is_array($field)) {
+            throw new AcfBridgeRuntimeException("ACF field key '{$key}' used by " . static::class . "::{$method}() is not registered in ACF");
+        }
+
+        $field['name'] = $name;
+
+        return $field;
+    }
+
+    /**
+     * 保存名に差し替えた定義$fieldへ、updateField()と同じくwp_slash()した値をacf_update_value()で保存する(update_field()が
+     * 定義を得た後にすることと同じ)。
+     *
+     * @param array<array-key, mixed> $field
+     */
+    private function updateClonedField(array $field, mixed $value): void
+    {
+        acf_update_value(\is_string($value) || \is_array($value) ? wp_slash($value) : $value, $this->validPostId(), $field);
+    }
+
     /** $selector(名前またはkey)のフィールドへ、wp_slash()した値をupdate_field()で保存する。 */
     private function updateField(string $selector, mixed $value): bool
     {
@@ -708,13 +836,7 @@ trait AcfFieldAccess
      */
     private function hasStoredValue(string $name): bool
     {
-        $postId = acf_get_valid_post_id($this->acfId);
-
-        if (!\is_int($postId) && !\is_string($postId)) {
-            throw new AcfBridgeRuntimeException('ACF resolved the post_id ' . $this->acfId . ' to ' . get_debug_type($postId) . ' (acf/validate_post_id); it must be an int or a string');
-        }
-
-        $target = acf_decode_post_id($postId);
+        $target = acf_decode_post_id($this->validPostId());
         $type = $target['type'] ?? null;
         $id = $target['id'] ?? null;
 
@@ -731,6 +853,22 @@ trait AcfFieldAccess
 
         // WpMetaStorage::has()と同じく、null・false・空の配列とスカラーの空文字は行なしとする
         return $rows !== null && $rows !== false && $rows !== '' && $rows !== [];
+    }
+
+    /**
+     * get_field()と同じく、acf_get_valid_post_id()でACFのpost_idに解決する。
+     *
+     * @throws AcfBridgeRuntimeException acf/validate_post_idのフィルタが、post_idをintでも文字列でもない値にした場合
+     */
+    private function validPostId(): int|string
+    {
+        $postId = acf_get_valid_post_id($this->acfId);
+
+        if (!\is_int($postId) && !\is_string($postId)) {
+            throw new AcfBridgeRuntimeException('ACF resolved the post_id ' . $this->acfId . ' to ' . get_debug_type($postId) . ' (acf/validate_post_id); it must be an int or a string');
+        }
+
+        return $postId;
     }
 
     /** ACFが未設定に返す値(null・false・'')か。 */

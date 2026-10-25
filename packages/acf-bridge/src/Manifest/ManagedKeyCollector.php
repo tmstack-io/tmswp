@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\AcfBridge\Manifest;
 
 use TMSWP\AcfBridge\BridgeConfig;
+use TMSWP\AcfBridge\Generate\CloneResolver;
 use TMSWP\AcfBridge\Generate\TypeMapper;
 use TMSWP\AcfBridge\Json\FieldGroup;
 use TMSWP\AcfBridge\Mapping\LocationResolver;
@@ -52,12 +53,22 @@ final class ManagedKeyCollector
                     TargetKind::Options => null,
                 };
 
+                // トップレベルでサブフィールドに置き換えたseamlessのclone自身の保存名(docs/09 §6.6)
+                foreach ($this->cloneMetaKeys($group->raw) as [$metaKey, $fieldKey]) {
+                    $keys[] = new ManagedKey($objectType, $target->subtype, $metaKey, $fieldKey, $group->key);
+                }
+
                 foreach ($group->fields as $field) {
                     if (!$this->types->storesValue($field) || $field->name === '' || $field->type === 'clone') {
                         continue;
                     }
 
                     $keys[] = new ManagedKey($objectType, $target->subtype, $field->name, $field->key, $group->key);
+
+                    // groupのcloneは、サブフィールドの値をそれぞれの保存名のメタに保存する(docs/09 §6.6)
+                    foreach ($this->cloneMetaKeys($field->raw) as [$metaKey, $fieldKey]) {
+                        $keys[] = new ManagedKey($objectType, $target->subtype, $metaKey, $fieldKey, $group->key);
+                    }
                 }
             }
         }
@@ -70,6 +81,27 @@ final class ManagedKeyCollector
         }
 
         return array_values($unique);
+    }
+
+    /**
+     * ACFがcloneの保存で書くメタの[キー, 元のkey](CloneResolverがフィールド・グループのrawのMETA_KEYSに置いたもの)。
+     *
+     * @param array<string, mixed> $raw
+     *
+     * @return list<array{string, string}>
+     */
+    private function cloneMetaKeys(array $raw): array
+    {
+        $metaKeys = $raw[CloneResolver::META_KEYS] ?? [];
+        $keys = [];
+
+        foreach (\is_array($metaKeys) ? $metaKeys : [] as $pair) {
+            if (\is_array($pair) && \is_string($pair[0] ?? null) && \is_string($pair[1] ?? null)) {
+                $keys[] = [$pair[0], $pair[1]];
+            }
+        }
+
+        return $keys;
     }
 
     private static function sortKey(ManagedKey $key): string

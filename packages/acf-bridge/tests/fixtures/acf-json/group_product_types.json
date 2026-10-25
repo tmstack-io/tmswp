@@ -1038,6 +1038,25 @@
             "label": "レイアウトの無いセクション",
             "type": "flexible_content",
             "layouts": []
+        },
+        {
+            "key": "field_t_cloned",
+            "name": "cloned",
+            "label": "複製",
+            "type": "clone",
+            "clone": ["group_clone_source"],
+            "display": "seamless",
+            "prefix_name": 1,
+            "prefix_label": 1
+        },
+        {
+            "key": "field_t_cloned_group",
+            "name": "cloned_group",
+            "label": "複製のグループ",
+            "type": "clone",
+            "clone": ["group_clone_source"],
+            "display": "group",
+            "prefix_name": 1
         }
     ]
 }

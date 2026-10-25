@@ -321,6 +321,34 @@ final class ProductFields
     public const EMPTY_SECTIONS = 'empty_sections';
     public const KEY_EMPTY_SECTIONS = 'field_t_empty_sections';
 
+    /** 複製 見出し (text, group_product_types) */
+    public const CLONED_HEADLINE = 'cloned_headline';
+    public const KEY_CLONED_HEADLINE = 'field_cs_headline';
+
+    /** 複製 開始日 (date_picker, group_product_types) */
+    public const CLONED_STARTS_ON = 'cloned_starts_on';
+    public const KEY_CLONED_STARTS_ON = 'field_cs_starts_on';
+
+    /** 複製 写真 (image, group_product_types) */
+    public const CLONED_PHOTO = 'cloned_photo';
+    public const KEY_CLONED_PHOTO = 'field_cs_photo';
+
+    /** 複製 関連 (post_object, group_product_types) */
+    public const CLONED_RELATED = 'cloned_related';
+    public const KEY_CLONED_RELATED = 'field_cs_related';
+
+    /** 複製 その他 (google_map, group_product_types) */
+    public const CLONED_EXTRA = 'cloned_extra';
+    public const KEY_CLONED_EXTRA = 'field_cs_extra';
+
+    /** 複製 リンク (repeater, group_product_types) */
+    public const CLONED_LINKS = 'cloned_links';
+    public const KEY_CLONED_LINKS = 'field_cs_links';
+
+    /** 複製のグループ (group, group_product_types) */
+    public const CLONED_GROUP = 'cloned_group';
+    public const KEY_CLONED_GROUP = 'field_t_cloned_group';
+
     public static function of(WP_Post|int $post): self
     {
         return new self(ObjectType::Post->resolveId($post));
@@ -2076,5 +2104,178 @@ final class ProductFields
     public function deleteEmptySections(): bool
     {
         return $this->acfDelete(self::KEY_EMPTY_SECTIONS);
+    }
+
+    /** 複製 見出し (text, group_product_types) */
+    public function clonedHeadline(): string
+    {
+        return $this->acfStringOf($this->acfClonedValue(self::KEY_CLONED_HEADLINE, self::CLONED_HEADLINE), self::CLONED_HEADLINE);
+    }
+
+    public function setClonedHeadline(string $value): void
+    {
+        $this->acfClonedUpdate(self::KEY_CLONED_HEADLINE, self::CLONED_HEADLINE, $value);
+    }
+
+    public function hasClonedHeadline(): bool
+    {
+        return $this->acfClonedHas(self::KEY_CLONED_HEADLINE, self::CLONED_HEADLINE);
+    }
+
+    public function deleteClonedHeadline(): bool
+    {
+        return $this->acfClonedDelete(self::KEY_CLONED_HEADLINE, self::CLONED_HEADLINE);
+    }
+
+    /** 複製 開始日 (date_picker, group_product_types) */
+    public function clonedStartsOn(): string
+    {
+        return $this->acfStringOf($this->acfClonedValue(self::KEY_CLONED_STARTS_ON, self::CLONED_STARTS_ON), self::CLONED_STARTS_ON);
+    }
+
+    public function setClonedStartsOn(string|DateTimeInterface|null $value): void
+    {
+        $this->acfClonedUpdateDate(self::KEY_CLONED_STARTS_ON, self::CLONED_STARTS_ON, $value, 'Ymd');
+    }
+
+    public function clonedStartsOnAsDateTime(): ?DateTimeImmutable
+    {
+        return $this->acfClonedDateTime(self::KEY_CLONED_STARTS_ON, self::CLONED_STARTS_ON, 'Ymd');
+    }
+
+    public function hasClonedStartsOn(): bool
+    {
+        return $this->acfClonedHas(self::KEY_CLONED_STARTS_ON, self::CLONED_STARTS_ON);
+    }
+
+    public function deleteClonedStartsOn(): bool
+    {
+        return $this->acfClonedDelete(self::KEY_CLONED_STARTS_ON, self::CLONED_STARTS_ON);
+    }
+
+    /** 複製 写真 (image, group_product_types) */
+    public function clonedPhoto(): ?int
+    {
+        return $this->acfIntOf($this->acfClonedValue(self::KEY_CLONED_PHOTO, self::CLONED_PHOTO), self::CLONED_PHOTO);
+    }
+
+    public function setClonedPhoto(?int $value): void
+    {
+        $this->acfClonedUpdate(self::KEY_CLONED_PHOTO, self::CLONED_PHOTO, $value);
+    }
+
+    public function hasClonedPhoto(): bool
+    {
+        return $this->acfClonedHas(self::KEY_CLONED_PHOTO, self::CLONED_PHOTO);
+    }
+
+    public function deleteClonedPhoto(): bool
+    {
+        return $this->acfClonedDelete(self::KEY_CLONED_PHOTO, self::CLONED_PHOTO);
+    }
+
+    /** 複製 関連 (post_object, group_product_types) */
+    public function clonedRelated(): ?WP_Post
+    {
+        return $this->acfObjectOf($this->acfClonedValue(self::KEY_CLONED_RELATED, self::CLONED_RELATED), self::CLONED_RELATED, WP_Post::class);
+    }
+
+    public function setClonedRelated(?int $value): void
+    {
+        $this->acfClonedUpdate(self::KEY_CLONED_RELATED, self::CLONED_RELATED, $value);
+    }
+
+    public function hasClonedRelated(): bool
+    {
+        return $this->acfClonedHas(self::KEY_CLONED_RELATED, self::CLONED_RELATED);
+    }
+
+    public function deleteClonedRelated(): bool
+    {
+        return $this->acfClonedDelete(self::KEY_CLONED_RELATED, self::CLONED_RELATED);
+    }
+
+    /** 複製 その他 (google_map, group_product_types) */
+    public function clonedExtra(): mixed
+    {
+        return $this->acfClonedValue(self::KEY_CLONED_EXTRA, self::CLONED_EXTRA);
+    }
+
+    public function setClonedExtra(mixed $value): void
+    {
+        $this->acfClonedUpdate(self::KEY_CLONED_EXTRA, self::CLONED_EXTRA, $value);
+    }
+
+    public function hasClonedExtra(): bool
+    {
+        return $this->acfClonedHas(self::KEY_CLONED_EXTRA, self::CLONED_EXTRA);
+    }
+
+    public function deleteClonedExtra(): bool
+    {
+        return $this->acfClonedDelete(self::KEY_CLONED_EXTRA, self::CLONED_EXTRA);
+    }
+
+    /**
+     * 複製 リンク (repeater, group_product_types)
+     *
+     * @return list<array{url: string}>
+     */
+    public function clonedLinks(): array
+    {
+        return $this->acfRowsOf($this->acfClonedValue(self::KEY_CLONED_LINKS, self::CLONED_LINKS), self::CLONED_LINKS, fn(array $row, string $path): array => [
+            'url' => $this->acfStringOf($row['url'] ?? null, $path . '.url'),
+        ]);
+    }
+
+    /** @param list<array<string, mixed>> $value */
+    public function setClonedLinks(array $value): void
+    {
+        $this->acfClonedUpdate(self::KEY_CLONED_LINKS, self::CLONED_LINKS, $value);
+    }
+
+    public function hasClonedLinks(): bool
+    {
+        return $this->acfClonedHas(self::KEY_CLONED_LINKS, self::CLONED_LINKS);
+    }
+
+    public function deleteClonedLinks(): bool
+    {
+        return $this->acfClonedDelete(self::KEY_CLONED_LINKS, self::CLONED_LINKS);
+    }
+
+    /**
+     * 複製のグループ (group, group_product_types)
+     *
+     * @return array{headline: string, starts_on: string, photo: int|null, related: WP_Post|null, extra: mixed, links: list<array{url: string}>}|null
+     */
+    public function clonedGroup(): ?array
+    {
+        return $this->acfGroup(self::KEY_CLONED_GROUP, fn(array $group, string $path): array => [
+            'headline' => $this->acfStringOf($group['headline'] ?? null, $path . '.headline'),
+            'starts_on' => $this->acfStringOf($group['starts_on'] ?? null, $path . '.starts_on'),
+            'photo' => $this->acfIntOf($group['photo'] ?? null, $path . '.photo'),
+            'related' => $this->acfObjectOf($group['related'] ?? null, $path . '.related', WP_Post::class),
+            'extra' => $group['extra'] ?? null,
+            'links' => $this->acfRowsOf($group['links'] ?? null, $path . '.links', fn(array $row, string $path): array => [
+                'url' => $this->acfStringOf($row['url'] ?? null, $path . '.url'),
+            ]),
+        ]);
+    }
+
+    /** @param array<string, mixed>|null $value */
+    public function setClonedGroup(?array $value): void
+    {
+        $this->acfUpdate(self::KEY_CLONED_GROUP, $value);
+    }
+
+    public function hasClonedGroup(): bool
+    {
+        return $this->acfHas(self::KEY_CLONED_GROUP);
+    }
+
+    public function deleteClonedGroup(): bool
+    {
+        return $this->acfDelete(self::KEY_CLONED_GROUP);
     }
 }

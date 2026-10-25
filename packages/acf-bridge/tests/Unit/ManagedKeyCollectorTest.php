@@ -6,6 +6,8 @@ namespace TMSWP\AcfBridge\Tests\Unit;
 
 use TMSWP\AcfBridge\BridgeConfig;
 use TMSWP\AcfBridge\Generate\CloneResolver;
+use TMSWP\AcfBridge\Generate\Generator;
+use TMSWP\AcfBridge\Generate\GeneratorContext;
 use TMSWP\AcfBridge\Json\AcfJsonRepository;
 use TMSWP\AcfBridge\Json\FieldGroup;
 use TMSWP\AcfBridge\Manifest\ManagedKey;
@@ -35,7 +37,7 @@ final class ManagedKeyCollectorTest extends UnitTestCase
 
         self::assertSame([], $errors);
         $rows = self::rows($keys);
-        self::assertCount(74, $rows);
+        self::assertCount(94, $rows);
 
         foreach ([
             ['post', 'product', 'main_visual', 'field_visual', 'group_product'],
@@ -45,6 +47,10 @@ final class ManagedKeyCollectorTest extends UnitTestCase
             ['term', 'genre', 'genre_color', 'field_genre_color', 'group_genre'],
             ['user', '', 'twitter', 'field_user_twitter', 'group_user'],
             [null, 'theme-settings', 'site_logo', 'field_logo', 'group_options'],
+            // seamlessのcloneのprefix_nameの保存名と、groupのcloneのサブフィールドの保存名(元のkey)
+            ['post', 'product', 'cloned_headline', 'field_cs_headline', 'group_product_types'],
+            ['post', 'product', 'cloned_group', 'field_t_cloned_group', 'group_product_types'],
+            ['post', 'product', 'cloned_group_headline', 'field_cs_headline', 'group_product_types'],
         ] as $row) {
             self::assertContains($row, $rows);
         }
@@ -57,8 +63,8 @@ final class ManagedKeyCollectorTest extends UnitTestCase
     }
 
     /**
-     * seamlessのcloneが展開したフィールドも管理キーになり、cloneフィールド自体・無効なグループ・値を持たない型は
-     * 管理キーにしない。
+     * seamlessのcloneが展開したフィールドと、clone自身の名前(ACFはcloneの名前にも空の値を保存する)も管理キーになり、
+     * 無効なグループ・値を持たない型は管理キーにしない。
      */
     public function testItCollectsFieldsExpandedFromSeamlessClone(): void
     {
@@ -93,8 +99,58 @@ final class ManagedKeyCollectorTest extends UnitTestCase
         self::assertSame([], $errors);
         self::assertSame([
             ['post', 'source', 'note', 'field_note', 'group_source'],
+            ['term', 'all', 'cloned', 'field_clone', 'group_target'],
             ['term', 'all', 'note', 'field_note', 'group_target'],
         ], self::rows($keys));
+    }
+
+    /**
+     * 数字だけの名前(`1`・`01`)のcloneも、clone自身の保存名と、groupのcloneのサブフィールドの保存名を管理キーにする
+     * (PHPが配列のキーで整数にする名前を落とさない)。生成するAcfManifestにも、文字列のメタキーとして出る。
+     */
+    public function testCloneMetaKeysWithDecimalNamesAreCollected(): void
+    {
+        $groups = [
+            FieldGroup::fromArray([
+                'key' => 'group_num_source',
+                'title' => 'Source',
+                'location' => [[['param' => 'post_type', 'operator' => '==', 'value' => 'num_source']]],
+                'fields' => [['key' => 'field_num_title', 'name' => 'title', 'label' => 'Title', 'type' => 'text']],
+            ], 'group_num_source.json'),
+            FieldGroup::fromArray([
+                'key' => 'group_num',
+                'title' => 'Num',
+                'location' => [[['param' => 'post_type', 'operator' => '==', 'value' => 'num']]],
+                'fields' => [
+                    ['key' => 'field_num_clone', 'name' => '1', 'label' => 'One', 'type' => 'clone', 'clone' => ['group_num_source'], 'display' => 'seamless'],
+                    ['key' => 'field_num_group', 'name' => '01', 'label' => 'Zero one', 'type' => 'clone', 'clone' => ['group_num_source'], 'display' => 'group', 'prefix_name' => 1],
+                ],
+            ], 'group_num.json'),
+        ];
+        $errors = [];
+        $config = new BridgeConfig([], '/tmp/acf', 'App\Acf');
+
+        $keys = (new ManagedKeyCollector())->collect((new CloneResolver())->resolve($groups, $errors), $config);
+
+        self::assertSame([], $errors);
+        self::assertSame([
+            ['post', 'num', '01', 'field_num_group', 'group_num'],
+            ['post', 'num', '01_title', 'field_num_title', 'group_num'],
+            ['post', 'num', '1', 'field_num_clone', 'group_num'],
+            ['post', 'num', 'title', 'field_num_title', 'group_num'],
+            ['post', 'num_source', 'title', 'field_num_title', 'group_num_source'],
+        ], self::rows($keys));
+
+        $manifest = '';
+
+        foreach ((new Generator())->generate($groups, new GeneratorContext($config, [], 'num'))->files() as $file) {
+            if ($file->relativePath === 'AcfManifest.php') {
+                $manifest = $file->contents;
+            }
+        }
+
+        self::assertStringContainsString("new ManagedKey(ObjectType::Post, 'num', '1', 'field_num_clone', 'group_num'),", $manifest);
+        self::assertStringContainsString("new ManagedKey(ObjectType::Post, 'num', '01', 'field_num_group', 'group_num'),", $manifest);
     }
 
     /**

@@ -917,15 +917,23 @@ public function sections(): array
 
 ## 6.6 clone の解決(確定方式)
 
-clone はフィールド/グループへの参照(`clone` 配列に field key / group key)であり、**生成時に静的解決して展開する**。
+cloneはフィールド・グループへの参照(`clone`の配列にfield key・group key)であり、**生成時に静的に解決して展開する**。展開の規則は、ACF Pro(`pro/fields/class-acf-field-clone.php`のget_cloned_fields()・acf_clone_field()・acf_clone_clone_field()・acf_get_fields()のフィルタ・prepare_field_for_db())が実行時にするものをそのまま再現する(CloneResolver)。名前・key・管理キーは、実物のACF Pro 6.8.8(ライセンス無し)で、cloneのkeyへのupdate_field()とacf_get_fields()の結果と一致することを確かめてある。
 
-1. 参照先解決: 参照値が `group_` 始まりならそのグループの全フィールド、`field_` 始まりなら当該フィールド単体。acf-json 全体(対象外グループ含む)から key で検索する。見つからなければ E004。
-2. `display: 'seamless'` → 参照先フィールドをホストグループの**トップレベル相当**として展開し、それぞれ個別のアクセサ・定数を生成する。`prefix_name: 1` の場合はフィールド名に `{cloneFieldName}_` プレフィクスを付けた名前で生成する(ACF の保存名と一致させる)。
-3. `display: 'group'` → group 型と同じ扱い(`array{...}|null`、shape は参照先フィールドから構成。`prefix_name` は ACF 仕様上 seamless のみ有効のため無視)。
-4. 解決グラフに循環(A が B を clone し B が A を clone)があれば E005。
-5. clone がサブフィールド(repeater 内等)にある場合も同規則で再帰展開する。
-
----
+1. 参照先: 参照の値が`group_`で始まればグループ(ACFのacf_is_field_group_key())の全フィールド、`field_`で始まればフィールド(acf_is_field_key())1つ。acf-json全体(対象外のグループを含む)からkeyで探す。見つからない参照と、どちらでもない値(接頭辞の無いkeyのグループ等。ACFはcloneで参照しない)はE004。グループで参照すると、そのグループのseamlessのcloneは先に展開されてから複製される。フィールドで参照したcloneは、cloneのまま複製される(次の5)。
+2. displayの既定はseamless(ACFのclone型の既定)。displayの無いcloneもseamlessとして扱う。
+3. seamless: 参照先のフィールドを、ホストのグループのトップレベルのフィールドとして展開し、それぞれのアクセサ・定数を生成する。
+   - prefix_nameなら、保存名(名前)を`{cloneの名前}_{名前}`にする。prefix_labelなら、ラベル(生成物のPHPDoc)を`{cloneのラベル} {ラベル}`にする。
+   - ACFはseamlessで複製したフィールドのkeyを`{cloneのkey}_{key}`に変えるが、この合成keyはcloneのサブフィールドの中(メモリ上)だけにあり、その定義はacf_get_field()では見つからない。そのため、KEY_定数と管理キーのfieldKeyは元のkeyにする。
+   - 値の参照のメタ(`_{保存名}`)にどちらのkeyが入るかは、保存の経路で決まる。トップレベルのcloneとgroupのcloneの保存(cloneのupdate_value())は、サブフィールドを元のkeyに戻してから保存するため、元のkeyが入る。group・repeater・flexible_contentの中のseamlessのcloneを、その親の保存から書くと、親は展開済みのサブフィールドを直接保存するため、合成keyが入る(例: `_root_c_title`・`_root_0_c_title`に`field_{clone}_field_{参照先}`)。生成アクセサは、参照のメタからフィールドの定義を選ばず、元のkeyの定義(保存名のフィールドは、名前を保存名に差し替えた定義)で読み書きする。
+   - これとは別に、ACFは、post_idがcustom options(オプションページ等の文字列のpost_id。`options`を除く)のとき、値を読む前に参照のメタを定義のkeyと照合し、参照のメタが無いか、定義の`key`とも`__key`とも違えば、そのフィールド自身の保存された値を読まない(既定値の補充とacf/load_valueのフィルタは、その後も行う。acf_get_value()。無料版6.2.0のincludes/acf-value-functions.phpの79〜89行、無料版6.8.10とPro 6.8.8の同じファイルの105〜117行)。上の保存の経路では、この照合はどちらも成り立つ。トップレベルのフィールドの参照のメタは元のkeyで、生成アクセサの定義の`key`(元のkey)と一致する。親の保存で合成keyが入るサブフィールドは、ACFが親の値を読むときに、展開したサブフィールド(`key`が合成key、`__key`が元のkey)と照合するため一致する。
+   - 保存名が元の定義の名前と同じなら、ほかのフィールドと同じく元のkeyで読み書きする。違えば(prefix_name)、元のkeyでは定義の名前のメタを読んでしまうため、元のkeyの定義の名前を保存名に差し替えて読み書きするヘルパ(`acfCloned*()`。§11)を使い、名前の定数(保存名)をヘルパに渡す。
+4. group: group型のフィールドとして扱い(`array{...}|null`)、cloneのkeyで読み書きする(acfGroup())。ACFは値を、サブフィールドの元の名前(`__name`)をキーにした配列で返すため、shapeのキーは元の名前にする。prefix_nameは、displayによらず保存名に付く(サブフィールドの値は`{cloneの名前}_{名前}`のメタに保存される)が、読み出しの配列のキーには影響しない。prefix_labelはseamlessのときだけ効く。
+5. cloneのclone: ACFのacf_clone_clone_field()と同じく、複製されるcloneがprefix_nameなら、外のcloneの名前をそのcloneの`_name`に置き換えてから、そのサブフィールドを外のcloneの設定で複製する。そのため名前は外から内へ重なる(例: seamless・prefix_nameのclone`c`が、seamless・prefix_nameのclone`m`をfield keyで参照すると、`title`の保存名は`c_m_m_title`)。groupのcloneのサブフィールドにあるcloneは、displayによらず入れ子のgroupになる(ACFがその値を入れ子の配列で返すため)。
+6. 解決グラフに循環(AがBをcloneし、BがAをcloneする)があればE005。
+7. cloneがサブフィールド(repeater内等)にある場合も、同じ規則で展開する(ACFはサブフィールドも同じ処理で読むため、seamlessのcloneのサブフィールドの配列のキーは`_name`(prefix_nameの名前)になる)。
+8. 管理キー(§7.1): ACFはcloneの保存で、cloneの名前にも空の値を保存する。そのため管理キーは、トップレベルのフィールドの保存名に加えて、次を含む。
+   - トップレベルで展開したseamlessのclone自身の保存名(cloneのcloneを含む)
+   - groupのcloneのサブフィールドの保存名(cloneの名前と`_name`の差を接頭辞として付ける。ACFのprepare_field_for_db())と、サブフィールドのclone自身の保存名
 
 # 7. 実行時連携 — Manifest / register_*_meta スキップ / 重複検出
 
@@ -957,6 +965,7 @@ final class AcfManifest
 ```
 
 - 対象は**トップレベルのフィールド名のみ**(repeater/group のフラット化キー `parent_0_sub` や ACF の参照メタ `_fieldname` は含めない。`register_*_meta`/`#[MetaSchema]` と衝突しうるのはトップレベル名だけであるため)。location 解決は §4 の `LocationResolver` を再利用する(W系はサイレントにスキップ)。
+- cloneが保存するトップレベルのメタ(seamlessのclone自身の名前、groupのcloneのサブフィールドの保存名等)も、同じくトップレベルのメタのため含める(§6.6の8)。`fieldKey`は、そのメタの参照(`_{名前}`)にACFが保存する元のkey。
 - `AcfManifest.php`は§5.2の生成規約(`@generated`のヘッダ・期待ファイル集合・孤児削除・`check`のバイト一致比較・決定的出力=グループのkeyの昇順)に従う。ヘッダには全入力の集約ハッシュ`source-hash: sha256:...`(§3.3の`sourceHash`)を、`@generated`の行の次の1か所だけに記録する(集約ハッシュを持つ唯一の生成ファイル。§5.2)。`sources`には、管理キーを持つグループの由来のJSONファイルを記す。
 
 ```php
@@ -1261,6 +1270,27 @@ trait AcfFieldAccess
     protected function acfUpdate(string $key, mixed $value): void;  // update_field($key, wp_slash($value), $id)(戻り値破棄)
     protected function acfUpdateDate(string $key, \DateTimeInterface|string|null $value, string $rawFormat): void;
                                                                     // DateTimeInterfaceはwp_timezone()の日時に変換してから$rawFormatで文字列にする(§6.3)
+
+    // ---- 生成コード用: cloneの保存名で読み書きするヘルパ(protected。§6.6) ----
+    // seamlessのcloneのprefix_nameで、保存名($name)がACFに登録された定義の名前と違うフィールドに使う。keyの定義を
+    // acf_get_field($key)で得て、nameを$nameに差し替えてから、ACFの値の関数を呼ぶ(ACFのacf_get_meta_field()と同じ形)。
+    // keyのフィールドが登録されていなければ、key版と同じくAcfBridgeRuntimeException。ACF 6.2.0と6.8.10で、
+    // acf_get_value($post_id, $field)・acf_format_value($value, $post_id, $field)・acf_update_value($value, $post_id, $field)・
+    // acf_delete_value($post_id, $field)の引数と振る舞いは同じ。
+
+    protected function acfClonedValue(string $key, string $name): mixed;   // acf_format_value(acf_get_value(...))。型は*Of()で正規化する
+    protected function acfClonedDateTime(string $key, string $name, string $rawFormat): ?\DateTimeImmutable;  // acf_get_value()の値をacfDateTime()と同じ規則で
+    protected function acfClonedUpdate(string $key, string $name, mixed $value): void;  // acf_update_value(wp_slash($value), ...)
+    protected function acfClonedUpdateDate(string $key, string $name, \DateTimeInterface|string|null $value, string $rawFormat): void;
+    protected function acfClonedHas(string $key, string $name): bool;      // has()と同じ判定。メタの名前は$name
+    protected function acfClonedDelete(string $key, string $name): bool;   // acf_delete_value(...)
+    // 制約: ACFは値をフィールドの名前ごとにリクエストの中で覚える(値のキャッシュ)。cloneを含むフィールドの値は、cloneの
+    // 名前(入れ子のcloneはそれぞれの名前)で覚え、サブフィールドの保存では消さない。そのため、acfCloned*()のsetter・
+    // delete、AcfMetaStorageで保存名に書いた後と、ACFのサブフィールドへのacf_update_value()の後に、同じリクエストで
+    // 既に読んだcloneのkeyのget_field()は古い値を返す(ACF自身のサブフィールドの保存と同じ振る舞い)。生成getterは保存名で
+    // 読むため影響を受けず、cloneのkeyへのupdate_field()はcloneの名前の値を書き直すため影響を受けない。同じリクエストで
+    // cloneのkeyのget_field()を読み直すときは、その前にcloneの名前の値をacf_flush_value_cache($postId, cloneの名前)で
+    // 消すか、生成getterで読む。
 
     // ---- 生成コード用: 値を受け取って正規化するヘルパ(protected。ACFに触れない) ----
     // $pathは例外とログに出す位置(`stores[0].shop_name`の形。§6.5)。group・repeater・flexible_contentのサブフィールドに使う。

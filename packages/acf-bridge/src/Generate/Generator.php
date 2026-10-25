@@ -635,7 +635,16 @@ final class Generator
 
         $lines[] = "    public function {$accessor->methodName}(): {$mapping->getterNativeType}";
         $lines[] = '    {';
-        $call = $this->helperCall($accessor->field, $mapping, "\$this->{$mapping->coercionHelper}(", ["self::{$accessor->keyConstName}"], '        ', $imports);
+
+        if (!$this->hasSavedName($accessor->field)) {
+            $call = $this->helperCall($accessor->field, $mapping, "\$this->{$mapping->coercionHelper}(", ["self::{$accessor->keyConstName}"], '        ', $imports);
+        } elseif ($mapping->coercionHelper === 'acfMixed') {
+            $call = ["\$this->acfClonedValue(self::{$accessor->keyConstName}, self::{$accessor->constName})"];
+        } else {
+            // 保存名のフィールドは、保存名で読んだ値を*Of()のヘルパで検査する(位置は保存名)
+            $call = $this->helperCall($accessor->field, $mapping, "\$this->{$mapping->coercionHelper}Of(", ["\$this->acfClonedValue(self::{$accessor->keyConstName}, self::{$accessor->constName})", "self::{$accessor->constName}"], '        ', $imports);
+        }
+
         $lines = [...$lines, ...$this->wrapped('        return ', $call, ';')];
         $lines[] = '    }';
 
@@ -767,10 +776,12 @@ final class Generator
         $lines[] = "    public function {$accessor->setterName}({$mapping->setterNativeType} \$value): void";
         $lines[] = '    {';
 
+        $target = $this->targetArguments($accessor);
+
         if ($mapping->dateRawFormat !== '') {
-            $lines[] = "        \$this->acfUpdateDate(self::{$accessor->keyConstName}, \$value, " . $this->phpString($mapping->dateRawFormat) . ');';
+            $lines[] = "        \$this->{$this->helperName($accessor, 'UpdateDate')}({$target}, \$value, " . $this->phpString($mapping->dateRawFormat) . ');';
         } else {
-            $lines[] = "        \$this->acfUpdate(self::{$accessor->keyConstName}, \$value);";
+            $lines[] = "        \$this->{$this->helperName($accessor, 'Update')}({$target}, \$value);";
         }
 
         $lines[] = '    }';
@@ -793,7 +804,7 @@ final class Generator
             '',
             "    public function {$methodName}(): ?{$imports->ref('DateTimeImmutable')}",
             '    {',
-            "        return \$this->acfDateTime(self::{$accessor->keyConstName}, " . $this->phpString($accessor->mapping->dateRawFormat) . ');',
+            "        return \$this->{$this->helperName($accessor, 'DateTime')}({$this->targetArguments($accessor)}, " . $this->phpString($accessor->mapping->dateRawFormat) . ');',
             '    }',
         ];
     }
@@ -805,14 +816,39 @@ final class Generator
             '',
             "    public function {$accessor->hasName}(): bool",
             '    {',
-            "        return \$this->acfHas(self::{$accessor->keyConstName});",
+            "        return \$this->{$this->helperName($accessor, 'Has')}({$this->targetArguments($accessor)});",
             '    }',
             '',
             "    public function {$accessor->deleteName}(): bool",
             '    {',
-            "        return \$this->acfDelete(self::{$accessor->keyConstName});",
+            "        return \$this->{$this->helperName($accessor, 'Delete')}({$this->targetArguments($accessor)});",
             '    }',
         ];
+    }
+
+    /**
+     * cloneの`prefix_name`で、保存名(フィールドの名前)がACFに登録された定義の名前と違うフィールドか(docs/09 §6.6)。
+     * そのフィールドは、元のkeyの定義を保存名に差し替えて読み書きするヘルパ(acfCloned*())を使う。
+     */
+    private function hasSavedName(FieldDefinition $field): bool
+    {
+        $definitionName = $field->raw[CloneResolver::DEFINITION_NAME] ?? null;
+
+        return \is_string($definitionName) && $definitionName !== $field->name;
+    }
+
+    /** traitのヘルパの名前。保存名のフィールドは`acfCloned{$suffix}`、それ以外は`acf{$suffix}`。 */
+    private function helperName(AccessorDefinition $accessor, string $suffix): string
+    {
+        return ($this->hasSavedName($accessor->field) ? 'acfCloned' : 'acf') . $suffix;
+    }
+
+    /** ヘルパに渡すフィールドの指定。保存名のフィールドはkeyと保存名、それ以外はkey。 */
+    private function targetArguments(AccessorDefinition $accessor): string
+    {
+        return $this->hasSavedName($accessor->field)
+            ? "self::{$accessor->keyConstName}, self::{$accessor->constName}"
+            : "self::{$accessor->keyConstName}";
     }
 
     /**
