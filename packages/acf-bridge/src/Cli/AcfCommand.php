@@ -231,26 +231,24 @@ final class AcfCommand
      */
     private function generate(BridgeConfig $config): array
     {
-        $repository = new AcfJsonRepository($config->jsonDirs);
-        $sourceHash = $repository->sourceHash();
-        $groups = $repository->fieldGroups();
+        $json = (new AcfJsonRepository($config->jsonDirs))->load();
         $report = (new Generator(new LocationResolver()))->generate(
-            $groups,
+            $json->fieldGroups,
             new GeneratorContext(
                 config: $config,
-                optionsPagePostIds: $this->optionsPagePostIds($repository, $config),
-                sourceHash: $sourceHash,
+                optionsPagePostIds: $this->optionsPagePostIds($json->optionsPagePostIds, $config),
+                sourceHash: $json->sourceHash,
             ),
         );
 
         return [
             'report' => new Report(
                 $report->files(),
-                [...$report->errors(), ...$this->metaSchemaConflictErrors($config, $groups)],
-                [...$repository->warnings(), ...$report->warnings()],
+                [...$report->errors(), ...$this->metaSchemaConflictErrors($config, $json->fieldGroups)],
+                [...$json->warnings, ...$report->warnings()],
                 $report->infos(),
             ),
-            'sourceHash' => $sourceHash,
+            'sourceHash' => $json->sourceHash,
         ];
     }
 
@@ -258,13 +256,14 @@ final class AcfCommand
      * オプションページのmenu_slug => post_id。acf-jsonのui_options_pageのpost_idと、BridgeConfigの
      * optionsPagePostIdsを合わせる(ACFの実行時には問い合わせない。生成結果を環境に依存させないため)。
      *
+     * @param array<string, string> $postIds acf-jsonのui_options_pageのmenu_slug => post_id
+     *
      * @throws AcfBridgeRuntimeException 同じページに違うpost_idを指定した場合
      *
      * @return array<string, string>
      */
-    private function optionsPagePostIds(AcfJsonRepository $repository, BridgeConfig $config): array
+    private function optionsPagePostIds(array $postIds, BridgeConfig $config): array
     {
-        $postIds = $repository->optionsPagePostIds();
 
         foreach ($config->optionsPagePostIds as $menuSlug => $postId) {
             if (\array_key_exists($menuSlug, $postIds) && $postIds[$menuSlug] !== $postId) {

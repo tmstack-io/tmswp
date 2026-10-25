@@ -95,7 +95,7 @@ final class TypeMapperTest extends UnitTestCase
     /**
      * group・repeater・flexible_contentは、サブフィールドのgetterの型を再帰で展開したshapeを返す。値を持たないサブフィールド
      * (message等)はshapeに含めず、PHPの識別子の形でない名前のキーは引用符で囲む。flexible_contentのレイアウトの
-     * acf_fc_layoutはレイアウトの名前のリテラルにする。
+     * acf_fc_layoutはレイアウトの名前のリテラルにし、レイアウトのshapeはJSONの順(名前の順でない)に並べる。
      */
     public function testNestedTypesExpandSubFieldShapesRecursively(): void
     {
@@ -133,7 +133,7 @@ final class TypeMapperTest extends UnitTestCase
         $this->assertMapping(
             new TypeMapping(
                 'array',
-                "list<array{acf_fc_layout: 'body', body: string}|array{acf_fc_layout: 'hero', title: string, image: int|null}>",
+                "list<array{acf_fc_layout: 'hero', title: string, image: int|null}|array{acf_fc_layout: 'body', body: string}>",
                 'acfLayouts',
                 'array',
                 'list<array<string, mixed>>',
@@ -157,6 +157,23 @@ final class TypeMapperTest extends UnitTestCase
                 ],
             ]), self::imports(), self::imports()),
         );
+    }
+
+    /**
+     * 空の名前のレイアウトのshapeにも、判別のキー`acf_fc_layout: ''`を書く(生成する正規化の関数は`'acf_fc_layout' => ''`を
+     * 返すため。レイアウトでないgroup・repeaterのshapeには書かない)。
+     */
+    public function testEmptyLayoutNameKeepsTheDiscriminator(): void
+    {
+        $mapping = (new TypeMapper())->map($this->field([
+            'type' => 'flexible_content',
+            'layouts' => [
+                ['name' => 'quote', 'sub_fields' => [['key' => 'field_text', 'name' => 'text', 'label' => '本文', 'type' => 'text']]],
+                ['name' => '', 'sub_fields' => [['key' => 'field_caption', 'name' => 'caption', 'label' => '説明', 'type' => 'text']]],
+            ],
+        ]), self::imports(), self::imports());
+
+        self::assertSame("list<array{acf_fc_layout: 'quote', text: string}|array{acf_fc_layout: '', caption: string}>", $mapping->getterDocType);
     }
 
     public function testUnknownTypesBecomeMixed(): void

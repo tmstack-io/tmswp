@@ -225,7 +225,9 @@ final class AcfBridge implements ExtensionInterface
     }
 
     /**
-     * acf/settings/load_jsonに、jsonDirsのうち存在して未登録のディレクトリを加える。
+     * acf/settings/load_jsonの末尾に、jsonDirsのうち存在するディレクトリをjsonDirsの逆順(jsonDirsの先頭が最後)で置く。
+     * 並びに既にあるもの(ACFの既定の`{stylesheet}/acf-json`等)は末尾へ移す。ACFは同じkeyのJSONのうちload_jsonの後の
+     * ディレクトリのものを使うため、生成(jsonDirsの先のディレクトリのものを使う。AcfJsonRepository)と同じファイルを使う。
      *
      * @param array<mixed> $paths
      *
@@ -233,13 +235,19 @@ final class AcfBridge implements ExtensionInterface
      */
     private function addLoadJsonDirs(array $paths): array
     {
+        $dirs = [];
+
         foreach ($this->config()->jsonDirs as $dir) {
-            if (is_dir($dir) && !\in_array($dir, $paths, true)) {
-                $paths[] = $dir;
+            $dir = rtrim($dir, '/\\');
+
+            if (is_dir($dir) && !\in_array($dir, $dirs, true)) {
+                $dirs[] = $dir;
             }
         }
 
-        return $paths;
+        $others = array_filter($paths, static fn(mixed $path): bool => !\is_string($path) || !\in_array(rtrim($path, '/\\'), $dirs, true));
+
+        return [...array_values($others), ...array_reverse($dirs)];
     }
 
     /**

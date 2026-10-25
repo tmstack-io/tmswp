@@ -7,16 +7,24 @@ namespace TMSWP\AcfBridge\Tests\Integration;
 use ACF_Local_JSON;
 use TMSWP\AcfBridge\AcfBridge;
 use TMSWP\AcfBridge\AcfMetaStorage;
+use TMSWP\AcfBridge\BridgeConfig;
+use TMSWP\AcfBridge\Json\AcfJsonRepository;
+use TMSWP\AcfBridge\Json\FieldGroup;
 use TMSWP\Core\Attribute\AsPostType;
 use TMSWP\Core\Attribute\MetaSchema;
 use TMSWP\Core\Exception\DuplicateMetaKeyException;
+use TMSWP\Core\Kernel\DiscoveryFile;
+use TMSWP\Core\Kernel\DiscoveryResult;
+use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
 use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Core\Meta\WpMetaStorage;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
+use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Core\Tests\Support\UsesTempDirectories;
 
 /**
  * fixtureのテーマとプラグインが、それぞれKernelConfigのextensionsにAcfBridgeを登録した状態を、有効化した無料版の
@@ -26,6 +34,15 @@ use TMSWP\Core\Tests\Support\IntegrationTestCase;
  */
 final class AcfBridgeKernelIntegrationTest extends IntegrationTestCase
 {
+    use BootsKernelBeforeInit;
+    use UsesTempDirectories;
+
+    public function tear_down(): void
+    {
+        $this->cleanupTempDirectories();
+        parent::tear_down();
+    }
+
     /** テーマとプラグインのKernelに別々のAcfBridgeが登録され、構成はそれぞれのacf-json・app/Acf・名前空間を向く。 */
     public function testBridgeIsRegisteredPerKernelForThemeAndPlugin(): void
     {
@@ -69,8 +86,9 @@ final class AcfBridgeKernelIntegrationTest extends IntegrationTestCase
     }
 
     /**
-     * テーマとプラグインのacf-jsonに同じkeyのJSONがあるとき、保存先は、ACFが実際に読み込んだファイル(load_jsonの並び
-     * でテーマ、プラグインの順のため、後のプラグインのもの)のディレクトリになり、もう一方のKernelのファイルを上書きしない。
+     * テーマとプラグインのacf-jsonに同じkeyのJSONがあるとき、保存先は、ACFが実際に読み込んだファイルのディレクトリに
+     * なり、もう一方のKernelのファイルを上書きしない。load_jsonの並びは、後にAcfBridgeを登録したテーマのKernelの
+     * jsonDirsが後になるため、ACFはテーマのものを読み込む。
      */
     public function testSaveDirectoryFollowsTheFileAcfLoadedWhenTwoKernelsShareAKey(): void
     {
@@ -88,9 +106,9 @@ final class AcfBridgeKernelIntegrationTest extends IntegrationTestCase
 
             $localJson->scan_files();
 
-            self::assertSame($pluginDir . '/group_tmswp_shared.json', acf_get_local_json_files()['group_tmswp_shared'] ?? null);
-            self::assertSame([$pluginDir], $localJson->get_save_paths('group_tmswp_shared', $group));
-            self::assertSame([$pluginDir], apply_filters('acf/json/save_paths', [$themeDir], $group));
+            self::assertSame($themeDir . '/group_tmswp_shared.json', acf_get_local_json_files()['group_tmswp_shared'] ?? null);
+            self::assertSame([$themeDir], $localJson->get_save_paths('group_tmswp_shared', $group));
+            self::assertSame([$themeDir], apply_filters('acf/json/save_paths', [$pluginDir], $group));
         } finally {
             foreach ($files as $file) {
                 if (is_file($file)) {
@@ -102,6 +120,107 @@ final class AcfBridgeKernelIntegrationTest extends IntegrationTestCase
         }
 
         self::assertArrayNotHasKey('group_tmswp_shared', acf_get_local_json_files());
+    }
+
+    /**
+     * 実物のACFは、同じkeyのJSONのうち、AcfBridgeのjsonDirsの先のディレクトリ(子テーマに当たる)のものを使い、生成
+     * (AcfJsonRepository)と同じファイルになる。AcfBridgeのフィルタより前にload_jsonにあるディレクトリには勝ち、後に動く
+     * フィルタが加えたディレクトリには負ける(docs/09 §3.1)。
+     */
+    public function testAcfUsesTheFileOfTheFirstJsonDirLikeTheGenerator(): void
+    {
+        $root = $this->createTempDirectory('acf-load-order');
+        $dirs = ['child' => $root . '/child-json', 'parent' => $root . '/parent-json', 'earlier' => $root . '/earlier-json', 'later' => $root . '/later-json'];
+
+        foreach ($dirs as $name => $dir) {
+            self::assertTrue(mkdir($dir));
+            $this->writeFile($dir . '/group_tmswp_load_order.json', '{"key": "group_tmswp_load_order", "title": "' . $name . '", "fields": [], "location": [], "active": true}');
+        }
+
+        add_filter('acf/settings/load_json', static fn(array $paths): array => [...$paths, $dirs['earlier']]);
+        $this->bootBridgeKernel([$dirs['child'], $dirs['parent']]);
+        $localJson = acf_get_instance('ACF_Local_JSON');
+        self::assertInstanceOf(ACF_Local_JSON::class, $localJson);
+        $later = static fn(array $paths): array => [...$paths, $dirs['later']];
+
+        try {
+            self::assertSame([$dirs['earlier'], $dirs['parent'], $dirs['child']], \array_slice($localJson->get_load_paths(), -3));
+            $localJson->scan_files();
+            self::assertSame($dirs['child'] . '/group_tmswp_load_order.json', acf_get_local_json_files()['group_tmswp_load_order'] ?? null);
+            self::assertSame(
+                $dirs['child'] . '/group_tmswp_load_order.json',
+                (new AcfJsonRepository([$dirs['child'], $dirs['parent']]))->load()->fieldGroups[0]->sourceFile,
+            );
+
+            add_filter('acf/settings/load_json', $later, 20);
+            $localJson->scan_files();
+            self::assertSame($dirs['later'] . '/group_tmswp_load_order.json', acf_get_local_json_files()['group_tmswp_load_order'] ?? null);
+        } finally {
+            remove_filter('acf/settings/load_json', $later, 20);
+
+            foreach ($dirs as $dir) {
+                if (is_file($dir . '/group_tmswp_load_order.json')) {
+                    unlink($dir . '/group_tmswp_load_order.json');
+                }
+            }
+
+            $localJson->scan_files();
+        }
+
+        self::assertArrayNotHasKey('group_tmswp_load_order', acf_get_local_json_files());
+    }
+
+    /**
+     * 実物のACFがフィールドグループとして読むJSON(keyがgroup_で始まるもの、keyの接頭辞を問わずfieldsを持つもの)と、
+     * 生成(AcfJsonRepository)がグループとして読むJSONが一致する(docs/09 §3.2)。
+     */
+    public function testAcfAndTheGeneratorReadTheSameJsonAsFieldGroups(): void
+    {
+        $dir = $this->createTempDirectory('acf-kinds') . '/acf-json';
+        self::assertTrue(mkdir($dir));
+        $fields = '"fields": [{"key": "field_tmswp_kinds_%1$s", "name": "tmswp_kinds_%1$s", "label": "%1$s", "type": "text"}]';
+        $files = [
+            'group_tmswp_kinds_plain' => '',
+            'post_type_tmswp_kinds_fields' => \sprintf($fields, 'post_type'),
+            'post_type_tmswp_kinds_bare' => '"post_type": "tmswp_kinds"',
+            'taxonomy_tmswp_kinds_fields' => \sprintf($fields, 'taxonomy'),
+            'taxonomy_tmswp_kinds_bare' => '"taxonomy": "tmswp_kinds"',
+            'ui_options_page_tmswp_kinds_fields' => \sprintf($fields, 'options') . ', "menu_slug": "tmswp-kinds", "post_id": "tmswp_kinds"',
+            'ui_options_page_tmswp_kinds_bare' => '"menu_slug": "tmswp-kinds-bare", "post_id": "tmswp_kinds_bare"',
+            'custom_tmswp_kinds_fields' => \sprintf($fields, 'custom'),
+            'custom_tmswp_kinds_bare' => '"title": "bare"',
+        ];
+
+        foreach ($files as $key => $body) {
+            $this->writeFile("{$dir}/{$key}.json", '{"key": "' . $key . '", "title": "' . $key . '"' . ($body === '' ? '' : ', ' . $body) . '}');
+        }
+
+        $this->bootBridgeKernel([$dir]);
+        $localJson = acf_get_instance('ACF_Local_JSON');
+        self::assertInstanceOf(ACF_Local_JSON::class, $localJson);
+
+        try {
+            $localJson->scan_files();
+            $acfGroups = array_values(array_filter(array_keys(acf_get_local_json_files()), static fn(string $key): bool => str_contains($key, 'tmswp_kinds')));
+            sort($acfGroups);
+            $json = (new AcfJsonRepository([$dir]))->load();
+
+            self::assertSame([
+                'custom_tmswp_kinds_fields',
+                'group_tmswp_kinds_plain',
+                'post_type_tmswp_kinds_fields',
+                'taxonomy_tmswp_kinds_fields',
+                'ui_options_page_tmswp_kinds_fields',
+            ], $acfGroups);
+            self::assertSame($acfGroups, array_map(static fn(FieldGroup $group): string => $group->key, $json->fieldGroups));
+            self::assertSame(['tmswp-kinds' => 'tmswp_kinds', 'tmswp-kinds-bare' => 'tmswp_kinds_bare'], $json->optionsPagePostIds);
+        } finally {
+            foreach (array_keys($files) as $key) {
+                unlink("{$dir}/{$key}.json");
+            }
+
+            $localJson->scan_files();
+        }
     }
 
     /**
@@ -162,6 +281,29 @@ final class AcfBridgeKernelIntegrationTest extends IntegrationTestCase
                 $exception->getMessage(),
             );
         }
+    }
+
+    /**
+     * jsonDirsが$jsonDirsのAcfBridgeを登録した、本番相当のプラグイン形態のKernel(コンポーネントは無い)をinitより前に
+     * bootする。initは発火しない(管理キーの申告は予約だけで、AcfManifestを要しない)。
+     *
+     * @param list<string> $jsonDirs
+     */
+    private function bootBridgeKernel(array $jsonDirs): void
+    {
+        $root = $this->createTempDirectory('acf-load-order-kernel');
+        self::assertTrue(mkdir($root . '/app'));
+        $this->writeFile($root . '/plugin.php', "<?php\n");
+        $namespace = 'TmswpAcfLoadOrder' . uniqid();
+        $config = KernelConfig::plugin(
+            $root . '/plugin.php',
+            $root . '/app',
+            $namespace,
+            false,
+            [new AcfBridge(new BridgeConfig(jsonDirs: $jsonDirs, outputDir: $root . '/app/Acf', namespace: $namespace . '\\Acf'))],
+        );
+        (new DiscoveryFile($config))->write(new DiscoveryResult([], []));
+        $this->bootBeforeInit($config);
     }
 }
 

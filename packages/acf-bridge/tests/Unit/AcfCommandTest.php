@@ -225,6 +225,31 @@ PHP;
     }
 
     /**
+     * acf-jsonの読み込みのE102(トップレベルが配列のJSON)は、syncもcheckもexit 2で止め、ファイルを書かない。読み込みの
+     * 警告(W001)は生成の警告と一緒に出し、check --strictはexit 1にする。
+     */
+    #[RunInSeparateProcess]
+    public function testReadErrorsAndWarningsOfAcfJsonAreReported(): void
+    {
+        $this->loadWpCliDouble();
+        $listed = $this->bootAcfBridgeKernel('Listed', [], ['groups.json' => '[' . self::COMMON_GROUP . ']']);
+        $ignored = $this->bootAcfBridgeKernel('Ignored', [], ['group_common.json' => self::COMMON_GROUP, 'note.json' => '"note"']);
+        $command = new AcfCommand();
+
+        self::assertSame(2, $this->halted(static fn() => $command->sync([], ['app' => $listed['namespace']])));
+        self::assertSame(2, $this->halted(static fn() => $command->check([], ['app' => $listed['namespace']])));
+        [$method, $message] = $this->calls()[0];
+        self::assertSame('line', $method);
+        self::assertIsString($message);
+        self::assertStringStartsWith("E102: ACF JSON file {$listed['root']}/acf-json/groups.json has an array at the top level;", $message);
+        self::assertDirectoryDoesNotExist($listed['root'] . '/app/Acf');
+
+        $command->sync([], ['app' => $ignored['namespace']]);
+        self::assertContains(['line', "W001: ACF JSON file {$ignored['root']}/acf-json/note.json was ignored because its top level is string, not an object"], $this->calls());
+        self::assertSame(1, $this->halted(static fn() => $command->check([], ['app' => $ignored['namespace'], 'strict' => true])));
+    }
+
+    /**
      * @param callable(): void $run
      *
      * @return int WP_CLI::halt()の終了コード

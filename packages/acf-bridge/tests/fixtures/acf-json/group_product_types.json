@@ -938,6 +938,19 @@
                                     "type": "textarea"
                                 }
                             ]
+                        },
+                        {
+                            "key": "layout_t_rows_blank",
+                            "name": "",
+                            "label": "blank",
+                            "sub_fields": [
+                                {
+                                    "key": "field_t_rows_blank_text",
+                                    "name": "text",
+                                    "label": "text",
+                                    "type": "textarea"
+                                }
+                            ]
                         }
                     ]
                 }

@@ -161,7 +161,7 @@ Kernel::boot(KernelConfig::plugin(__FILE__, __DIR__ . '/app', 'Vendor\Plugin', e
 
 1. 構成を決める(渡した`BridgeConfig`、無ければ`BridgeConfig::forKernel($kernel->config())`)。同じインスタンスを2つ目のKernelに登録した場合と、構成の`namespace`がKernelの`appNamespace`(またはその配下)でない場合は`AcfBridgeRuntimeException`(設定の誤り。debugに関係なくbootの例外になる)。
 2. KernelのContainerに自身を`AcfBridge::class`で登録する(acf-bridgeのクラスが登録したKernelを引けるようにする)。
-3. `BridgeConfig::$registerLoadJsonDirs === true`のとき`acf/settings/load_json`フィルタを登録し、`BridgeConfig::$jsonDirs`のうち存在して未登録のディレクトリを加える。
+3. `BridgeConfig::$registerLoadJsonDirs === true`のとき`acf/settings/load_json`フィルタ(priority 10)を登録し、`BridgeConfig::$jsonDirs`のうち存在するディレクトリを、jsonDirsの逆順(jsonDirsの先頭が最後)で並びの末尾に置く。並びに既にあるもの(ACFの既定の`{stylesheet}/acf-json`等)は末尾へ移す。ACFは同じkeyのJSONのうち`load_json`の並びで後のディレクトリのものを使うため、jsonDirsの先のディレクトリ(テーマの既定では子テーマ)のものが使われ、生成(§3.1)と同じファイルになる。ほかのディレクトリとの順は§3.1。
 4. `acf/json/save_paths`フィルタ(ACF 6.2+)を登録する。ACFが実際に読み込んだJSONファイル(`acf_get_local_json_files()`。ACFは`load_json`の並びで後のディレクトリのファイルを使う)が、この構成の`jsonDirs`のどれかにあるグループ等は、管理画面で保存したときの書き込み先をそのディレクトリだけにする。プラグインや親テーマのacf-jsonから読み込んだグループを、ACFの既定の保存先(子テーマの`{stylesheet}/acf-json`)へ書かず、読み込んだacf-jsonへ書き戻すためである。保存のフィルタに渡るグループの配列は読み込み元(`local_file`)を持たないため、ACFの読み込みの結果で判定する。ACFが別のKernelのacf-jsonから読み込んだもの、ACFが読み込んでいないもの(管理画面で新しく作ったグループ)は、保存先を変えない。テーマとプラグインのacf-jsonに同じkeyのファイルがある場合も、ACFが読み込んだ側にだけ書き、もう一方のファイルを上書きしない。プラグインで新しく作ったグループは、そのファイルをプラグインのacf-jsonへ移してからsyncする。
 5. `$kernel->defer('plugins_loaded', 10, ...)`で、有効なACFの版の確認を予約する。ACFはプラグインの読み込み時に`ACF_VERSION`を定義するため、すべてのプラグインを読み込んだ後に確かめる。`ACF_VERSION`が6.2より古ければ`AcfBridgeRuntimeException`(設定の誤り。§1.2)。ACFが無効(`ACF_VERSION`が無い)なら確かめない。
 6. `$kernel->defer('init', 6, ...)`でManifest連携(§7.2)を予約する(ACFの`acf/init`は`init` priority 5で発火するため、その直後)。手順5・6の予約は、発火済みのフックへの予約なら(テーマのKernelの手順5、本番の遅延boot(フックの発火後のboot)の手順5・6)、bootの最後のKernelのキャッチアップの中で(最初に発火した順, priority)の位置で実行される(MetaSchemaのWordPressへの登録(`init` 20)より前。Kernel設計書§3.3)。
@@ -227,25 +227,43 @@ ACF Local JSON 標準に準拠する。
 
 | コンテキスト | 既定探索パス |
 |---|---|
-| テーマ | `get_stylesheet_directory() . '/acf-json'`(子テーマ運用時は `get_template_directory() . '/acf-json'` も追加。同名ファイルは子テーマ優先) |
+| テーマ | `get_stylesheet_directory() . '/acf-json'`(子テーマ運用時は`get_template_directory() . '/acf-json'`も追加。同じkeyは子テーマ優先) |
 | プラグイン | `dirname($pluginFile) . '/acf-json'` |
 | 追加 | `BridgeConfig::$jsonDirs` で任意追加 |
 
-- 対象ファイル: 各ディレクトリ直下の `*.json`(再帰しない。ACF 標準と同じ)。
-- 同一フィールドグループ key のファイルが複数ディレクトリにある場合、`jsonDirs` の並びで先勝ち(テーマ既定では子テーマ優先)。後続は無視し W010 を出す。
+- 対象ファイル: 各ディレクトリ直下の`*.json`(再帰しない。ACF標準と同じ)。ディレクトリの中はファイル名の昇順に読む。
+- 同じkeyのJSONが複数のディレクトリにある場合、`jsonDirs`の並びで先のディレクトリのものを使う(テーマの既定では子テーマ)。後のディレクトリのものは使わずW010を出す。フィールドグループもオプションページ(§3.2)も同じ。
+- 同じディレクトリの中に同じkeyのJSONが2つ以上ある場合はE102。ACFはファイル名の順で後のものを使うため、どの定義が使われるかがファイル名で決まってしまう。どちらかを消すかkeyを変える。
+
+実行時との一致:
+
+- ACF(6.2〜6.8の`ACF_Local_JSON::scan_files()`)は、`acf/settings/load_json`の値に`acf/json/load_paths`フィルタ(ACF 6.2+)を当てた並びの順に各ディレクトリを読み、同じkeyは後に読んだファイルで上書きする。つまり、並びで後のディレクトリのものを使う。
+- AcfBridgeは`load_json`の並びの末尾にjsonDirsを逆順で置く(§2.1の手順3)。そのため、ACFもjsonDirsの先のディレクトリのファイルを使い、生成と一致する。
+- ほかのディレクトリとの順: どのディレクトリのファイルが使われるかは、すべてのフィルタを当てた後の最終的な`get_load_paths()`の並び(後のディレクトリが勝つ)で決まる。AcfBridgeは自分のフィルタの中で並びを決めるだけで、ほかのフィルタの並べ替えを打ち消さない。
+  - AcfBridgeのフィルタより前に並びにあるディレクトリ(ACFの既定のディレクトリ、先に動いたフィルタが加えたもの)は、jsonDirsより前になる。同じkeyではjsonDirsのものが使われる。
+  - AcfBridgeのフィルタより後に動く`load_json`のフィルタ(priorityが10より大きいもの、priority 10で後に登録したもの)や`acf/json/load_paths`フィルタが、ディレクトリを並びの末尾に加えた場合は、そのディレクトリがjsonDirsより後になり、同じkeyではそちらが使われる。それらのフィルタが先頭に加えた場合はjsonDirsが勝ち、並びを入れ替えた場合(jsonDirsの順を変えた場合を含む)は入れ替えた後の並びで決まる。どの場合も、jsonDirsの先のディレクトリ以外のものが使われると、生成(jsonDirsだけを読む)と食い違う。jsonDirsの外に同じkeyのJSONを置かず、jsonDirsの並びを変えるフィルタを使わない。
+  - テーマとプラグインのKernelがそれぞれAcfBridgeを登録した場合は、後に登録したKernel(通常はテーマ。プラグインはテーマより先に読み込まれる)のjsonDirsが後になり、同じkeyではそちらが使われる。Kernelをまたいで同じkeyのJSONを置かない。
+- `registerLoadJsonDirs: false`のときは、`load_json`の並びを利用側が決める。生成と一致させるには、jsonDirsの先のディレクトリを並びの後に置く。
 
 ## 3.2 ファイル種別の判定
 
-ACF 6 系の Local JSON はフィールドグループ以外も保存する。トップレベル `key` のプレフィクスで判定する。
+ACFのLocal JSON(6.2〜6.8の`ACF_Local_JSON::scan_files()`・`get_files()`)と同じ規則で判定する。ACFが読まない形は、黙って読んだり捨てたりせず、E102かW001にする。まず、ファイルの形を次の表で判定する。
 
-| `key` プレフィクス | 種別 | 扱い |
-|---|---|---|
-| `group_` | フィールドグループ | **生成対象** |
-| `ui_options_page_` | ACF オプションページ定義 | location 解決の補助情報(menu_slug → `post_id` 設定)として読む。クラス生成はフィールドグループの location 側から行う(§5.4) |
-| `post_type_` / `taxonomy_` | ACF UI 登録の CPT/タクソノミー | **対象外**。W001 を出す。rules/ で「CPT/タクソノミーは `#[AsPostType]`/`#[AsTaxonomy]` で PHP 宣言する。ACF UI 登録は使用しない」を必須規約とする |
-| その他 / `key` 不在 / JSON 構文エラー | 不明 | JSON 構文エラーは E102、それ以外は W001 で無視 |
+| ファイルの形 | 扱い |
+|---|---|
+| ファイルを読めない、JSONの構文の誤り | E102 |
+| トップレベルが配列(list。複数のグループを1ファイルに入れた手動エクスポートの形。空の配列を含む) | E102。ACFは読まないため、生成と実行時が食い違う。1ファイルに1つのオブジェクトに分ける |
+| トップレベルが配列でない(文字列・数値・`null`等) | W001で無視(ACFも読まない) |
+| オブジェクトで、`key`が無い・空・文字列でない | W001で無視 |
 
-トップレベルが配列(複数グループを 1 ファイルに格納した手動エクスポート形式)の場合は各要素を個別グループとして読む。
+`key`を持つオブジェクトは、同じkeyのJSONのうち使うもの(§3.1)を、次の表で扱う。ACF(6.2〜6.8)の`get_files('acf-field-group')`は、keyが`group_`で始まるものに加え、keyの接頭辞を問わず`fields`を持つ(`isset()`。値が`null`でない)ものをフィールドグループとして読むため、同じ判定にする。1つのJSONが複数の行に当たる場合は、当たるすべての扱いをする。
+
+| 条件 | 扱い |
+|---|---|
+| `key`が`group_`で始まる、または`fields`を持つ | フィールドグループとして**生成対象**(keyの接頭辞が`post_type_`・`taxonomy_`・`ui_options_page_`でも同じ) |
+| `key`が`ui_options_page_`で始まる | ACFオプションページ定義として、location解決の補助情報(menu_slug → `post_id`設定)を読む。クラス生成はフィールドグループのlocation側から行う(§5.4) |
+| `key`が`post_type_` / `taxonomy_`で始まる | ACF UI登録のCPT/タクソノミーの定義は**対象外**。W001を出す(`fields`を持てば、フィールドグループとしては上の行のとおり読む)。rules/で「CPT/タクソノミーは`#[AsPostType]`/`#[AsTaxonomy]`でPHP宣言する。ACF UI登録は使用しない」を必須規約とする |
+| 上のどれにも当たらない(`group_`・`ui_options_page_`・`post_type_`・`taxonomy_`のどれでも始まらず、`fields`を持たない) | 不明。W001で無視 |
 
 ## 3.3 `TMSWP\AcfBridge\Json\AcfJsonRepository`
 
@@ -256,36 +274,43 @@ final class AcfJsonRepository
     public function __construct(private readonly array $jsonDirs) {}
 
     /**
-     * 全フィールドグループを読み込み、正規化して返す。
-     * 並び順はグループ key の昇順(決定性のため)。
-     * @return list<FieldGroup>
+     * 全ディレクトリのJSONを1回ずつ読み、§3.1・§3.2の規則で結果を返す。
+     * @throws GenerationException E102(§3.1・§3.2)
      */
-    public function fieldGroups(): array;
+    public function load(): AcfJsonSource;
+}
 
-    /**
-     * ui_options_page_*.json から menu_slug → post_id 設定のマップを返す。
-     * post_id 未設定のページは含めない。
-     * @return array<string, string>
-     */
-    public function optionsPagePostIds(): array;
-
-    /** 入力ファイル一覧(パス昇順)。ドリフト検知のハッシュ計算に使う。 @return list<string> */
-    public function sourceFiles(): array;
-
-    /**
-     * 正規化済み入力のハッシュ。
-     * sha256( JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE で再エンコードした
-     *         グループ配列(key昇順、modified フィールドは除外) )
-     */
-    public function sourceHash(): string;
+final readonly class AcfJsonSource
+{
+    public function __construct(
+        /** @var list<FieldGroup> 使うフィールドグループ。並び順はグループkeyの昇順(決定性のため) */
+        public array $fieldGroups,
+        /** @var array<string, string> ui_options_pageのmenu_slug → post_id設定。post_id未設定のページは含めない */
+        public array $optionsPagePostIds,
+        /** @var list<string> 読み込みの警告(W001・W010) */
+        public array $warnings,
+        /**
+         * 正規化済み入力のハッシュ。
+         * sha256( JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODEで再エンコードした
+         *         $fieldGroupsの元の配列(key昇順、modifiedフィールドは除外。オブジェクトのキーは並べ替え、
+         *         flexible_contentのフィールドのlayoutsはJSONの順のまま) )
+         */
+        public string $sourceHash,
+    ) {}
 }
 ```
+
+生成(`wp tmswp acf sync` / `check`)は、`load()`の結果だけを使う(各JSONを1回だけ読む)。
 
 正規化仕様:
 
 - `FieldGroup` は `key` / `title` / `fields`(`FieldDefinition` のリスト、JSON 出現順を維持)/ `location`(生の二重配列)/ `active` を持つ readonly DTO。`active: false`(無効化グループ)は生成対象外とし W011 を出す。
-- `FieldDefinition` は `key` / `name` / `label` / `type` / `required`(bool)/ `returnFormat`(?string)/ `multiple`(bool)/ `fieldType`(?string, taxonomy用)/ `subFields`(list<FieldDefinition>)/ `layouts`(flexible用: name → list<FieldDefinition>)/ `raw`(元配列, array<string,mixed>)を持つ readonly DTO。
+- `FieldDefinition`は`key` / `name` / `label` / `type` / `required`(bool)/ `returnFormat`(?string)/ `multiple`(bool)/ `fieldType`(?string, taxonomy用)/ `subFields`(list<FieldDefinition>)/ `layouts`(flexible用: list<FlexibleLayout>)/ `raw`(元配列, array<string,mixed>)を持つreadonly DTO。
+- `FlexibleLayout`は`name`(string)/ `subFields`(list<FieldDefinition>)を持つreadonly DTO。`layouts`はJSONの順を保ち、生成するレイアウトのshapeと正規化の関数もその順に並ぶ。数字だけのname(`'0'`等)も文字列のまま持つ。生成は次のレイアウトをE002にする(全階層のflexible_contentに当てはめる)。
+  - 同じフィールドの中の、同じnameのレイアウト(ACFの行の`acf_fc_layout`からレイアウトを決められない)
+  - PHPが配列のキーで整数に変えるname(10進の整数の文字列。`0`・`12`等)。生成する、レイアウトの名前をキーにした正規化の関数の配列(traitの`acfLayouts()`の引数。`array<string, Closure>`)が、その名前を文字列のキーで持てないためである
 - ハッシュから `modified`(ACF が保存毎に更新するタイムスタンプ)を除外することで、無意味なドリフト検出を防ぐ。**それ以外のキーはすべてハッシュに含める**(label 変更等も再生成対象。生成コードの PHPDoc に label を含めるため)。
+- ハッシュは、オブジェクトのキーの順に依存しないようキーを並べ替えるが、`type`が`flexible_content`のフィールドの定義の`layouts`(ACFはレイアウトのkeyをキーにしたオブジェクトで保存する)は並べ替えない。レイアウトの順は生成コードの順になるため、順だけを変えてもハッシュが変わる。それ以外の`layouts`というキー(groupの`metadata`・selectの`choices`の中等)は、ほかのオブジェクトと同じくキーを並べ替える。`modified`は、flexible_contentの`layouts`の直下を含め、全階層で除く。
 
 ---
 
@@ -632,13 +657,13 @@ final class Report
 | コード | 区分 | 内容 |
 |---|---|---|
 | E001 | エラー | 同一ターゲットにマージされる複数グループ間でフィールド名が重複 |
-| E002 | エラー | メソッド名・定数名の衝突(予約名・ほかのフィールドとの衝突。メソッド名は大文字小文字を区別しない)、クラス定数に使えない名前(`class`)、サブフィールドの名前の重複・`acf_fc_layout`・10進の整数の名前(§5.5) |
+| E002 | エラー | メソッド名・定数名の衝突(予約名・ほかのフィールドとの衝突。メソッド名は大文字小文字を区別しない)、クラス定数に使えない名前(`class`)、サブフィールドの名前の重複・`acf_fc_layout`・10進の整数の名前(§5.5)、flexible_contentのレイアウトの名前の重複・10進の整数の名前(§3.3) |
 | E003 | エラー | クラス名衝突、studly 変換不能、classMap の不正指定 |
 | E004 | エラー | clone フィールドの参照先(field key / group key)が acf-json 内に見つからない |
 | E005 | エラー | clone の循環参照 |
 | E101 | エラー | `#[MetaSchema]` 宣言と ACF 管理下キーの重複(§7.3。check 時に静的検出) |
-| E102 | エラー | JSON 構文エラー、出力先書込不可、設定不備 |
-| W001 | 警告 | 非対象 JSON(post_type_*/taxonomy_*/不明種別)を無視した |
+| E102 | エラー | JSON構文エラー、トップレベルが配列のJSON、同じディレクトリの中の同じkeyのJSON(§3.1・§3.2)、出力先書込不可、設定不備 |
+| W001 | 警告 | 非対象JSON(post_type_*/taxonomy_*/不明種別、トップレベルが配列でないJSON、keyの無いJSON。§3.2)を無視した |
 | W002 | 警告 | location を解決できずグループ(または AND グループ)をスキップ |
 | W003 | 警告 | `post`(個別 ID)条件は静的解決不能 |
 | W004 | 警告 | 同一 AND グループ内の複数対象条件に優先順位を適用した |
@@ -646,7 +671,7 @@ final class Report
 | W006 | 警告 | 非対応 location パラメータ(comment/widget/block 等)をスキップ |
 | W007 | 警告 | 不成立 AND 条件(同一 param の == 重複) |
 | W009 | 警告 | ASCII snake_case でないフィールド名のためアクセサ未生成 |
-| W010 | 警告 | 複数ディレクトリに同一グループ key(先勝ち適用) |
+| W010 | 警告 | 複数ディレクトリに同じkeyのJSON(jsonDirsの先のディレクトリのものを使う。§3.1) |
 | W011 | 警告 | `active: false` のグループをスキップ |
 | I001 | 情報 | acf-json に裏付けのない PHP 登録グループを検出(生成対象外) |
 | I002 | 情報 | outputDir に `@generated` マーカーの無いファイルが存在(削除しない) |

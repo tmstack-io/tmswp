@@ -154,6 +154,27 @@ PHP;
     }
 
     /**
+     * ACFは同じkeyのJSONのうちload_jsonの後のディレクトリのものを使うため、jsonDirs(先のディレクトリのものを使う)を
+     * 逆順でload_jsonの末尾に置く。並びに既にあるもの(ACFの既定の子テーマのacf-json等)は末尾へ移し、ほかの
+     * ディレクトリ(存在しないjsonDirsを含む)は元の順で前に残す。
+     */
+    public function testLoadJsonPutsTheFirstJsonDirLast(): void
+    {
+        $loadJson = null;
+        Filters\expectAdded('acf/settings/load_json')->once()->whenHappen(static function (Closure $callback) use (&$loadJson): void {
+            $loadJson = $callback;
+        });
+        $app = $this->bootAcfBridgeKernel('Order', ['Acf/AcfManifest.php' => self::MANIFEST], moreJsonDirs: ['parent-json', 'missing-json']);
+        $child = $app['root'] . '/acf-json';
+        $parent = $app['root'] . '/parent-json';
+        self::assertTrue(rmdir($app['root'] . '/missing-json'));
+
+        self::assertInstanceOf(Closure::class, $loadJson);
+        self::assertSame([$parent, $child], $loadJson([]));
+        self::assertSame(['/plugin/acf-json', '/other/acf-json', $parent, $child], $loadJson([$child . '/', '/plugin/acf-json', $parent, '/other/acf-json', $child]));
+    }
+
+    /**
      * @return iterable<string, array{mixed, bool}>
      */
     public static function acfVersionProvider(): iterable

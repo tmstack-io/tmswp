@@ -226,7 +226,8 @@ final class Generator
     /**
      * フィールドの型を検査する。未知の型はW005(入れ子のサブフィールドも)。group・repeater・flexible_contentの
      * サブフィールドの名前の重複と、flexible_contentのレイアウトのacf_fc_layoutという名前のサブフィールドは、生成する
-     * 配列のキーが重なるためE002にしてfalseを返す。
+     * 配列のキーが重なるためE002にしてfalseを返す。flexible_contentのレイアウトの名前の重複と、PHPが整数のキーにする
+     * レイアウトの名前も、生成するレイアウトごとの配列のキーにできないためE002にしてfalseを返す。
      *
      * @param string $path 警告とエラーに出すフィールドの位置(`stores.shop_name`の形)
      * @param list<string> $errors
@@ -245,8 +246,24 @@ final class Generator
         }
 
         if ($field->type === 'flexible_content') {
-            foreach ($field->layouts as $layoutName => $layoutFields) {
-                $valid = $this->checkSubFields($layoutFields, $path, $groupKey, $layoutName, $errors, $warnings) && $valid;
+            $layoutNames = [];
+
+            foreach ($field->layouts as $layout) {
+                // 生成する`レイアウトの名前 => 正規化の関数`の配列のキーになるため、PHPが整数にする名前は文字列のキーで持てない
+                if (\is_int(array_key_first([$layout->name => true]))) {
+                    $errors[] = "E002: ACF field '{$path}' in group '{$groupKey}' has a layout named '{$layout->name}', which PHP converts to the integer array key {$layout->name}, so the generated accessor cannot map it to the normalizer of its rows; rename the layout in ACF to a name that is not a decimal integer";
+                    $valid = false;
+                    continue;
+                }
+
+                if (\array_key_exists($layout->name, $layoutNames)) {
+                    $errors[] = "E002: ACF field '{$path}' in group '{$groupKey}' has more than one layout named '{$layout->name}'; rename one of them";
+                    $valid = false;
+                    continue;
+                }
+
+                $layoutNames[$layout->name] = true;
+                $valid = $this->checkSubFields($layout->subFields, $path, $groupKey, $layout->name, $errors, $warnings) && $valid;
             }
         }
 
@@ -646,9 +663,9 @@ final class Generator
         $entryIndent = $indent . '    ';
         $lines = ['['];
 
-        foreach ($field->layouts as $layoutName => $layoutFields) {
-            $closure = $this->shapeClosure('row', $layoutFields, $layoutName, $entryIndent, $imports);
-            $lines = [...$lines, ...$this->wrapped($entryIndent . $this->phpString($layoutName) . ' => ', $closure, ',')];
+        foreach ($field->layouts as $layout) {
+            $closure = $this->shapeClosure('row', $layout->subFields, $layout->name, $entryIndent, $imports);
+            $lines = [...$lines, ...$this->wrapped($entryIndent . $this->phpString($layout->name) . ' => ', $closure, ',')];
         }
 
         $lines[] = $indent . ']';

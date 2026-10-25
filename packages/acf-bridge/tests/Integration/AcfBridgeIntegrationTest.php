@@ -1528,11 +1528,11 @@ PHP);
     private function generateThemeFieldsInto(string $namespace): string
     {
         $outputDir = $this->createTempDirectory('acf-generated');
-        $repository = new AcfJsonRepository([get_stylesheet_directory() . '/acf-json']);
-        $report = (new Generator())->generate($repository->fieldGroups(), new GeneratorContext(
+        $json = (new AcfJsonRepository([get_stylesheet_directory() . '/acf-json']))->load();
+        $report = (new Generator())->generate($json->fieldGroups, new GeneratorContext(
             config: new BridgeConfig(jsonDirs: [], outputDir: $outputDir, namespace: $namespace),
-            optionsPagePostIds: $repository->optionsPagePostIds(),
-            sourceHash: $repository->sourceHash(),
+            optionsPagePostIds: $json->optionsPagePostIds,
+            sourceHash: $json->sourceHash,
         ));
         self::assertSame([], $report->errors());
 

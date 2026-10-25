@@ -203,10 +203,11 @@ final class TypeMapper
      * リテラルはそのまま書く。サブフィールドのsetterは生成しないため、そのsetter側の型の参照は生成クラスのuseに記録しない。
      *
      * @param list<FieldDefinition> $fields
+     * @param string|null $layout flexible_contentのレイアウトの名前(空の名前もそのリテラルにする)。nullはレイアウトでない
      */
-    private function shape(array $fields, ClassImports $imports, string $layout = ''): string
+    private function shape(array $fields, ClassImports $imports, ?string $layout = null): string
     {
-        $parts = $layout === '' ? [] : ["acf_fc_layout: '" . str_replace(['\\', "'"], ['\\\\', "\\'"], $layout) . "'"];
+        $parts = $layout === null ? [] : ["acf_fc_layout: '" . str_replace(['\\', "'"], ['\\\\', "\\'"], $layout) . "'"];
 
         foreach ($this->valueFields($fields) as $subField) {
             $parts[] = self::shapeKey($subField->name) . ': ' . $this->map($subField, $imports, ClassImports::discarding())->getterDocType;
@@ -220,8 +221,8 @@ final class TypeMapper
     {
         $shapes = [];
 
-        foreach ($field->layouts as $layoutName => $layoutFields) {
-            $shapes[] = $this->shape($layoutFields, $imports, $layoutName);
+        foreach ($field->layouts as $layout) {
+            $shapes[] = $this->shape($layout->subFields, $imports, $layout->name);
         }
 
         return implode('|', $shapes);

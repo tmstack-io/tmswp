@@ -72,7 +72,7 @@ final class GeneratorTest extends UnitTestCase
 
     /**
      * group・repeater・flexible_contentのgetterは、サブフィールドごとに値を受け取るヘルパ(`*Of()`)を呼ぶ関数を生成し、
-     * 入れ子を全階層で正規化する。位置は`$path . '.名前'`で渡す。
+     * 入れ子を全階層で正規化する。位置は`$path . '.名前'`で渡す。flexible_contentのレイアウトはJSONの順に並べる。
      */
     public function testNestedFieldsAreNormalizedPerSubField(): void
     {
@@ -92,9 +92,6 @@ final class GeneratorTest extends UnitTestCase
             PHP, $product);
         self::assertStringContainsString(<<<'PHP'
                     return $this->acfLayouts(self::KEY_SECTIONS, [
-                        'divider' => fn(array $row, string $path): array => [
-                            'acf_fc_layout' => 'divider',
-                        ],
                         'hero' => fn(array $row, string $path): array => [
                             'acf_fc_layout' => 'hero',
                             'title' => $this->acfStringOf($row['title'] ?? null, $path . '.title'),
@@ -103,6 +100,14 @@ final class GeneratorTest extends UnitTestCase
                                 'link' => $this->acfLinkOf($row['link'] ?? null, $path . '.link'),
                             ]),
                         ],
+                        'text_block' => fn(array $row, string $path): array => [
+                            'acf_fc_layout' => 'text_block',
+                            'body' => $this->acfStringOf($row['body'] ?? null, $path . '.body'),
+                        ],
+                        'divider' => fn(array $row, string $path): array => [
+                            'acf_fc_layout' => 'divider',
+                        ],
+                    ]);
             PHP, $product);
         self::assertStringContainsString("'メモ' => \$this->acfStringOf(\$row['メモ'] ?? null, \$path . '.メモ'),", $product);
         self::assertStringContainsString("'map' => \$row['map'] ?? null,", $product);
@@ -353,6 +358,29 @@ final class GeneratorTest extends UnitTestCase
             [['key' => 'field_rows', 'name' => 'rows', 'label' => 'rows', 'type' => 'repeater', 'sub_fields' => [['key' => 'field_inner', 'name' => 'inner', 'label' => 'inner', 'type' => 'group', 'sub_fields' => [self::text('1')]]]]],
             [],
             "E002: ACF field 'rows.inner' in group 'group_names' has a sub field named '1', which PHP converts to the integer array key 1, so the generated accessor cannot return it as a field name; rename the sub field in ACF to a name that is not a decimal integer",
+        ];
+        yield 'duplicate layouts' => [
+            [['key' => 'field_sections', 'name' => 'sections', 'label' => 'sections', 'type' => 'flexible_content', 'layouts' => [
+                ['name' => 'hero', 'sub_fields' => [self::text('title')]],
+                ['name' => 'hero', 'sub_fields' => [self::text('body')]],
+            ]]],
+            [],
+            "E002: ACF field 'sections' in group 'group_names' has more than one layout named 'hero'; rename one of them",
+        ];
+        yield 'decimal integer layout name' => [
+            [['key' => 'field_sections', 'name' => 'sections', 'label' => 'sections', 'type' => 'flexible_content', 'layouts' => [
+                ['name' => 'hero', 'sub_fields' => [self::text('title')]],
+                ['name' => '0', 'sub_fields' => [self::text('body')]],
+            ]]],
+            [],
+            "E002: ACF field 'sections' in group 'group_names' has a layout named '0', which PHP converts to the integer array key 0, so the generated accessor cannot map it to the normalizer of its rows; rename the layout in ACF to a name that is not a decimal integer",
+        ];
+        yield 'decimal integer layout name in a nested flexible content' => [
+            [['key' => 'field_box', 'name' => 'box', 'label' => 'box', 'type' => 'group', 'sub_fields' => [
+                ['key' => 'field_blocks', 'name' => 'blocks', 'label' => 'blocks', 'type' => 'flexible_content', 'layouts' => [['name' => '12', 'sub_fields' => []]]],
+            ]]],
+            [],
+            "E002: ACF field 'box.blocks' in group 'group_names' has a layout named '12', which PHP converts to the integer array key 12, so the generated accessor cannot map it to the normalizer of its rows; rename the layout in ACF to a name that is not a decimal integer",
         ];
         yield 'acf_fc_layout sub field' => [
             [['key' => 'field_sections', 'name' => 'sections', 'label' => 'sections', 'type' => 'flexible_content', 'layouts' => [['name' => 'hero', 'sub_fields' => [self::text('acf_fc_layout')]]]]],
@@ -711,7 +739,7 @@ final class GeneratorTest extends UnitTestCase
 
     private function generateFixture(): Report
     {
-        $repository = new AcfJsonRepository([__DIR__ . '/../fixtures/acf-json']);
+        $json = (new AcfJsonRepository([__DIR__ . '/../fixtures/acf-json']))->load();
         $config = new BridgeConfig(
             jsonDirs: [],
             outputDir: self::EXPECTED_APP,
@@ -720,11 +748,11 @@ final class GeneratorTest extends UnitTestCase
         );
 
         return (new Generator())->generate(
-            $repository->fieldGroups(),
+            $json->fieldGroups,
             new GeneratorContext(
                 config: $config,
-                optionsPagePostIds: $repository->optionsPagePostIds(),
-                sourceHash: $repository->sourceHash(),
+                optionsPagePostIds: $json->optionsPagePostIds,
+                sourceHash: $json->sourceHash,
             ),
         );
     }

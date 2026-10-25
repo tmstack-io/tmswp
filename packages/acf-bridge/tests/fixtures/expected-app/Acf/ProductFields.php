@@ -1925,7 +1925,7 @@ final class ProductFields
     /**
      * 行 (repeater, group_product_types)
      *
-     * @return list<array{title: string, choice: string|null, amount: int|float|null, photo_id: int|null, enabled: bool, tags: list<string>, photo_ids: list<int>, post: WP_Post|null, posts: list<WP_Post>, photo: AcfImage|null, attachment: AcfFile|null, photos: list<AcfImage>, link: AcfLink|null, choice_array: AcfChoice|null, tags_array: list<AcfChoice>, author: AcfUserArray|null, authors: list<AcfUserArray>, color: AcfColorRgba|null, day: string, map: mixed, 'メモ': string, detail: array{summary: string, user: WP_User|null}|null, blocks: list<array{acf_fc_layout: 'quote', text: string}>}>
+     * @return list<array{title: string, choice: string|null, amount: int|float|null, photo_id: int|null, enabled: bool, tags: list<string>, photo_ids: list<int>, post: WP_Post|null, posts: list<WP_Post>, photo: AcfImage|null, attachment: AcfFile|null, photos: list<AcfImage>, link: AcfLink|null, choice_array: AcfChoice|null, tags_array: list<AcfChoice>, author: AcfUserArray|null, authors: list<AcfUserArray>, color: AcfColorRgba|null, day: string, map: mixed, 'メモ': string, detail: array{summary: string, user: WP_User|null}|null, blocks: list<array{acf_fc_layout: 'quote', text: string}|array{acf_fc_layout: '', text: string}>}>
      */
     public function rowsValue(): array
     {
@@ -1960,6 +1960,10 @@ final class ProductFields
                     'acf_fc_layout' => 'quote',
                     'text' => $this->acfStringOf($row['text'] ?? null, $path . '.text'),
                 ],
+                '' => fn(array $row, string $path): array => [
+                    'acf_fc_layout' => '',
+                    'text' => $this->acfStringOf($row['text'] ?? null, $path . '.text'),
+                ],
             ]),
         ]);
     }
@@ -1983,14 +1987,11 @@ final class ProductFields
     /**
      * セクション (flexible_content, group_product_types)
      *
-     * @return list<array{acf_fc_layout: 'divider'}|array{acf_fc_layout: 'hero', title: string, image: int|null, buttons: list<array{link: AcfLink|null}>}|array{acf_fc_layout: 'text_block', body: string}>
+     * @return list<array{acf_fc_layout: 'hero', title: string, image: int|null, buttons: list<array{link: AcfLink|null}>}|array{acf_fc_layout: 'text_block', body: string}|array{acf_fc_layout: 'divider'}>
      */
     public function sections(): array
     {
         return $this->acfLayouts(self::KEY_SECTIONS, [
-            'divider' => fn(array $row, string $path): array => [
-                'acf_fc_layout' => 'divider',
-            ],
             'hero' => fn(array $row, string $path): array => [
                 'acf_fc_layout' => 'hero',
                 'title' => $this->acfStringOf($row['title'] ?? null, $path . '.title'),
@@ -2002,6 +2003,9 @@ final class ProductFields
             'text_block' => fn(array $row, string $path): array => [
                 'acf_fc_layout' => 'text_block',
                 'body' => $this->acfStringOf($row['body'] ?? null, $path . '.body'),
+            ],
+            'divider' => fn(array $row, string $path): array => [
+                'acf_fc_layout' => 'divider',
             ],
         ]);
     }

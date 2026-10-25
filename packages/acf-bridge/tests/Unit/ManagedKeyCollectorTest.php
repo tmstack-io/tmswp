@@ -25,11 +25,11 @@ final class ManagedKeyCollectorTest extends UnitTestCase
      */
     public function testItCollectsTheKeysOfTheExpectedManifestInTheSameOrder(): void
     {
-        $repository = new AcfJsonRepository([__DIR__ . '/../fixtures/acf-json']);
+        $groups = (new AcfJsonRepository([__DIR__ . '/../fixtures/acf-json']))->load()->fieldGroups;
         $config = new BridgeConfig([], '/tmp/acf', 'App\Acf', methodNameMap: ['group_product.店舗名' => 'storeName']);
         $errors = [];
 
-        $keys = (new ManagedKeyCollector())->collect((new CloneResolver())->resolve($repository->fieldGroups(), $errors), $config);
+        $keys = (new ManagedKeyCollector())->collect((new CloneResolver())->resolve($groups, $errors), $config);
         $manifest = file_get_contents(__DIR__ . '/../fixtures/expected-app/Acf/AcfManifest.php');
         self::assertIsString($manifest);
 

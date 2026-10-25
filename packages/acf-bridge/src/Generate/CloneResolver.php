@@ -6,6 +6,7 @@ namespace TMSWP\AcfBridge\Generate;
 
 use TMSWP\AcfBridge\Json\FieldDefinition;
 use TMSWP\AcfBridge\Json\FieldGroup;
+use TMSWP\AcfBridge\Json\FlexibleLayout;
 
 final class CloneResolver
 {
@@ -66,8 +67,8 @@ final class CloneResolver
             $this->indexField($subField);
         }
 
-        foreach ($field->layouts as $layoutFields) {
-            foreach ($layoutFields as $layoutField) {
+        foreach ($field->layouts as $layout) {
+            foreach ($layout->subFields as $layoutField) {
                 $this->indexField($layoutField);
             }
         }
@@ -107,8 +108,8 @@ final class CloneResolver
 
         $layouts = [];
 
-        foreach ($field->layouts as $layoutName => $layoutFields) {
-            $layouts[$layoutName] = $this->resolveFields($layoutFields, $groupKey, [...$stack, $field->key, $layoutName], $errors);
+        foreach ($field->layouts as $layout) {
+            $layouts[] = new FlexibleLayout($layout->name, $this->resolveFields($layout->subFields, $groupKey, [...$stack, $field->key, $layout->name], $errors));
         }
 
         return [
@@ -270,7 +271,7 @@ final class CloneResolver
 
     /**
      * @param list<FieldDefinition> $subFields
-     * @param array<string, list<FieldDefinition>> $layouts
+     * @param list<FlexibleLayout> $layouts
      */
     private function fieldWith(FieldDefinition $field, string $name, string $type, array $subFields, array $layouts): FieldDefinition
     {
