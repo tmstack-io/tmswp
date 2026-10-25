@@ -13,6 +13,7 @@ use stdClass;
 use TMSWP\AcfBridge\AcfMetaStorage;
 use TMSWP\AcfBridge\BridgeConfig;
 use TMSWP\AcfBridge\Exception\AcfBridgeRuntimeException;
+use TMSWP\AcfBridge\Generate\GeneratedFile;
 use TMSWP\AcfBridge\Generate\Generator;
 use TMSWP\AcfBridge\Generate\GeneratorContext;
 use TMSWP\AcfBridge\Json\AcfJsonRepository;
@@ -44,8 +45,9 @@ use WP_User;
  * フィールドのprice(既定値'0')と、ACFのフィールドでないtmswp_acf_stored_note(既定値'none')を宣言する。
  *
  * AcfFieldAccessのヘルパは、実行時に宣言するプローブのクラス(AcfAccessProbe)で呼ぶ。プローブを置く名前空間で、
- * 形の不一致の扱いを決めるKernel(fixtureのテーマはdebug、本番相当のKernelはdebugでない)が決まる。プローブが読む
- * キーはACFのフィールドではなく、get_field()は保存したメタをそのまま返す。
+ * 形の不一致の扱いを決めるKernel(fixtureのテーマはdebug、本番相当のKernelはdebugでない)が決まる。プローブは、
+ * set_up()がACFのローカルのフィールドグループとして登録するtextのフィールド(keyは`field_{名前}`)を、生成アクセサと
+ * 同じくkeyで読み書きする。textのフィールドはフォーマットで値を変えないため、get_field()は保存したメタをそのまま返す。
  */
 final class AcfBridgeIntegrationTest extends IntegrationTestCase
 {
@@ -58,6 +60,39 @@ final class AcfBridgeIntegrationTest extends IntegrationTestCase
 
     /** fixtureのacf-json(group_tmswp_acf_contract.json)のtextフィールド */
     private const CONTRACT_KEY = 'tmswp_acf_contract_single';
+
+    /** プローブが読み書きするtextのフィールドの名前(set_up()がACFに登録する) */
+    private const PROBE_FIELDS = [
+        'tmswp_probe_absent',
+        'tmswp_probe_array',
+        'tmswp_probe_date',
+        'tmswp_probe_datetime',
+        'tmswp_probe_dst',
+        'tmswp_probe_dst_part',
+        'tmswp_probe_empty',
+        'tmswp_probe_exponent',
+        'tmswp_probe_float',
+        'tmswp_probe_gallery',
+        'tmswp_probe_group',
+        'tmswp_probe_ids',
+        'tmswp_probe_int',
+        'tmswp_probe_list',
+        'tmswp_probe_nul',
+        'tmswp_probe_overflow',
+        'tmswp_probe_text',
+        'tmswp_probe_word',
+    ];
+
+    private const FIELDS_CLASS = self::THEME_NAMESPACE . '\\Acf\\TmswpAcfPostFields';
+
+    public function set_up(): void
+    {
+        parent::set_up();
+        self::registerLocalFieldGroup('group_tmswp_probe', array_map(
+            static fn(string $name): array => ['key' => 'field_' . $name, 'name' => $name, 'label' => $name, 'type' => 'text'],
+            self::PROBE_FIELDS,
+        ));
+    }
 
     public function tear_down(): void
     {
@@ -325,15 +360,15 @@ final class AcfBridgeIntegrationTest extends IntegrationTestCase
             self::assertNull($probe->number($name), $name);
             self::assertNull($probe->int($name), $name);
             self::assertFalse($probe->bool($name), $name);
-            self::assertSame([], $probe->list($name), $name);
+            self::assertSame([], $probe->rows($name), $name);
             self::assertSame([], $probe->intList($name), $name);
-            self::assertNull($probe->nullableArray($name), $name);
+            self::assertNull($probe->group($name), $name);
             self::assertNull($probe->image($name), $name);
             self::assertSame([], $probe->imageList($name), $name);
             self::assertNull($probe->dateTime($name, 'Ymd'), $name);
         }
 
-        self::assertNull($probe->nullableArray('tmswp_probe_group'));
+        self::assertNull($probe->group('tmswp_probe_group'));
         self::assertSame(12, $probe->number('tmswp_probe_int'));
         self::assertSame(12, $probe->int('tmswp_probe_int'));
         self::assertSame(1.5, $probe->number('tmswp_probe_float'));
@@ -355,8 +390,8 @@ final class AcfBridgeIntegrationTest extends IntegrationTestCase
             'string' => [static fn(): string => $probe->string('tmswp_probe_array'), "'tmswp_probe_array'", 'expected string, got array'],
             'number' => [static fn(): int|float|null => $probe->number('tmswp_probe_word'), "'tmswp_probe_word'", 'expected number, got string'],
             'int' => [static fn(): ?int => $probe->int('tmswp_probe_float'), "'tmswp_probe_float'", 'expected int, got float'],
-            'nullableArray' => [static fn(): ?array => $probe->nullableArray('tmswp_probe_list'), "'tmswp_probe_list'", 'expected array with string keys, got list'],
-            'list' => [static fn(): array => $probe->list('tmswp_probe_array'), "'tmswp_probe_array'", 'expected list, got array with string keys'],
+            'group' => [static fn(): ?array => $probe->group('tmswp_probe_list'), "'tmswp_probe_list'", 'expected array with string keys, got list'],
+            'rows' => [static fn(): array => $probe->rows('tmswp_probe_array'), "'tmswp_probe_array'", 'expected list, got array with string keys'],
             'image' => [static fn(): ?array => $probe->image('tmswp_probe_array'), "'tmswp_probe_array'", 'expected AcfImage, got array of another shape'],
         ];
 
@@ -383,7 +418,7 @@ final class AcfBridgeIntegrationTest extends IntegrationTestCase
         $probe = $probeClass::of($postId);
 
         self::assertSame('', $probe->string('tmswp_probe_array'));
-        self::assertSame([], $probe->list('tmswp_probe_array'));
+        self::assertSame([], $probe->rows('tmswp_probe_array'));
         self::assertNull($probe->image('tmswp_probe_array'));
 
         self::assertSame([
@@ -1055,6 +1090,133 @@ final class AcfBridgeIntegrationTest extends IntegrationTestCase
     }
 
     /**
+     * 生成アクセサはfield keyでACFを呼ぶ。参照のメタ(`_{名前}`)の無い投稿でも、getterはフィールドの型でフォーマットした
+     * 値を返し(名前で呼ぶとACFはダミーのフィールドでrawを返す)、delete*()は値を消す(名前で呼ぶとACFは何も消さない)。
+     * setterは未保存の投稿にも参照のメタにフィールドのkeyを書き、has*()は保存した値の有無を返す。
+     */
+    public function testGeneratedAccessorsCallAcfByFieldKey(): void
+    {
+        $postId = self::createPost('tmswp_acf_post');
+        $image = self::createAttachment('image/jpeg', $postId);
+        update_post_meta($postId, 'main_image', $image);
+        update_post_meta($postId, 'subtitle', 'stored without reference');
+        self::assertSame([], get_post_meta($postId, '_main_image'));
+        self::assertSame([], get_post_meta($postId, '_subtitle'));
+        $fields = self::fieldsOf(self::FIELDS_CLASS, $postId);
+
+        $readImage = self::callOn($fields, 'mainImage');
+        self::assertIsArray($readImage);
+        self::assertSame($image, $readImage['ID']);
+        self::assertSame((string) $image, get_field('main_image', $postId));
+
+        self::assertTrue(self::callOn($fields, 'hasSubtitle'));
+        self::assertFalse(delete_field('subtitle', $postId));
+        self::assertSame('stored without reference', get_post_meta($postId, 'subtitle', true));
+        self::assertTrue(self::callOn($fields, 'deleteSubtitle'));
+        self::assertSame([], get_post_meta($postId, 'subtitle'));
+        self::assertFalse(self::callOn($fields, 'hasSubtitle'));
+
+        $freshId = self::createPost('tmswp_acf_post');
+        $fresh = self::fieldsOf(self::FIELDS_CLASS, $freshId);
+        self::assertFalse(self::callOn($fresh, 'hasSubtitle'));
+        self::callOn($fresh, 'setSubtitle', 'written by key');
+        self::assertSame('written by key', get_post_meta($freshId, 'subtitle', true));
+        self::assertSame('field_tmswp_acf_post_subtitle', get_post_meta($freshId, '_subtitle', true));
+        self::assertSame('written by key', self::callOn($fresh, 'subtitle'));
+        self::assertTrue(self::callOn($fresh, 'hasSubtitle'));
+    }
+
+    /**
+     * keyのフィールドがACFに登録されていないこと(acf-jsonと生成クラスの食い違い)は設定の誤りで、debugでない本番の
+     * Kernelでも、生成アクセサの読み書きは、ダミーのフィールドで別のメタを読み書きせずにAcfBridgeRuntimeExceptionになる。
+     */
+    public function testUnregisteredFieldKeyIsAConfigurationErrorEvenInProduction(): void
+    {
+        $logger = new RecordingLogger();
+        $class = $this->generateFieldsInto($this->productionKernel('Unregistered', $logger)->config()->appNamespace . '\\Acf', FieldGroup::fromArray([
+            'key' => 'group_tmswp_unregistered',
+            'title' => 'Unregistered',
+            'location' => [[['param' => 'post_type', 'operator' => '==', 'value' => 'tmswp_acf_post']]],
+            'fields' => [['key' => 'field_tmswp_unregistered', 'name' => 'tmswp_unregistered', 'label' => 'Unregistered', 'type' => 'text']],
+        ], 'acf-json/group_tmswp_unregistered.json'));
+        $postId = self::createPost('tmswp_acf_post');
+        $fields = self::fieldsOf($class, $postId);
+        $calls = [
+            'tmswpUnregistered' => ['acfString', []],
+            'setTmswpUnregistered' => ['acfUpdate', ['value']],
+            'hasTmswpUnregistered' => ['acfHas', []],
+            'deleteTmswpUnregistered' => ['acfDelete', []],
+        ];
+
+        foreach ($calls as $method => [$helper, $arguments]) {
+            try {
+                self::callOn($fields, $method, ...$arguments);
+                self::fail("AcfBridgeRuntimeException was not thrown for {$method}");
+            } catch (AcfBridgeRuntimeException $exception) {
+                self::assertStringStartsWith("ACF field key 'field_tmswp_unregistered' used by {$class}::{$helper}() is not registered in ACF.", $exception->getMessage(), $method);
+            }
+        }
+
+        self::assertSame([], get_post_meta($postId, 'tmswp_unregistered'));
+        self::assertSame([], get_post_meta($postId, 'field_tmswp_unregistered'));
+        self::assertSame([], $logger->records);
+    }
+
+    /**
+     * 生成したof()は、IDが0のWP_Post・0・負のIDをInvalidArgumentExceptionにする(ACFはpost_idの0を現在のループの投稿に
+     * 置き換えるため、表示中の投稿を読み書きしない)。
+     */
+    public function testGeneratedFactoryRejectsIdsBelowOne(): void
+    {
+        $of = [self::FIELDS_CLASS, 'of'];
+        self::assertIsCallable($of);
+
+        foreach (['WP_Post with ID 0' => new WP_Post((object) ['ID' => 0]), 'zero' => 0, 'negative' => -1] as $name => $post) {
+            try {
+                $of($post);
+                self::fail("InvalidArgumentException was not thrown for {$name}");
+            } catch (InvalidArgumentException $exception) {
+                self::assertSame('meta object ID must be a positive integer', $exception->getMessage(), $name);
+            }
+        }
+    }
+
+    /**
+     * groupのgetterは、サブフィールドごとに型どおりに正規化する(実物の無料版ACFのgroup)。未保存のgroupは、ACFが
+     * サブフィールドの未設定の値の配列を返すため、各サブフィールドの未設定の値になる。サブフィールドの形の不一致は、
+     * debugでは位置(`slashed_group.json`)を示す例外になり、本番では記録して未設定の値にする。
+     */
+    public function testGroupGetterNormalizesEachSubField(): void
+    {
+        $unsaved = self::fieldsOf(self::FIELDS_CLASS, self::createPost('tmswp_acf_post'));
+        self::assertSame(['json' => '', 'path' => ''], self::callOn($unsaved, 'slashedGroup'));
+
+        $saved = self::fieldsOf(self::FIELDS_CLASS, self::createPost('tmswp_acf_post'));
+        self::callOn($saved, 'setSlashedGroup', ['json' => '{"a":1}', 'path' => 12]);
+        self::assertSame(['json' => '{"a":1}', 'path' => '12'], self::callOn($saved, 'slashedGroup'));
+
+        $postId = self::createPost('tmswp_acf_post');
+        update_post_meta($postId, 'slashed_group_json', ['secret' => 'hidden']);
+        update_post_meta($postId, 'slashed_group_path', 'kept');
+
+        try {
+            self::callOn(self::fieldsOf(self::FIELDS_CLASS, $postId), 'slashedGroup');
+            self::fail('AcfBridgeRuntimeException was not thrown');
+        } catch (AcfBridgeRuntimeException $exception) {
+            self::assertSame("ACF field 'slashed_group.json' of {$postId} has an unexpected value: expected string, got array (" . self::FIELDS_CLASS . ')', $exception->getMessage());
+        }
+
+        $logger = new RecordingLogger();
+        $production = self::fieldsOf($this->generateThemeFieldsInto($this->productionKernel('Group', $logger)->config()->appNamespace . '\\Acf'), $postId);
+        self::assertSame(['json' => '', 'path' => 'kept'], self::callOn($production, 'slashedGroup'));
+        self::assertSame([['error', 'slashed_group.json', 'string', 'array']], array_map(
+            static fn(array $record): array => [$record['level'], $record['context']['field'], $record['context']['expected'], $record['context']['actual']],
+            $logger->records,
+        ));
+        self::assertStringNotContainsString('hidden', (string) json_encode($logger->records));
+    }
+
+    /**
      * traitの内部の名前と同じ名前のフィールド(date_time_raw_format・local_time_instants)から生成したクラスも、PHPで
      * 読み込め、日時のgetterとsetterが動く(traitは定数・staticメンバーを持たない)。
      */
@@ -1072,6 +1234,7 @@ final class AcfBridgeIntegrationTest extends IntegrationTestCase
                 ['key' => 'field_tmswp_local_time_instants', 'name' => 'local_time_instants', 'label' => 'Instants', 'type' => 'date_time_picker'],
             ],
         ], 'acf-json/group_tmswp_internal_names.json');
+        self::registerLocalFieldGroup($group->key, $group->raw['fields'] ?? []);
         $report = (new Generator())->generate([$group], new GeneratorContext(
             config: new BridgeConfig(jsonDirs: [], outputDir: $outputDir, namespace: $namespace),
             optionsPagePostIds: [],
@@ -1333,18 +1496,20 @@ final class {$shortName} implements AcfAccessProbe
         return new self(\$acfId);
     }
 
-    public function string(string \$name): string { return \$this->acfString(\$name); }
-    public function nullableString(string \$name): ?string { return \$this->acfNullableString(\$name); }
-    public function number(string \$name): int|float|null { return \$this->acfNumber(\$name); }
-    public function int(string \$name): ?int { return \$this->acfInt(\$name); }
-    public function bool(string \$name): bool { return \$this->acfBool(\$name); }
-    public function list(string \$name): array { return \$this->acfList(\$name); }
-    public function intList(string \$name): array { return \$this->acfIntList(\$name); }
-    public function nullableArray(string \$name): ?array { return \$this->acfNullableArray(\$name); }
-    public function image(string \$name): ?array { return \$this->acfImage(\$name); }
-    public function imageList(string \$name): array { return \$this->acfImageList(\$name); }
-    public function dateTime(string \$name, string \$rawFormat): ?DateTimeImmutable { return \$this->acfDateTime(\$name, \$rawFormat); }
-    public function setDate(string \$name, DateTimeInterface|string|null \$value, string \$rawFormat): void { \$this->acfUpdateDate(\$name, \$value, \$rawFormat); }
+    public function string(string \$name): string { return \$this->acfString(self::key(\$name)); }
+    public function nullableString(string \$name): ?string { return \$this->acfNullableString(self::key(\$name)); }
+    public function number(string \$name): int|float|null { return \$this->acfNumber(self::key(\$name)); }
+    public function int(string \$name): ?int { return \$this->acfInt(self::key(\$name)); }
+    public function bool(string \$name): bool { return \$this->acfBool(self::key(\$name)); }
+    public function rows(string \$name): array { return \$this->acfRows(self::key(\$name), static fn(array \$row, string \$path): array => \$row); }
+    public function intList(string \$name): array { return \$this->acfIntList(self::key(\$name)); }
+    public function group(string \$name): ?array { return \$this->acfGroup(self::key(\$name), static fn(array \$group, string \$path): array => \$group); }
+    public function image(string \$name): ?array { return \$this->acfImage(self::key(\$name)); }
+    public function imageList(string \$name): array { return \$this->acfImageList(self::key(\$name)); }
+    public function dateTime(string \$name, string \$rawFormat): ?DateTimeImmutable { return \$this->acfDateTime(self::key(\$name), \$rawFormat); }
+    public function setDate(string \$name, DateTimeInterface|string|null \$value, string \$rawFormat): void { \$this->acfUpdateDate(self::key(\$name), \$value, \$rawFormat); }
+
+    private static function key(string \$name): string { return 'field_' . \$name; }
 }
 PHP);
 
@@ -1382,6 +1547,61 @@ PHP);
         self::assertTrue(class_exists($class, false));
 
         return $class;
+    }
+
+    /**
+     * ACFのローカルのフィールドグループ(tmswp_acf_postの投稿)として$fieldsを登録する。データベースには書かない。登録は
+     * プロセスの中で続くため、登録済みのグループは登録し直さない(acf_add_local_field_group()は登録済みのkeyでfalseを返す)。
+     *
+     * @param mixed $fields acf-jsonのfieldsの形の配列
+     */
+    private static function registerLocalFieldGroup(string $key, mixed $fields): void
+    {
+        if (acf_is_local_field_group($key)) {
+            return;
+        }
+
+        self::assertTrue(acf_add_local_field_group([
+            'key' => $key,
+            'title' => $key,
+            'fields' => $fields,
+            'location' => [[['param' => 'post_type', 'operator' => '==', 'value' => 'tmswp_acf_post']]],
+        ]));
+    }
+
+    /**
+     * $groupから$namespaceへ生成したアクセサのクラス(AcfManifestでないもの。$groupは1つのターゲットに解決する)を読み込み、
+     * そのクラス名を返す。
+     */
+    private function generateFieldsInto(string $namespace, FieldGroup $group): string
+    {
+        $outputDir = $this->createTempDirectory('acf-generated-group');
+        $report = (new Generator())->generate([$group], new GeneratorContext(
+            config: new BridgeConfig(jsonDirs: [], outputDir: $outputDir, namespace: $namespace),
+            optionsPagePostIds: [],
+            sourceHash: $group->key,
+        ));
+        self::assertSame([], $report->errors());
+        $files = array_values(array_filter($report->files(), static fn(GeneratedFile $file): bool => $file->relativePath !== 'AcfManifest.php'));
+        self::assertCount(1, $files);
+        $file = $files[0];
+        $this->writeFile($outputDir . '/' . $file->relativePath, $file->contents);
+        require $outputDir . '/' . $file->relativePath;
+        $class = $namespace . '\\' . basename($file->relativePath, '.php');
+        self::assertTrue(class_exists($class, false));
+
+        return $class;
+    }
+
+    /**
+     * $objectの$methodを呼ぶ(生成クラスはPHPStanの解析対象外のため、呼び出せることを確かめてから呼ぶ)。
+     */
+    private static function callOn(object $object, string $method, mixed ...$arguments): mixed
+    {
+        $call = [$object, $method];
+        self::assertIsCallable($call);
+
+        return $call(...$arguments);
     }
 
     /** 生成クラス$classのof($postId)を呼び、そのインスタンスを返す(生成クラスはPHPStanの解析対象外)。 */
@@ -1484,14 +1704,14 @@ interface AcfAccessProbe
 
     public function bool(string $name): bool;
 
-    /** @return list<mixed> */
-    public function list(string $name): array;
+    /** @return list<array<string, mixed>> */
+    public function rows(string $name): array;
 
     /** @return list<int> */
     public function intList(string $name): array;
 
     /** @return array<string, mixed>|null */
-    public function nullableArray(string $name): ?array;
+    public function group(string $name): ?array;
 
     /** @return AcfImage|null */
     public function image(string $name): ?array;

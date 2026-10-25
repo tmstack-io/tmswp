@@ -33,7 +33,9 @@ use WP_Post;
  *
  * どの書き込みの後も(例外になった場合も)、ACFの値のキャッシュ(get_field()が使う)からそのキーを消す。
  *
- * 全メソッドは、ACFが有効でなければAcfNotActiveExceptionを投げる(docs/09 §10)。
+ * 全メソッドは、対象のIDが1未満ならInvalidArgumentExceptionを(ACFはpost_idの0を現在のループの投稿に置き換え、
+ * WordPressのメタの関数は負のIDをabsint()で別のIDにするため)、ACFが有効でなければAcfNotActiveExceptionを投げる
+ * (docs/09 §8.1・§10)。
  */
 final class AcfMetaStorage implements MetaStorageInterface
 {
@@ -86,7 +88,7 @@ final class AcfMetaStorage implements MetaStorageInterface
 
     public function has(ObjectType $type, int $objectId, string $key): bool
     {
-        $this->assertAcfActive(__METHOD__);
+        $this->assertCallable(__METHOD__, $type, $objectId);
 
         return $this->meta->has($type, $objectId, $key);
     }
@@ -94,21 +96,21 @@ final class AcfMetaStorage implements MetaStorageInterface
     /** 保存された値(メタの先頭の行)を返す。行が無ければnull(ACFのフィールドのdefault_valueは返さない)。 */
     public function get(ObjectType $type, int $objectId, string $key): mixed
     {
-        $this->assertAcfActive(__METHOD__);
+        $this->assertCallable(__METHOD__, $type, $objectId);
 
         return $this->meta->get($type, $objectId, $key);
     }
 
     public function getAll(ObjectType $type, int $objectId, string $key): array
     {
-        $this->assertAcfActive(__METHOD__);
+        $this->assertCallable(__METHOD__, $type, $objectId);
 
         return $this->meta->getAll($type, $objectId, $key);
     }
 
     public function getMultiple(ObjectType $type, int $objectId, array $keys): array
     {
-        $this->assertAcfActive(__METHOD__);
+        $this->assertCallable(__METHOD__, $type, $objectId);
 
         return $this->meta->getMultiple($type, $objectId, $keys);
     }
@@ -124,7 +126,7 @@ final class AcfMetaStorage implements MetaStorageInterface
      */
     public function set(ObjectType $type, int $objectId, string $key, mixed $value): bool
     {
-        $this->assertAcfActive(__METHOD__);
+        $this->assertCallable(__METHOD__, $type, $objectId);
 
         if ($value === null) {
             throw new InvalidArgumentException("meta '{$key}' cannot store null; use delete() to remove it");
@@ -174,7 +176,7 @@ final class AcfMetaStorage implements MetaStorageInterface
      */
     public function setAll(ObjectType $type, int $objectId, string $key, array $values): bool
     {
-        $this->assertAcfActive(__METHOD__);
+        $this->assertCallable(__METHOD__, $type, $objectId);
         $acfId = $this->acfId($type, $objectId);
         $field = $this->acfField($type, $objectId, $key);
 
@@ -194,7 +196,7 @@ final class AcfMetaStorage implements MetaStorageInterface
      */
     public function delete(ObjectType $type, int $objectId, string $key): bool
     {
-        $this->assertAcfActive(__METHOD__);
+        $this->assertCallable(__METHOD__, $type, $objectId);
         $acfId = $this->acfId($type, $objectId);
         $field = $this->supportedAcfField($type, $objectId, $key);
 
@@ -342,6 +344,18 @@ final class AcfMetaStorage implements MetaStorageInterface
         } finally {
             acf_flush_value_cache($acfId, $key);
         }
+    }
+
+    /**
+     * 対象のID(1以上。ObjectType::resolveId())と、ACFが有効であることを検査する。
+     *
+     * @throws InvalidArgumentException IDが1未満の場合
+     * @throws AcfNotActiveException ACFが有効でない場合
+     */
+    private function assertCallable(string $callable, ObjectType $type, int $objectId): void
+    {
+        $type->resolveId($objectId);
+        $this->assertAcfActive($callable);
     }
 
     private function assertAcfActive(string $callable): void

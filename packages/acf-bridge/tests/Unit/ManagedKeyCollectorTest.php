@@ -34,14 +34,25 @@ final class ManagedKeyCollectorTest extends UnitTestCase
         self::assertIsString($manifest);
 
         self::assertSame([], $errors);
-        self::assertSame([
+        $rows = self::rows($keys);
+        self::assertCount(74, $rows);
+
+        foreach ([
             ['post', 'product', 'main_visual', 'field_visual', 'group_product'],
-            ['post', 'product', 'price', 'field_price', 'group_product'],
-            ['post', 'product', 'published_at', 'field_published', 'group_product'],
-            ['post', 'product', 'stores', 'field_stores', 'group_product'],
             ['post', 'product', '店舗名', 'field_store_name', 'group_product'],
+            ['post', 'product', 'map_value', 'field_t_map_value', 'group_product_types'],
+            ['post', 'product', 'sections', 'field_t_sections', 'group_product_types'],
+            ['term', 'genre', 'genre_color', 'field_genre_color', 'group_genre'],
+            ['user', '', 'twitter', 'field_user_twitter', 'group_user'],
             [null, 'theme-settings', 'site_logo', 'field_logo', 'group_options'],
-        ], self::rows($keys));
+        ] as $row) {
+            self::assertContains($row, $rows);
+        }
+
+        foreach (['message_note', 'tab_basic', 'accordion_more', 'title'] as $name) {
+            self::assertNotContains($name, array_column($rows, 2), $name);
+        }
+
         self::assertSame(self::manifestRows($keys), self::manifestLinesOf($manifest));
     }
 

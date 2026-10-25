@@ -16,11 +16,17 @@ use TMSWP\Core\Kernel\Kernel;
 /**
  * 生成クラス(`XxxFields`・`XxxOptions`)が使う、ACFの値の読み書きの基盤(docs/09 §11)。
  *
- * 型強制のヘルパ(acfString()等)は、ACFが返した値を次の2つに分けて扱う(docs/09 §6.1)。
+ * 公開のエスケープハッチ(has()・value()・rawValue()・update()・delete())はフィールド名でACFを呼ぶ。生成コードが使う
+ * 保護のヘルパは、フィールドのkey(生成クラスのKEY_定数)でACFを呼ぶ(docs/09 §6.1)。keyのフィールドがACFに
+ * 登録されていなければ、設定の誤りとしてdebugにかかわらずAcfBridgeRuntimeExceptionにする。
+ *
+ * 型強制のヘルパは、ACFが返した値を次の2つに分けて扱う(docs/09 §6.1)。名前が`Of`で終わるヘルパは、値と、例外と
+ * ログに出す位置(`stores[0].shop_name`の形)を受け取り、group・repeater・flexible_contentの入れ子のサブフィールドに使う。
  * - 未設定(null・false・''。配列の型は空の配列も): 型ごとの未設定の値('' ・[]・false・null)に正規化する。エラーにしない。
  * - 形の不一致(フィールドの型の想定と違う値): エラー方針(docs/00 §5.6)の実行時のデータ取得の失敗として扱う。
  *   生成クラスのKernel(Kernel::forClass())のdebugではAcfBridgeRuntimeExceptionを投げ、本番ではそのKernelのロガーに
- *   errorで記録して未設定の値を返す。listの型は要素ごとに検査し、本番では不一致の要素だけを記録して除く。
+ *   errorで記録して未設定の値を返す。listの型(repeater・flexible_contentの行を含む)は要素ごとに検査し、本番では
+ *   不一致の要素だけを記録して除く。
  *
  * @phpstan-import-type AcfChoice from \TMSWP\AcfBridge\AcfTypes
  * @phpstan-import-type AcfColorRgba from \TMSWP\AcfBridge\AcfTypes
@@ -39,38 +45,17 @@ trait AcfFieldAccess
     }
 
     /**
-     * 値が保存されているか。get_field()が読む保存先(acf_get_valid_post_id()で解決したpost_id)の、メタの行(options
-     * ページはoption)の有無で判定する。フィールドのdefault_value、register_*_metaの既定値、groupが返す空の配列は
-     * 「保存されている」としない。
+     * 名前が$nameのフィールドの値が保存されているか。get_field()が読む保存先(acf_get_valid_post_id()で解決した
+     * post_id)の、メタの行(optionsページはoption)の有無で判定する。フィールドのdefault_value、register_*_metaの
+     * 既定値、groupが返す空の配列は「保存されている」としない。
      *
      * @throws AcfBridgeRuntimeException acf/validate_post_idのフィルタが、post_idをintでも文字列でもない値にした場合
      */
     public function has(string $name): bool
     {
         $this->assertAcfActive(__FUNCTION__);
-        $postId = acf_get_valid_post_id($this->acfId);
 
-        if (!\is_int($postId) && !\is_string($postId)) {
-            throw new AcfBridgeRuntimeException('ACF resolved the post_id ' . $this->acfId . ' to ' . get_debug_type($postId) . ' (acf/validate_post_id); it must be an int or a string');
-        }
-
-        $target = acf_decode_post_id($postId);
-        $type = $target['type'] ?? null;
-        $id = $target['id'] ?? null;
-
-        if ($type === 'option') {
-            // ACFはoptionsの値を`{post_id}_{フィールド名}`のoptionに保存し、nullを未保存として読む
-            return \is_string($id) && get_option("{$id}_{$name}", null) !== null;
-        }
-
-        if (!\is_string($type) || !\is_int($id) || $id < 1) {
-            return false;
-        }
-
-        $rows = get_metadata_raw($type, $id, $name, false);
-
-        // WpMetaStorage::has()と同じく、null・false・空の配列とスカラーの空文字は行なしとする
-        return $rows !== null && $rows !== false && $rows !== '' && $rows !== [];
+        return $this->hasStoredValue($name);
     }
 
     public function value(string $name): mixed
@@ -101,8 +86,7 @@ trait AcfFieldAccess
     {
         $this->assertAcfActive(__FUNCTION__);
 
-        // 文字列と配列(の中の文字列)だけをslashする。ほかの型はwp_slash()の対象外
-        return update_field($name, \is_string($value) || \is_array($value) ? wp_slash($value) : $value, $this->acfId) !== false;
+        return $this->updateField($name, $value);
     }
 
     public function delete(string $name): bool
@@ -112,133 +96,66 @@ trait AcfFieldAccess
         return delete_field($name, $this->acfId);
     }
 
-    protected function acfString(string $name): string
+    /**
+     * keyのフィールドの値が保存されているか(has()と同じ判定)。保存先のメタの名前は、ACFに登録されたフィールドの
+     * 定義の名前(get_field()が読む名前)を使う。
+     */
+    protected function acfHas(string $key): bool
     {
-        $this->assertAcfActive(__FUNCTION__);
-        $value = $this->value($name);
-
-        if (self::isUnset($value)) {
-            return '';
-        }
-
-        if (\is_string($value) || \is_int($value) || \is_float($value)) {
-            return (string) $value;
-        }
-
-        return $this->acfMismatch($name, 'string', get_debug_type($value), '');
+        return $this->hasStoredValue($this->acfFieldName(__FUNCTION__, $key));
     }
 
-    protected function acfNullableString(string $name): ?string
+    /** keyのフィールドの値を、delete_field()で消す。消したらtrue。 */
+    protected function acfDelete(string $key): bool
     {
-        $value = $this->acfString($name);
+        $this->acfFieldName(__FUNCTION__, $key);
 
-        return $value === '' ? null : $value;
+        return delete_field($key, $this->acfId);
     }
 
-    protected function acfNumber(string $name): int|float|null
+    /** keyのフィールドのフォーマット済みの値を、型を強制せずに返す(ACFの未知の型。docs/09 §6.2)。 */
+    protected function acfMixed(string $key): mixed
     {
-        $this->assertAcfActive(__FUNCTION__);
-        $value = $this->value($name);
+        $this->acfFieldName(__FUNCTION__, $key);
 
-        if (self::isUnset($value)) {
-            return null;
-        }
-
-        if (\is_int($value) || \is_float($value)) {
-            return $value;
-        }
-
-        if (\is_string($value) && is_numeric($value)) {
-            // 整数の文字列はint、小数・指数の文字列はfloatになる
-            return $value + 0;
-        }
-
-        return $this->acfMismatch($name, 'number', get_debug_type($value), null);
+        return get_field($key, $this->acfId, true);
     }
 
-    protected function acfInt(string $name): ?int
+    protected function acfString(string $key): string
     {
-        $value = $this->acfNumber($name);
-
-        if ($value === null || \is_int($value)) {
-            return $value;
-        }
-
-        return $this->acfMismatch($name, 'int', 'float', null);
+        return $this->acfStringOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
-    protected function acfBool(string $name): bool
+    protected function acfNullableString(string $key): ?string
     {
-        $this->assertAcfActive(__FUNCTION__);
-        $value = $this->value($name);
-
-        if (\is_scalar($value) || $value === null) {
-            return (bool) $value;
-        }
-
-        return $this->acfMismatch($name, 'bool', get_debug_type($value), false);
+        return $this->acfNullableStringOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
-    /** @return list<mixed> */
-    protected function acfList(string $name): array
+    protected function acfNumber(string $key): int|float|null
     {
-        $this->assertAcfActive(__FUNCTION__);
-        $value = $this->value($name);
+        return $this->acfNumberOf(...$this->acfFormatted(__FUNCTION__, $key));
+    }
 
-        if (self::isUnset($value)) {
-            return [];
-        }
+    protected function acfInt(string $key): ?int
+    {
+        return $this->acfIntOf(...$this->acfFormatted(__FUNCTION__, $key));
+    }
 
-        if (!\is_array($value)) {
-            return $this->acfMismatch($name, 'list', get_debug_type($value), []);
-        }
-
-        foreach (array_keys($value) as $key) {
-            if (!\is_int($key)) {
-                return $this->acfMismatch($name, 'list', 'array with string keys', []);
-            }
-        }
-
-        // ACFが要素を除いた配列は添字が飛ぶことがあるため、詰め直す
-        return array_values($value);
+    protected function acfBool(string $key): bool
+    {
+        return $this->acfBoolOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /** @return list<int> */
-    protected function acfIntList(string $name): array
+    protected function acfIntList(string $key): array
     {
-        return $this->acfListOf($name, 'int', static function (mixed $item): ?int {
-            if (\is_int($item)) {
-                return $item;
-            }
-
-            return \is_string($item) && ctype_digit($item) ? (int) $item : null;
-        });
+        return $this->acfIntListOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /** @return list<string> */
-    protected function acfStringList(string $name): array
+    protected function acfStringList(string $key): array
     {
-        return $this->acfListOf($name, 'string', static fn(mixed $item): ?string => \is_string($item) || \is_int($item) || \is_float($item) ? (string) $item : null);
-    }
-
-    /** @return array<string, mixed>|null */
-    protected function acfNullableArray(string $name): ?array
-    {
-        $this->assertAcfActive(__FUNCTION__);
-        $value = $this->value($name);
-
-        // 一度も保存していないgroupは空の配列になる
-        if (self::isUnset($value) || $value === []) {
-            return null;
-        }
-
-        if (!\is_array($value)) {
-            return $this->acfMismatch($name, 'array with string keys', get_debug_type($value), null);
-        }
-
-        $assoc = self::stringKeyedArray($value);
-
-        return $assoc ?? $this->acfMismatch($name, 'array with string keys', 'list', null);
+        return $this->acfStringListOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /**
@@ -248,85 +165,137 @@ trait AcfFieldAccess
      *
      * @return T|null
      */
-    protected function acfObject(string $name, string $class): ?object
+    protected function acfObject(string $key, string $class): ?object
     {
-        $this->assertAcfActive(__FUNCTION__);
-        $value = $this->value($name);
+        [$value, $path] = $this->acfFormatted(__FUNCTION__, $key);
 
-        if (self::isUnset($value)) {
-            return null;
-        }
-
-        return $value instanceof $class ? $value : $this->acfMismatch($name, $class, get_debug_type($value), null);
+        return $this->acfObjectOf($value, $path, $class);
     }
 
     /**
-     * objectのlist(relationship・post_object・taxonomy・userの複数・return_format=object)。要素ごとに$classのinstanceofを
-     * 検査し、合わない要素は形の不一致として扱う(本番では記録して除く)。
-     *
      * @template T of object
      *
      * @param class-string<T> $class
      *
      * @return list<T>
      */
-    protected function acfObjectList(string $name, string $class): array
+    protected function acfObjectList(string $key, string $class): array
     {
-        return $this->acfListOf($name, $class, static fn(mixed $item): ?object => $item instanceof $class ? $item : null);
+        [$value, $path] = $this->acfFormatted(__FUNCTION__, $key);
+
+        return $this->acfObjectListOf($value, $path, $class);
     }
 
     /** @return AcfImage|null */
-    protected function acfImage(string $name): ?array
+    protected function acfImage(string $key): ?array
     {
-        return $this->acfShape($name, 'AcfImage', $this->acfImageFromArray(...));
+        return $this->acfImageOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /** @return AcfFile|null */
-    protected function acfFile(string $name): ?array
+    protected function acfFile(string $key): ?array
     {
-        return $this->acfShape($name, 'AcfFile', $this->acfFileFromArray(...));
+        return $this->acfFileOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /** @return list<AcfImage> */
-    protected function acfImageList(string $name): array
+    protected function acfImageList(string $key): array
     {
-        return $this->acfListOf($name, 'AcfImage', $this->arrayItem($this->acfImageFromArray(...)));
+        return $this->acfImageListOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /** @return AcfLink|null */
-    protected function acfLink(string $name): ?array
+    protected function acfLink(string $key): ?array
     {
-        return $this->acfShape($name, 'AcfLink', $this->acfLinkFromArray(...));
+        return $this->acfLinkOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /** @return AcfChoice|null */
-    protected function acfChoice(string $name): ?array
+    protected function acfChoice(string $key): ?array
     {
-        return $this->acfShape($name, 'AcfChoice', $this->acfChoiceFromArray(...));
+        return $this->acfChoiceOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /** @return list<AcfChoice> */
-    protected function acfChoiceList(string $name): array
+    protected function acfChoiceList(string $key): array
     {
-        return $this->acfListOf($name, 'AcfChoice', $this->arrayItem($this->acfChoiceFromArray(...)));
+        return $this->acfChoiceListOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /** @return AcfUserArray|null */
-    protected function acfUserArray(string $name): ?array
+    protected function acfUserArray(string $key): ?array
     {
-        return $this->acfShape($name, 'AcfUserArray', $this->acfUserArrayFromArray(...));
+        return $this->acfUserArrayOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /** @return list<AcfUserArray> */
-    protected function acfUserArrayList(string $name): array
+    protected function acfUserArrayList(string $key): array
     {
-        return $this->acfListOf($name, 'AcfUserArray', $this->arrayItem($this->acfUserArrayFromArray(...)));
+        return $this->acfUserArrayListOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /** @return AcfColorRgba|null */
-    protected function acfColorRgba(string $name): ?array
+    protected function acfColorRgba(string $key): ?array
     {
-        return $this->acfShape($name, 'AcfColorRgba', $this->acfColorRgbaFromArray(...));
+        return $this->acfColorRgbaOf(...$this->acfFormatted(__FUNCTION__, $key));
+    }
+
+    /**
+     * groupの値を$shapeで正規化する(acfGroupOf())。
+     *
+     * @template T of array<string, mixed>
+     *
+     * @param Closure(array<string, mixed>, string): T $shape
+     *
+     * @return T|null
+     */
+    protected function acfGroup(string $key, Closure $shape): ?array
+    {
+        [$value, $path] = $this->acfFormatted(__FUNCTION__, $key);
+
+        return $this->acfGroupOf($value, $path, $shape);
+    }
+
+    /**
+     * repeaterの行を$rowで正規化する(acfRowsOf())。
+     *
+     * @template T of array<string, mixed>
+     *
+     * @param Closure(array<string, mixed>, string): T $row
+     *
+     * @return list<T>
+     */
+    protected function acfRows(string $key, Closure $row): array
+    {
+        [$value, $path] = $this->acfFormatted(__FUNCTION__, $key);
+
+        return $this->acfRowsOf($value, $path, $row);
+    }
+
+    /**
+     * flexible_contentの行を、レイアウトごとの$layoutsで正規化する(acfLayoutsOf())。
+     *
+     * @template T of array<string, mixed>
+     *
+     * @param array<string, Closure(array<string, mixed>, string): T> $layouts
+     *
+     * @return list<T>
+     */
+    protected function acfLayouts(string $key, array $layouts): array
+    {
+        [$value, $path] = $this->acfFormatted(__FUNCTION__, $key);
+
+        return $this->acfLayoutsOf($value, $path, $layouts);
+    }
+
+    /**
+     * レイアウトの無いflexible_contentの行を検査する(acfEmptyLayoutsOf())。
+     *
+     * @return list<never>
+     */
+    protected function acfEmptyLayouts(string $key): array
+    {
+        return $this->acfEmptyLayoutsOf(...$this->acfFormatted(__FUNCTION__, $key));
     }
 
     /**
@@ -336,10 +305,10 @@ trait AcfFieldAccess
      * date_time_pickerの書式(Y-m-d H:i:s)で、現地の時刻が夏時間の終わり等で2回来る(2つの瞬間を表す)場合は、早い方の
      * 瞬間を返す(acfUpdateDate()が保存を許すのは早い方だけのため、保存した瞬間として往復する)。
      */
-    protected function acfDateTime(string $name, string $rawFormat): ?DateTimeImmutable
+    protected function acfDateTime(string $key, string $rawFormat): ?DateTimeImmutable
     {
-        $this->assertAcfActive(__FUNCTION__);
-        $value = $this->rawValue($name);
+        $path = $this->acfFieldName(__FUNCTION__, $key);
+        $value = get_field($key, $this->acfId, false);
 
         if (self::isUnset($value)) {
             return null;
@@ -348,19 +317,19 @@ trait AcfFieldAccess
         $expected = "date string in the format '{$rawFormat}'";
 
         if (!\is_string($value)) {
-            return $this->acfMismatch($name, $expected, get_debug_type($value), null);
+            return $this->acfMismatch($path, $expected, get_debug_type($value), null);
         }
 
         // createFromFormat()は、NULを含む文字列をValueErrorにするため、解析の前に形の不一致として扱う
         if (str_contains($value, "\0")) {
-            return $this->acfMismatch($name, $expected, 'string that contains NUL', null);
+            return $this->acfMismatch($path, $expected, 'string that contains NUL', null);
         }
 
         $timezone = wp_timezone();
         $date = DateTimeImmutable::createFromFormat('!' . $rawFormat, $value, $timezone);
 
         if (!$date instanceof DateTimeImmutable || $date->format($rawFormat) !== $value) {
-            return $this->acfMismatch($name, $expected, 'string that does not match the format', null);
+            return $this->acfMismatch($path, $expected, 'string that does not match the format', null);
         }
 
         if ($rawFormat !== AcfLocalTime::DATE_TIME_RAW_FORMAT) {
@@ -373,12 +342,13 @@ trait AcfFieldAccess
     }
 
     /**
-     * update()に委譲し、戻り値を捨てる。update()のfalseは「書き込まなかった」と「失敗した」を区別できないため
-     * (update()を参照)、生成クラスのsetterは結果を返さない。
+     * keyのフィールドへupdate()と同じ規則(wp_slash())で保存し、戻り値を捨てる。update()のfalseは「書き込まなかった」と
+     * 「失敗した」を区別できないため(update()を参照)、生成クラスのsetterは結果を返さない。
      */
-    protected function acfUpdate(string $name, mixed $value): void
+    protected function acfUpdate(string $key, mixed $value): void
     {
-        $this->update($name, $value);
+        $this->acfFieldName(__FUNCTION__, $key);
+        $this->updateField($key, $value);
     }
 
     /**
@@ -392,12 +362,12 @@ trait AcfFieldAccess
      *
      * @throws InvalidArgumentException date_time_pickerの書式で、入力が同じ現地の時刻を表す2つの瞬間の遅い方の場合
      */
-    protected function acfUpdateDate(string $name, DateTimeInterface|string|null $value, string $rawFormat): void
+    protected function acfUpdateDate(string $key, DateTimeInterface|string|null $value, string $rawFormat): void
     {
-        $this->assertAcfActive(__FUNCTION__);
+        $name = $this->acfFieldName(__FUNCTION__, $key);
 
         if (!$value instanceof DateTimeInterface) {
-            $this->acfUpdate($name, $value);
+            $this->updateField($key, $value);
 
             return;
         }
@@ -416,7 +386,265 @@ trait AcfFieldAccess
             }
         }
 
-        $this->acfUpdate($name, $raw);
+        $this->updateField($key, $raw);
+    }
+
+    /** 文字列・数値は文字列にする。未設定は''。 */
+    protected function acfStringOf(mixed $value, string $path): string
+    {
+        if (self::isUnset($value)) {
+            return '';
+        }
+
+        if (\is_string($value) || \is_int($value) || \is_float($value)) {
+            return (string) $value;
+        }
+
+        return $this->acfMismatch($path, 'string', get_debug_type($value), '');
+    }
+
+    /** acfStringOf()の''をnullにする。 */
+    protected function acfNullableStringOf(mixed $value, string $path): ?string
+    {
+        $string = $this->acfStringOf($value, $path);
+
+        return $string === '' ? null : $string;
+    }
+
+    /** 整数の文字列はint、小数・指数の文字列はfloatにする。未設定はnull。 */
+    protected function acfNumberOf(mixed $value, string $path): int|float|null
+    {
+        if (self::isUnset($value)) {
+            return null;
+        }
+
+        if (\is_int($value) || \is_float($value)) {
+            return $value;
+        }
+
+        if (\is_string($value) && is_numeric($value)) {
+            return $value + 0;
+        }
+
+        return $this->acfMismatch($path, 'number', get_debug_type($value), null);
+    }
+
+    /** acfNumberOf()のうち整数だけを受け付ける。小数は形の不一致。 */
+    protected function acfIntOf(mixed $value, string $path): ?int
+    {
+        $number = $this->acfNumberOf($value, $path);
+
+        if ($number === null || \is_int($number)) {
+            return $number;
+        }
+
+        return $this->acfMismatch($path, 'int', 'float', null);
+    }
+
+    /** スカラーとnullはboolにする。配列・objectは形の不一致。 */
+    protected function acfBoolOf(mixed $value, string $path): bool
+    {
+        if (\is_scalar($value) || $value === null) {
+            return (bool) $value;
+        }
+
+        return $this->acfMismatch($path, 'bool', get_debug_type($value), false);
+    }
+
+    /** @return list<int> */
+    protected function acfIntListOf(mixed $value, string $path): array
+    {
+        return $this->acfListItemsOf($value, $path, 'int', static function (mixed $item): ?int {
+            if (\is_int($item)) {
+                return $item;
+            }
+
+            return \is_string($item) && ctype_digit($item) ? (int) $item : null;
+        });
+    }
+
+    /** @return list<string> */
+    protected function acfStringListOf(mixed $value, string $path): array
+    {
+        return $this->acfListItemsOf($value, $path, 'string', static fn(mixed $item): ?string => \is_string($item) || \is_int($item) || \is_float($item) ? (string) $item : null);
+    }
+
+    /**
+     * @template T of object
+     *
+     * @param class-string<T> $class
+     *
+     * @return T|null
+     */
+    protected function acfObjectOf(mixed $value, string $path, string $class): ?object
+    {
+        if (self::isUnset($value)) {
+            return null;
+        }
+
+        return $value instanceof $class ? $value : $this->acfMismatch($path, $class, get_debug_type($value), null);
+    }
+
+    /**
+     * objectのlist(relationship・post_object・taxonomy・userの複数・return_format=object)。要素ごとに$classのinstanceofを
+     * 検査し、合わない要素は形の不一致として扱う(本番では記録して除く)。
+     *
+     * @template T of object
+     *
+     * @param class-string<T> $class
+     *
+     * @return list<T>
+     */
+    protected function acfObjectListOf(mixed $value, string $path, string $class): array
+    {
+        return $this->acfListItemsOf($value, $path, $class, static fn(mixed $item): ?object => $item instanceof $class ? $item : null);
+    }
+
+    /** @return AcfImage|null */
+    protected function acfImageOf(mixed $value, string $path): ?array
+    {
+        return $this->acfShapeOf($value, $path, 'AcfImage', $this->acfImageFromArray(...));
+    }
+
+    /** @return AcfFile|null */
+    protected function acfFileOf(mixed $value, string $path): ?array
+    {
+        return $this->acfShapeOf($value, $path, 'AcfFile', $this->acfFileFromArray(...));
+    }
+
+    /** @return list<AcfImage> */
+    protected function acfImageListOf(mixed $value, string $path): array
+    {
+        return $this->acfListItemsOf($value, $path, 'AcfImage', $this->arrayItem($this->acfImageFromArray(...)));
+    }
+
+    /** @return AcfLink|null */
+    protected function acfLinkOf(mixed $value, string $path): ?array
+    {
+        return $this->acfShapeOf($value, $path, 'AcfLink', $this->acfLinkFromArray(...));
+    }
+
+    /** @return AcfChoice|null */
+    protected function acfChoiceOf(mixed $value, string $path): ?array
+    {
+        return $this->acfShapeOf($value, $path, 'AcfChoice', $this->acfChoiceFromArray(...));
+    }
+
+    /** @return list<AcfChoice> */
+    protected function acfChoiceListOf(mixed $value, string $path): array
+    {
+        return $this->acfListItemsOf($value, $path, 'AcfChoice', $this->arrayItem($this->acfChoiceFromArray(...)));
+    }
+
+    /** @return AcfUserArray|null */
+    protected function acfUserArrayOf(mixed $value, string $path): ?array
+    {
+        return $this->acfShapeOf($value, $path, 'AcfUserArray', $this->acfUserArrayFromArray(...));
+    }
+
+    /** @return list<AcfUserArray> */
+    protected function acfUserArrayListOf(mixed $value, string $path): array
+    {
+        return $this->acfListItemsOf($value, $path, 'AcfUserArray', $this->arrayItem($this->acfUserArrayFromArray(...)));
+    }
+
+    /** @return AcfColorRgba|null */
+    protected function acfColorRgbaOf(mixed $value, string $path): ?array
+    {
+        return $this->acfShapeOf($value, $path, 'AcfColorRgba', $this->acfColorRgbaFromArray(...));
+    }
+
+    /**
+     * groupの値(サブフィールドの名前 => フォーマット済みの値)を、$shapeでサブフィールドごとに正規化する。未設定(空の
+     * 配列を含む)はnull、文字列のキーの配列でない値は形の不一致。$shapeは、サブフィールドの値と位置(`{$path}.{名前}`)を
+     * 型ごとの`*Of()`のヘルパに渡す(ジェネレータが生成する)。
+     *
+     * @template T of array<string, mixed>
+     *
+     * @param Closure(array<string, mixed>, string): T $shape
+     *
+     * @return T|null
+     */
+    protected function acfGroupOf(mixed $value, string $path, Closure $shape): ?array
+    {
+        $group = $this->acfAssocOf($value, $path, 'array with string keys');
+
+        return $group === null ? null : $shape($group, $path);
+    }
+
+    /**
+     * repeaterの行のlistを、行ごとに$rowで正規化する。未設定は[]。listでない値は形の不一致。文字列のキーの配列でない
+     * 行は形の不一致として扱い、本番では記録して除く。$rowが受け取る位置は`{$path}[{添字}]`。
+     *
+     * @template T of array<string, mixed>
+     *
+     * @param Closure(array<string, mixed>, string): T $row
+     *
+     * @return list<T>
+     */
+    protected function acfRowsOf(mixed $value, string $path, Closure $row): array
+    {
+        $rows = [];
+
+        foreach ($this->acfListOf($value, $path) as $index => $element) {
+            $rowPath = "{$path}[{$index}]";
+            $assoc = \is_array($element) ? self::stringKeyedArray($element) : null;
+
+            if ($assoc === null) {
+                $this->acfMismatch($rowPath, 'row (array with string keys)', \is_array($element) ? 'list' : get_debug_type($element), null);
+                continue;
+            }
+
+            $rows[] = $row($assoc, $rowPath);
+        }
+
+        return $rows;
+    }
+
+    /**
+     * flexible_contentの行のlistを、行のacf_fc_layout(レイアウトの名前)に対応する$layoutsの関数で正規化する。
+     * acf_fc_layoutが無い・$layoutsに無いレイアウトの行は形の不一致として扱い、本番では記録して除く。ほかの扱いは
+     * acfRowsOf()と同じ。
+     *
+     * @template T of array<string, mixed>
+     *
+     * @param array<string, Closure(array<string, mixed>, string): T> $layouts
+     *
+     * @return list<T>
+     */
+    protected function acfLayoutsOf(mixed $value, string $path, array $layouts): array
+    {
+        $rows = [];
+        $expected = 'layout name (' . implode(', ', array_map(static fn(string $name): string => "'{$name}'", array_keys($layouts))) . ')';
+
+        foreach ($this->acfRowsOf($value, $path, static fn(array $row, string $rowPath): array => ['row' => $row, 'path' => $rowPath]) as $entry) {
+            $layout = $entry['row']['acf_fc_layout'] ?? null;
+            $normalize = \is_string($layout) ? ($layouts[$layout] ?? null) : null;
+
+            if ($normalize === null) {
+                $this->acfMismatch($entry['path'] . '.acf_fc_layout', $expected, \is_string($layout) ? 'string that is not a layout of the field' : get_debug_type($layout), null);
+                continue;
+            }
+
+            $rows[] = $normalize($entry['row'], $entry['path']);
+        }
+
+        return $rows;
+    }
+
+    /**
+     * レイアウトの無いflexible_contentは、正規化できる行が無い。未設定は[]、listでない値は形の不一致。行はどれも、
+     * レイアウトに無い行として形の不一致にし、本番では記録して除く(acfLayoutsOf()と同じ扱い)。
+     *
+     * @return list<never>
+     */
+    protected function acfEmptyLayoutsOf(mixed $value, string $path): array
+    {
+        foreach ($this->acfListOf($value, $path) as $index => $element) {
+            $this->acfMismatch("{$path}[{$index}]", 'no row (the flexible content field has no layouts)', get_debug_type($element), null);
+        }
+
+        return [];
     }
 
     /**
@@ -428,6 +656,81 @@ trait AcfFieldAccess
         if (!\function_exists('get_field')) {
             throw AcfNotActiveException::forCall(static::class . '::' . $method);
         }
+    }
+
+    /**
+     * keyのフィールドの、ACFに登録された定義の名前を返す。生成アクセサは、この名前を例外とログの位置と、has()の
+     * 保存先のメタの名前に使う。
+     *
+     * keyのフィールドが見つからないと、ACFのget_field()・update_field()は、keyを名前とするダミーのフィールドで黙って
+     * 別のメタを読み書きする。そのため、登録されていないことを設定の誤り(acf-jsonと生成クラスの食い違い等)として、
+     * debugにかかわらず例外にする。
+     *
+     * @throws AcfNotActiveException ACFが有効でない場合
+     * @throws AcfBridgeRuntimeException keyのフィールドがACFに登録されていない場合
+     */
+    private function acfFieldName(string $method, string $key): string
+    {
+        $this->assertAcfActive($method);
+        $field = acf_is_field_key($key) ? acf_get_field($key) : false;
+        $name = \is_array($field) && ($field['key'] ?? null) === $key ? ($field['name'] ?? null) : null;
+
+        if (!\is_string($name) || $name === '') {
+            throw new AcfBridgeRuntimeException("ACF field key '{$key}' used by " . static::class . "::{$method}() is not registered in ACF. Generated accessors read and write fields by their key; make sure ACF loads the acf-json that defines the field, or run wp tmswp acf sync if the field was removed");
+        }
+
+        return $name;
+    }
+
+    /**
+     * keyのフィールドのフォーマット済みの値と、例外とログに出す位置(フィールドの名前)を返す。
+     *
+     * @return array{mixed, string}
+     */
+    private function acfFormatted(string $method, string $key): array
+    {
+        $name = $this->acfFieldName($method, $key);
+
+        return [get_field($key, $this->acfId, true), $name];
+    }
+
+    /** $selector(名前またはkey)のフィールドへ、wp_slash()した値をupdate_field()で保存する。 */
+    private function updateField(string $selector, mixed $value): bool
+    {
+        // 文字列と配列(の中の文字列)だけをslashする。ほかの型はwp_slash()の対象外
+        return update_field($selector, \is_string($value) || \is_array($value) ? wp_slash($value) : $value, $this->acfId) !== false;
+    }
+
+    /**
+     * 名前が$nameのメタの行(optionsページはoption)が、get_field()が読む保存先にあるか。
+     *
+     * @throws AcfBridgeRuntimeException acf/validate_post_idのフィルタが、post_idをintでも文字列でもない値にした場合
+     */
+    private function hasStoredValue(string $name): bool
+    {
+        $postId = acf_get_valid_post_id($this->acfId);
+
+        if (!\is_int($postId) && !\is_string($postId)) {
+            throw new AcfBridgeRuntimeException('ACF resolved the post_id ' . $this->acfId . ' to ' . get_debug_type($postId) . ' (acf/validate_post_id); it must be an int or a string');
+        }
+
+        $target = acf_decode_post_id($postId);
+        $type = $target['type'] ?? null;
+        $id = $target['id'] ?? null;
+
+        if ($type === 'option') {
+            // ACFはoptionsの値を`{post_id}_{フィールド名}`のoptionに保存し、nullを未保存として読む
+            return \is_string($id) && get_option("{$id}_{$name}", null) !== null;
+        }
+
+        if (!\is_string($type) || !\is_int($id) || $id < 1) {
+            return false;
+        }
+
+        $rows = get_metadata_raw($type, $id, $name, false);
+
+        // WpMetaStorage::has()と同じく、null・false・空の配列とスカラーの空文字は行なしとする
+        return $rows !== null && $rows !== false && $rows !== '' && $rows !== [];
     }
 
     /** ACFが未設定に返す値(null・false・'')か。 */
@@ -442,7 +745,7 @@ trait AcfFieldAccess
      *
      * @template T
      *
-     * @param string $name フィールド名(listの要素は`name[添字]`)
+     * @param string $path フィールドの位置(フィールド名。listの要素は`name[添字]`、サブフィールドは`name.sub`)
      * @param string $expected 想定した型
      * @param string $actual 実際の値の型(値そのものではない)
      * @param T $fallback 本番で返す未設定の値
@@ -451,17 +754,17 @@ trait AcfFieldAccess
      *
      * @return T
      */
-    private function acfMismatch(string $name, string $expected, string $actual, mixed $fallback): mixed
+    private function acfMismatch(string $path, string $expected, string $actual, mixed $fallback): mixed
     {
         $kernel = Kernel::forClass(static::class);
         $acfId = (string) $this->acfId;
 
         if ($kernel->config()->debug) {
-            throw new AcfBridgeRuntimeException("ACF field '{$name}' of {$acfId} has an unexpected value: expected {$expected}, got {$actual} (" . static::class . ')');
+            throw new AcfBridgeRuntimeException("ACF field '{$path}' of {$acfId} has an unexpected value: expected {$expected}, got {$actual} (" . static::class . ')');
         }
 
         $kernel->logger()->error('tmswp.acf: ACF field {field} of {acfId} has an unexpected value: expected {expected}, got {actual} ({class})', [
-            'field' => $name,
+            'field' => $path,
             'acfId' => $acfId,
             'expected' => $expected,
             'actual' => $actual,
@@ -469,6 +772,49 @@ trait AcfFieldAccess
         ]);
 
         return $fallback;
+    }
+
+    /**
+     * listの値。未設定は[]、配列でない値・文字列のキーの配列は形の不一致。
+     *
+     * @return list<mixed>
+     */
+    private function acfListOf(mixed $value, string $path): array
+    {
+        if (self::isUnset($value)) {
+            return [];
+        }
+
+        if (!\is_array($value)) {
+            return $this->acfMismatch($path, 'list', get_debug_type($value), []);
+        }
+
+        foreach (array_keys($value) as $key) {
+            if (!\is_int($key)) {
+                return $this->acfMismatch($path, 'list', 'array with string keys', []);
+            }
+        }
+
+        // ACFが要素を除いた配列は添字が飛ぶことがあるため、詰め直す
+        return array_values($value);
+    }
+
+    /**
+     * 文字列のキーの配列の値。未設定(空の配列を含む)はnull、配列でない値・listは形の不一致。
+     *
+     * @return array<string, mixed>|null
+     */
+    private function acfAssocOf(mixed $value, string $path, string $expected): ?array
+    {
+        if (self::isUnset($value) || $value === []) {
+            return null;
+        }
+
+        if (!\is_array($value)) {
+            return $this->acfMismatch($path, $expected, get_debug_type($value), null);
+        }
+
+        return self::stringKeyedArray($value) ?? $this->acfMismatch($path, $expected, 'list', null);
     }
 
     /**
@@ -480,15 +826,15 @@ trait AcfFieldAccess
      *
      * @return T|null
      */
-    private function acfShape(string $name, string $expected, Closure $shape): ?array
+    private function acfShapeOf(mixed $value, string $path, string $expected, Closure $shape): ?array
     {
-        $value = $this->acfNullableArray($name);
+        $assoc = $this->acfAssocOf($value, $path, 'array with string keys');
 
-        if ($value === null) {
+        if ($assoc === null) {
             return null;
         }
 
-        return $shape($value) ?? $this->acfMismatch($name, $expected, 'array of another shape', null);
+        return $shape($assoc) ?? $this->acfMismatch($path, $expected, 'array of another shape', null);
     }
 
     /**
@@ -500,15 +846,15 @@ trait AcfFieldAccess
      *
      * @return list<T>
      */
-    private function acfListOf(string $name, string $expected, Closure $item): array
+    private function acfListItemsOf(mixed $value, string $path, string $expected, Closure $item): array
     {
         $items = [];
 
-        foreach ($this->acfList($name) as $index => $element) {
+        foreach ($this->acfListOf($value, $path) as $index => $element) {
             $typed = $item($element);
 
             if ($typed === null) {
-                $this->acfMismatch("{$name}[{$index}]", $expected, \is_array($element) ? 'array of another shape' : get_debug_type($element), null);
+                $this->acfMismatch("{$path}[{$index}]", $expected, \is_array($element) ? 'array of another shape' : get_debug_type($element), null);
                 continue;
             }
 

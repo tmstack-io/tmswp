@@ -32,8 +32,7 @@ parameters:
     - tests/Unit
 
   excludePaths:
-    - packages/*/tests/fixtures/*
-    - packages/*/tests/*/fixtures/*
+    - packages/core/tests/fixtures/*
 
   scanDirectories:
     - vendor-bin/wp-tests/vendor/yoast/phpunit-polyfills/src

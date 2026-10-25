@@ -4,37 +4,18 @@ declare(strict_types=1);
 
 namespace TMSWP\AcfBridge\Generate;
 
+/**
+ * フィールド名・locationの値から、生成クラスのメソッド名・定数名・クラス名の部品を作る(docs/09 §4.3・§5.5)。
+ */
 final class NameConverter
 {
-    /** @var list<string> */
-    private const RESERVED = [
-        'of',
-        'instance',
-        'value',
-        'rawValue',
-        'update',
-        'delete',
-        'has',
-        'acfId',
-        'class',
-        'function',
-        'list',
-        'match',
-        'readonly',
-    ];
-
+    /** snake_case → camelCase。'main_visual' → 'mainVisual' */
     public static function methodName(string $fieldName): string
     {
-        $studly = self::studly($fieldName);
-        $method = lcfirst($studly);
-
-        if (\in_array($method, self::RESERVED, true)) {
-            return $method . 'Field';
-        }
-
-        return $method;
+        return lcfirst(self::studly($fieldName));
     }
 
+    /** 区切り([^A-Za-z0-9])で分けて各語の先頭を大文字にする。'main_visual' → 'MainVisual'。数字で始まれば'N'を前置する。 */
     public static function studly(string $name): string
     {
         $parts = preg_split('/[^A-Za-z0-9]+/', $name, -1, PREG_SPLIT_NO_EMPTY);
@@ -48,15 +29,21 @@ final class NameConverter
         return preg_match('/^[0-9]/', $studly) === 1 ? 'N' . $studly : $studly;
     }
 
+    /**
+     * 'main_visual' → 'MAIN_VISUAL'。ASCII snake_caseでない名前と、PHPでクラス定数に使えない名前(`class`)はnull。
+     */
     public static function constName(string $fieldName): ?string
     {
-        if (preg_match('/^[a-z][a-z0-9_]*$/', $fieldName) !== 1) {
+        if (!self::isAccessorEligible($fieldName)) {
             return null;
         }
 
-        return strtoupper($fieldName);
+        $constName = strtoupper($fieldName);
+
+        return $constName === 'CLASS' ? null : $constName;
     }
 
+    /** アクセサを生成できるフィールド名(ASCII snake_case: `^[a-z][a-z0-9_]*$`)か。 */
     public static function isAccessorEligible(string $fieldName): bool
     {
         return preg_match('/^[a-z][a-z0-9_]*$/', $fieldName) === 1;

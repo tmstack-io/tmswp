@@ -6,173 +6,222 @@ namespace TMSWP\AcfBridge\Generate;
 
 use TMSWP\AcfBridge\Json\FieldDefinition;
 
+/**
+ * ACFのフィールドの型と設定から、生成アクセサの型と読み方(TypeMapping)を決める(docs/09 §6.2)。
+ *
+ * 型の表記の中のクラス(WP_Post・DateTimeInterface等)はClassImports::ref()の参照で、型の別名(AcfImage等)は
+ * ClassImports::alias()の名前で書く。shapeのキー(フィールドの名前)とacf_fc_layoutのリテラル(レイアウトの名前)は、
+ * 生成クラスの名前にかかわらず、そのまま書く。
+ */
 final class TypeMapper
 {
-    public function map(FieldDefinition $field): TypeMapping
+    /** 値を持たないACFのフィールドの型(アクセサもshapeのキーも生成しない) */
+    private const array NO_VALUE_TYPES = ['message', 'tab', 'accordion'];
+
+    /**
+     * @param ClassImports $imports getter側の型(getterNativeType・getterDocType・objectClass)が参照するクラスと型の別名を
+     *                              書く、生成クラス1つ分のClassImports
+     * @param ClassImports $setterImports setter側の型(setterNativeType・setterDocType)の参照を書くClassImports。
+     *                                    トップレベルのフィールドは$importsと同じもの、setterを生成しない入れ子の
+     *                                    サブフィールドは生成クラスのuseに記録しないもの
+     */
+    public function map(FieldDefinition $field, ClassImports $imports, ClassImports $setterImports): TypeMapping
     {
         $returnFormat = $field->returnFormat ?? $this->defaultReturnFormat($field);
 
         return match ($field->type) {
-            'text', 'textarea', 'email', 'url', 'password', 'wysiwyg', 'oembed', 'date_picker', 'date_time_picker', 'time_picker' => $this->stringType($field),
+            'text', 'textarea', 'email', 'url', 'password', 'wysiwyg', 'oembed', 'date_picker', 'date_time_picker', 'time_picker' => $this->stringType($field, $setterImports),
             'number', 'range' => new TypeMapping('int|float|null', 'int|float|null', 'acfNumber', 'int|float|null'),
             'true_false' => new TypeMapping('bool', 'bool', 'acfBool', 'bool'),
-            'select', 'checkbox', 'radio', 'button_group' => $this->choiceType($field, $returnFormat),
-            'image' => $this->mediaType($returnFormat, 'AcfImage', 'acfImage'),
-            'file' => $this->mediaType($returnFormat, 'AcfFile', 'acfFile'),
-            'gallery' => $this->galleryType($returnFormat),
-            'link' => $returnFormat === 'url'
-                ? new TypeMapping('?string', 'string|null', 'acfNullableString', '?array', 'AcfLink|null')
-                : new TypeMapping('?array', 'AcfLink|null', 'acfLink', '?array', 'AcfLink|null'),
-            'post_object' => $field->multiple ? $this->listObjectType($returnFormat, '\\WP_Post') : $this->singleObjectType($returnFormat, '\\WP_Post'),
+            'select', 'checkbox', 'radio', 'button_group' => $this->choiceType($field, $returnFormat, $imports),
+            'image' => $this->mediaType($returnFormat, 'AcfImage', 'acfImage', $imports),
+            'file' => $this->mediaType($returnFormat, 'AcfFile', 'acfFile', $imports),
+            'gallery' => $this->galleryType($returnFormat, $imports),
+            'link' => $this->linkType($returnFormat, $imports, $setterImports),
+            'post_object' => $field->multiple ? $this->listObjectType($returnFormat, 'WP_Post', $imports) : $this->singleObjectType($returnFormat, 'WP_Post', $imports),
             'page_link' => $field->multiple
                 ? new TypeMapping('array', 'list<string>', 'acfStringList', 'array', 'list<int|string>')
                 : new TypeMapping('?string', 'string|null', 'acfNullableString', 'int|string|null'),
             'relationship' => $returnFormat === 'id'
                 ? new TypeMapping('array', 'list<int>', 'acfIntList', 'array', 'list<int>')
-                : new TypeMapping('array', 'list<\\WP_Post>', 'acfList', 'array', 'list<int>'),
-            'taxonomy' => $this->taxonomyType($field, $returnFormat),
-            'user' => $field->multiple ? $this->listObjectType($returnFormat, '\\WP_User', 'AcfUserArray') : $this->singleObjectType($returnFormat, '\\WP_User', 'AcfUserArray'),
+                : $this->listObjectType($returnFormat, 'WP_Post', $imports),
+            'taxonomy' => $this->taxonomyType($field, $returnFormat, $imports),
+            'user' => $field->multiple
+                ? $this->listObjectType($returnFormat, 'WP_User', $imports, 'AcfUserArray')
+                : $this->singleObjectType($returnFormat, 'WP_User', $imports, 'AcfUserArray'),
             'color_picker' => $returnFormat === 'array'
-                ? new TypeMapping('?array', 'AcfColorRgba|null', 'acfColorRgba', 'string')
+                ? new TypeMapping('?array', $imports->alias('AcfColorRgba') . '|null', 'acfColorRgba', 'string')
                 : new TypeMapping('string', 'string', 'acfString', 'string'),
-            'group' => new TypeMapping('?array', $this->shape($field) . '|null', 'acfNullableArray', '?array', 'array<string, mixed>|null'),
-            'repeater' => new TypeMapping('array', 'list<' . $this->shape($field) . '>', 'acfList', 'array', 'list<array<string, mixed>>'),
-            'flexible_content' => new TypeMapping('array', 'list<' . $this->flexibleUnion($field) . '>', 'acfList', 'array', 'list<array<string, mixed>>'),
-            default => new TypeMapping('mixed', 'mixed', 'value', 'mixed'),
+            'group' => new TypeMapping('?array', $this->shape($field->subFields, $imports) . '|null', 'acfGroup', '?array', 'array<string, mixed>|null'),
+            'repeater' => new TypeMapping('array', 'list<' . $this->shape($field->subFields, $imports) . '>', 'acfRows', 'array', 'list<array<string, mixed>>'),
+            'flexible_content' => $field->layouts === []
+                ? new TypeMapping('array', 'list<never>', 'acfEmptyLayouts', 'array', 'list<array<string, mixed>>')
+                : new TypeMapping('array', 'list<' . $this->flexibleUnion($field, $imports) . '>', 'acfLayouts', 'array', 'list<array<string, mixed>>'),
+            default => new TypeMapping('mixed', 'mixed', 'acfMixed', 'mixed'),
         };
     }
 
     public function storesValue(FieldDefinition $field): bool
     {
-        return !\in_array($field->type, ['message', 'tab', 'accordion'], true);
+        return !\in_array($field->type, self::NO_VALUE_TYPES, true);
     }
 
-    private function stringType(FieldDefinition $field): TypeMapping
+    /**
+     * サブフィールドのうち値を持つもの(group・repeater・flexible_contentのレイアウトのshapeのキーになるもの)。
+     *
+     * @param list<FieldDefinition> $fields
+     *
+     * @return list<FieldDefinition>
+     */
+    public function valueFields(array $fields): array
     {
-        if ($field->type === 'date_picker') {
-            return new TypeMapping('string', 'string', 'acfString', 'string|\\DateTimeInterface|null', '', true, 'Ymd');
-        }
-
-        if ($field->type === 'date_time_picker') {
-            return new TypeMapping('string', 'string', 'acfString', 'string|\\DateTimeInterface|null', '', true, 'Y-m-d H:i:s');
-        }
-
-        if ($field->type === 'time_picker') {
-            return new TypeMapping('string', 'string', 'acfString', 'string|\\DateTimeInterface|null', '', false, 'H:i:s');
-        }
-
-        return new TypeMapping('string', 'string', 'acfString', 'string');
+        return array_values(array_filter($fields, $this->storesValue(...)));
     }
 
-    private function choiceType(FieldDefinition $field, string $returnFormat): TypeMapping
+    /**
+     * array shapeのキーの表記。PHPの識別子の形の名前はそのまま、ほかの名前(日本語のフィールド名等)は引用符で囲む。
+     */
+    public static function shapeKey(string $name): string
+    {
+        if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name) === 1) {
+            return $name;
+        }
+
+        return "'" . str_replace(['\\', "'"], ['\\\\', "\\'"], $name) . "'";
+    }
+
+    private function stringType(FieldDefinition $field, ClassImports $setterImports): TypeMapping
+    {
+        $dateSetter = static fn(): string => 'string|' . $setterImports->ref('DateTimeInterface') . '|null';
+
+        return match ($field->type) {
+            'date_picker' => new TypeMapping('string', 'string', 'acfString', $dateSetter(), '', true, 'Ymd'),
+            'date_time_picker' => new TypeMapping('string', 'string', 'acfString', $dateSetter(), '', true, 'Y-m-d H:i:s'),
+            'time_picker' => new TypeMapping('string', 'string', 'acfString', $dateSetter(), '', false, 'H:i:s'),
+            default => new TypeMapping('string', 'string', 'acfString', 'string'),
+        };
+    }
+
+    private function choiceType(FieldDefinition $field, string $returnFormat, ClassImports $imports): TypeMapping
     {
         $isMultiple = $field->multiple || $field->type === 'checkbox';
 
         if ($isMultiple) {
             return $returnFormat === 'array'
-                ? new TypeMapping('array', 'list<AcfChoice>', 'acfChoiceList', 'array', 'list<string>')
+                ? new TypeMapping('array', 'list<' . $imports->alias('AcfChoice') . '>', 'acfChoiceList', 'array', 'list<string>')
                 : new TypeMapping('array', 'list<string>', 'acfStringList', 'array', 'list<string>');
         }
 
         return $returnFormat === 'array'
-            ? new TypeMapping('?array', 'AcfChoice|null', 'acfChoice', '?string')
+            ? new TypeMapping('?array', $imports->alias('AcfChoice') . '|null', 'acfChoice', '?string')
             : new TypeMapping('?string', 'string|null', 'acfNullableString', '?string');
     }
 
-    private function mediaType(string $returnFormat, string $docType, string $arrayHelper): TypeMapping
+    /** @param string $alias return_format=arrayの型の別名(AcfTypesの名前) */
+    private function mediaType(string $returnFormat, string $alias, string $arrayHelper, ClassImports $imports): TypeMapping
     {
         return match ($returnFormat) {
             'id' => new TypeMapping('?int', 'int|null', 'acfInt', '?int'),
             'url' => new TypeMapping('?string', 'string|null', 'acfNullableString', '?int'),
-            default => new TypeMapping('?array', "{$docType}|null", $arrayHelper, '?int'),
+            default => new TypeMapping('?array', $imports->alias($alias) . '|null', $arrayHelper, '?int'),
         };
     }
 
-    private function galleryType(string $returnFormat): TypeMapping
+    private function galleryType(string $returnFormat, ClassImports $imports): TypeMapping
     {
         return match ($returnFormat) {
             'id' => new TypeMapping('array', 'list<int>', 'acfIntList', 'array', 'list<int>'),
             'url' => new TypeMapping('array', 'list<string>', 'acfStringList', 'array', 'list<int>'),
-            default => new TypeMapping('array', 'list<AcfImage>', 'acfImageList', 'array', 'list<int>'),
+            default => new TypeMapping('array', 'list<' . $imports->alias('AcfImage') . '>', 'acfImageList', 'array', 'list<int>'),
         };
     }
 
-    private function singleObjectType(string $returnFormat, string $objectClass, string $arrayDoc = ''): TypeMapping
+    private function linkType(string $returnFormat, ClassImports $imports, ClassImports $setterImports): TypeMapping
+    {
+        $setterDoc = $setterImports->alias('AcfLink') . '|null';
+
+        return $returnFormat === 'url'
+            ? new TypeMapping('?string', 'string|null', 'acfNullableString', '?array', $setterDoc)
+            : new TypeMapping('?array', $imports->alias('AcfLink') . '|null', 'acfLink', '?array', $setterDoc);
+    }
+
+    /**
+     * @param string $class 要素のクラスの短名(ClassImports::ref()に渡す)
+     * @param string $arrayAlias return_format=arrayの型の別名(AcfTypesの名前)。無ければ''
+     */
+    private function singleObjectType(string $returnFormat, string $class, ClassImports $imports, string $arrayAlias = ''): TypeMapping
     {
         if ($returnFormat === 'id') {
             return new TypeMapping('?int', 'int|null', 'acfInt', '?int');
         }
 
-        if ($returnFormat === 'array' && $arrayDoc !== '') {
-            return new TypeMapping('?array', "{$arrayDoc}|null", 'acfUserArray', '?int');
+        if ($returnFormat === 'array' && $arrayAlias !== '') {
+            return new TypeMapping('?array', $imports->alias($arrayAlias) . '|null', 'acfUserArray', '?int');
         }
 
-        return new TypeMapping('?object', "{$objectClass}|null", 'value', '?int');
+        $objectClass = $imports->ref($class);
+
+        return new TypeMapping("?{$objectClass}", "{$objectClass}|null", 'acfObject', '?int', objectClass: $objectClass);
     }
 
-    private function listObjectType(string $returnFormat, string $objectClass, string $arrayDoc = ''): TypeMapping
+    /**
+     * @param string $class 要素のクラスの短名(ClassImports::ref()に渡す)
+     * @param string $arrayAlias return_format=arrayの型の別名(AcfTypesの名前)。無ければ''
+     */
+    private function listObjectType(string $returnFormat, string $class, ClassImports $imports, string $arrayAlias = ''): TypeMapping
     {
         if ($returnFormat === 'id') {
             return new TypeMapping('array', 'list<int>', 'acfIntList', 'array', 'list<int>');
         }
 
-        if ($returnFormat === 'array' && $arrayDoc !== '') {
-            return new TypeMapping('array', "list<{$arrayDoc}>", 'acfUserArrayList', 'array', 'list<int>');
+        if ($returnFormat === 'array' && $arrayAlias !== '') {
+            return new TypeMapping('array', 'list<' . $imports->alias($arrayAlias) . '>', 'acfUserArrayList', 'array', 'list<int>');
         }
 
-        return new TypeMapping('array', "list<{$objectClass}>", 'acfList', 'array', 'list<int>');
+        $objectClass = $imports->ref($class);
+
+        return new TypeMapping('array', "list<{$objectClass}>", 'acfObjectList', 'array', 'list<int>', objectClass: $objectClass);
     }
 
-    private function taxonomyType(FieldDefinition $field, string $returnFormat): TypeMapping
+    private function taxonomyType(FieldDefinition $field, string $returnFormat, ClassImports $imports): TypeMapping
     {
         $isMultiple = \in_array($field->fieldType, ['checkbox', 'multi_select'], true);
 
         if ($isMultiple) {
             return $returnFormat === 'object'
-                ? new TypeMapping('array', 'list<\\WP_Term>', 'acfList', 'array', 'list<int>')
+                ? $this->listObjectType($returnFormat, 'WP_Term', $imports)
                 : new TypeMapping('array', 'list<int>', 'acfIntList', 'array', 'list<int>');
         }
 
         return $returnFormat === 'object'
-            ? new TypeMapping('?object', '\\WP_Term|null', 'value', '?int')
+            ? $this->singleObjectType($returnFormat, 'WP_Term', $imports)
             : new TypeMapping('?int', 'int|null', 'acfInt', '?int');
     }
 
-    private function shape(FieldDefinition $field): string
+    /**
+     * サブフィールドのshape(`array{名前: getterの型, ...}`)。値を持たないサブフィールドは含めない。キーとacf_fc_layoutの
+     * リテラルはそのまま書く。サブフィールドのsetterは生成しないため、そのsetter側の型の参照は生成クラスのuseに記録しない。
+     *
+     * @param list<FieldDefinition> $fields
+     */
+    private function shape(array $fields, ClassImports $imports, string $layout = ''): string
     {
-        $parts = [];
+        $parts = $layout === '' ? [] : ["acf_fc_layout: '" . str_replace(['\\', "'"], ['\\\\', "\\'"], $layout) . "'"];
 
-        foreach ($field->subFields as $subField) {
-            if (!$this->storesValue($subField) || !NameConverter::isAccessorEligible($subField->name)) {
-                continue;
-            }
-
-            $parts[] = $subField->name . ': ' . $this->map($subField)->getterDocType;
+        foreach ($this->valueFields($fields) as $subField) {
+            $parts[] = self::shapeKey($subField->name) . ': ' . $this->map($subField, $imports, ClassImports::discarding())->getterDocType;
         }
 
         return 'array{' . implode(', ', $parts) . '}';
     }
 
-    private function flexibleUnion(FieldDefinition $field): string
+    /** レイアウトごとのshape(acf_fc_layoutはレイアウトの名前のリテラル)のunion。レイアウトは1つ以上。 */
+    private function flexibleUnion(FieldDefinition $field, ClassImports $imports): string
     {
-        if ($field->layouts === []) {
-            return 'array{acf_fc_layout: string}';
-        }
-
         $shapes = [];
 
         foreach ($field->layouts as $layoutName => $layoutFields) {
-            $parts = ["acf_fc_layout: '" . str_replace("'", "\\'", $layoutName) . "'"];
-
-            foreach ($layoutFields as $subField) {
-                if (!$this->storesValue($subField) || !NameConverter::isAccessorEligible($subField->name)) {
-                    continue;
-                }
-
-                $parts[] = $subField->name . ': ' . $this->map($subField)->getterDocType;
-            }
-
-            $shapes[] = 'array{' . implode(', ', $parts) . '}';
+            $shapes[] = $this->shape($layoutFields, $imports, $layoutName);
         }
 
         return implode('|', $shapes);
