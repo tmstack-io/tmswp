@@ -27,6 +27,10 @@ final class ManagedKeyCollector
      * グループを渡す(seamlessのcloneが展開したフィールドも管理キーになる)。並びはAcfManifestの行と同じ
      * (ObjectTypeのcase名の順でoptionsは最後、次にサブタイプ、メタキー)。
      *
+     * 同じ(ObjectType, サブタイプ, メタキー)は1つにする。テンプレート別のクラスと投稿タイプのクラス、別のテンプレートの
+     * クラスが同じ名前のフィールドを持つと、同じ投稿のメタの同じキーになるため。残すのは、グループのkey・field keyの
+     * 昇順で最初のもの。
+     *
      * @param list<FieldGroup> $groups CloneResolverでcloneを解決したグループ
      *
      * @return list<ManagedKey>
@@ -58,9 +62,14 @@ final class ManagedKeyCollector
             }
         }
 
-        usort($keys, static fn(ManagedKey $a, ManagedKey $b): int => self::sortKey($a) <=> self::sortKey($b));
+        usort($keys, static fn(ManagedKey $a, ManagedKey $b): int => [self::sortKey($a), $a->groupKey, $a->fieldKey] <=> [self::sortKey($b), $b->groupKey, $b->fieldKey]);
+        $unique = [];
 
-        return $keys;
+        foreach ($keys as $key) {
+            $unique[self::sortKey($key)] ??= $key;
+        }
+
+        return array_values($unique);
     }
 
     private static function sortKey(ManagedKey $key): string

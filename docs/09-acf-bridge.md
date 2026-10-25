@@ -321,7 +321,7 @@ final readonly class AcfJsonSource
 ```php
 enum TargetKind: string
 {
-    case Post = 'post';        // 投稿タイプ単位 → {Studly}Fields
+    case Post = 'post';        // 投稿タイプ単位 → {Studly}Fields、テンプレート単位 → {Studly}TemplateFields
     case Term = 'term';        // タクソノミー単位 → {Studly}TermFields / TermFields
     case User = 'user';        // 全ユーザー共通 → UserFields
     case Options = 'options';  // オプションページ単位 → {Studly}Options
@@ -334,7 +334,12 @@ final readonly class GenerationTarget
         /** post_type名 / taxonomy名(all可) / ''(user) / options_page menu_slug */
         public string $subtype,
         public string $className,   // 短名(名前空間なし)
+        /** 投稿のテンプレート(page_template・post_templateのdefault以外の値)。テンプレート別のクラスのときだけ持つ */
+        public ?string $template = null,
     ) {}
+
+    /** 生成クラスを分けるキー。'post:product'等で、テンプレート別のクラスは'post-template:{template}' */
+    public function key(): string;
 }
 ```
 
@@ -342,27 +347,41 @@ final readonly class GenerationTarget
 
 ACF の `location` は「ORグループの配列 × 各ORグループ内は AND 条件の配列」。各 AND グループを独立に 1 ターゲットへ解決し、全 OR グループの和集合(重複排除)がそのフィールドグループのターゲット集合となる。**1 グループが複数ターゲットに解決された場合、各ターゲットのクラスすべてにそのグループのアクセサを生成する。**
 
-`operator` が `"=="` の条件のみ解決に使う。`"!="` は表示絞り込みであり保存先を決めないため無視する(AND グループ内に `==` の解決可能条件が他になければ W002 でその AND グループをスキップ)。
+`operator`が`"=="`の条件のみ解決に使う。`"!="`は表示の絞り込みであり保存先を決めないため無視する。1つのANDグループの中の`==`の条件は、上書きせず、すべてを満たす1つのターゲットに解決する(例: `post_type==product` AND `page_template==templates/feature.php`は、productのテンプレート`templates/feature.php`のクラス)。
 
 | param | `== value` の解決結果 |
 |---|---|
 | `post_type` | `Post` / subtype = value |
-| `page_template`, `page_type`, `page_parent`, `page` | `Post` / subtype = `page` |
-| `post_category`, `post_format` | `Post` / subtype = `post` |
-| `attachment` | `Post` / subtype = `attachment` |
+| `page_template`(default以外) | `Post` / subtype = 同じANDグループの`post_type`の値、無ければ`page`。テンプレート別のクラス(§4.3) |
+| `page_template==default` | `Post` / subtype = `page`(ACFはdefaultをpageにだけ当てはめる。page以外の`post_type`と同時ならW007) |
+| `post_template`(default以外) | `Post` / subtype = 同じANDグループの`post_type`の値。テンプレート別のクラス(§4.3)。`post_type ==`が無ければ、`page_template`の有無によらずW002(テンプレートのファイルのヘッダーは読まない) |
+| `post_template==default` | `Post` / subtype = 同じANDグループの`post_type`の値(投稿タイプのクラス) |
+| `page_type`, `page_parent`, `page` | `Post` / subtype = 同じANDグループの`post_type`の値、無ければ`page` |
+| `post_category`, `post_format` | `Post` / subtype = 同じANDグループの`post_type`の値、無ければ`post` |
+| `attachment` | `Post` / subtype = 同じANDグループの`post_type`の値、無ければ`attachment` |
 | `post_status`, `post_taxonomy`, `post` (個別ID) | 単独では解決不能。同一 AND グループ内に上記の解決可能条件があればそれに従う。なければ W003(`post`)/W002 でスキップ |
 | `taxonomy` | `Term` / subtype = value(`all` 含む) |
 | `user_form`, `user_role` | `User` / subtype = `''`(role 別にクラスは分けない。全ユーザーグループは単一の `UserFields` に集約) |
 | `options_page` | `Options` / subtype = value(menu_slug) |
 | `current_user`, `current_user_role` | 表示者条件。保存先を決めないため無視(`!=` と同じ扱い) |
-| `comment`, `widget`, `nav_menu`, `nav_menu_item`, `block` | 非対応。W006 でその AND グループをスキップ |
-| 未知の param | W006 でスキップ |
+| `block` | 非対応。W006でそのANDグループをスキップする。acf-bridgeはACF Blocksのアクセサを生成しない。独自ブロックは文書12 §1.11(D-26)の方式で作る |
+| `comment`, `widget`, `nav_menu`, `nav_menu_item` | 非対応。W006でそのANDグループをスキップ |
+| 未知のparam | W006でスキップ |
 
 競合規則:
 
 - 同一 AND グループ内に**異なる種別**の解決可能条件が複数ある場合(例: `post_type==post` AND `taxonomy==genre`)、優先順位 `post_type系 > taxonomy > options_page > user系` で 1 つだけ採用し W004 を出す。
-- 同一 AND グループ内に**同一 param** の `==` が複数値である場合(`post_type==a` AND `post_type==b`)は条件不成立として W007 でスキップ。
-- フィールドグループの全 AND グループが解決不能 → そのグループ全体を W002 でスキップ(エラーにはしない。`check --strict` では失敗となる §9.3)。
+- `post_type`が無く、ほかの条件が違う投稿タイプを示す場合(例: `page_type`(page)AND `post_format`(post))は、どれも選ばずW002でそのANDグループをスキップする。
+- 1つのANDグループの中の、静的に判別できる矛盾は、条件不成立としてW007でスキップする。`!=`から対象を決めることはしないが、矛盾の検査には`!=`も使う。ACFが画面の1つの値と比べるparamは、比べる値(値源)ごとに次を調べる。
+  - 同じ値源に、`all`でない違う`==`の値が2つ以上ある(`all`はACFがどの値にも当てはめるため、ほかの値と同時に成り立つ)。
+  - 同じ値源に、同じ値の`==`と`!=`がある(値源のparamのmatch()は、`compare_to_rule()`で`!=`のときに`==`の結果を反転する)。
+  - 同じ値源に`!= all`がある(どの値にも当てはまる`all`の否定は、どの画面にも当てはまらない)。
+  - 値源とparam: post_type(`post_type`。画面の投稿タイプ)、テンプレート(`page_template`・`post_template`。投稿のメタ`_wp_page_template`で、空はdefault。`page_template`のmatch()は`post_template`のmatch()に委ねる)、投稿のID(`page`・`post`。画面の投稿のID。`page`のmatch()は`post`のmatch()に委ねる)、`page_parent`(親のID)、`post_status`(状態)、`post_format`(フォーマット)、`taxonomy`(タクソノミー)、`options_page`(menu_slug)。
+  - 根拠: ACF 6.2.0・6.8.10の`includes/locations/class-acf-location-*.php`(`options_page`はACF Pro 6.5.1・6.8.8の`pro/locations/class-acf-location-options-page.php`)のmatch()が、上の1つの値を`includes/locations/abstract-acf-location.php`の`compare_to_rule()`で比べる。
+  - 値源に入らない(値を複数持てる、ruleの値ごとに前処理をして比べる)param: 同じparamの、完全に同じ文字列の`==`と`!=`だけをW007にする(同じruleの値なら同じ述語になり、`!=`がそれを反転する)。該当するのは`post_category`・`post_taxonomy`(投稿の複数のタームのどれか)、`user_role`(ユーザーの権限ごとに`user_can()`で判定)、`page_type`(front_page・top_level等の別々の判定)、`attachment`(`image`と`image/png`が同じファイルに当てはまる)、`user_form`(`edit`は追加の画面にも当てはまる)。
+  - 値源の値の同じ・違うは、`compare_to_rule()`と同じPHP 8の`==`で判定する。数値の文字列どうしは数値として比べ(`page==1`と`post==01`は同じ投稿のIDで、同時に成り立つ)、それ以外は文字列として比べる(`Product`と`product`は違う値)。値源に入らないparamは、PHPの`==`で同じ値でも別の述語になりうるため(`user_role`はruleの値ごとに`user_can()`を呼び、WordPressは数値の`1`を`level_1`、`01`を`level_01`の権限として調べる)、完全に同じ文字列だけを同じ値とする。
+  - operatorを調べる前にtrueを返す経路を持つparamは、その経路で`==`と`!=`の両方が成り立つため、`==`と`!=`の検査から外す(生成から除かない)。ACF 6.2.0・6.8.10の`includes/locations/`の全クラスと、ACF Pro 6.5.1・6.8.8の`pro/locations/`の全クラスのmatch()のうち、該当するのは`user_form`だけである。RESTの画面(`$screen['rest']`。ACFのREST APIがユーザーのフィールドグループを選ぶときに渡す)ではtrueを返す(6.8.10の`class-acf-location-user-form.php`の49〜51行、6.2.0の同じファイルの40〜42行)。operatorによらずfalseを返す経路(画面に値が無いとき等)は、`==`と`!=`の両方を成り立たなくするだけで、矛盾の検査を誤らせない。
+- `==`で対象を決められるparamが無いANDグループは、ANDグループごとにW002でスキップする(個別IDの`post`だけならW003)。フィールドグループの全ANDグループが解決不能のときは、さらにグループ全体をW002でスキップする(エラーにはしない。`check --strict`では失敗となる。§9.3)。
 
 ## 4.3 クラス命名規則
 
@@ -371,13 +390,24 @@ ACF の `location` は「ORグループの配列 × 各ORグループ内は AND 
 | TargetKind | クラス短名 | 例 |
 |---|---|---|
 | Post | `{studly(post_type)}Fields` | `product` → `ProductFields`、`post` → `PostFields`、`page` → `PageFields` |
+| Post(テンプレート) | `{studly(テンプレートのファイル名から拡張子を除いたもの)}TemplateFields` | `templates/page-about.php` → `PageAboutTemplateFields` |
 | Term | `{studly(taxonomy)}TermFields`、`all` のときは `TermFields` | `genre` → `GenreTermFields` |
 | User | `UserFields`(固定) | — |
 | Options | `{studly(menu_slug)}Options` | `theme-settings` → `ThemeSettingsOptions` |
 
+- studlyの結果が空(ASCIIの英数字の無い名前)ならE003。
+- 1つのターゲット(テンプレート別のクラスでは1つのテンプレート)に合流するグループが、classMapで違うクラス名を求める場合(classMapの無いグループの既定の名前との食い違いを含む)はE003。1つのターゲットには1つのクラスを作る。
 - `BridgeConfig::$classMap`(グループ key → クラス短名)が指定されている場合、そのグループ由来のターゲットのうち **単一ターゲットに解決されるグループに限り** クラス名を上書きできる。複数ターゲットのグループに classMap を指定した場合は E003。
-- 異なるターゲットが同一クラス名に解決された場合(例: post_type `product` と taxonomy `product-fields` の偶発衝突)は E003(メッセージに両ターゲットと classMap での回避方法を含める)。
+- 異なるターゲットが同一クラス名に解決された場合(例: post_type`product`とtaxonomy`product-fields`の偶発衝突、ディレクトリだけが違う同じファイル名のテンプレート)はE003(メッセージに両ターゲットとclassMapでの回避方法を含める)。
 - 同一ターゲットに複数グループが解決された場合は **1 クラスにマージ**する(グループ key 昇順でフィールドを連結)。マージ後にフィールド名が重複したら E001。
+
+テンプレート別のクラス:
+
+- 単一のテンプレート(`page_template==X`か`post_template==X`。default以外)を条件に持つANDグループは、テンプレート別のクラスに出す。ORで複数のテンプレートを条件にするグループは、それぞれのテンプレートのクラスに出す。
+- 一般のpageのグループ(`page_type`・`page`・`page_parent`や、テンプレートの条件の無い`post_type==page`)はPageFieldsに残し、テンプレート別のクラスには含めない。テンプレートを選んだpageには両方のグループが表示されるため、利用側は両方のクラスを使う。
+- 1つのテンプレートを複数の投稿タイプが使う場合(`post_template`で投稿タイプが違うANDグループ)も、クラスはテンプレートごとに1つにする。テンプレートのファイルはテーマに1つで、ACFはテンプレートのフィールドを、そのテンプレートを選んだどの投稿タイプの投稿にも表示するためである。生成クラスの`of()`は投稿タイプを確かめず、field keyで読み書きするため、投稿タイプが違っても同じクラスで扱える。管理キー(§7.1)は投稿タイプごとに出す(`(post, product, 名前)`と`(post, page, 名前)`)。同じテンプレートのクラスに、投稿タイプが違うグループの同じ名前の別のフィールドがあればE001(1つのアクセサで2つのfield keyを扱えないため)。
+- テンプレート別のクラスとその投稿タイプのクラス(PageFields等。`post_type==all`のクラスは、どの投稿タイプのテンプレートとも重なる)が同じ名前のフィールドを持つ場合、ACFはどちらも同じ投稿のメタ(その名前)に保存する(テンプレートを選んだ投稿に両方のグループが表示される)。field keyが同じなら同じフィールド(cloneで共有したもの等)として扱い、両方のクラスに同じアクセサを生成する。field keyが違えば、2つのフィールドが1つのメタを奪い合うためE001にする。別のテンプレートのクラスどうしの同じ名前は、1つの投稿が選べるテンプレートは1つのため衝突しない。
+- 管理キーは、同じ(ObjectType, サブタイプ, メタキー)を1つにする(グループのkey・field keyの昇順で最初のもの)。テンプレート別のクラスとその投稿タイプのクラス、別のテンプレートのクラスの同じ名前のフィールドは、同じ投稿のメタの同じキーだからである。
 
 ---
 
@@ -656,20 +686,20 @@ final class Report
 
 | コード | 区分 | 内容 |
 |---|---|---|
-| E001 | エラー | 同一ターゲットにマージされる複数グループ間でフィールド名が重複 |
+| E001 | エラー | 同一ターゲットにマージされる複数グループ間でフィールド名が重複、テンプレート別のクラスとその投稿タイプ(`all`を含む)のクラスの同じ名前の別のフィールド(§4.3) |
 | E002 | エラー | メソッド名・定数名の衝突(予約名・ほかのフィールドとの衝突。メソッド名は大文字小文字を区別しない)、クラス定数に使えない名前(`class`)、サブフィールドの名前の重複・`acf_fc_layout`・10進の整数の名前(§5.5)、flexible_contentのレイアウトの名前の重複・10進の整数の名前(§3.3) |
-| E003 | エラー | クラス名衝突、studly 変換不能、classMap の不正指定 |
+| E003 | エラー | クラス名衝突(同じファイル名のテンプレートを含む)、studly変換不能、classMapの不正指定(1つのターゲットへの違うクラス名を含む) |
 | E004 | エラー | clone フィールドの参照先(field key / group key)が acf-json 内に見つからない |
 | E005 | エラー | clone の循環参照 |
 | E101 | エラー | `#[MetaSchema]` 宣言と ACF 管理下キーの重複(§7.3。check 時に静的検出) |
 | E102 | エラー | JSON構文エラー、トップレベルが配列のJSON、同じディレクトリの中の同じkeyのJSON(§3.1・§3.2)、出力先書込不可、設定不備 |
 | W001 | 警告 | 非対象JSON(post_type_*/taxonomy_*/不明種別、トップレベルが配列でないJSON、keyの無いJSON。§3.2)を無視した |
-| W002 | 警告 | location を解決できずグループ(または AND グループ)をスキップ |
+| W002 | 警告 | locationを解決できずグループ(またはANDグループ)をスキップ(`==`で対象を決められないANDグループごと、`post_type ==`の無い`post_template`、違う投稿タイプを示す条件。§4.2) |
 | W003 | 警告 | `post`(個別 ID)条件は静的解決不能 |
 | W004 | 警告 | 同一 AND グループ内の複数対象条件に優先順位を適用した |
 | W005 | 警告 | 未知のフィールド型(サブフィールドを含む)を`mixed`として生成した |
-| W006 | 警告 | 非対応 location パラメータ(comment/widget/block 等)をスキップ |
-| W007 | 警告 | 不成立 AND 条件(同一 param の == 重複) |
+| W006 | 警告 | 非対応locationパラメータ(comment/widget/block等)をスキップ。blockは独自ブロックの方式(文書12 §1.11)を案内する |
+| W007 | 警告 | 不成立AND条件(同じ値源の`all`でない違う値の`==`、同じ値の`==`と`!=`、`!= all`。§4.2) |
 | W009 | 警告 | ASCII snake_case でないフィールド名のためアクセサ未生成 |
 | W010 | 警告 | 複数ディレクトリに同じkeyのJSON(jsonDirsの先のディレクトリのものを使う。§3.1) |
 | W011 | 警告 | `active: false` のグループをスキップ |

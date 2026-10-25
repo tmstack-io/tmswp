@@ -106,6 +106,7 @@ final class Generator
         $buckets = [];
         /** @var array<string, string> $classTargets */
         $classTargets = [];
+        $placed = [];
 
         foreach ($groups as $group) {
             if (!$group->active) {
@@ -133,6 +134,14 @@ final class Generator
                     continue;
                 }
 
+                $existing = $buckets[$targetKey] ?? null;
+
+                // 1つの生成のキーは1つのクラスになるため、classMapで違うクラス名を求めるグループがあれば設定の誤り
+                if ($existing instanceof TargetBucket && $existing->target->className !== $target->className) {
+                    $errors[] = "E003: target {$targetKey} is requested as class '{$existing->target->className}' by group '{$existing->groups()[0]->key}' and as class '{$target->className}' by group '{$group->key}'; set the same class name for both groups in BridgeConfig::\$classMap (one class is generated per target)";
+                    continue;
+                }
+
                 $registeredTarget = $classTargets[$target->className] ?? null;
 
                 if ($registeredTarget !== null && $registeredTarget !== $targetKey) {
@@ -142,13 +151,67 @@ final class Generator
 
                 $classTargets[$target->className] = $targetKey;
                 $buckets[$targetKey] ??= new TargetBucket($target);
-                $buckets[$targetKey]->addGroup($group);
+
+                // テンプレート別のクラスは、同じグループが投稿タイプごとの対象から同じクラスに入るため、1回だけ足す
+                if (!\in_array($group, $buckets[$targetKey]->groups(), true)) {
+                    $buckets[$targetKey]->addGroup($group);
+                }
+
+                $placed[] = [$group, $target];
             }
         }
 
+        $errors = [...$errors, ...$this->templateFieldConflicts($placed)];
         ksort($buckets, SORT_STRING);
 
         return array_values($buckets);
+    }
+
+    /**
+     * テンプレート別のクラスとその投稿タイプのクラス(PageFields等。`post_type==all`のクラスも、どの投稿タイプにも重なる)
+     * が、同じ名前の別のフィールド(field keyが違う)を持てばE001にする。テンプレートを選んだ投稿には両方のグループが表示され、ACFはどちらも同じ投稿のメタ(その名前)に保存する
+     * ため、2つのフィールドが1つのメタを奪い合う。field keyが同じなら同じフィールド(cloneで共有したもの等)で、衝突しない。
+     *
+     * @param list<array{FieldGroup, GenerationTarget}> $placed クラスに入れたグループと、その対象
+     *
+     * @return list<string>
+     */
+    private function templateFieldConflicts(array $placed): array
+    {
+        $plain = [];
+        $templated = [];
+
+        foreach ($placed as [$group, $target]) {
+            if ($target->kind !== TargetKind::Post) {
+                continue;
+            }
+
+            foreach ($group->fields as $field) {
+                if (!$this->types->storesValue($field) || $field->name === '' || $field->type === 'clone') {
+                    continue;
+                }
+
+                if ($target->template === null) {
+                    $plain[$field->name][] = [$target->subtype, $field->key, $group->key];
+                } else {
+                    $templated[] = [$target, $field->name, $field->key, $group->key];
+                }
+            }
+        }
+
+        $errors = [];
+
+        foreach ($templated as [$target, $name, $fieldKey, $groupKey]) {
+            foreach ($plain[$name] ?? [] as [$plainSubtype, $plainFieldKey, $plainGroupKey]) {
+                $overlaps = $plainSubtype === $target->subtype || $plainSubtype === 'all' || $target->subtype === 'all';
+
+                if ($overlaps && $plainFieldKey !== $fieldKey) {
+                    $errors[] = "E001: duplicate ACF field '{$name}' for post:{$plainSubtype} in groups {$plainGroupKey} and {$groupKey} (template '{$target->template}' of post:{$target->subtype}); a post with the template shows both groups and ACF saves both fields to the same meta key, so rename one of them or share one field";
+                }
+            }
+        }
+
+        return array_values(array_unique($errors));
     }
 
     /**
@@ -835,6 +898,10 @@ final class Generator
 
     private function targetDescription(GenerationTarget $target): string
     {
+        if ($target->template !== null) {
+            return 'post template ' . $this->phpString($target->template);
+        }
+
         return match ($target->kind) {
             TargetKind::Post => 'post_type ' . $this->phpString($target->subtype),
             TargetKind::Term => 'taxonomy ' . $this->phpString($target->subtype),
@@ -852,7 +919,7 @@ final class Generator
 
     private function targetKey(GenerationTarget $target): string
     {
-        return $target->kind->value . ':' . $target->subtype;
+        return $target->key();
     }
 
     private function isClassName(string $className): bool

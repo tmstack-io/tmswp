@@ -98,6 +98,41 @@ final class ManagedKeyCollectorTest extends UnitTestCase
     }
 
     /**
+     * 同じ(ObjectType, サブタイプ, メタキー)の管理キーは1つにする。テンプレート別のクラス・その投稿タイプのクラス・
+     * 別のテンプレートのクラスの同じ名前のフィールドは、同じ投稿のメタの同じキーだからである。残すのは、グループの
+     * key・field keyの昇順で最初のもの。1つのテンプレートを使う投稿タイプごとの管理キーは、それぞれ出す。
+     */
+    public function testKeysOfTheSameMetaAreCollectedOnce(): void
+    {
+        $groups = [
+            self::subtitleGroup('group_b_contact', [['page_template', 'templates/contact.php']], 'field_contact_subtitle'),
+            self::subtitleGroup('group_a_about', [['page_template', 'templates/about.php']], 'field_about_subtitle'),
+            self::subtitleGroup('group_c_page', [['post_type', 'page']], 'field_page_subtitle'),
+            self::subtitleGroup('group_d_product', [['post_type', 'product'], ['post_template', 'templates/about.php']], 'field_about_subtitle'),
+        ];
+
+        self::assertSame([
+            ['post', 'page', 'subtitle', 'field_about_subtitle', 'group_a_about'],
+            ['post', 'product', 'subtitle', 'field_about_subtitle', 'group_d_product'],
+        ], self::rows((new ManagedKeyCollector())->collect($groups, new BridgeConfig([], '/tmp/acf', 'App\Acf'))));
+    }
+
+    /**
+     * locationが1つのANDグループ$conditions([param, value]の`==`)で、textのフィールドsubtitle(field keyは$fieldKey)を持つグループ。
+     *
+     * @param list<array{string, string}> $conditions
+     */
+    private static function subtitleGroup(string $key, array $conditions, string $fieldKey): FieldGroup
+    {
+        return FieldGroup::fromArray([
+            'key' => $key,
+            'title' => $key,
+            'location' => [array_map(static fn(array $condition): array => ['param' => $condition[0], 'operator' => '==', 'value' => $condition[1]], $conditions)],
+            'fields' => [['key' => $fieldKey, 'name' => 'subtitle', 'label' => 'Subtitle', 'type' => 'text']],
+        ], "{$key}.json");
+    }
+
+    /**
      * @param list<ManagedKey> $keys
      *
      * @return list<array{?string, string, string, string, string}>

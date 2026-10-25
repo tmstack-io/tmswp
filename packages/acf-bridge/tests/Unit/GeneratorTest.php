@@ -232,6 +232,115 @@ final class GeneratorTest extends UnitTestCase
     }
 
     /**
+     * 単一のテンプレートを条件にするグループは、テンプレートごとのクラス(`{Studly(ファイル名)}TemplateFields`)に出し、
+     * 一般のpageのグループはPageFieldsに残す。1つのテンプレートを複数の投稿タイプが使えば、クラスはテンプレートごとに
+     * 1つで、管理キーは投稿タイプごとに出す。別のテンプレートの同じ名前のフィールドは、同じ(post, page, 名前)の管理キーを
+     * 1つだけ出す。
+     */
+    public function testTemplateGroupsGenerateOneClassPerTemplate(): void
+    {
+        $report = (new Generator())->generate([
+            $this->locatedGroup('group_about', [[['page_template', 'templates/page-about.php']], [['post_type', 'product'], ['post_template', 'templates/page-about.php']]], [self::text('hero')]),
+            $this->locatedGroup('group_contact', [[['page_template', 'templates/page-contact.php']]], [['key' => 'field_contact_hero', 'name' => 'hero', 'label' => 'hero', 'type' => 'text']]),
+            $this->locatedGroup('group_page', [[['post_type', 'page']]], [self::text('subtitle')]),
+        ], $this->context());
+        $files = $this->filesByPath($report->files());
+
+        self::assertSame([], $report->errors());
+        self::assertSame([], $report->warnings());
+        self::assertSame(['AcfManifest.php', 'PageAboutTemplateFields.php', 'PageContactTemplateFields.php', 'PageFields.php'], array_keys($files));
+        self::assertStringContainsString("PageAboutTemplateFields — ACF typed accessors for post template 'templates/page-about.php'.", $files['PageAboutTemplateFields.php']);
+        self::assertStringContainsString("public const KEY_HERO = 'field_hero';", $files['PageAboutTemplateFields.php']);
+        self::assertStringContainsString("public const KEY_HERO = 'field_contact_hero';", $files['PageContactTemplateFields.php']);
+        self::assertStringNotContainsString('HERO', $files['PageFields.php']);
+        self::assertSame(3, substr_count($files['AcfManifest.php'], 'new ManagedKey('));
+        self::assertStringContainsString("new ManagedKey(ObjectType::Post, 'page', 'hero', 'field_hero', 'group_about'),\n            new ManagedKey(ObjectType::Post, 'page', 'subtitle', 'field_subtitle', 'group_page'),\n            new ManagedKey(ObjectType::Post, 'product', 'hero', 'field_hero', 'group_about'),", $files['AcfManifest.php']);
+    }
+
+    /**
+     * テンプレート別のクラスとその投稿タイプのクラスが、同じ名前の別のフィールド(field keyが違う)を持てばE001にする
+     * (テンプレートを選んだ投稿に両方のグループが表示され、同じメタに保存されるため)。field keyが同じなら同じフィールド。
+     */
+    public function testTemplateFieldNamedLikeAFieldOfThePostTypeIsE001(): void
+    {
+        $page = $this->locatedGroup('group_page', [[['post_type', 'page']]], [self::text('subtitle')]);
+        $conflicting = $this->locatedGroup('group_about', [[['page_template', 'templates/page-about.php']]], [['key' => 'field_about_subtitle', 'name' => 'subtitle', 'label' => 'subtitle', 'type' => 'text']]);
+        $shared = $this->locatedGroup('group_about', [[['page_template', 'templates/page-about.php']]], [self::text('subtitle')]);
+
+        self::assertSame(
+            ["E001: duplicate ACF field 'subtitle' for post:page in groups group_page and group_about (template 'templates/page-about.php' of post:page); a post with the template shows both groups and ACF saves both fields to the same meta key, so rename one of them or share one field"],
+            (new Generator())->generate([$conflicting, $page], $this->context())->errors(),
+        );
+        self::assertSame([], (new Generator())->generate([$shared, $page], $this->context())->errors());
+    }
+
+    /**
+     * `post_type==all`のグループは、どの投稿タイプのテンプレートのクラスとも同じ投稿に表示されるため、同じ名前の別の
+     * フィールドはE001にする。field keyが同じなら同じフィールドとして両方に出す。
+     */
+    public function testAllPostTypesGroupAndTemplateWithTheSameFieldNameIsE001(): void
+    {
+        $all = $this->locatedGroup('group_all', [[['post_type', 'all']]], [['key' => 'field_all_title', 'name' => 'title', 'label' => 'title', 'type' => 'text']]);
+        $template = $this->locatedGroup('group_feature', [[['post_type', 'product'], ['post_template', 'templates/feature.php']]], [self::text('title')]);
+        $shared = $this->locatedGroup('group_feature', [[['post_type', 'product'], ['post_template', 'templates/feature.php']]], [['key' => 'field_all_title', 'name' => 'title', 'label' => 'title', 'type' => 'text']]);
+
+        self::assertSame(
+            ["E001: duplicate ACF field 'title' for post:all in groups group_all and group_feature (template 'templates/feature.php' of post:product); a post with the template shows both groups and ACF saves both fields to the same meta key, so rename one of them or share one field"],
+            (new Generator())->generate([$all, $template], $this->context())->errors(),
+        );
+        self::assertSame([], (new Generator())->generate([$all, $shared], $this->context())->errors());
+    }
+
+    /**
+     * 同じテンプレートのクラスに合流するグループが、classMapで違うクラス名を求めれば、どちらも黙って捨てずにE003にする
+     * (テンプレートごとに1つのクラスを作る)。classMapの無いグループとの食い違いも同じ。
+     */
+    public function testDifferentClassMapsForOneTargetAreE003(): void
+    {
+        $page = $this->locatedGroup('group_a', [[['page_template', 'templates/feature.php']]], [self::text('title')]);
+        $product = $this->locatedGroup('group_b', [[['post_type', 'product'], ['post_template', 'templates/feature.php']]], [self::text('body')]);
+
+        self::assertSame(
+            ["E003: target post-template:templates/feature.php is requested as class 'FirstFields' by group 'group_a' and as class 'SecondFields' by group 'group_b'; set the same class name for both groups in BridgeConfig::\$classMap (one class is generated per target)"],
+            (new Generator())->generate([$page, $product], $this->classMapContext(['group_a' => 'FirstFields', 'group_b' => 'SecondFields']))->errors(),
+        );
+        self::assertSame(
+            ["E003: target post-template:templates/feature.php is requested as class 'FirstFields' by group 'group_a' and as class 'FeatureTemplateFields' by group 'group_b'; set the same class name for both groups in BridgeConfig::\$classMap (one class is generated per target)"],
+            (new Generator())->generate([$page, $product], $this->classMapContext(['group_a' => 'FirstFields']))->errors(),
+        );
+        $same = (new Generator())->generate([$page, $product], $this->classMapContext(['group_a' => 'FirstFields', 'group_b' => 'FirstFields']));
+        self::assertSame([], $same->errors());
+        self::assertSame(['AcfManifest.php', 'FirstFields.php'], array_keys($this->filesByPath($same->files())));
+    }
+
+    /** ファイル名が同じテンプレート(ディレクトリが違う)はクラス名が衝突するため、E003にする(classMapで避ける)。 */
+    public function testTemplateClassNamesThatCollideAreE003(): void
+    {
+        $report = (new Generator())->generate([
+            $this->locatedGroup('group_a', [[['page_template', 'templates/a/feature.php']]], [self::text('title')]),
+            $this->locatedGroup('group_b', [[['page_template', 'templates/b/feature.php']]], [self::text('title')]),
+        ], $this->context());
+
+        self::assertSame(["E003: class name 'FeatureTemplateFields' is used by both post-template:templates/a/feature.php and post-template:templates/b/feature.php"], $report->errors());
+    }
+
+    /** 対象を決められないANDグループごとのW002に加えて、どのANDグループも解決できないグループにもW002を出す。 */
+    public function testUnresolvedAndGroupsAreReportedOneByOne(): void
+    {
+        $report = (new Generator())->generate([
+            $this->locatedGroup('group_partial', [[['post_type', 'product']], [['current_user', 'logged_in']]], [self::text('title')]),
+            $this->locatedGroup('group_none', [[['post_template', 'templates/feature.php']]], [self::text('title')]),
+        ], $this->context());
+
+        self::assertSame([], $report->errors());
+        self::assertSame([
+            "W002: location AND group 2 of ACF field group 'group_partial' was skipped: it has no '==' condition that decides the target",
+            "W002: location AND group 1 of ACF field group 'group_none' was skipped: 'post_template' needs a 'post_type ==' condition in the same AND group to decide the post type",
+            "W002: ACF field group 'group_none' location could not be resolved",
+        ], $report->warnings());
+    }
+
+    /**
      * 生成するメソッドが、AcfFieldAccessのメソッド(private・protected・publicのすべて。Reflectionで集める)と、生成クラスの
      * ファクトリ(of・instance)と衝突するフィールドはE002にする。traitのメソッドをすべて、そのメソッド名になるフィールド名で
      * 確かめる(手書きの一覧では、traitを変えたときに漏れるため)。
@@ -770,6 +879,16 @@ final class GeneratorTest extends UnitTestCase
         );
     }
 
+    /** @param array<string, string> $classMap */
+    private function classMapContext(array $classMap): GeneratorContext
+    {
+        return new GeneratorContext(
+            config: new BridgeConfig(jsonDirs: [], outputDir: $this->createTempDirectory('acf-output'), namespace: 'App\\Acf', classMap: $classMap),
+            optionsPagePostIds: [],
+            sourceHash: 'abc123',
+        );
+    }
+
     /** @return array<string, string> */
     private static function text(string $name): array
     {
@@ -797,6 +916,23 @@ final class GeneratorTest extends UnitTestCase
         }
 
         return $contents;
+    }
+
+    /**
+     * @param list<list<array{string, string}>> $andGroups ANDグループごとの`==`の条件([param, value])
+     * @param list<array<string, mixed>> $fields
+     */
+    private function locatedGroup(string $key, array $andGroups, array $fields): FieldGroup
+    {
+        return FieldGroup::fromArray([
+            'key' => $key,
+            'title' => $key,
+            'location' => array_map(
+                static fn(array $conditions): array => array_map(static fn(array $condition): array => ['param' => $condition[0], 'operator' => '==', 'value' => $condition[1]], $conditions),
+                $andGroups,
+            ),
+            'fields' => $fields,
+        ], "acf-json/{$key}.json");
     }
 
     /** @param list<array<string, mixed>> $fields */
