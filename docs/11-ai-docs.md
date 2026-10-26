@@ -426,7 +426,7 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所のみ差
 
 rules/*.md内のコード例とFWのAPIの乖離(ドリフト)は、10-quality.mdのGitHub Actionsワークフロー(QA)に置くCIジョブ`rules-verify`で機械検出する。方式は次のとおり:
 
-1. **抽出**: `tools/extract-rules-code.php`(monorepo同梱。vendor非依存・PHP標準関数のみ)が`packages/core/rules/*.md`から、`<?php`で始まる```` ```php ````フェンスのコードブロックを抽出する。`namespace App\…`の宣言を含むブロックを「クラス定義例」とみなし、`var/rules-code/app/`配下へPSR-4整合のパス(例: `App\Post\NewsPost` → `var/rules-code/app/Post/NewsPost.php`)で書き出す。それ以外のブロック(テンプレートの断片・functions.php等)は`var/rules-code/templates/`へ`<レシピ名>-<連番>.php`で書き出す。
+1. **抽出**: `tools/extract-rules-code.php`(monorepo同梱。vendor非依存・PHP標準関数のみ)が各パッケージの`rules/*.md`(`packages/*/rules/*.md`)から、`<?php`で始まる```` ```php ````フェンスのコードブロックを抽出する。`namespace App\…`の宣言を含むブロックを「クラス定義例」とみなし、`var/rules-code/app/`配下へPSR-4整合のパス(例: `App\Post\NewsPost` → `var/rules-code/app/Post/NewsPost.php`)で書き出す。それ以外のブロック(テンプレートの断片・functions.php等)は`var/rules-code/templates/`へ`<レシピ名>-<連番>.php`で書き出す。
 2. **検証**: `tools/verify-rules-code.php`が、抽出したすべてのPHPファイルの構文を`php -l`で確かめる。クラス定義例(`var/rules-code/app/`)は`var/rules-analysis/app/`へ写し、専用の設定(level max、szepeviktor/phpstan-wordpressとtmswp/coreのPHPStan拡張、ACF Proのスタブ)のPHPStanで解析する。テンプレートの断片はPHPStanの対象外(§8.6の方針と同一)。どちらかの失敗でジョブを失敗させる。
 3. **実行契機**: QAワークフローの対象(すべてのPRとmainへのpush)。
 

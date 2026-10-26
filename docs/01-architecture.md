@@ -164,7 +164,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 
 - AI 向け機能別レシピ(rules/)は**各パッケージの `rules/` ディレクトリに収載し、composer 配布物に含める**。これにより利用側プロジェクトは `composer update` だけで最新のレシピを受け取る(`vendor/tmswp/core/rules/post-type.md` のように参照できる)。
 - monorepo ルートの `AGENTS.md` は **FW 自体を開発する AI** 向け。スターター同梱の `AGENTS.md` は **FW を利用してサイトを作る AI** 向けで、`vendor/tmswp/*/rules/` への参照を含む。両者は別物である(内容は AI 資料設計書が定義)。
-- 各パッケージの rules/ はそのパッケージの機能のみを扱う(例: `packages/acf-bridge/rules/acf.md`)。コアに拡張の手順書を置かない。
+- 拡張パッケージの導入手順(利用者AIが最初に読むもの)は、コアの`rules/acf.md`・`rules/extensions.md`に集める。拡張パッケージだけの細部は、そのパッケージの`rules/`に置く(例: `packages/acf-bridge/rules/sync-check.md`)。配置の詳細はAI資料設計書(11-ai-docs.md §1.2・§6)が定める。
 
 ### 2.2 パッケージ内ディレクトリの不変条件
 

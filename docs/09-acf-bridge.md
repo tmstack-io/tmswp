@@ -1380,28 +1380,39 @@ return \TMSWP\Core\Kernel\KernelConfig::theme(
 
 ## 12.2 テンプレートでの読み取り(WP 標準テーマ手法のまま)
 
+§5.3の`product`のフィールドのうち、単純な値(`price`・`main_visual`)は、文書12 §1.9と§8.2のとおり`#[MetaSchema]`で宣言して`MetaBag`で読み(エンティティ`ProductPost`は§12.6)、ACF固有の複合型(`store_info`)は生成アクセサで読む。同じキーを`MetaBag`と生成アクセサの両方から読まない。
+
 ```php
 <?php // single-product.php
-$fields = \App\Acf\ProductFields::of(get_post()); ?>
-<h1><?php the_title(); ?></h1>
-<p class="price"><?php echo esc_html(number_format((float) ($fields->price() ?? 0))); ?>円</p>
-<?php $img = $fields->mainVisual(); ?>
-<?php if ($img !== null) : ?>
-    <img src="<?php echo esc_url($img['sizes']['large'] ?? $img['url']); ?>" alt="<?php echo esc_attr($img['alt']); ?>">
+
+use App\Acf\ProductFields;
+use App\Post\ProductPost;
+
+// シングルのテンプレートの表示中の投稿のID(get_the_ID()はint|falseを返すため、of()に渡さない)
+$productId = get_queried_object_id();
+$mainVisualId = ProductPost::mainVisualId($productId);
+?>
+<h1><?php echo esc_html(get_the_title($productId)); ?></h1>
+<p class="price"><?php echo esc_html(number_format_i18n(ProductPost::price($productId))); ?>円</p>
+<?php if ($mainVisualId > 0) : ?>
+    <?php echo wp_get_attachment_image($mainVisualId, 'large'); ?>
 <?php endif; ?>
 
-<?php foreach ($fields->storeInfo() as $row) : ?>
-    <li><?php echo esc_html($row['shop_name']); ?> (<?php echo esc_html($row['tel']); ?>)</li>
-<?php endforeach; ?>
+<ul>
+    <?php foreach (ProductFields::of($productId)->storeInfo() as $row) : ?>
+        <li><?php echo esc_html($row['shop_name']); ?> (<?php echo esc_html($row['tel']); ?>)</li>
+    <?php endforeach; ?>
+</ul>
 ```
 
 ## 12.3 flexible_content の判別 union
 
 ```php
-<?php foreach (\App\Acf\PageFields::of(get_post())->sections() as $section) : ?>
-    <?php match ($section['acf_fc_layout']) {
-        'hero'       => get_template_part('parts/hero', null, ['title' => $section['title'], 'image' => $section['image']]),
-        'text_block' => get_template_part('parts/text-block', null, ['body' => $section['body']]),
+<?php foreach (\App\Acf\PageFields::of(get_queried_object_id())->sections() as $section) : ?>
+    <?php echo match ($section['acf_fc_layout']) {
+        'hero'       => '<h2>' . esc_html($section['title']) . '</h2>'
+            . ($section['image'] !== null ? wp_get_attachment_image($section['image'], 'large') : ''),
+        'text_block' => wp_kses_post($section['body']),
     }; ?>
 <?php endforeach; ?>
 ```
@@ -1409,6 +1420,7 @@ $fields = \App\Acf\ProductFields::of(get_post()); ?>
 ## 12.4 オプションページ
 
 ```php
+<?php
 $options = \App\Acf\ThemeSettingsOptions::instance();
 $tel = $options->contactTel();          // text → string
 $logo = $options->siteLogo();           // image rf=id → int|null
@@ -1416,26 +1428,87 @@ $logo = $options->siteLogo();           // image rf=id → int|null
 
 ## 12.5 書き込み(管理機能・インポータ等)
 
+単純な値は`MetaBag`で、複合型は生成アクセサのsetterで書く。
+
 ```php
-$fields = \App\Acf\ProductFields::of($postId);
-$fields->setPrice(12800);
-$fields->setMainVisual($attachmentId);
-$fields->setStoreInfo([
-    ['shop_name' => '本店', 'tel' => '03-0000-0000', 'open_hours' => '10:00-18:00'],
-]);
+<?php
+
+use App\Acf\ProductFields;
+use App\Post\ProductPost;
+
+function import_product(int $postId, int $attachmentId): void
+{
+    $meta = ProductPost::meta($postId);
+    $meta->set(ProductPost::META_PRICE, 12800);
+    $meta->set(ProductPost::META_MAIN_VISUAL, $attachmentId);
+
+    ProductFields::of($postId)->setStoreInfo([
+        ['shop_name' => '本店', 'tel' => '03-0000-0000', 'open_hours' => '10:00-18:00'],
+    ]);
+}
 ```
 
 ## 12.6 MetaBag 経由(オプトイン)と日本語フィールド名のエスケープハッチ
 
 ```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Post;
+
+use TMSWP\AcfBridge\AcfMetaStorage;
+use TMSWP\Core\Attribute\AsPostType;
+use TMSWP\Core\Attribute\MetaSchema;
+use TMSWP\Core\Attribute\UseMetaStorage;
+use TMSWP\Core\Label\LabelLanguage;
+use TMSWP\Core\Meta\MetaValueType;
+use TMSWP\Core\Post\PostType;
+use TMSWP\Core\Post\PostTypeDefinition;
+use WP_Post;
+
 #[AsPostType]
-#[UseMetaStorage(\TMSWP\AcfBridge\AcfMetaStorage::class)]
-final class ProductPost extends PostType { /* ... */ }
+#[UseMetaStorage(AcfMetaStorage::class)]
+final class ProductPost extends PostType
+{
+    // ACFのフィールドグループのnumberのフィールド
+    #[MetaSchema(type: MetaValueType::Integer, default: 0)]
+    public const META_PRICE = 'price';
 
-ProductPost::meta($post)->int('stock');           // raw 値を MetaBag の型付きで取得
+    // ACFのフィールドグループのimageのフィールド(添付ファイルのID。未設定は0)
+    #[MetaSchema(type: MetaValueType::Integer, default: 0)]
+    public const META_MAIN_VISUAL = 'main_visual';
 
-// 旧案件由来の日本語フィールド名(W009 対象)は value() で読む
-$rows = \App\Acf\ShopFields::of($post)->value('店舗情報リピート');
+    public static function definition(): PostTypeDefinition
+    {
+        return PostTypeDefinition::create('product')->label('製品')->labelLanguage(LabelLanguage::Ja)->hasArchive();
+    }
+
+    public static function price(WP_Post|int $post): int
+    {
+        return self::meta($post)->int(self::META_PRICE);
+    }
+
+    public static function mainVisualId(WP_Post|int $post): int
+    {
+        return self::meta($post)->int(self::META_MAIN_VISUAL);
+    }
+}
+```
+
+- `MetaBag`には、キーを宣言したエンティティの定数を渡す(`ProductPost::meta($post)->int(ProductPost::META_PRICE)`)。文字列リテラルで渡すと、宣言済みのキーと同じ文字列はPHPStanが`tmswp.metaKeyLiteral`で報告する(文書04)。
+- `MetaBag`は保存された値(raw)を返す。imageのフィールドは、return_formatにかかわらず添付ファイルのIDを返す。
+
+旧案件由来の日本語フィールド名(W009の対象。`check --strict`は失敗するため、原則は`methodNameMap`で生成アクセサを作る。§5.5)は、`value()`で読む。戻り値は`mixed`のため、型を確かめてから使う。
+
+```php
+<?php
+
+$rows = \App\Acf\ProductFields::of(get_queried_object_id())->value('店舗情報リピート');
+
+if (is_array($rows)) {
+    // 行の形はACFが返すままで、型の正規化はされない
+}
 ```
 
 ---

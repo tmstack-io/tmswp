@@ -3,23 +3,27 @@
 declare(strict_types=1);
 
 $root = dirname(__DIR__);
-$rulesDir = $root . '/packages/core/rules';
 $outputDir = $root . '/var/rules-code';
+// 各パッケージのrules/(レシピはパッケージごとに置く)。mdの無いディレクトリからは何も抽出しない
+$rulesDirs = glob($root . '/packages/*/rules', GLOB_ONLYDIR);
 
-if (!is_dir($rulesDir)) {
-    throw new RuntimeException("rules ディレクトリがありません: {$rulesDir}");
+if ($rulesDirs === false || $rulesDirs === []) {
+    throw new RuntimeException("rules ディレクトリがありません: {$root}/packages/*/rules");
 }
 
+sort($rulesDirs);
 clearDirectory($outputDir);
 
-$iterator = new DirectoryIterator($rulesDir);
+foreach ($rulesDirs as $rulesDir) {
+    $iterator = new DirectoryIterator($rulesDir);
 
-foreach ($iterator as $fileInfo) {
-    if (!$fileInfo->isFile() || $fileInfo->getExtension() !== 'md') {
-        continue;
+    foreach ($iterator as $fileInfo) {
+        if (!$fileInfo->isFile() || $fileInfo->getExtension() !== 'md') {
+            continue;
+        }
+
+        extractCodeBlocks($fileInfo->getPathname(), $outputDir);
     }
-
-    extractCodeBlocks($fileInfo->getPathname(), $outputDir);
 }
 
 function extractCodeBlocks(string $markdownFile, string $outputDir): void
