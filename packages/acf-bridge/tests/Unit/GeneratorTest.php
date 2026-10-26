@@ -342,15 +342,167 @@ final class GeneratorTest extends UnitTestCase
         self::assertSame(['AcfManifest.php', 'FirstFields.php'], array_keys($this->filesByPath($same->files())));
     }
 
-    /** ファイル名が同じテンプレート(ディレクトリが違う)はクラス名が衝突するため、E003にする(classMapで避ける)。 */
+    /**
+     * ファイル名が同じテンプレート(ディレクトリが違う)はクラス名が衝突するため、E003にする。メッセージは両方の対象と、
+     * classMapで避ける方法を示す(docs/09 §4.3)。classMapで片方のクラス名を変えれば生成できる。
+     */
     public function testTemplateClassNamesThatCollideAreE003(): void
     {
-        $report = (new Generator())->generate([
+        $groups = [
             $this->locatedGroup('group_a', [[['page_template', 'templates/a/feature.php']]], [self::text('title')]),
             $this->locatedGroup('group_b', [[['page_template', 'templates/b/feature.php']]], [self::text('title')]),
+        ];
+
+        self::assertSame(
+            ["E003: class name 'FeatureTemplateFields' is used by both post-template:templates/a/feature.php and post-template:templates/b/feature.php; set another class name for the group of one of them in BridgeConfig::\$classMap (only for a group whose location resolves to one class)"],
+            (new Generator())->generate($groups, $this->context())->errors(),
+        );
+
+        $mapped = (new Generator())->generate($groups, $this->classMapContext(['group_a' => 'AFeatureTemplateFields']));
+        self::assertSame([], $mapped->errors());
+        self::assertSame(['AFeatureTemplateFields.php', 'AcfManifest.php', 'FeatureTemplateFields.php'], array_keys($this->filesByPath($mapped->files())));
+    }
+
+    /**
+     * 1つのテンプレートを複数の投稿タイプで使うグループは、投稿タイプごとの対象が1つのテンプレートのクラスになるため、
+     * 単一のターゲットのグループとしてclassMapでクラス名を変えられる(docs/09 §4.3)。
+     */
+    public function testClassMapRenamesTheTemplateClassOfSeveralPostTypes(): void
+    {
+        $group = $this->locatedGroup('group_a', [
+            [['post_type', 'page'], ['post_template', 'templates/feature.php']],
+            [['post_type', 'post'], ['post_template', 'templates/feature.php']],
+        ], [self::text('title')]);
+
+        $report = (new Generator())->generate([$group], $this->classMapContext(['group_a' => 'FeatureFields']));
+
+        self::assertSame([], $report->errors());
+        self::assertSame(['AcfManifest.php', 'FeatureFields.php'], array_keys($this->filesByPath($report->files())));
+
+        // 2つの投稿タイプのクラスになるグループには、classMapを指定できない
+        $twoClasses = $this->locatedGroup('group_b', [[['post_type', 'page']], [['post_type', 'post']]], [self::text('title')]);
+        self::assertSame(
+            ["E003: classMap for 'group_b' is only allowed for a group whose location resolves to one class"],
+            (new Generator())->generate([$twoClasses], $this->classMapContext(['group_b' => 'BothFields']))->errors(),
+        );
+    }
+
+    /** 違う種類のターゲットが同じクラス名になるときも、E003のメッセージはclassMapで避ける方法を示す。 */
+    public function testClassNameCollisionOfDifferentKindsShowsTheClassMapResolution(): void
+    {
+        $report = (new Generator())->generate([
+            $this->locatedGroup('group_a', [[['post_type', 'product-term']]], [self::text('title')]),
+            $this->locatedGroup('group_b', [[['taxonomy', 'product']]], [self::text('body')]),
         ], $this->context());
 
-        self::assertSame(["E003: class name 'FeatureTemplateFields' is used by both post-template:templates/a/feature.php and post-template:templates/b/feature.php"], $report->errors());
+        self::assertSame(
+            ["E003: class name 'ProductTermFields' is used by both post:product-term and term:product; set another class name for the group of one of them in BridgeConfig::\$classMap (only for a group whose location resolves to one class)"],
+            $report->errors(),
+        );
+    }
+
+    /**
+     * ヘッダのsourcesは、ディレクトリだけが違う同じ名前のファイル(子テーマと親テーマのacf-json等)のグループを1行に
+     * まとめず、両方を記す。生成クラスとAcfManifestのどちらも同じ。
+     */
+    public function testSourcesListFilesWithTheSameNameInDifferentDirectories(): void
+    {
+        $child = FieldGroup::fromArray(['key' => 'group_child', 'title' => '子テーマ', 'location' => [[['param' => 'post_type', 'operator' => '==', 'value' => 'product']]], 'fields' => [self::text('title')]], '/child/acf-json/fields.json');
+        $parent = FieldGroup::fromArray(['key' => 'group_parent', 'title' => '親テーマ', 'location' => [[['param' => 'post_type', 'operator' => '==', 'value' => 'product']]], 'fields' => [self::text('body')]], '/parent/acf-json/fields.json');
+
+        $files = $this->filesByPath((new Generator())->generate([$child, $parent], $this->context())->files());
+
+        foreach (['ProductFields.php', 'AcfManifest.php'] as $path) {
+            self::assertStringContainsString(" * sources:\n *   fields.json (子テーマ)\n *   fields.json (親テーマ)\n */", $files[$path], $path);
+        }
+    }
+
+    /**
+     * acf-jsonの文字列が生成物のdocコメントに説明の文として入る箇所(ヘッダのタイトルの投稿タイプ・タクソノミー・
+     * menu_slug・テンプレート、sourcesのグループのタイトル、定数とgetterの説明のラベル・型・グループのkey、cloneの
+     * prefix_labelの付いたラベル)に、docコメントを閉じる並びがあっても、その並びのスラッシュをエスケープして埋め込み、
+     * 生成物はPHPとして解析できる。
+     */
+    public function testDocCommentTextCannotCloseTheComment(): void
+    {
+        $end = '*' . '/';
+        $groups = [
+            FieldGroup::fromArray([
+                'key' => "group_post{$end}x",
+                'title' => "タイトル {$end} echo 1;",
+                'location' => [[['param' => 'post_type', 'operator' => '==', 'value' => "pt{$end}x"]]],
+                'fields' => [
+                    self::commentField('field_price', 'price', 'text'),
+                    self::commentField('field_map', 'map', "map{$end}x"),
+                    self::commentField('field_box', 'box', 'group', ['sub_fields' => [self::commentField('field_box_title', 'title', 'text')]]),
+                    self::commentField('field_cloned', 'cloned', 'clone', ['clone' => ['group_source'], 'display' => 'seamless', 'prefix_name' => 1, 'prefix_label' => 1]),
+                ],
+            ], 'acf-json/group_post.json'),
+            FieldGroup::fromArray([
+                'key' => 'group_source',
+                'title' => "source {$end}",
+                'location' => [[['param' => 'post_type', 'operator' => '==', 'value' => 'source']]],
+                'fields' => [self::commentField('field_headline', 'headline', 'text')],
+            ], 'acf-json/group_source.json'),
+            $this->commentGroup('group_term', [['taxonomy', "tax{$end}x"]], self::commentField('field_term_note', 'note', 'text')),
+            $this->commentGroup('group_options', [['options_page', "opt{$end}x"]], self::commentField('field_logo', 'logo', 'text')),
+            $this->commentGroup('group_template', [['page_template', "templates/tpl{$end}x.php"]], self::commentField('field_lead', 'lead', 'text')),
+        ];
+
+        $report = (new Generator())->generate($groups, $this->context(optionsPagePostIds: ["opt{$end}x" => 'options']));
+
+        self::assertSame([], $report->errors());
+        $files = $this->filesByPath($report->files());
+        self::assertSame(['AcfManifest.php', 'OptXOptions.php', 'PtXFields.php', 'SourceFields.php', 'TaxXTermFields.php', 'XTemplateFields.php'], array_keys($files));
+
+        foreach ($files as $path => $contents) {
+            // 構文エラーならParseErrorになる。docコメントは、閉じる並びを最後にだけ持つ
+            foreach (token_get_all($contents, TOKEN_PARSE) as $token) {
+                if (\is_array($token) && $token[0] === T_DOC_COMMENT) {
+                    self::assertSame(\strlen($token[1]) - 2, strpos($token[1], $end), "{$path}: {$token[1]}");
+                }
+            }
+        }
+
+        self::assertStringContainsString(" * PtXFields — ACF typed accessors for post_type 'pt*\\/x'.\n", $files['PtXFields.php']);
+        self::assertStringContainsString(" *   group_post.json (タイトル *\\/ echo 1;)\n", $files['PtXFields.php']);
+        self::assertStringContainsString("    /** price *\\/ label (text, group_post*\\/x) */\n", $files['PtXFields.php']);
+        self::assertStringContainsString("    /** map *\\/ label (map*\\/x, group_post*\\/x) */\n", $files['PtXFields.php']);
+        self::assertStringContainsString("    /** cloned *\\/ label headline *\\/ label (text, group_post*\\/x) */\n", $files['PtXFields.php']);
+        self::assertStringContainsString(" * TaxXTermFields — ACF typed accessors for taxonomy 'tax*\\/x'.\n", $files['TaxXTermFields.php']);
+        self::assertStringContainsString(" * OptXOptions — ACF typed accessors for options_page 'opt*\\/x'.\n", $files['OptXOptions.php']);
+        self::assertStringContainsString(" * XTemplateFields — ACF typed accessors for post template 'templates/tpl*\\/x.php'.\n", $files['XTemplateFields.php']);
+        self::assertStringContainsString(" *   group_source.json (source *\\/)\n", $files['AcfManifest.php']);
+    }
+
+    /**
+     * group・repeater・flexible_contentのレイアウトのサブフィールドの名前と、flexible_contentのレイアウトの名前は、
+     * getterのPHPDocの型(shapeのキー・レイアウトのリテラル)になり、docコメントを閉じる並びを書けないため、E002にして
+     * ACFで名前を変えるよう案内する。groupの表示のcloneが展開したサブフィールドも同じ。
+     */
+    public function testNamesInPhpDocTypesCannotCloseTheComment(): void
+    {
+        $end = '*' . '/';
+        $report = (new Generator())->generate([
+            $this->commentGroup('group_types', [['post_type', 'product']], ...[
+                ['key' => 'field_box', 'name' => 'box', 'label' => 'box', 'type' => 'group', 'sub_fields' => [self::text("a{$end}b")]],
+                ['key' => 'field_rows', 'name' => 'rows', 'label' => 'rows', 'type' => 'repeater', 'sub_fields' => [self::text("r{$end}s")]],
+                ['key' => 'field_blocks', 'name' => 'blocks', 'label' => 'blocks', 'type' => 'flexible_content', 'layouts' => [
+                    ['key' => 'layout_bad', 'name' => "l{$end}m", 'label' => 'bad', 'sub_fields' => []],
+                    ['key' => 'layout_quote', 'name' => 'quote', 'label' => 'quote', 'sub_fields' => [self::text("x{$end}y")]],
+                ]],
+                ['key' => 'field_cloned', 'name' => 'cloned', 'label' => 'cloned', 'type' => 'clone', 'clone' => ['group_source'], 'display' => 'group'],
+            ]),
+            $this->commentGroup('group_source', [['post_type', 'source']], self::text("c{$end}d")),
+        ], $this->context());
+
+        self::assertSame([
+            "E002: ACF field 'box' in group 'group_types' has a sub field named 'a*/b', which contains '*/' and cannot be written in the PHPDoc type of the generated accessor; rename the sub field in ACF",
+            "E002: ACF field 'rows' in group 'group_types' has a sub field named 'r*/s', which contains '*/' and cannot be written in the PHPDoc type of the generated accessor; rename the sub field in ACF",
+            "E002: ACF field 'blocks' in group 'group_types' has a layout named 'l*/m', which contains '*/' and cannot be written in the PHPDoc type of the generated accessor; rename the layout in ACF",
+            "E002: layout 'quote' of ACF field 'blocks' in group 'group_types' has a sub field named 'x*/y', which contains '*/' and cannot be written in the PHPDoc type of the generated accessor; rename the sub field in ACF",
+            "E002: ACF field 'cloned' in group 'group_types' has a sub field named 'c*/d', which contains '*/' and cannot be written in the PHPDoc type of the generated accessor; rename the sub field in ACF",
+        ], $report->errors());
     }
 
     /** 対象を決められないANDグループごとのW002に加えて、どのANDグループも解決できないグループにもW002を出す。 */
@@ -562,8 +714,8 @@ final class GeneratorTest extends UnitTestCase
 
         self::assertSame([], $report->errors());
         self::assertSame([
-            "W009: ACF field '0' in group 'group_names' is not ASCII snake_case; accessor was skipped",
-            "W009: ACF field '12' in group 'group_names' is not ASCII snake_case; accessor was skipped",
+            "W009: ACF field '0' in group 'group_names' is not ASCII snake_case; accessor was skipped; set BridgeConfig::\$methodNameMap['group_names.0'] to an ASCII method name to generate it",
+            "W009: ACF field '12' in group 'group_names' is not ASCII snake_case; accessor was skipped; set BridgeConfig::\$methodNameMap['group_names.12'] to an ASCII method name to generate it",
         ], $report->warnings());
     }
 
@@ -988,6 +1140,29 @@ final class GeneratorTest extends UnitTestCase
             ),
             'fields' => $fields,
         ], "acf-json/{$key}.json");
+    }
+
+    /**
+     * ラベルにdocコメントを閉じる並びを含むフィールドの定義。
+     *
+     * @param array<string, mixed> $extra
+     *
+     * @return array<string, mixed>
+     */
+    private static function commentField(string $key, string $name, string $type, array $extra = []): array
+    {
+        return ['key' => $key, 'name' => $name, 'label' => "{$name} *" . '/ label', 'type' => $type] + $extra;
+    }
+
+    /**
+     * locationが$conditions(1つのANDグループの`==`の条件)で、フィールドが$fieldsのグループ(タイトルはkey)。
+     *
+     * @param list<array{string, string}> $conditions
+     * @param array<string, mixed> ...$fields
+     */
+    private function commentGroup(string $key, array $conditions, array ...$fields): FieldGroup
+    {
+        return $this->locatedGroup($key, [$conditions], array_values($fields));
     }
 
     /** @param list<array<string, mixed>> $fields */

@@ -146,7 +146,7 @@ final class AcfMetaStorage implements MetaStorageInterface
         $attachment = $field !== null && \in_array($field['type'], ['image', 'file'], true);
 
         if ($attachment && (!\is_int($value) || $value < 1)) {
-            throw new InvalidArgumentException("meta '{$key}' is an ACF {$field['type']} field and stores a single attachment ID; pass a positive int, got " . get_debug_type($value));
+            throw new InvalidArgumentException("meta '{$key}' is an ACF {$field['type']} field and stores a single attachment ID; pass a positive int, got " . (\is_int($value) ? (string) $value : get_debug_type($value)));
         }
 
         return $this->flushingAcfValue($acfId, $key, function () use ($type, $objectId, $key, $value, $field, $attachment): bool {

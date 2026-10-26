@@ -170,6 +170,10 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
         "test:coverage:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --coverage-clover=var/coverage/integration.xml",
         "test:coverage:check": "php bin/coverage-check.php 72 var/coverage/unit.xml var/coverage/integration.xml",
         "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
+        "test:integration:acf-pro": [
+            "Composer\\Config::disableProcessTimeout",
+            "bash tools/acf-pro-integration.sh"
+        ],
         "test": ["@test:unit", "@test:integration"],
         "qa:fast": ["@lint", "@analyse", "@test:unit"],
         "acf:check:fixtures": [
@@ -679,6 +683,12 @@ abstract class UnitTestCase extends TestCase
             <directory>packages/ja-toolkit/tests/Integration</directory>
         </testsuite>
     </testsuites>
+    <!-- ACF Pro専用のテストは、ACF Proを載せた隔離環境(composer test:integration:acf-pro)だけで走らせる -->
+    <groups>
+        <exclude>
+            <group>acf-pro</group>
+        </exclude>
+    </groups>
     <coverage>
         <include>
             <directory suffix=".php">packages/core/src</directory>
@@ -690,6 +700,8 @@ abstract class UnitTestCase extends TestCase
     </coverage>
 </phpunit>
 ```
+
+`<groups>`の除外により、ACF Pro専用のテスト(グループ`acf-pro`)は`composer test:integration`・カバレッジの計測・CIでは走らない(4.9)。
 
 `<coverage>` の計測対象は、4.3 の `<source>` と同じ 5 パッケージの src である(4.8)。`--coverage-clover` を付けない通常の実行(`composer test:integration`)では計測しない。
 
@@ -841,7 +853,7 @@ define('WP_DEBUG', true);
 
 - `core: null` は最新安定版。特定バージョンは `"core": "https://wordpress.org/wordpress-7.0.zip"` 形式で override する。`phpVersion` の既定は下限の 8.3。
 - `testsEnvironment: false` により、wp-env は開発用の環境(`wordpress` / `cli` / `mysql`)だけを作る。@wordpress/env 11 では development と tests の 2 環境を同時に作る既定の動作が非推奨のため、統合テストはこの環境の `cli` コンテナで実行し、テーブル接頭辞 `wptests_` で開発用サイトのテーブルと分ける。
-- `plugins` に wordpress.org の無料版 ACF(本家 WP Engine の `advanced-custom-fields`)を、版を固定した zip で入れる(D-11)。ACF Pro 限定機能のテストは CI では行わない。
+- `plugins` に wordpress.org の無料版 ACF(本家 WP Engine の `advanced-custom-fields`)を、版を固定した zip で入れる(D-11)。ACF Pro 限定機能のテストは CI では行わず、手元で隔離した環境で走らせる(4.9)。
 - `mappings` により monorepo 全体が `wp-content/plugins/tmswp` にマウントされ、コンテナ内からルートの `vendor/` / `vendor-bin/` / 各設定ファイルにそのままアクセスできる。これが `composer test:integration` の `--env-cwd=wp-content/plugins/tmswp` の前提。
 - `.wp-env.override.json` は `.gitignore` に追加する。
 
@@ -886,6 +898,24 @@ define('WP_DEBUG', true);
   4. clover ごとの行数と実行済みの行数を STDOUT に出す。合算の `coverage = 実行済みの行数 / 行数 * 100`(小数 2 桁丸め)。
   5. `coverage < argv[1]` なら `Combined coverage 57.11% (3534/6188 lines in 206 files) is below required 58%` 形式で STDERR に出し exit(1)。以上なら `Combined coverage 58.34% (3610/6188 lines in 206 files) (>= 58%)` を STDOUT に出し exit(0)。
 - clover は、実行可能な行がメソッドの開始行と重なる場合、その行を `type="method"`(メソッド全体の集計値)として出力し、行単位の実行有無を持たない。合算は `type="stmt"` の行だけで行うため、行数は PHPUnit が表示する `statements` よりわずかに少ない。
+
+### 4.9 ACF Proでの統合テスト(手元だけ)
+
+CIは無料版ACFで確かめる。ACF Pro専用の型(repeater・flexible_content・gallery・clone)とPro限定機能のテストは、ACF Proのzipのパスを環境変数`TMSWP_ACF_PRO_ZIP`で渡したときだけ、手元で走らせる(D-49)。
+
+```bash
+TMSWP_ACF_PRO_ZIP=/path/to/advanced-custom-fields-pro.zip composer test:integration:acf-pro
+# phpunitの引数を足すとき
+TMSWP_ACF_PRO_ZIP=/path/to/advanced-custom-fields-pro.zip composer test:integration:acf-pro -- --filter AcfFieldTypesIntegrationTest
+```
+
+- `tools/acf-pro-integration.sh`が行う。`TMSWP_ACF_PRO_ZIP`が無い・ファイルでない・読めない・`advanced-custom-fields-pro/acf.php`の版のヘッダを持たない場合は、理由を出してexit 1で止まる。
+- zipは、リポジトリの外の作業ディレクトリ(`${TMPDIR}/tmswp-acf-pro/`)に展開し、成功しても失敗しても終了時に消す。リポジトリにはProの本体もそのパスも残らない。
+- wp-envは、作業ディレクトリに書いた別の設定ファイル(`wp-env --config=...`)で起動する。wp-envの作業ディレクトリ(`~/.wp-env/`の下)・コンテナ・DBは設定ファイルのパスごとに分かれるため、本体の環境(`.wp-env.json`)と共有しない。ポートは8898にする。WordPressとPHPの版は`.wp-env.json`と同じにする。
+- Proは無料版のスラッグ(`wp-content/plugins/advanced-custom-fields`)にマウントするため、fixtureの有効化(`tests/fixtures/_activate.php`)はそのまま使える。
+- 走らせるのはacf-bridgeの統合テストの全体で、グループ`acf-free`(無料版であることを確かめるテスト)を外す。Pro専用のテストはグループ`acf-pro`とし、`acf_is_pro()`が偽なら失敗にする(skipにしない)。通常の`composer test:integration`は4.5のXMLでこのグループを除外する。
+- ライセンスキーは使わない。Proのzipは、ACFの公式のcomposerリポジトリ(`connect.advancedcustomfields.com`。ライセンスキーをusernameにしたHTTP basic認証)からも取得できる。スクリプトはこの取得を行わない。
+- 手元の確認に使う版は、CIの無料版と同じ版(6.8.10)にする。結果は、その版の受け入れの記録に残す。
 
 ---
 

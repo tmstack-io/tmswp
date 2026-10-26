@@ -407,7 +407,7 @@ ACF の `location` は「ORグループの配列 × 各ORグループ内は AND 
 
 ## 4.3 クラス命名規則
 
-`studly()` 変換: `[^A-Za-z0-9]` を区切りとして分割 → 各語の先頭を大文字化して連結(`product-item` → `ProductItem`、`theme_settings` → `ThemeSettings`)。変換結果が数字始まりの場合は `N` を前置(`4koma` → `N4koma`)。変換結果が空(全角文字のみ等)の場合は E003。
+`studly()` 変換: `[^A-Za-z0-9]` を区切りとして分割 → 各語を小文字にしてから先頭を大文字にして連結(`product-item` → `ProductItem`、`theme_settings` → `ThemeSettings`)。大文字を含む語も小文字にしてから先頭だけを大文字にする(大文字を含むmenu_slug・テンプレートのファイル名。例: `myCPT` → `Mycpt`)。変換結果が数字始まりの場合は `N` を前置(`4koma` → `N4koma`)。変換結果が空(全角文字のみ等)の場合は E003。
 
 | TargetKind | クラス短名 | 例 |
 |---|---|---|
@@ -419,7 +419,7 @@ ACF の `location` は「ORグループの配列 × 各ORグループ内は AND 
 
 - studlyの結果が空(ASCIIの英数字の無い名前)ならE003。
 - 1つのターゲット(テンプレート別のクラスでは1つのテンプレート)に合流するグループが、classMapで違うクラス名を求める場合(classMapの無いグループの既定の名前との食い違いを含む)はE003。1つのターゲットには1つのクラスを作る。
-- `BridgeConfig::$classMap`(グループ key → クラス短名)が指定されている場合、そのグループ由来のターゲットのうち **単一ターゲットに解決されるグループに限り** クラス名を上書きできる。複数ターゲットのグループに classMap を指定した場合は E003。
+- `BridgeConfig::$classMap`(グループ key → クラス短名)は、**locationの解決結果が1つのクラスにまとまるグループに限り**、クラス名を上書きできる。同じテンプレートを複数の投稿タイプで使うグループは、投稿タイプごとの解決結果が1つのテンプレート別のクラスにまとまるため、これに当たる。解決結果が複数のクラスになるグループに classMap を指定した場合は E003。
 - 異なるターゲットが同一クラス名に解決された場合(例: post_type`product`とtaxonomy`product-fields`の偶発衝突、ディレクトリだけが違う同じファイル名のテンプレート)はE003(メッセージに両ターゲットとclassMapでの回避方法を含める)。
 - 同一ターゲットに複数グループが解決された場合は **1 クラスにマージ**する(グループ key 昇順でフィールドを連結)。マージ後にフィールド名が重複したら E001。
 
@@ -501,7 +501,7 @@ composerのスクリプトは`vendor/bin`をPATHに加えて実行するため�
  * 再生成: composer acf:sync (vendor/bin/tms-acf sync)
  *
  * sources:
- *   acf-json/group_66f01a2b3c4d5.json (製品情報)
+ *   group_66f01a2b3c4d5.json (製品情報)
  */
 
 declare(strict_types=1);
@@ -509,7 +509,8 @@ declare(strict_types=1);
 namespace App\Acf;
 ```
 
-- ヘッダの `sources` は当該クラスの由来 JSON ファイル一覧のみを記す。全入力の集約ハッシュ(§3.3 `sourceHash`)は各生成ファイルへは埋め込まず、`AcfManifest.php`(§7.1)のヘッダと `check` 成功メッセージ(§9.1 手順8)にのみ記録する。これにより acf-json 1 ファイルの編集で差分が出るのは実際に影響を受けた生成ファイル(+ `AcfManifest.php`)のみとなる。`check` の判定は §9.1 の一段の全文バイト比較のみであり、ハッシュによる早期判定は行わない(孤児・欠損も §9.1 手順5が検出する)。
+- ヘッダの `sources` は当該クラスの由来 JSON ファイル一覧のみを記す。各行は`{ファイル名} ({グループのタイトル})`で、行の昇順に並べる。ディレクトリだけが違う同じ名前のファイル(子テーマと親テーマのacf-json等)のグループは、1行にまとめずに別の行にする。全入力の集約ハッシュ(§3.3 `sourceHash`)は各生成ファイルへは埋め込まず、`AcfManifest.php`(§7.1)のヘッダと `check` 成功メッセージ(§9.1 手順8)にのみ記録する。これにより acf-json 1 ファイルの編集で差分が出るのは実際に影響を受けた生成ファイル(+ `AcfManifest.php`)のみとなる。`check` の判定は §9.1 の一段の全文バイト比較のみであり、ハッシュによる早期判定は行わない(孤児・欠損も §9.1 手順5が検出する)。
+- acf-jsonの文字列のうち、生成物のdocコメントに説明の文として入るもの(ヘッダのタイトルの投稿タイプ・タクソノミー・menu_slug・テンプレートのパス、`sources`のグループのタイトル、定数とgetterの説明のラベル・フィールドの型・グループのkey)は、docコメントを閉じる並び`*/`を`*\/`にして埋め込む。PHPDocの型に入る名前(サブフィールドとレイアウトの名前)はE002にする(§5.5の規則6)。
 
 ## 5.3 生成クラスの構造(正準形)
 
@@ -664,6 +665,7 @@ final class NameConverter
    - 同じ階層のサブフィールドの名前の重複
    - flexible_contentのレイアウトの`acf_fc_layout`という名前のサブフィールド(ACFが各行のレイアウトの名前に使う)
    - PHPが配列のキーで整数に変える名前(10進の整数の文字列。`0`・`7`・`-12`等。`01`・`1.5`は変えない)。ACFが返すgroup・行の配列はその名前を文字列のキーで持てず、生成するshapeと実際の値が食い違うためである。判定はPHPの配列のキーの変換そのもので行い、メッセージはACFでフィールド名を変えるよう案内する。トップレベルのフィールド名は配列のキーにならず、ASCII snake_caseでない名前(数字で始まる名前を含む)は規則1のW009でアクセサを生成しないため、この制約は無い。
+   - docコメントを閉じる並び`*/`を含む名前。サブフィールドの名前はgetterのPHPDocの型のshapeのキーになり、docコメントの中に`*/`を書く方法が無いためである。flexible_contentのレイアウトの名前も、同じ理由でE002にする(レイアウトのリテラルになる)。メッセージはACFで名前を変えるよう案内する。
 
 ## 5.6 Generator / GeneratorContext / Report
 
@@ -726,7 +728,7 @@ final class Report
 | コード | 区分 | 内容 |
 |---|---|---|
 | E001 | エラー | 同一ターゲットにマージされる複数グループ間でフィールド名が重複、テンプレート別のクラスとその投稿タイプ(`all`を含む)のクラスの同じ名前の別のフィールド(§4.3) |
-| E002 | エラー | メソッド名・定数名の衝突(予約名・ほかのフィールドとの衝突。メソッド名は大文字小文字を区別しない)、クラス定数に使えない名前(`class`)、サブフィールドの名前の重複・`acf_fc_layout`・10進の整数の名前(§5.5)、flexible_contentのレイアウトの名前の重複・10進の整数の名前(§3.3)、クラスの中で宣言できないレイアウトの型の別名(§6.4) |
+| E002 | エラー | メソッド名・定数名の衝突(予約名・ほかのフィールドとの衝突。メソッド名は大文字小文字を区別しない)、クラス定数に使えない名前(`class`)、サブフィールドの名前の重複・`acf_fc_layout`・10進の整数の名前・`*/`を含む名前(§5.5)、flexible_contentのレイアウトの名前の重複・10進の整数の名前・`*/`を含む名前(§3.3・§5.5)、クラスの中で宣言できないレイアウトの型の別名(§6.4) |
 | E003 | エラー | クラス名衝突(同じファイル名のテンプレートを含む)、studly変換不能、classMapの不正指定(1つのターゲットへの違うクラス名を含む) |
 | E004 | エラー | clone フィールドの参照先(field key / group key)が acf-json 内に見つからない |
 | E005 | エラー | clone の循環参照 |
@@ -755,7 +757,7 @@ final class Report
   - keyのフィールドがACFに登録されていない(`acf_get_field($key)`が見つけない)ことは、acf-jsonと生成クラスの食い違い等の設定の誤り(文書00 §5.6)として、debugにかかわらず`AcfBridgeRuntimeException`にする。ACFはそのkeyを名前とするダミーのフィールドで、別のメタを黙って読み書きするためである。メッセージは、keyと生成クラスのメソッドを含む。
   - 例外とログの位置(フィールド名)と、`has*()`が保存先を調べるメタの名前には、ACFに登録されたフィールドの定義の名前(`acf_get_field($key)['name']`。`get_field()`が読む名前と同じ)を使う。生成コードは名前の定数をヘルパに渡さない。
   - 名前で呼ぶのは、traitの公開のエスケープハッチ(`value()`・`rawValue()`・`update()`・`delete()`・`has()`。§11)だけである。
-- **未設定時の値の正規化**: ACFの`null`/`false`/`''`の揺れを生成コード側で吸収する。文字列系は`''`、配列系は`[]`、boolは`false`、それ以外は`null`に正規化する。一度も保存していないgroupが返す空の配列も未設定として`null`にする。未設定はエラーにしない(文書00 §5.6の「データが無いこと」)。`required`設定はACFでは保存を強制しないため**型のナローイングには使わない**(常に未設定がありうる前提の型とする)。
+- **未設定時の値の正規化**: ACFの`null`/`false`/`''`の揺れを生成コード側で吸収する。文字列系は`''`、配列系は`[]`、boolは`false`、それ以外は`null`に正規化する。一度も保存していないgroupが返す空の配列も未設定として`null`にする。表に無い型(`mixed`。§6.2)は正規化せず、ACFが返す値のままにする。color_picker(rf=array)は、ACFが値の無い場合と色として読めない文字列の場合に`rgba(0,0,0,0)`の配列(`['red' => 0, 'green' => 0, 'blue' => 0, 'alpha' => 0.0]`)を返すため、生成getterはこの配列を`null`にする(groupなどのサブフィールドも同じ)。完全に透明な黒を保存した値も`null`になる。未設定はエラーにしない(文書00 §5.6の「データが無いこと」)。`required`設定はACFでは保存を強制しないため**型のナローイングには使わない**(常に未設定がありうる前提の型とする)。
 - **形の不一致**: ACFが未設定でない値を返し、それが本表の型に合わない場合(textに配列が保存されている、numberが数値の文字列でない、画像の配列のキーや型が`AcfImage`と違う、日付のrawが書式に合わない等)は、未設定と区別し、文書00 §5.6の「実行時のデータ取得の失敗」として扱う。生成クラスのKernel(`Kernel::forClass()`。生成クラスの名前空間は、acf-bridgeを登録したKernelのアプリの名前空間の中にある。§2.1)のdebugでは`AcfBridgeRuntimeException`を投げ、本番ではそのKernelのロガーに`error`で記録して未設定の値を返す。記録(ログのcontextの`field`・`acfId`・`expected`・`actual`・`class`)は、フィールドの位置・post_id・想定した型・実際の値の型と生成クラスを含み、値そのものは含まない。位置は、トップレベルはフィールド名、listの要素は`name[添字]`、group・repeater・flexible_contentのサブフィールドは`name.sub`(例: `stores[0].shop_name`)で、どの階層のどのフィールドかを示す(§6.5)。`list<>`の型(gallery・relationship・複数選択等)は要素ごとに検査し、本番では不一致の要素だけを記録して除き、ほかの要素は返す(1つの要素の不正で全体を捨てない)。objectのlist(relationship・post_object・taxonomy・userの複数で、return_formatがobject。getterの型は`list<\WP_Post>`・`list<\WP_Term>`・`list<\WP_User>`)は、ジェネレータが要素のクラスを渡して`acfObjectList(self::KEY_X, WP_Post::class)`の形で読み、要素ごとに`instanceof`で検査する。単一のobjectは`acfObject()`で同じクラスを検査する。
 - **`has()`**(生成の`has{Studly}()`と、エスケープハッチの`has($name)`): 値が保存されているかを、`get_field()`が読む保存先(`acf_get_valid_post_id()`で解決したpost_id)のメタの行(optionsのpost_idはACFが値を保存するoption)の有無で判定する。フィールドの`default_value`、`register_*_meta`の既定値、groupが返す空の配列は「保存されている」としない。
 - **setterは「保存型(raw)」** を受け取る。`update_field`はraw値(添付ID・投稿ID・`Ymd`文字列等)で保存するため。`null`を渡した場合は値を空に更新する(`update_field($key, null)`委譲。削除は生成の`delete{Studly}()`を使う)。値は`wp_slash()`してから`update_field()`に渡す。ACFは、メタでは`update_metadata()`が、optionsでは自身が`wp_unslash()`するため、slashしないとバックスラッシュが消える。setterは結果を返さない。`update_field()`の戻り値は、`update_metadata()`と同じく、同じ値で書き込まなかったとき・フィルタが中止したとき・データベースのエラーのどれでも`false`になり、区別できないためである(エスケープハッチの`update()`はこの`false`をそのまま返す)。書き込みの失敗を例外で知る必要がある単純な値は、`MetaBag`(`#[UseMetaStorage(AcfMetaStorage::class)]`。§8.1)で読み書きする。
@@ -856,7 +858,7 @@ final class AcfTypes
 | repeater | — | `list<array{...sub shapes...}>` | `[]` | `list<array<string, mixed>>`(行配列、サブ名 → raw 値) |
 | flexible_content | — | §6.4 判別 union | `[]` | `list<array{acf_fc_layout: string, ...}>`(raw 値) |
 | clone | — | §6.6 | — | — |
-| 上記以外(google_map等の同梱型・サードパーティ型) | — | `mixed`(W005。サブフィールドも) | `null` | `mixed` |
+| 上記以外(google_map等の同梱型・サードパーティ型) | — | `mixed`(W005。サブフィールドも) | ACFが返す値のまま(正規化しない。例: google_mapの未設定は`false`) | `mixed` |
 
 - rf = return_format。acf-json に return_format が無い場合は ACF の既定値(image/file=`array`、select 系=`value`、link=`array`、post_object/relationship=`object`、taxonomy=`id`、user=`array`、color_picker=`string`)で解釈する。
 - 型のマッピングを変える拡張点(フィルタ等)は持たない。生成はWordPressを起動しない`tms-acf`でも行うため、フィルタで変えると2つのコマンドの生成結果が食い違う。表に無い型は`mixed`(W005)で生成し、値は`value()`(§11)か生成アクセサの戻り値を利用側で検査して使う。
@@ -956,7 +958,7 @@ final class PageFields
 - 未設定と形の不一致は、トップレベルと同じ規則(§6.1)をサブフィールドごとに当てはめる。
   - group: 未設定(`null`・`false`・`''`・空の配列)は`null`。文字列のキーの配列でない値は形の不一致。一度も保存していないgroupは、ACFがサブフィールドの未設定の値の配列を返すため、各サブフィールドの未設定の値の配列になる(保存の有無は`has*()`で判定する)。
   - repeater・flexible_content: 未設定は`[]`。listでない値は形の不一致(本番は`[]`)。行は要素ごとに検査し、文字列のキーの配列でない行と、flexible_contentの`acf_fc_layout`が無い・レイアウトに無い行は、形の不一致として、本番では記録してその行だけを除く。
-  - サブフィールド: サブフィールドの型の未設定の値に正規化する。行やgroupに無いキーは未設定とみなし、宣言していないキーは返さない。形の不一致は、本番では記録してそのサブフィールドを未設定の値にし(listの型は不正な要素だけを除く)、ほかのサブフィールドと行は返す。
+  - サブフィールド: サブフィールドの型の未設定の値に正規化する(表に無い型はACFが返す値のまま。§6.1)。行やgroupに無いキーは未設定とみなし、宣言していないキーは返さない。形の不一致は、本番では記録してそのサブフィールドを未設定の値にし(listの型は不正な要素だけを除く)、ほかのサブフィールドと行は返す。
 - 例外とログの位置は、どの階層のどのフィールドかを示す: `group_value.title`、`stores[0].shop_name`、`sections[1].acf_fc_layout`、`sections[0].buttons[2].link`。
 - 正規化はACFに触れない値を受け取るヘルパで行うため、ACF Proの型(repeater・flexible_content・gallery)の正規化も、無料版ACFのCIでユニットテストで確かめる(packages/acf-bridge/tests/Unit/AcfFieldAccessTest)。
 - setter は raw 値の配列を受ける(shape は `array<string, mixed>` ベースの緩い型。厳密な raw shape 注釈は生成しない。複雑な一括更新はエスケープハッチ `update()` を直接使う想定)。
@@ -1540,7 +1542,9 @@ if (is_array($rows)) {
 - [ ] 生成ファイルに `@generated` ヘッダ・再生成コマンド注記・sources が含まれ、集約 `source-hash` は `AcfManifest.php` のヘッダにのみ含まれる(他の生成ファイルには含まれない)
 - [ ] syncが孤児ファイル(@generated付き)を削除し、マーカー無しファイルを削除しない。sync・checkがマーカー無しファイルをI002で示す
 - [ ] §6.2 の全フィールド型 × return_format の組につき、生成 getter/setter の型が表どおりである(スナップショットテストで全行カバー)
-- [ ] 未設定値の正規化(文字列 `''` / 配列 `[]` / bool `false` / その他 `null`)が統合テストで確認される
+- [ ] 未設定値の正規化(文字列 `''` / 配列 `[]` / bool `false` / その他 `null`。表に無い型はACFの値のまま)が統合テストで確認される
+- [ ] 全型のfixture(packages/acf-bridge/tests/fixtures/acf-json)から生成したアクセサが、実物のACFでACFの経路(`update_field()`)と生成setterで保存した値を型どおりに返し、値の無い投稿では全getterが未設定の値を返す。無料版ACFにある型はCIの統合テストで、Pro専用の型(repeater・flexible_content・gallery・clone)は下記の手元のACF Proの実行で確かめる(`AcfFieldTypesIntegrationTest`・`AcfCloneIntegrationTest`)
+- [ ] Pro専用のテスト(グループ`acf-pro`)は、ACF Proのzipのパスを環境変数`TMSWP_ACF_PRO_ZIP`で渡した`composer test:integration:acf-pro`だけで走る。リポジトリの外に展開し、別の設定ファイル(`wp-env --config`)とポートで隔離したwp-envに載せ、終了時に展開したProを消す(文書10 §4.9)。Proが無効なら失敗する(skipしない)。通常の`composer test:integration`とCIは、このグループを除外する
 - [ ] flexible_contentが、レイアウトごとの`@phpstan-type`の別名(`acf_fc_layout`リテラルで判別)のunionで生成され、PHPStanが`match`でナローイングできるサンプルが解析を通る。宣言できない別名はE002になる
 - [ ] clone の seamless(prefix_name 有無)/ group 展開、E004(参照先なし)、E005(循環)がフィクスチャで検証される
 - [ ] date_picker / date_time_picker に `*AsDateTime(): ?\DateTimeImmutable` が生成され、`wp_timezone()` 基準でパースされる
@@ -1557,7 +1561,7 @@ if (is_array($rows)) {
 - [ ] `tms-acf check`・`wp tmswp acf check`が、差分なし=0 / 差分あり=1 / E*=2の終了コードを返し、`--strict`で警告も1になる。modifiedのファイルは統一diffの先頭40行を表示する。同じ構成で2つのコマンドの出力と終了コードが同じ(tms-acfのE101の注記を除く)
 - [ ] `tms-acf`がWordPressを起動せず、`tmswp-kernel.php`が無い・`KernelConfig`を返さない・`AcfBridge`が無い場合と構成の誤りを、原因を示してexit 2にする
 - [ ] acf-bridgeを入れる手順(`composer require`・`extensions`・composerスクリプト`acf:sync` / `acf:check`(`tms-acf`))が文書11に示され、CIで`check --strict`が実行される
-- [ ] ユニットテスト(Brain Monkey、WP 非依存: LocationResolver / TypeMapper / NameConverter / Generator スナップショット)と統合テスト(wp-env + 無償版 ACF。Pro 専用型はフィクスチャ JSON によるユニット層でカバー)が分離されている(DR-12)
+- [ ] ユニットテスト(Brain Monkey、WP 非依存: LocationResolver / TypeMapper / NameConverter / Generator スナップショット)と統合テスト(wp-env + 無償版 ACF。Pro専用型の正規化はフィクスチャJSONによるユニット層でも確かめる)が分離されている(DR-12)
 
 ## 検証コマンド
 
@@ -1579,4 +1583,7 @@ composer acf:check:fixtures
 
 # 重複キー検出(フィクスチャ: MetaSchema と同名フィールドを持つ acf-json を配置)
 wp tmswp acf check ; test $? -eq 2
+
+# ACF Pro専用の型とPro限定機能(手元だけ。monorepoで。文書10 §4.9)
+TMSWP_ACF_PRO_ZIP=/path/to/advanced-custom-fields-pro.zip composer test:integration:acf-pro
 ```

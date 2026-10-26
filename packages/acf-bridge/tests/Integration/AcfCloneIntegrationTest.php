@@ -12,6 +12,7 @@ use TMSWP\AcfBridge\Generate\GeneratorContext;
 use TMSWP\AcfBridge\Json\FieldGroup;
 use TMSWP\AcfBridge\Manifest\ManagedKey;
 use TMSWP\AcfBridge\Manifest\ManagedKeyCollector;
+use TMSWP\AcfBridge\Tests\Support\RestoresAcfStores;
 use TMSWP\Core\Tests\Support\IntegrationTestCase;
 use TMSWP\Core\Tests\Support\UsesTempDirectories;
 
@@ -19,40 +20,36 @@ use TMSWP\Core\Tests\Support\UsesTempDirectories;
  * cloneのフィールドを、実物のACF Proで確かめる(docs/09 §6.6)。ACFの管理画面と同じ経路(cloneのkeyへのupdate_field()と
  * get_field())で保存した値を、生成アクセサが読み書き・削除・存在判定でき、管理キーがACFの保存したメタのキーと一致する。
  *
- * cloneはACF Proの型のため、無料版のACF(CI)では飛ばす。ACF Proでの実行の手順はdocs/12 §1.2(v0.6.0-T6で整える)。
+ * cloneはACF Proの型のため、グループacf-proとし、ACF Proを載せた隔離環境(composer test:integration:acf-pro)だけで
+ * 走らせる(docs/09 §14)。
+ *
+ * @group acf-pro
  */
 final class AcfCloneIntegrationTest extends IntegrationTestCase
 {
+    use RestoresAcfStores;
     use UsesTempDirectories;
-
-    /** @var list<string> このテストが登録したACFのローカルのグループのkey */
-    private array $localGroups = [];
-
-    /** @var list<string> このテストが登録したACFのローカルのフィールドのkey */
-    private array $localFields = [];
 
     public function set_up(): void
     {
         parent::set_up();
-
-        if (!class_exists('acf_field_clone')) {
-            self::markTestSkipped('The clone field type requires ACF Pro, which is not active (the CI runs the free ACF). Run this test with ACF Pro as described in docs/12 §1.2.');
-        }
+        $this->snapshotAcfStores();
+        self::assertTrue(acf_is_pro(), 'the acf-pro group runs only with ACF Pro (composer test:integration:acf-pro)');
     }
 
     public function tear_down(): void
     {
-        // ACFのローカルのフィールドとグループはプロセスの中で続くため、ほかのテストに残さない
-        foreach ($this->localFields as $key) {
-            acf_remove_local_field($key);
+        // ACFのstore(ローカルのフィールドとグループ、テストが捨てた値のキャッシュを含む)はプロセスの中で続くため、
+        // set_upの時点のdataとaliasesに戻す。どれかが失敗しても、ほかの後始末を飛ばさない
+        try {
+            $this->restoreAcfStores();
+        } finally {
+            try {
+                $this->cleanupTempDirectories();
+            } finally {
+                parent::tear_down();
+            }
         }
-
-        foreach ($this->localGroups as $key) {
-            acf_remove_local_field_group($key);
-        }
-
-        $this->cleanupTempDirectories();
-        parent::tear_down();
     }
 
     /**
@@ -178,11 +175,6 @@ final class AcfCloneIntegrationTest extends IntegrationTestCase
 
         foreach ($definitions as $definition) {
             self::assertTrue(acf_add_local_field_group($definition));
-            $this->localGroups[] = $definition['key'];
-            foreach ($definition['fields'] as $field) {
-                self::assertIsString($field['key']);
-                $this->localFields[] = $field['key'];
-            }
             $groups[] = FieldGroup::fromArray($definition, $definition['key'] . '.json');
         }
 

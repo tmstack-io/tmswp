@@ -110,6 +110,29 @@ final class AcfFieldAccessTest extends UnitTestCase
         self::assertSame([], $access->emptyLayouts(''));
     }
 
+    /**
+     * color_picker(return_formatがarray)は、ACFが値の無いときと色として読めない文字列のときに返すrgba(0,0,0,0)の配列を
+     * 未設定としてnullにする。ほかの色は、どれか1つの成分(alphaを含む)が0でなければそのまま返す。
+     */
+    public function testTransparentBlackColorIsUnset(): void
+    {
+        $this->bootKernel(true);
+        $access = AcfFieldAccessFixture::make(10);
+
+        self::assertNull($access->color(['red' => 0, 'green' => 0, 'blue' => 0, 'alpha' => 0.0]));
+        self::assertNull($access->color(null));
+        self::assertNull($access->color(''));
+
+        foreach ([
+            ['red' => 0, 'green' => 0, 'blue' => 0, 'alpha' => 0.5],
+            ['red' => 0, 'green' => 0, 'blue' => 0, 'alpha' => 1.0],
+            ['red' => 0, 'green' => 0, 'blue' => 1, 'alpha' => 0.0],
+            ['red' => 255, 'green' => 0, 'blue' => 0, 'alpha' => 0.0],
+        ] as $color) {
+            self::assertSame($color, $access->color($color));
+        }
+    }
+
     /** 入れ子の値を、全階層でサブフィールドの型どおりに正規化する(数値の文字列は数値、添字の飛んだlistは詰め直す)。 */
     public function testNestedValuesAreNormalizedAtEveryLevel(): void
     {

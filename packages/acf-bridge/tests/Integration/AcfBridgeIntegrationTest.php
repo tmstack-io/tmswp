@@ -101,6 +101,11 @@ final class AcfBridgeIntegrationTest extends IntegrationTestCase
         parent::tear_down();
     }
 
+    /**
+     * CIの環境の前提(無料版のACF)。ACF Proで走らせるcomposer test:integration:acf-proは、このグループを外す。
+     *
+     * @group acf-free
+     */
     public function testFreeAcfIsActive(): void
     {
         self::assertInstanceOf(ACF::class, acf());
@@ -837,12 +842,13 @@ final class AcfBridgeIntegrationTest extends IntegrationTestCase
         self::assertIsArray($readFile);
         self::assertSame($file, $readFile['ID']);
 
-        foreach (['数字の文字列' => (string) $image, 'ゼロ' => 0, '負の数' => -1, '配列' => [$image]] as $name => $invalid) {
+        // メッセージは、渡した値の型を示す。intは範囲の外の値そのものを示す(型だけでは何が誤りか分からないため)
+        foreach (['数字の文字列' => [(string) $image, 'string'], 'ゼロ' => [0, '0'], '負の数' => [-1, '-1'], '配列' => [[$image], 'array']] as $name => [$invalid, $got]) {
             try {
                 $storage->set(ObjectType::Post, $postId, 'main_image', $invalid);
                 self::fail("InvalidArgumentException was not thrown for {$name}");
             } catch (InvalidArgumentException $exception) {
-                self::assertStringContainsString("meta 'main_image' is an ACF image field and stores a single attachment ID; pass a positive int", $exception->getMessage(), $name);
+                self::assertSame("meta 'main_image' is an ACF image field and stores a single attachment ID; pass a positive int, got {$got}", $exception->getMessage(), $name);
             }
         }
 

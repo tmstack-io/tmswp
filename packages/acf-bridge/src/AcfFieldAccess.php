@@ -643,10 +643,17 @@ trait AcfFieldAccess
         return $this->acfListItemsOf($value, $path, 'AcfUserArray', $this->arrayItem($this->acfUserArrayFromArray(...)));
     }
 
-    /** @return AcfColorRgba|null */
+    /**
+     * color_picker(return_formatがarray)の値。ACFは値が無いとき(と色として読めない文字列のとき)もrgba(0,0,0,0)の配列を
+     * 返すため、その配列は未設定としてnullにする(完全に透明な黒を保存した値もnullになる。docs/09 §6.5)。
+     *
+     * @return AcfColorRgba|null
+     */
     protected function acfColorRgbaOf(mixed $value, string $path): ?array
     {
-        return $this->acfShapeOf($value, $path, 'AcfColorRgba', $this->acfColorRgbaFromArray(...));
+        $color = $this->acfShapeOf($value, $path, 'AcfColorRgba', $this->acfColorRgbaFromArray(...));
+
+        return $color === ['red' => 0, 'green' => 0, 'blue' => 0, 'alpha' => 0.0] ? null : $color;
     }
 
     /**

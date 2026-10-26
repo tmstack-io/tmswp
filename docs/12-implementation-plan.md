@@ -139,7 +139,7 @@ v0.1.0 → v0.2.0 ─┬→ v0.3.0 ─→ v0.6.0 ─┐
 ## 1.2 ACF の検証
 
 - 利用者は ACF Pro を使う前提とする。CI では wordpress.org の無料版 ACF(advanced-custom-fields)で確認する。
-- Pro 限定機能(repeater・flexible_content・gallery・clone 等)のテストは、ライセンスキーを環境変数で渡したときだけ手元で走らせ、その結果を記録する。実物の ACF Pro での最終確認は v0.9.0 で行う。
+- Pro限定機能(repeater・flexible_content・gallery・clone等)のテストは、ACF Proのzipのパスを環境変数`TMSWP_ACF_PRO_ZIP`で渡したときだけ、手元で`composer test:integration:acf-pro`で走らせ、その結果を記録する(隔離したwp-envで走らせる。docs/10 §4.9)。実物のACF Proでの最終確認はv0.9.0で行う。
 - 偽の ACF 関数を定義するテストは置かない。
 - 反映先: `09-acf-bridge.md` §14、`10-quality.md` §4、.wp-env.json。
 
@@ -781,7 +781,7 @@ v0.3.0(v0.2.0 を含む)
 - 完了条件:
   - 無料版 ACF にある型について、正規化、key の解決、マーク、E101、UseMetaStorage が CI の統合テストで確認され、CLI のテストがある。全ユニットテストが UnitTestCase を継承する。
   - マークの振り分け(ACF の location の値 `all` のキーを `markExternallyManagedInAllSubtypes()` に、それ以外のキーを `markExternallyManaged()` に渡すこと)を acf-bridge のテストで確かめる(v0.3.0 の時点では、packages/acf-bridge/src/AcfBridge.php のこの振り分けに acf-bridge 側のテストが無い)。
-  - Pro 専用の型(repeater、flexible_content、gallery、clone)と他の Pro 限定機能のテストは、ライセンスキーを環境変数で渡したときだけ手元で走り、その結果を記録している(§1.2)。実物の ACF Pro での最終確認は v0.9.0-T1 で行う。
+  - Pro専用の型(repeater、flexible_content、gallery、clone)と他のPro限定機能のテストは、ACF Proのzipのパスを環境変数`TMSWP_ACF_PRO_ZIP`で渡したときだけ手元で走り(`composer test:integration:acf-pro`)、その結果を記録している(§1.2)。実物のACF Proでの最終確認はv0.9.0-T1で行う。
   - 対象領域(acf-bridge)を再点検して、件数のみ判明している軽微な不具合(1 件)を特定し、すべて対処した。
 - 検証コマンド: `composer test:unit`、`composer test:integration`
 
@@ -807,7 +807,7 @@ v0.3.0(v0.2.0 を含む)
 
 1. 全 31 型の組み合わせの fixture から生成したコードが PHPStan level max を通る(静的解析)。
 2. 無料版 ACF にある型は、CI の統合テストで型どおりの値を返す。
-3. Pro 専用の型は、ライセンスキーを環境変数で渡した手元の実行で型どおりの値を返したことが記録されている(実物の ACF Pro での最終確認は v0.9.0-T1)。
+3. Pro専用の型は、ACF Proのzipのパスを環境変数`TMSWP_ACF_PRO_ZIP`で渡した手元の実行(`composer test:integration:acf-pro`)で型どおりの値を返したことが記録されている(実物のACF Proでの最終確認はv0.9.0-T1)。
 4. テーマとプラグインの両方で acf-bridge を使える。
 5. 偽の ACF を使うテストが無い。
 6. unit と integration の合算カバレッジが §0.7 の表のこの版の閾値(75%)以上である(CI の `coverage` ジョブ)。composer.json の `test:coverage:check` の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。
@@ -1013,8 +1013,8 @@ v0.8.0
 #### v0.9.0-T1: 実物の ACF Pro での確認
 
 - 対象ファイル領域: なし(確認作業。不具合が見つかった場合は、該当パッケージの修正タスクを追加する)
-- 完了条件: ライセンスキーを環境変数で渡し、v0.6.0 で手元確認した Pro 専用の型と Pro 限定機能のテストを含む acf-bridge の統合テストと、sample-site の ACF 機能が実物の ACF Pro で通ったことを記録している(§1.2)。
-- 検証コマンド: ライセンスキーの環境変数を設定して `composer test:integration`
+- 完了条件: ACF Proのzipのパスを環境変数`TMSWP_ACF_PRO_ZIP`で渡し、v0.6.0で手元確認したPro専用の型とPro限定機能のテストを含むacf-bridgeの統合テストと、sample-siteのACF機能が実物のACF Proで通ったことを記録している(§1.2)。
+- 検証コマンド: `TMSWP_ACF_PRO_ZIP`を設定して`composer test:integration:acf-pro`
 
 #### v0.9.0-T2: E2E の自動化と統合テストの網羅確認
 

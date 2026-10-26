@@ -14,6 +14,7 @@ use TMSWP\AcfBridge\AcfFieldAccess;
  * 形の不一致の扱いはKernel::forClass()のKernelで決まり、TMSWPの名前空間はアプリの名前空間にできないため、テストは
  * この名前空間(App\FieldAccess)のKernelを起動する。
  *
+ * @phpstan-import-type AcfColorRgba from \TMSWP\AcfBridge\AcfTypes
  * @phpstan-import-type AcfImage from \TMSWP\AcfBridge\AcfTypes
  */
 final class AcfFieldAccessFixture
@@ -60,6 +61,12 @@ final class AcfFieldAccessFixture
     public function deleteByKey(string $key): bool
     {
         return $this->acfDelete($key);
+    }
+
+    /** @return AcfColorRgba|null */
+    public function color(mixed $value): ?array
+    {
+        return $this->acfColorRgbaOf($value, 'color_value');
     }
 
     /** @return array{title: string, photo: int|null, enabled: bool, tags: list<string>, image: AcfImage|null, items: list<array{label: string, amount: int|float|null, owner: ArrayObject<array-key, mixed>|null}>}|null */
