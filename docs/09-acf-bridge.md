@@ -23,7 +23,7 @@ Advanced Custom Fields (ACF / ACF Pro) と TMSWP を統合する唯一の公式�
 |---|---|
 | 全体アーキテクチャ/リポジトリ構成 | monorepo レイアウト、拡張パッケージの配布形態(DR-11, DR-15) |
 | Kernel・Discovery 設計書 | `Kernel::boot()` / `KernelConfig`(appDir・appNamespace の取得元)、ブートのフック整合規約(DR-04) |
-| Meta/Option 定義層設計書 | `MetaStorageInterface`、`MetaSchemaRegistry`、`MetaBag`、`ObjectType`、`#[MetaSchema]`、`#[UseMetaStorage]`。`#[WithMetaRevisions]`(§4.11)は §8.3 の責務分担の参照のみ(コアはプレビュー用の独自フックを発火せず、本拡張もそれに依存しない) |
+| Meta/Option 定義層設計書 | `MetaStorageInterface`、`MetaSchemaRegistry`、`MetaBag`、`ObjectType`、`#[MetaSchema]`、`#[UseMetaStorage]`。`#[WithMetaRevisions]`(§4.11)には依存しない(ACFのフィールドのプレビューはACFの標準機能が扱う。§8.3) |
 | QA/CI 設計書 | `composer qa` 系コマンド、GitHub Actions マトリクス(DR-12) |
 
 ---
@@ -81,7 +81,6 @@ packages/acf-bridge/
 │   ├── AcfTypes.php             # @phpstan-type 定義専用クラス
 │   ├── AcfLocalTime.php         # 日付系の現地の時刻の変換(§6.3)
 │   ├── AcfMetaStorage.php       # MetaStorageInterface 実装
-│   ├── PreviewAcfSupport.php    # プレビュー時 ACF 値保存(オプトイン)
 │   ├── Json/
 │   │   ├── AcfJsonRepository.php
 │   │   ├── AcfJsonSource.php    # 読み込みの結果(グループ・オプションページのpost_id・警告・source hash)
@@ -190,7 +189,6 @@ Kernelの構成は、テーマ・プラグインのルート(探索結果ファ�
 5. `$kernel->defer('plugins_loaded', 10, ...)`で、有効なACFの版の確認を予約する。ACFはプラグインの読み込み時に`ACF_VERSION`を定義するため、すべてのプラグインを読み込んだ後に確かめる。`ACF_VERSION`が6.2より古ければ`AcfBridgeRuntimeException`(設定の誤り。§1.2)。ACFが無効(`ACF_VERSION`が無い)なら確かめない。
 6. `$kernel->defer('init', 6, ...)`でManifest連携(§7.2)を予約する(ACFの`acf/init`は`init` priority 5で発火するため、その直後)。手順5・6の予約は、発火済みのフックへの予約なら(テーマのKernelの手順5、本番の遅延boot(フックの発火後のboot)の手順5・6)、bootの最後のKernelのキャッチアップの中で(最初に発火した順, priority)の位置で実行される(MetaSchemaのWordPressへの登録(`init` 20)より前。Kernel設計書§3.3)。
 7. `defined('WP_CLI') && WP_CLI`のとき`WP_CLI::add_command('tmswp acf', new Cli\AcfCommand())`を実行する(テーマとプラグインの両方が登録しても1つのコマンドで、対象は`--app=`で選ぶ。§5.1)。
-8. `BridgeConfig::$previewMeta === true`のとき`PreviewAcfSupport::register()`を呼ぶ(§8.3)。
 
 - ACFが無効でも`register()`は成功する(手順3・4のフィルタはACFが無ければ発火せず、手順5は版を確かめない)。手順6の申告もACFに依存せず行う(§7.2)。
 - debugによる分岐とログは、登録したKernelの`$kernel->config()->debug`と`$kernel->logger()`に従う(`AcfBridge::kernel()`から引く)。`WP_DEBUG`を直接参照して分岐しない(文書12 §1.7)。
@@ -207,7 +205,6 @@ final readonly class BridgeConfig
      * @param array<string, string> $classMap       グループkey → クラス短名の明示指定
      * @param array<string, string> $methodNameMap  "{groupKey}.{fieldName}" → メソッド名の明示指定
      * @param array<string, string> $optionsPagePostIds オプションページのmenu_slug → ACFのpost_id(§5.4)
-     * @param bool                  $previewMeta    プレビュー時ACF値保存の有効化
      * @param bool                  $registerLoadJsonDirs acf/settings/load_json への自動登録
      */
     public function __construct(
@@ -217,7 +214,6 @@ final readonly class BridgeConfig
         public array $classMap = [],
         public array $methodNameMap = [],
         public array $optionsPagePostIds = [],
-        public bool $previewMeta = false,
         public bool $registerLoadJsonDirs = true,
     ) {}
 
@@ -231,7 +227,6 @@ final readonly class BridgeConfig
         array $classMap = [],
         array $methodNameMap = [],
         array $optionsPagePostIds = [],
-        bool $previewMeta = false,
     ): self;
 }
 ```
@@ -1089,7 +1084,7 @@ externally managed meta key 'price' for post:product is already declared by App\
 
 ---
 
-# 8. AcfMetaStorage と #[UseMetaStorage] / プレビュー連携
+# 8. AcfMetaStorage と #[UseMetaStorage] / プレビュー
 
 ## 8.1 `TMSWP\AcfBridge\AcfMetaStorage`
 
@@ -1164,26 +1159,15 @@ final class ProductPost extends PostType
 - 使い分けは文書04「メタ・設定の使い分け」(文書12 §1.9)に従う。単純な値(文字列・数値・真偽・日付・単一画像ID等)は、ACFの画面で編集する場合も`#[MetaSchema]`で宣言し、エンティティに`#[UseMetaStorage(AcfMetaStorage::class)]`を付けて、アプリは`MetaBag`だけで読み書きする(ACFに完全には依存させない)。ACF固有の複合型(repeater・flexible_content・group・gallery・relationship)は生成アクセサ(`XxxFields`)で扱う。同じキーを`MetaBag`と生成アクセサの両方から読み書きしない。
 - `#[MetaSchema]`で宣言できるACFのフィールドのキーは、単純な値の型(§8.1の`AcfMetaStorage::SUPPORTED_FIELD_TYPES`)のフィールドだけである。ほかの型(gallery・relationship・group等)のフィールドは、生成アクセサで読み書きする。
 
-## 8.3 `PreviewAcfSupport`(プレビュー時 ACF 値保存・オプトイン)
+## 8.3 ACFのフィールドのプレビュー
 
-旧 FW `AbstractHook::save_preview_post` + `acf_save_preview_postmeta` の後継。コアの `#[WithMetaRevisions]`(Meta/Option 文書 §4.11)は WP 6.4 の `register_post_meta(..., ['revisions_enabled' => true])` に全面委譲する有効化レイヤであり、**FW 独自のフックを一切発火しない**。ACF 管理下キーはそもそも `register_post_meta` されない(§7.2)ためこのコア経路には乗らず、Meta/Option 文書も「ACF フィールドのプレビュー対応は acf-bridge 側の責務」と明記している。よって本クラスはコアの tmswp/* アクションに依存せず、WP 標準フックへ直接登録する**acf-bridge 完結**の実装とする。
+本拡張はプレビューのための処理を持たない。ACFのフィールドのプレビューは、ACFの標準機能が扱う。
 
-```php
-final class PreviewAcfSupport
-{
-    public static function register(): void;
-}
-```
-
-- `register()` は `add_action('wp_insert_post', ...)` でコールバックを登録する(旧 FW と同一の契機)。プレビュー時の WP のオートセーブ/リビジョン保存は `wp_create_post_autosave()` → `_wp_put_post_revision()` → `wp_insert_post()` を経由するため、このフックでリビジョン保存を検知できる。コアの `#[WithMetaRevisions]` の有無とは独立に動作する(両者は対象キーが重複しない補完関係: コア = `#[MetaSchema]` 登録キー、本クラス = ACF 管理下キー)。
-- コールバック擬似手順(引数 `int $postId`)。判定順序を変えないこと — リビジョン判定を nonce 検証より先に行うのは、通常の投稿保存経路で ACF 自身の nonce を消費しない(`acf_verify_nonce` は成功時に nonce を無効化するため、ACF 本体の `save_post` 処理と競合させない)ためである。
-  1. `$parentId = wp_is_post_revision($postId)` が false なら return(リビジョン保存以外は対象外。下書きプレビューは投稿本体が保存され ACF の通常 `save_post` 処理が値を保存するため、本クラスの関与は不要)。
-  2. `$_POST['acf']` が非空配列でなければ return(ブロックエディタの REST オートセーブ等、ACF 入力を含まないリクエストはここで抜ける)。
-  3. `function_exists('acf_verify_nonce')` かつ `acf_verify_nonce('post') === true` でなければ return(ACF がメタボックスに出力する `_acf_nonce` の検証。ACF 不在時もここで抜ける)。
-  4. `current_user_can('edit_post', $parentId)` でなければ return(防御的な権限再確認)。
-  5. `function_exists('acf_update_values')` なら `acf_update_values((array) wp_unslash($_POST['acf']), $postId)` を実行。不在なら何もしない(プレビュー経路で例外を投げない)。
-- セキュリティ前提: WP のプレビュー/オートセーブ保存経路(`wp-admin/post.php` の preview アクション、REST オートセーブ)は `wp_insert_post` 到達前に nonce と `edit_post` capability を検証済みである。ただし `wp_insert_post` アクションは任意のコードからも発火しうるため、本コールバックは手順 3(nonce)・手順 4(capability)の検証を**自身でも必ず**行う(多層防御)。検証を省略して `$_POST['acf']` をリビジョンへ書き込む実装は不可。
-- 有効化は `BridgeConfig::$previewMeta = true` のみ(既定 false)。
+- 確認した版: 無料版ACF 6.8.10で実測した(統合テスト`AcfPreviewIntegrationTest`)。ACF Pro 6.8.8は、保存の処理のソースが無料版と同じである。
+- 公開済み・非公開の投稿を、メタボックスのフォームを送るクラシックの形式でプレビューすると、ACFはフィールドの値をautosaveのリビジョンへ保存し、親の投稿の値を変えない。プレビューの表示では、`get_field()`等がautosaveの値を読む。
+- 編集中の利用者自身の下書き・自動下書き(ほかの利用者のロックが無いもの)のプレビューでは、WordPressが親の投稿を保存する(`post_preview()`が`edit_post()`を呼ぶ)。このためACFの値も親の投稿へ保存される。
+- ブロックエディタのプレビュー(RESTのautosaveと、メタボックスの送信)は、上の保証に含めない。RESTのautosaveはACFのフィールドの値を送らない。
+- 制約: ACFはリビジョンの読み出しに`wp_get_post_revisions()`を使うため、`revisions`に対応しない投稿タイプでは、プレビューの読み出しが親の投稿の値になる。
 
 ---
 
@@ -1244,7 +1228,6 @@ QA文書のGitHub Actionsに以下のステップを追加する(acf-jsonを持�
 | `AcfMetaStorage` の全メソッド | `AcfNotActiveException` を投げる |
 | Manifest連携(§7.2) | ACFが有効なときと同じく申告する(生成物`AcfManifest`だけで決まり、ACFの実行時に依存しないため)。重複は§7.3の例外になる。`AcfManifest`が無いことはACFの有無に関係なく設定の誤り(WP-CLIを除き`AcfBridgeRuntimeException`。§7.2) |
 | `wp tmswp acf sync` / `check` | 実行可能(acf-jsonと`BridgeConfig`だけから生成し、ACFの実行時に問い合わせない。§5.4) |
-| `PreviewAcfSupport` | 何もしない(フック登録はされるが、コールバックが §8.3 手順 3 の `function_exists('acf_verify_nonce')` で早期 return) |
 
 登録・申告・生成と、実行時の値の読み書きの扱いは、文書00 §5.6のエラー方針に次のとおり当てはめる。
 
@@ -1464,7 +1447,7 @@ $rows = \App\Acf\ShopFields::of($post)->value('店舗情報リピート');
 - **null センチネル委譲の全廃**: 旧 `iwf2b/meta/get` 系フィルタは「null を返したら次へ」方式のため正当な null/false を外部ストレージから返せず、さらに `clear` 系はフィルタ名不一致(`iwf2b/meta/delete` 発火 vs `iwf2b/meta/clear` 登録)とシグネチャ不整合で**実際には機能していなかった**。本拡張は `has()`/`get()` 分離の `MetaStorageInterface` 実装 + `#[UseMetaStorage]` の明示オプトインに置き換え、グローバルフィルタ委譲は提供しない(DR-18)。
 - **実利用実態への適合**: 実案件 15 件中、テーマでの `get_field`/ACF API 直接利用は数千箇所規模(T10 5,662 件等)であり「ACF を使わせない」のは非現実的。一方で型検査ゼロ・フィールド名タイポの実行時無反応が恒常的な事故源だった。生成アクセサ + PHPStan level max でこれを静的検査に引き上げる。
 - **マニフェストのライフサイクル一本化**: ACF 管理下キーのマニフェストは acf-json の純関数である派生物なので、実行時に acf-json を走査して自前キャッシュする方式は採らず、他の生成クラスと同じ「sync 生成物としてコミットし check で鮮度を強制する」方式に揃える(DR-06)。キャッシュ検証・アトミック書込・書込不可フォールバックの機構は持たない。集約 source-hash は `AcfManifest.php` 1 箇所だけに置き、各生成クラスには埋め込まない。acf-json 1 ファイルの編集で無関係な生成クラスのヘッダが変化する diff ノイズを生まないためである。
-- **プレビュー時 ACF 保存の継承**: 旧 `acf_save_preview_postmeta` は有用機能だったため継承する。ただしコアの `#[WithMetaRevisions]` は WP 6.4 の `revisions_enabled` への有効化レイヤであり独自フックを発火しない(Meta/Option 文書 §4.11)ため、旧 FW のような「コアが独自アクションを発火し ACF 実装が購読する」分割は採らず、本拡張の `PreviewAcfSupport` が旧 FW と同じ `wp_insert_post` 契機で acf-bridge 完結に実装する。旧実装に無かった nonce(`acf_verify_nonce`)と `edit_post` capability の検証を追加し、無検証の `$_POST['acf']` リビジョン書き込み経路を塞いだ(§8.3)。
+- **プレビュー時ACF保存**: 旧`acf_save_preview_postmeta`は継承しない。ACF標準で足りるため(§8.3)。
 
 ---
 
@@ -1492,7 +1475,7 @@ $rows = \App\Acf\ShopFields::of($post)->value('店舗情報リピート');
 - [ ] 生成コードを含む app/ が PHPStan level max(szepeviktor/phpstan-wordpress)を baseline なしで通過する
 - [ ] `AcfMetaStorage`の読み書きが`WpMetaStorage`と同じ意味でメタの生の行を読み書きし、ACFの書き込みの関数とフィルタを通らない。ACFのフィールドのキーの`set()`・`delete()`は参照のメタも扱い、扱えない型(§8.1)のキーは`AcfBridgeRuntimeException`になる。nullセンチネルのフォールスルーが存在しない
 - [ ] `#[UseMetaStorage(AcfMetaStorage::class)]`付与エンティティの`meta()`が、ACFのフィールドの保存先を読み書きし、ACFがその値をフィールドとして読める(wp-env統合テスト)
-- [ ] `BridgeConfig::$previewMeta = true` 時、プレビュー保存(リビジョン作成)で `$_POST['acf']` の値がリビジョンへ保存され、§8.3 の判定順序どおり「非リビジョン保存」「nonce 不正」「`edit_post` 権限なし」の各ケースで書き込まれない(統合テスト)。コアの `tmswp/` プレビュー用アクションへの依存が存在しない(`grep -r 'tmswp/preview' packages/acf-bridge/src` が 0 件)
+- [ ] 公開済みの投稿をクラシックの形式でプレビューすると、ACFの標準機能がフィールドの値をautosaveへ保存して親の投稿の値を変えず、プレビューのURLで`get_field()`がautosaveの値を返す(統合テスト。§8.3)
 - [ ] `#[MetaSchema]`の宣言が無いACF管理下キーは`register_*_meta`されず(統合テスト: `registered_meta_key_exists()`がfalse)、`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティが宣言したACF管理下キーは`register_*_meta`される(統合テスト: `registered_meta_key_exists()`がtrue)
 - [ ] 別のストレージ(`AcfMetaStorage`でない)のエンティティの`#[MetaSchema]`とACF管理下キーの重複が、実行時例外および`wp tmswp acf check`のE101(exit 2)の両方で検出される
 - [ ] `wp tmswp acf sync`が`AcfManifest.php`を生成し、`managedKeys()`がacf-json由来のACF管理下キー一覧を返す。`AcfManifest`クラスが無いとき、Manifest連携(§7.2)は`AcfBridgeRuntimeException`になり、WP-CLIのときだけ`WP_CLI::warning()`で警告して申告しない

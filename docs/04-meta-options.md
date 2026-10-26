@@ -848,7 +848,7 @@ final class WithMetaRevisions
 - 付与されたエンティティのメタは `register_post_meta(..., ['revisions_enabled' => true])` で登録され(4.9)、以降の保存・プレビュー・リビジョン復元はすべてWPコアが処理する: 投稿保存/オートセーブ時にメタがリビジョンへ複製され、プレビュー表示時はWPコアの `_wp_preview_meta_filter`(`get_post_metadata` フィルタ)がオートセーブリビジョンの値へ読み替える。FW独自のフックは一切追加しない。
 - プレビューの値は `MetaBag` のすべての読み取り(`has()`・`get()`・型付きgetter・`all()`)で読める。そのため `WpMetaStorage`(4.6)は、行の有無を `get_metadata_raw(..., false)` が行を返したか(フィルタが返した空でないスカラーも1行。アイキャッチを差し替えるプレビューで `_wp_preview_post_thumbnail_filter` が返す ID を含む。アイキャッチを外すプレビューでこのフィルタが返すスカラーの `''` は、WP と同じく行なし)で判定し(`metadata_exists()` はフィルタの結果を `(bool)` にするため、オートセーブの値が `'0'`・`''` だと行が無いと判定され、スキーマdefaultが返る)、`getMultiple()` をキーごとに読む(全メタを読む `get_metadata($type, $id)` はキーを指定しないため、プレビューのフィルタに当たらない)。例えば Integer のキー(default 100)をオートセーブで 0 にしてプレビューすると、`int()` は 0、`all()` はそのキーに `'0'` を返す。
 - 宣言は属性であるため「いつ有効化するか」という時間軸の概念が存在しない。宣言は `registerAll()`(init 20)実行前に構造上確定しているため、呼び出し順序の契約・手遅れ時の例外・レジストリの可変メソッドを持たない(設計根拠6)。
-- `#[MetaSchema]`で宣言していないACF管理下キー(`isExternallyManaged()` = true)はそもそも`register_post_meta`されないため本機構の対象外。ACFフィールドのプレビュー対応はacf-bridge側の責務とする(本書はスコープ外と明記するに留める)。`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティが宣言したACF管理下キーは、宣言どおり登録されるため本機構の対象になる。
+- `#[MetaSchema]`で宣言していないACF管理下キー(`isExternallyManaged()` = true)はそもそも`register_post_meta`されないため本機構の対象外。ACFのフィールドのプレビューはACFの標準機能が扱う(acf-bridge設計書§8.3)。`#[UseMetaStorage(AcfMetaStorage::class)]`のエンティティが宣言したACF管理下キーは、宣言どおり登録されるため本機構の対象になる。
 - サイト構成に応じて実行時に要否を切り替える用途には属性は使えない。リビジョン保存の要否はエンティティ単位で静的に決まるものとして扱う。
 
 ### 4.12 `TMSWP\Core\Attribute\AsOptionGroup` / `TMSWP\Core\Attribute\OptionSchema`

@@ -72,10 +72,6 @@ final class AcfBridge implements ExtensionInterface
         if (\defined('WP_CLI') && WP_CLI === true && class_exists('WP_CLI')) {
             WP_CLI::add_command('tmswp acf', new AcfCommand());
         }
-
-        if ($config->previewMeta) {
-            PreviewAcfSupport::register();
-        }
     }
 
     /**

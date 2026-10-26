@@ -829,7 +829,7 @@ FormDefinition::create('contact')
 | `wp_unique_post_slug` → `auto_post_slug()` | 日本語スラッグ→`{post_type}-{id}` 変換 | **JapaneseSlug**(visibility欠落バグ修正・format設定可) |
 | `remove_filter wptexturize` ×4 | テクスチャライズ無効化 | **DisableTexturize**(run_wptexturizeへ一本化) |
 | `wp_insert_post` → `save_preview_post()` / `save_preview_postmeta` アクション発火 | プレビュー時メタ保存の基盤 | コアへ移管: `#[WithMetaRevisions]`(オプトイン。Meta設計書が定義) |
-| `class_exists('ACF')` ブロック一式: `acf_load_config`/`acf_activated`/`acf/settings/path`/`acf/settings/dir`/`acf/load_field`/`acf_field_auto_export`/`acf_save_preview_postmeta`/`acf/settings/show_admin` | **ACF連携**(同梱パス・JSON自動書出し・表示トグル) | **廃止→acf-bridgeへ移管**(DR-06。acf-json真実源化により自前JSON書出し`acf_field_auto_export`は役割消滅。詳細はacf-bridge設計書) |
+| `class_exists('ACF')` ブロック一式: `acf_load_config`/`acf_activated`/`acf/settings/path`/`acf/settings/dir`/`acf/load_field`/`acf_field_auto_export`/`acf_save_preview_postmeta`/`acf/settings/show_admin` | **ACF連携**(同梱パス・JSON自動書出し・表示トグル) | **廃止→acf-bridgeへ移管**(DR-06。acf-json真実源化により自前JSON書出し`acf_field_auto_export`は役割消滅。`acf_save_preview_postmeta`はACF標準で足りるため継承しない。詳細はacf-bridge設計書) |
 | `iwf2b/meta/*`・`iwf2b/option/*` フィルタ → `*_with_acf()` ×6 | nullセンチネルのメタ/オプションACF委譲(**フィルタ名不一致で実際は機能していなかった**) | **廃止**(DR-18。後継は `MetaStorageInterface` + `#[UseMetaStorage]` の明示オプトイン。acf-bridgeの `AcfMetaStorage` が実装) |
 
 ## 3.7 旧iwf2bからの設計根拠

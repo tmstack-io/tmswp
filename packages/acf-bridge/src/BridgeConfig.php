@@ -21,7 +21,6 @@ final readonly class BridgeConfig
      * @param array<string, string> $methodNameMap "{グループのkey}.{フィールド名}" => メソッド名
      * @param array<string, string> $optionsPagePostIds オプションページのmenu_slug => ACFのpost_id。acf-jsonの
      *                                                  ui_options_pageに無いページ(PHPで登録したページ)に使う
-     * @param bool $previewMeta プレビュー時にACFの値を保存する(§8.3)
      * @param bool $registerLoadJsonDirs jsonDirsをacf/settings/load_jsonに加える
      *
      * @throws AcfBridgeRuntimeException 入力が不正な場合(設定の誤り)
@@ -33,7 +32,6 @@ final readonly class BridgeConfig
         public array $classMap = [],
         public array $methodNameMap = [],
         public array $optionsPagePostIds = [],
-        public bool $previewMeta = false,
         public bool $registerLoadJsonDirs = true,
     ) {
         foreach ($jsonDirs as $jsonDir) {
@@ -69,7 +67,6 @@ final readonly class BridgeConfig
         array $classMap = [],
         array $methodNameMap = [],
         array $optionsPagePostIds = [],
-        bool $previewMeta = false,
     ): self {
         return new self(
             jsonDirs: [$config->rootDir() . '/acf-json'],
@@ -78,7 +75,6 @@ final readonly class BridgeConfig
             classMap: $classMap,
             methodNameMap: $methodNameMap,
             optionsPagePostIds: $optionsPagePostIds,
-            previewMeta: $previewMeta,
         );
     }
 
