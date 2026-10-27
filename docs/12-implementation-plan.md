@@ -926,6 +926,7 @@ v0.2.0〜v0.7.0
   - スターターのラベル言語の既定が日本語(§1.13)。テーマスターターに blocks/ と、npm のビルドと探索コマンドの連結がある(§1.11)。探索結果ファイルの生成がビルド手順にあり、各スターターの探索結果ファイル(`tmswp-discovery.php`)を生成してコミットしている。setup.php が名前空間を書き換えた後に探索結果ファイルを作り直す(または作り直す手順を案内する)(§1.4)。
   - スターター由来のプラグイン 2 本とテーマを同じサイトで起動できる(統合テストまたは wp-env 上の確認)。
   - スターターの `composer qa` が探索結果ファイルの照合(§1.4)を含む。CLAUDE.md を置いていない(§1.18)。
+  - docs/11 §10のsetup.phpの記述(§10.2の全文と説明)を、starters/theme/bin/setup.phpとstarters/plugin/bin/setup.phpの実物に合わせ、両者が一致している。v0.6.0の時点では、docs/11 §10.2の全文はスラッグの正規化・対話での入力・composer.jsonのnameの`local/<slug>`への書き換え・自己削除を含むが、starters/theme/bin/setup.phpとstarters/plugin/bin/setup.phpはどれも行わず、プレースホルダの置き換え(プラグインは本体ファイルの名前の変更も)だけを行う。
 - 検証コマンド: スターターから create-project 相当で 2 つ生成して `composer qa`、wp-env 上でフロントが 200 を返すことの確認
 
 #### v0.8.0-T3: 配布物の整備
@@ -943,6 +944,7 @@ v0.2.0〜v0.7.0
 - 完了条件:
   - sample-site が想定する用途の機能(フォーム、設定ページ、サムネイル、日本語対応、ACF、ブロック)を備え、README が sample-site 用で、lock と path リポジトリの扱いが決まり、`composer qa` が通り、wp-env 上で動く。探索結果ファイル(ブロックを含む)をコミットし、sample-site の `composer qa` が照合する(§1.4)。
   - sample-siteの依存が今のpackages/*から解決され、`composer validate`がlockの古さを報告しない(lockをコミットしない扱いにする場合は、lockを作る手順がREADMEにある)。v0.5.0の時点では、examples/sample-site/composer.lockは.gitignoreの対象(`/composer.lock`)でコミットされておらず、手元に残るlockの更新日は2026-07-05で、`composer validate`が「The lock file is not up to date with the latest changes in composer.json」を出す。lockのtmswp/core 0.1.0は`php: >=8.2`と`ext-mbstring`を要求し、今のpackages/core/composer.json(`php: >=8.3`、ext-mbstringなし)と食い違う。pathリポジトリが`symlink: false`のため、vendor/tmswp/*(.gitignoreの対象)もその時点のpackages/*の写しで、今のpackages/core/srcと一致しない。
+  - sample-siteのcomposer scriptsが、acf-bridgeの生成と照合に`vendor/bin/tms-acf`(`tms-acf sync`・`tms-acf check`。docs/09 §5.1)を使い、`wp tmswp acf`の呼び出しが残っていない。v0.6.0の時点では、examples/sample-site/composer.jsonのscriptsの`acf:check`・`acf:sync`が`wp tmswp acf check`・`wp tmswp acf sync`のままである。
 - 検証コマンド: `cd examples/sample-site && composer qa`、wp-env 上での表示確認
 
 #### v0.8.0-T5: テスト構成の整理
@@ -956,6 +958,7 @@ v0.2.0〜v0.7.0
 - 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.github/workflows/split.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、package.json・package-lock.json(@wordpress/env の版と、npm のインストールスクリプトの扱い)、docs/10 §1.1(package.json の写しの版)・§4.8(カバレッジゲート)・§5(ワークフローの完全版)、docs/01 §4.4(ワークフロー)、packages/core/src/Kernel/DiscoverCommand.php(照合したKernelの数)、tests/fixtures/_wp-cli.php(`theme_roots`に左右されないfixtureの読み込み)、tools/(PHPStanのワーカーごとのメモリの最大量を測る手順。新設)、docs/10 §2.2(計測の手順と上限の扱い)、composer.json(`analyse`)・phpstan.neon.dist(上限を超えそうな場合の解析の分割)
 - 完了条件:
   - rules の検査が全パッケージの rules/ を対象にし、docs/11 §6.3 どおりの検証をする。sample-site と starters の `composer qa` が CI にある。
+  - starters/pluginのphp-cs-fixerの設定(starters/plugin/.php-cs-fixer.dist.php)が、setup.phpの実行の前と後のどちらでも、実在するファイルだけを参照する。v0.6.0の時点では、starters/plugin/.php-cs-fixer.dist.phpが`__DIR__ . '/plugin.php'`をappendしているが、setup.phpが本体ファイルを`<slug>.php`に名前を変えるため、スラッグが`plugin`以外のプロジェクトでは無いファイルを参照する。
   - tools/extract-rules-code.php が、namespace 付きのコード例のクラス名を `final readonly class`・`readonly class` の宣言からも取り出す(v0.4.0 の時点では、クラス名の正規表現が `final class`・`class`・`enum` だけに一致し、`final readonly class` のコード例は「クラス名がありません」の例外になる。v0.4.0 の rules/form-mail.md は `final class` と `public readonly` のプロパティで回避している)。
   - unit と integration の合算カバレッジが、5 パッケージ全体に加えてパッケージ別にも判定され(パッケージ別の基準値はこの版で決める)、docs/10 §4.8 がその方式に改訂されている。php-cs-fixer の設定が docs/10 §3.2・§7 項目4 どおり。
   - qa.yml と split.yml の外部アクションが Node.js 24 で動く版になり(CI に Node.js 20 の非推奨の警告が出ない)、SHA で固定されている(docs/10 §5.3)。外部アクションの実行時に出る Node.js の非推奨の警告(DEP0040 の `punycode`、DEP0169 の `url.parse()`。v0.2.0 の時点では、actions/setup-node・actions/cache・actions/upload-artifact・ramsey/composer-install の実行時に全ジョブで出ている)が、更新後の版で出ないことを確かめる。最新の版でも出る場合は、そのアクションと版を受け入れ記録に書く。
