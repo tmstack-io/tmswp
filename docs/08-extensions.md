@@ -264,7 +264,7 @@ final class Thumbnail implements \TMSWP\Core\Kernel\ExtensionInterface
 
 `url()`の振る舞い(確定手順):
 
-1. `$src`が`0`か空文字なら`null`(画像が無い。アイキャッチの未設定は`get_post_thumbnail_id()`が`0`を返す)。負の整数は`InvalidThumbSourceException`。intなら`"id:{$src}"`へ正規化する。
+1. `$src`が`0`か空文字なら`null`(画像が無い。アイキャッチの未設定は`get_post_thumbnail_id()`が`0`を返す。投稿が無いときは`get_post_thumbnail_id()`が`false`を返し、`$src`はint|stringなので、呼び出し側で`(int) get_post_thumbnail_id()`として`0`にする。`0`は画像が無いとして`null`になる)。負の整数は`InvalidThumbSourceException`。intなら`"id:{$src}"`へ正規化する。
 2. `$width`/`$height` がともにnull/0、負、上限超過なら `InvalidThumbSourceException`(URL生成時点で開発者ミスを検出)。
 3. オプションを正規化する(§1.2)。誤りは`InvalidThumbOptionException`。
 4. `SourceResolver::resolve()` でローカルパスに解決する。`null`(添付ファイルが無い・実体が無い)なら`null`を返す。uploadsの外・許可されない拡張子は`InvalidThumbSourceException`。
@@ -485,7 +485,7 @@ return KernelConfig::theme(
 
 ```php
 <?php /* template-parts/card.php — 画像が無い(null)ときはimgを出さない */ ?>
-<?php $thumb = tms_thumb(get_post_thumbnail_id(), 400, 300); ?>
+<?php $thumb = tms_thumb((int) get_post_thumbnail_id(), 400, 300); ?>
 <?php if ($thumb !== null) : ?>
 <img src="<?php echo esc_url($thumb); ?>" alt="">
 <?php endif; ?>

@@ -32,7 +32,7 @@ return KernelConfig::theme(
 ## 使い方
 
 ```php
-<?php $thumb = tms_thumb(get_post_thumbnail_id(), 400, 300); ?>
+<?php $thumb = tms_thumb((int) get_post_thumbnail_id(), 400, 300); ?>
 <?php if ($thumb !== null) : ?>
 <img src="<?php echo esc_url($thumb); ?>" alt="">
 <?php endif; ?>
