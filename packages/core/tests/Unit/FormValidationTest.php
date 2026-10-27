@@ -36,6 +36,7 @@ use TMSWP\Core\Form\ValidationContext;
 use TMSWP\Core\Form\Validator;
 use TMSWP\Testing\UnitTestCase;
 use TMSWP\Testing\WpdbTestDouble;
+use WP;
 
 final class FormValidationTest extends UnitTestCase
 {
@@ -331,6 +332,12 @@ final class FormValidationTest extends UnitTestCase
         );
 
         Functions\when('nocache_headers')->justReturn();
+        // フロントの要求。Formはhandle()で、POSTで送る名前を公開のクエリ変数と照らす(照合はFormRuntimeTest)
+        Functions\when('is_admin')->justReturn(false);
+        $wp = Mockery::mock(WP::class);
+        self::assertInstanceOf(WP::class, $wp);
+        $wp->public_query_vars = [];
+        $GLOBALS['wp'] = $wp;
         $GLOBALS['wpdb'] = WpdbTestDouble::create();
 
         try {
@@ -343,7 +350,7 @@ final class FormValidationTest extends UnitTestCase
                 'birth' => ['year' => '2026', 'month' => '2', 'day' => '3'],
             ]));
         } finally {
-            unset($GLOBALS['wpdb']);
+            unset($GLOBALS['wpdb'], $GLOBALS['wp']);
         }
 
         self::assertSame(FormStep::Complete, $result->step);

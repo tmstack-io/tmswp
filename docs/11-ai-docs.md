@@ -905,9 +905,10 @@ create-project完了時に`post-create-project-cmd`(`bin/setup.php`と、続け�
    - スターターのブロック名の名前空間`tmswp-starter/`を、ブロック名の名前空間に(blocks/とbuild/blocks/のblock.jsonと、ビルドの出力のJavaScript)。
    - `'/plugin.php'`を`'/<slug>.php'`に(プラグインの`tmswp-kernel.php`の本体ファイルのパスと、`.php-cs-fixer.dist.php`)。
    - README.mdの`<!-- tmswp-starter-setup -->`から`<!-- /tmswp-starter-setup -->`までの節(スターターからの作り方と、`bin/setup.php`の手順)を消す。作ったプロジェクトには`bin/setup.php`が無いためである。
+   - npmのパッケージの名前(テーマのみ。プラグインのスターターにはpackage.jsonが無い)を、スラッグにする。package.jsonには`name`が無いため先頭に足し、package-lock.jsonは先頭の`name`(スターターを作ったディレクトリの名前`theme`のまま残っている)と、ルートのパッケージ(`packages[""]`)の`name`を変える。npmが`name`のあるpackage.jsonから書くのと同じ形にするためである。スラッグの形(英小文字・数字・`-`・`_`で、英字で始まる)は、npmの名前の規則に合う。字下げは元のファイルのものを保つ。ルートのパッケージの無いpackage-lock.json(npm 6以前の形式)は、エラーで止まる。
 5. **本体リネーム**(プラグインのみ): `plugin.php` → `<slug>.php`。
 6. **探索結果ファイルの削除**:スターターの`tmswp-discovery.php`は、書き換える前の名前空間とブロック名で作ったものなので消す。
-7. **composer.json書き換え**:上の置き換えに加えて、`name`を`local/<slug>`、`license`を`proprietary`に変更し、`config.autoloader-suffix`を生成した名前空間にし、`post-create-project-cmd`エントリを削除する。字下げは元のcomposer.jsonのものを保つ。`autoloader-suffix`は、Composerのオートローダのクラス名(`ComposerAutoloaderInit<suffix>`)の接尾辞である。既定の接尾辞は、create-projectが依存を入れた時点のcomposer.lockのハッシュで、同じ版のスターターから作ったプロジェクトどうしで同じになる。そのため、同じスターターから作ったプラグインを同じサイトで有効にすると、クラスの重複で止まる。スターター自身のlicenseはGPL-2.0-or-later(Packagistに公開してcreate-projectで使うため)で、作った案件のプロジェクトはクライアントの非公開のコードのため`proprietary`にする。スターターにLICENSEのファイルは置かない。
+7. **composer.json書き換え**:上の置き換えに加えて、`name`を`local/<slug>`、`description`を`<表示名> (WordPress theme)`(プラグインは`(WordPress plugin)`。スターターの説明`Starter theme for …`は作ったプロジェクトに当てはまらない)、`license`を`proprietary`に変更し、`config.autoloader-suffix`を生成した名前空間にし、`post-create-project-cmd`エントリを削除する。字下げは元のcomposer.jsonのものを保つ。`autoloader-suffix`は、Composerのオートローダのクラス名(`ComposerAutoloaderInit<suffix>`)の接尾辞である。既定の接尾辞は、create-projectが依存を入れた時点のcomposer.lockのハッシュで、同じ版のスターターから作ったプロジェクトどうしで同じになる。そのため、同じスターターから作ったプラグインを同じサイトで有効にすると、クラスの重複で止まる。スターター自身のlicenseはGPL-2.0-or-later(Packagistに公開してcreate-projectで使うため)で、作った案件のプロジェクトはクライアントの非公開のコードのため`proprietary`にする。スターターにLICENSEのファイルは置かない。
 8. **自己削除**: `bin/setup.php`と、空になった`bin/`を削除する(再実行事故の防止)。
 9. **composer.lockの更新**: create-projectが作った`composer.lock`があれば、Composer(`COMPOSER_BINARY`。Composerがスクリプトに渡す)で`composer update --lock --no-install`を実行し、書き換えたcomposer.jsonのハッシュを記録し直す(パッケージの版は変えない。`composer validate`がlockの古さを報告しないため)。`--no-install`で作った場合は`composer.lock`が無いため、何もしない。Composerから実行していない(手で実行した)場合は、`composer update --lock`の実行を案内する。
 10. 次の一手を標準出力に案内する。オートローダの作り直し(`composer dump-autoload`)、`WP_DEBUG`を有効にしたサイト(開発環境)でテーマ・プラグインを有効にしての探索結果ファイルの作成(テーマは`npm ci && npm run build`、プラグインは`composer discover`。どちらも`wp tmswp discover`を実行する)とコミット、`composer qa`、AGENTS.mdである。
@@ -1029,9 +1030,23 @@ function setupProject(string $root, array $arguments): void
         }
     }
 
+    // npmのパッケージの名前をスラッグにする(package.jsonには無いため足す)。package-lock.jsonの名前は、スターターを
+    // 作ったディレクトリの名前のまま残っているため
+    foreach (['package.json', 'package-lock.json'] as $npmFileName) {
+        $npmFile = $root . '/' . $npmFileName;
+
+        if (is_file($npmFile)) {
+            $npmSource = $rewrites[$npmFile] ?? readTextFile($npmFile);
+            $rewrites[$npmFile] = encodeJson($npmFile, withNpmName($npmFile, decodeJsonObject($npmFile, $npmSource), $slug), $npmSource);
+        }
+    }
+
+    $kind = is_file($root . '/style.css') ? 'theme' : 'plugin';
     $composerSource = $rewrites[$composerFile] ?? readTextFile($composerFile);
-    $composer = decodeComposerJson($composerFile, $composerSource);
+    $composer = decodeJsonObject($composerFile, $composerSource);
     $composer->name = 'local/' . $slug;
+    // スターターの説明(Starter theme for ...)は、作ったプロジェクトには当てはまらない
+    $composer->description = "{$name} (WordPress {$kind})";
     $composer->license = 'proprietary';
     // Composerのオートローダのクラス名(ComposerAutoloaderInit<suffix>)の接尾辞を、名前空間にする。既定の接尾辞は、
     // create-projectが依存を入れた時点のcomposer.lockのハッシュ(同じ版のスターターから作ったプロジェクトどうしで同じ)で、
@@ -1046,15 +1061,7 @@ function setupProject(string $root, array $arguments): void
         unset($composer->scripts->{'post-create-project-cmd'});
     }
 
-    try {
-        $composerJson = reindentJson(
-            json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
-            jsonIndent($composerSource),
-        ) . "\n";
-    } catch (JsonException $exception) {
-        throw new RuntimeException("cannot encode {$composerFile}: {$exception->getMessage()}", 0, $exception);
-    }
-
+    $composerJson = encodeJson($composerFile, $composer, $composerSource);
     unset($rewrites[$composerFile]);
 
     foreach ($rewrites as $file => $contents) {
@@ -1085,7 +1092,6 @@ function setupProject(string $root, array $arguments): void
     $lockStep = refreshLockFile($root)
         ? ''
         : "\n               Then run `composer update --lock`: composer.lock records the hash of the old composer.json.";
-    $kind = is_file($root . '/style.css') ? 'theme' : 'plugin';
     $build = $kind === 'theme' ? 'npm ci && npm run build' : 'composer discover';
     fwrite(STDOUT, <<<TEXT
 
@@ -1244,13 +1250,13 @@ function assertName(string $name): void
  */
 function readComposerJson(string $file): stdClass
 {
-    return decodeComposerJson($file, readTextFile($file));
+    return decodeJsonObject($file, readTextFile($file));
 }
 
 /**
  * @throws RuntimeException JSONのオブジェクトでない場合
  */
-function decodeComposerJson(string $file, string $json): stdClass
+function decodeJsonObject(string $file, string $json): stdClass
 {
     try {
         $composer = json_decode($json, false, 512, JSON_THROW_ON_ERROR);
@@ -1373,6 +1379,60 @@ function refreshLockFile(string $root): bool
 }
 
 /**
+ * npmのパッケージの名前を$nameにしたものを返す。nameは先頭に置く(npmが書く順と同じ)。package-lock.jsonは、先頭の
+ * nameと、ルートのパッケージ(packages[""])のnameの両方を変える(npmは、package.jsonのnameを両方に書く)。
+ *
+ * @throws RuntimeException package-lock.jsonにルートのパッケージが無い場合
+ */
+function withNpmName(string $file, stdClass $package, string $name): stdClass
+{
+    $renamed = withFirstProperty($package, 'name', $name);
+
+    if (basename($file) !== 'package-lock.json') {
+        return $renamed;
+    }
+
+    $packages = isset($renamed->packages) && $renamed->packages instanceof stdClass ? get_object_vars($renamed->packages) : [];
+    $rootPackage = $packages[''] ?? null;
+
+    if (!$rootPackage instanceof stdClass) {
+        throw new RuntimeException("{$file} has no root package (packages[\"\"]); regenerate it with npm 7 or later");
+    }
+
+    $packages[''] = withFirstProperty($rootPackage, 'name', $name);
+    $renamed->packages = (object) $packages;
+
+    return $renamed;
+}
+
+/**
+ * $keyを$valueにして、先頭に置いたオブジェクトを返す(ほかのプロパティの順は保つ)。
+ */
+function withFirstProperty(stdClass $object, string $key, string $value): stdClass
+{
+    $properties = get_object_vars($object);
+    unset($properties[$key]);
+
+    return (object) ([$key => $value] + $properties);
+}
+
+/**
+ * JSONのオブジェクトを、元のファイルの内容($source)と同じ字下げで書いたJSON(末尾に改行)を返す。
+ *
+ * @throws RuntimeException JSONにできない場合
+ */
+function encodeJson(string $file, stdClass $data, string $source): string
+{
+    try {
+        $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    } catch (JsonException $exception) {
+        throw new RuntimeException("cannot encode {$file}: {$exception->getMessage()}", 0, $exception);
+    }
+
+    return reindentJson($file, $json, jsonIndent($source)) . "\n";
+}
+
+/**
  * JSONの1段の字下げ(最初に字下げした行の空白)を返す。字下げが無ければ4つの空白を返す。
  */
 function jsonIndent(string $json): string
@@ -1382,8 +1442,10 @@ function jsonIndent(string $json): string
 
 /**
  * json_encode()のJSON_PRETTY_PRINT(4つの空白)の字下げを、$indentに変える。
+ *
+ * @throws RuntimeException 置き換えに失敗した場合
  */
-function reindentJson(string $json, string $indent): string
+function reindentJson(string $file, string $json, string $indent): string
 {
     $reindented = preg_replace_callback(
         '/^(?: {4})+/m',
@@ -1392,7 +1454,7 @@ function reindentJson(string $json, string $indent): string
     );
 
     if ($reindented === null) {
-        throw new RuntimeException('cannot indent composer.json: ' . preg_last_error_msg());
+        throw new RuntimeException("cannot indent {$file}: " . preg_last_error_msg());
     }
 
     return $reindented;

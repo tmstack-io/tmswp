@@ -26,9 +26,17 @@ use TMSWP\Core\Form\TempFileGc;
 use TMSWP\Core\Form\TempFileStore;
 use TMSWP\Core\Form\UploadedFile;
 use TMSWP\Testing\UnitTestCase;
+use WP;
 
 final class FormViewAndFileTest extends UnitTestCase
 {
+    protected function tearDown(): void
+    {
+        unset($GLOBALS['wp']);
+
+        parent::tearDown();
+    }
+
     public function testFormHtmlAndFieldViewEscapeRenderedMarkup(): void
     {
         $this->stubEscapers();
@@ -179,6 +187,12 @@ final class FormViewAndFileTest extends UnitTestCase
     public function testAttributesSetByTheFormCannotBeSpecified(Closure $render): void
     {
         $this->stubEscapers();
+        // フロントの要求。Formはopen()で、POSTで送る名前を公開のクエリ変数と照らす(照合はFormRuntimeTest)
+        Functions\when('is_admin')->justReturn(false);
+        $wp = Mockery::mock(WP::class);
+        self::assertInstanceOf(WP::class, $wp);
+        $wp->public_query_vars = [];
+        $GLOBALS['wp'] = $wp;
         Functions\when('nocache_headers')->justReturn();
         Functions\when('wp_create_nonce')->justReturn('nonce');
         Functions\when('wp_salt')->justReturn('secret');

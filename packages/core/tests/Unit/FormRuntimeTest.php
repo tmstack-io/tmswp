@@ -6,9 +6,11 @@ namespace TMSWP\Core\Tests\Unit;
 
 use ArrayObject;
 use Brain\Monkey\Actions;
+use Brain\Monkey\Filters;
 use Brain\Monkey\Functions;
 use Closure;
 use LogicException as PhpLogicException;
+use Mockery;
 use org\bovigo\vfs\vfsStream;
 use org\bovigo\vfs\vfsStreamDirectory;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -48,12 +50,16 @@ use TMSWP\Core\Log\LogChannel;
 use TMSWP\Testing\RecordingLogger;
 use TMSWP\Testing\UnitTestCase;
 use TMSWP\Testing\WpdbTestDouble;
+use WP;
 
 final class FormRuntimeTest extends UnitTestCase
 {
     private const string EXPIRED_CONFIRMATION = 'The confirmation screen has expired. Please review your entries and continue again.';
 
     private const string SEND_FAILED = 'The form could not be sent. Please try again.';
+
+    /** WordPress 7.0のWP::$public_query_varsの既定値(投稿タイプ等を登録する前) */
+    private const array WORDPRESS_PUBLIC_QUERY_VARS = ['m', 'p', 'posts', 'w', 'cat', 'withcomments', 'withoutcomments', 's', 'search', 'exact', 'sentence', 'calendar', 'page', 'paged', 'more', 'tb', 'pb', 'author', 'order', 'orderby', 'year', 'monthnum', 'day', 'hour', 'minute', 'second', 'name', 'category_name', 'tag', 'feed', 'author_name', 'pagename', 'page_id', 'error', 'attachment', 'attachment_id', 'subpost', 'subpost_id', 'preview', 'robots', 'favicon', 'taxonomy', 'term', 'cpage', 'post_type', 'embed'];
 
     /** @var list<array<string, mixed>> */
     private array $completed = [];
@@ -83,7 +89,7 @@ final class FormRuntimeTest extends UnitTestCase
 
     protected function tearDown(): void
     {
-        unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions']);
+        unset($GLOBALS['wpdb'], $GLOBALS['wp_version'], $GLOBALS['wp_actions'], $GLOBALS['wp']);
         Kernel::reset();
 
         parent::tearDown();
@@ -181,6 +187,7 @@ final class FormRuntimeTest extends UnitTestCase
      */
     public function testOnlyTheFormThatThePostIsAddressedToProcessesIt(): void
     {
+        self::stubFrontRequest([]);
         Functions\when('wp_create_nonce')->justReturn('nonce');
         Functions\when('wp_salt')->justReturn('secret');
         Functions\when('nocache_headers')->justReturn();
@@ -1897,8 +1904,116 @@ final class FormRuntimeTest extends UnitTestCase
         }
     }
 
+    /**
+     * POSTで送る名前がWordPressの公開のクエリ変数とぶつかる項目は、handle()とopen()のどちらでも、要求の種類
+     * (GET・POST)に関係なく設定の誤りの例外にする。WordPressは公開のクエリ変数のPOSTの値を読み、送信を別のページの
+     * 表示や404にするため。メッセージには、ぶつかった名前と、別の名前の案内を入れる。
+     *
+     * @param Closure(Form): mixed $call
+     */
+    #[DataProvider('formEntryPoints')]
+    public function testFieldNamedLikeAPublicQueryVarIsAConfigurationError(Closure $call): void
+    {
+        $this->stubRuntimeFunctions();
+        self::stubFrontRequest(self::WORDPRESS_PUBLIC_QUERY_VARS);
+
+        foreach (['name', 's'] as $name) {
+            $form = new Form(FormDefinition::create('contact')->text('email', 'Email')->text($name, 'Field'));
+
+            try {
+                $call($form);
+                self::fail("項目 {$name} が例外になりません");
+            } catch (FormConfigException $exception) {
+                self::assertSame(
+                    "form 'contact' posts '{$name}', the same name as a public query var of WordPress. WordPress reads public query vars from POST values, so submitting the form shows another page or a 404; rename the field (for example, 'contact_{$name}' instead of '{$name}')",
+                    $exception->getMessage(),
+                );
+            }
+        }
+    }
+
+    /** @return iterable<string, array{Closure(Form): mixed}> フォームが公開のクエリ変数との照合を行う入口 */
+    public static function formEntryPoints(): iterable
+    {
+        yield 'handle() of GET' => [static fn(Form $form): FormResult => $form->handle(new FormRequest('GET'))];
+        yield 'handle() of POST' => [static fn(Form $form): FormResult => $form->handle(new FormRequest('POST', [Form::FIELD_FORM_ID => 'contact', 'email' => 'a@example.com']))];
+        yield 'open()' => [static fn(Form $form): string => $form->open()];
+    }
+
+    /**
+     * 投稿タイプ・タクソノミーのquery_var(登録で$wp->public_query_varsに入る)と、query_varsフィルタで足した名前も
+     * 公開のクエリ変数として照らす。ぶつかる名前は、すべてメッセージに並べる。
+     */
+    public function testQueryVarsOfPostTypesAndTheQueryVarsFilterAreChecked(): void
+    {
+        $this->stubRuntimeFunctions();
+        self::stubFrontRequest([...self::WORDPRESS_PUBLIC_QUERY_VARS, 'product']);
+        Filters\expectApplied('query_vars')->andReturnUsing(static fn(array $vars): array => [...$vars, 'campaign']);
+        $form = new Form(FormDefinition::create('order-form')
+            ->text('product', 'Product')
+            ->text('full_name', 'Full name')
+            ->select('campaign', 'Campaign', ['spring' => 'Spring']));
+
+        $this->expectException(FormConfigException::class);
+        $this->expectExceptionMessage("form 'order-form' posts 'product', 'campaign', the same name as a public query var of WordPress. WordPress reads public query vars from POST values, so submitting the form shows another page or a 404; rename the field (for example, 'order_form_product' instead of 'product')");
+
+        $form->open();
+    }
+
+    /**
+     * ぶつからない名前(full_name等)のフォームは、そのまま処理する。ファイルの項目は、本体を$_FILESで送り、
+     * WordPressは読まないため、POSTで送る{name}__tokenだけを照らす(attachmentは公開のクエリ変数でも使える)。
+     */
+    public function testFieldNamesThatDoNotPostAPublicQueryVarPass(): void
+    {
+        $this->stubRuntimeFunctions();
+        self::stubFrontRequest(self::WORDPRESS_PUBLIC_QUERY_VARS);
+        $definition = FormDefinition::create('contact')
+            ->text('full_name', 'Full name', [new Required()])
+            ->add(new RuntimeTestDateField('birth', 'Birth date'))
+            ->file('attachment', 'Attachment');
+        $form = new Form($definition);
+
+        self::assertSame(FormStep::Input, $form->handle(new FormRequest('GET'))->step);
+        self::assertStringStartsWith('<form method="post"', $form->open());
+
+        Filters\expectApplied('query_vars')->andReturnUsing(static fn(array $vars): array => [...$vars, 'attachment__token']);
+        $this->expectException(FormConfigException::class);
+        $this->expectExceptionMessage("form 'contact' posts 'attachment__token', the same name as a public query var of WordPress");
+
+        (new Form($definition))->open();
+    }
+
+    /**
+     * 管理画面(admin-ajax.phpを含む)は要求の解析をせず、POSTの値をクエリ変数として読まないため、照らさない
+     * ($wpが無くても例外にしない)。
+     */
+    public function testAdminRequestsDoNotCheckTheQueryVars(): void
+    {
+        $this->stubRuntimeFunctions();
+        unset($GLOBALS['wp']);
+        Functions\when('is_admin')->justReturn(true);
+        $form = new Form(FormDefinition::create('contact')->text('name', 'Name'));
+
+        self::assertSame(FormStep::Input, $form->handle(new FormRequest('GET'))->step);
+        self::assertStringStartsWith('<form method="post"', $form->open());
+    }
+
+    /** フロントの要求でWordPressの$wpが無いと、照らせないため例外にする(照らさずに通さない) */
+    public function testMissingWpIsAConfigurationErrorOnTheFront(): void
+    {
+        $this->stubRuntimeFunctions();
+        unset($GLOBALS['wp']);
+
+        $this->expectException(FormConfigException::class);
+        $this->expectExceptionMessage("cannot check the field names of form 'contact' against the public query vars of WordPress: the global \$wp is not a WP instance");
+
+        (new Form(FormDefinition::create('contact')->text('full_name', 'Full name')))->handle(new FormRequest('GET'));
+    }
+
     public function testHandleAndOpenExcludeThePageFromPageCaches(): void
     {
+        self::stubFrontRequest([]);
         Functions\when('wp_create_nonce')->justReturn('nonce');
         Functions\when('wp_salt')->justReturn('secret');
         Functions\when('esc_attr')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
@@ -1914,6 +2029,7 @@ final class FormRuntimeTest extends UnitTestCase
     #[RunInSeparateProcess]
     public function testHandleDefinesDoNotCachePage(): void
     {
+        self::stubFrontRequest([]);
         Functions\when('nocache_headers')->justReturn();
 
         self::assertFalse(\defined('DONOTCACHEPAGE'));
@@ -2256,6 +2372,22 @@ final class FormRuntimeTest extends UnitTestCase
         Functions\when('wp_salt')->justReturn('secret');
         Functions\when('nocache_headers')->justReturn();
         Functions\when('esc_attr')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
+        self::stubFrontRequest([]);
+    }
+
+    /**
+     * フロントの要求(is_admin()がfalse)のWordPressの$wpを、指定した公開のクエリ変数で用意する。Formはhandle()・
+     * open()で、POSTで送る名前をこれと照らす。
+     *
+     * @param list<string> $publicQueryVars
+     */
+    private static function stubFrontRequest(array $publicQueryVars): void
+    {
+        Functions\when('is_admin')->justReturn(false);
+        $wp = Mockery::mock(WP::class);
+        self::assertInstanceOf(WP::class, $wp);
+        $wp->public_query_vars = $publicQueryVars;
+        $GLOBALS['wp'] = $wp;
     }
 
     /**

@@ -110,7 +110,7 @@ final class ContactMailer
             'admin_notification',
             MailHeader::address(get_bloginfo('admin_email')),
             /* translators: 1: site name, 2: inquiry type, 3: sender name */
-            MailHeader::text(sprintf(__('[%1$s] %2$s from %3$s', 'my-theme'), $siteName, $subjectLabel, self::string($values, 'name'))),
+            MailHeader::text(sprintf(__('[%1$s] %2$s from %3$s', 'my-theme'), $siteName, $subjectLabel, self::string($values, 'full_name'))),
             $this->adminBody($values),
             ['Reply-To: ' . $email],
             $this->attachments($values),
@@ -151,7 +151,7 @@ final class ContactMailer
     {
         $lines = [];
 
-        foreach (['name', 'kana', 'company', 'email', 'phone', 'address'] as $name) {
+        foreach (['full_name', 'kana', 'company', 'email', 'phone', 'address'] as $name) {
             $lines[] = ContactForm::label($name) . ': ' . self::string($values, $name);
         }
 

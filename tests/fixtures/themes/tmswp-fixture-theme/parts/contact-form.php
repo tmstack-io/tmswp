@@ -8,5 +8,5 @@ if (!$form instanceof TMSWP\Core\Form\Form) {
 }
 
 echo $form->open();
-echo $form->field('name')->input();
+echo $form->field('full_name')->input();
 echo $form->close();

@@ -105,6 +105,8 @@ POST _step=back    (+ _confirm_token)   → 署名検証 → 値復元 → step 
 
 加えて、ファイルフィールド `{name}` に対し `{name}__token`(一時保管トークンの引き回し用hidden)を予約する。
 
+フロントのフォームは、WordPressの公開のクエリ変数(`name`・`s`・`p`・`page`・`year`・`author`等と、登録した投稿タイプ・タクソノミーの`query_var`)と同じ名前もPOSTで送れない。`handle()`・`open()`が`FormConfigException`にする(§Fieldの項目名の規則)。
+
 ---
 
 ## クラス仕様
@@ -271,6 +273,12 @@ final class Field
 振る舞い仕様:
 
 - `name` は `/\A[a-z][a-z0-9_]*\z/` に一致しなければ `FormConfigException`。予約キー(§予約POSTキー)・`__token` サフィックス付き名も拒否する。
+- フォームがPOSTで送る項目の名前(ファイルの項目は`{name}__token`)は、WordPressの公開のクエリ変数と同じにできない。WordPressはフロントの要求の解析(`WP::parse_request()`)で、公開のクエリ変数と同じ名前のPOSTの値をクエリ変数として読む。たとえば項目`name`に「山田 太郎」を入れて送ると、スラッグ「山田 太郎」の投稿を探して404になり、フォームの処理まで届かない。お名前は`full_name`のように、ぶつからない名前にする。
+  - 公開のクエリ変数は、`$wp->public_query_vars`に`query_vars`フィルタを通したもの。WordPressの既定(`m`・`p`・`s`・`page`・`paged`・`name`・`pagename`・`year`・`monthnum`・`day`・`author`・`order`・`orderby`・`tag`・`feed`・`attachment`・`preview`・`embed`等)と、登録した投稿タイプ・タクソノミーの`query_var`(既定は投稿タイプ・タクソノミーの名前)、プラグインがフィルタで足した名前を含む。
+  - 検査は`Form::handle()`と`Form::open()`が、呼ばれた時点の公開のクエリ変数で行う。投稿タイプ・タクソノミーの登録(`init`)の後に決まるため、項目の定義(`FormDefinition`)の時点では検査しない。入力画面を開いた時点(`open()`)で検出されるため、送信して初めて404に気付くことは無い。ぶつかる名前があれば、debugに関係なく`FormConfigException`(設定の誤り。00-overview.md §5.6)にする。メッセージには、ぶつかった名前と、別の名前の例(`{フォームID}_{項目名}`)を入れる。
+  - ファイルの本体は`$_FILES`で送り、WordPressは読まないため、ファイルの項目は`{name}__token`だけを検査する(ファイルの項目は`attachment`と名付けられる)。
+  - 管理画面(`is_admin()`。admin-ajax.phpを含む)では検査しない。管理画面は要求の解析をせず、POSTの値をクエリ変数として読まないため。設定ページ(`tmswp/settings-page`)のフォームは、オプションのキーと同じ名前(`name`・`year`等)を項目に使える。検査は`open()`を呼んだ要求で行うため、フロントで描画したフォームの`action`を管理画面側(admin-post.php等)へ向ける構成でも、公開のクエリ変数と同じ名前は使えない。
+  - フロントで`$wp`(`WP`のインスタンス)が無い場合は、検査できないため`FormConfigException`にする(検査せずに通さない)。
 - **デフォルトtrimフィルタ**: `text` / `textarea` は、ユーザ指定 `$filters` の先頭に半角・全角空白トリム(`preg_replace('/\A[\s\x{3000}]++|[\s\x{3000}]++\z/u', '', $v)`)を自動挿入する。`password` / `hidden` / 選択系 / `file` には適用しない。不正なUTF-8を渡すと、元の値のまま通さずに `TMSWP\Core\Exception\LogicException` を投げる(Formは取り込みの段階で不正なUTF-8を止めるため(§bind())、Form経由では届かない。`Validator` を直接呼ぶ場合は呼び出し側が正しいUTF-8を渡す)。
 - `choices` のキーは、PHPが `'1'` のような数字の文字列をintに変えるため、intのこともある。値との比較(選択状態・ラベルへの変換・選択肢の検証)は、すべてキーを文字列にしてから厳密に行う。
 - `choices` のキー `''` はプレースホルダ(「--- お選びください ---」等)として許可する。選択肢整合検証(§Validator)は空値をスキップするため、`''` 選択は `Required` で検出される。
@@ -1171,6 +1179,7 @@ final class Form
      * 冪等: 2回目以降の呼び出しは初回の FormResult をそのまま返す(onCompleteの二重実行はない)。
      * フォームのあるページをページキャッシュから外す(§ページキャッシュからの除外)ため、出力の前に呼ぶ。
      * @param ?FormRequest $request null = FormRequest::fromGlobals()
+     * @throws FormConfigException POSTで送る項目の名前がWordPressの公開のクエリ変数とぶつかる場合(§Field。フロントのみ)
      * @throws \Throwable debug時、onCompleteが投げた例外と JtiStore のデータベースのエラー
      */
     public function handle(?FormRequest $request = null): FormResult;
@@ -1195,6 +1204,7 @@ final class Form
      * render() の出力を続ける。
      * attrs['action'] は送信先(未指定時は ''。自己POST)。method="post" は固定で、ファイルフィールドを持つ定義では
      * enctype="multipart/form-data" を自動付与する。この2つはFWが決めるため、attrsで指定すると FormConfigException。
+     * POSTで送る項目の名前がWordPressの公開のクエリ変数とぶつかる場合もFormConfigException(§Field。フロントのみ)。
      * @throws FormConfigException
      */
     public function open(array $attrs = []): string;
@@ -1674,7 +1684,7 @@ final class FormHtml
 ```php
 namespace TMSWP\Core\Exception\Form;
 
-/** フォーム定義の誤り(重複name・予約名・choices空・型と部品の不一致など)。実装時に気付くべきバグ。
+/** フォーム定義の誤り(重複name・予約名・公開のクエリ変数とぶつかる名前・choices空・型と部品の不一致など)。実装時に気付くべきバグ。
  *  UnknownFieldExceptionの親となるため非final */
 class FormConfigException extends \LogicException {}
 
@@ -1719,7 +1729,7 @@ final class ContactForm
 
         return new Form(
             FormDefinition::create('contact')
-                ->text('name', 'お名前', rules: [new Required(), new MaxLength(50)])
+                ->text('full_name', 'お名前', rules: [new Required(), new MaxLength(50)])
                 ->add(KanaTextField::create('kana', 'フリガナ', rules: [new Required()], maxLength: 50))
                 ->text('company', '会社名', rules: [new Required(), new MaxLength(100)])
                 ->text('address', 'ご住所', rules: [new Required(), new MaxLength(200)])
@@ -1785,10 +1795,10 @@ get_header();
     <?php endforeach; ?>
     <?= $form->open(['class' => 'contact-form']) ?>
     <dl>
-        <dt><?= $form->field('name')->labelTag() ?></dt>
+        <dt><?= $form->field('full_name')->labelTag() ?></dt>
         <dd>
-            <?= $form->field('name')->input(['class' => 'w-full', 'placeholder' => '山田 太郎']) ?>
-            <?= $form->field('name')->errors() ?>
+            <?= $form->field('full_name')->input(['class' => 'w-full', 'placeholder' => '山田 太郎']) ?>
+            <?= $form->field('full_name')->errors() ?>
         </dd>
 
         <dt><?= $form->field('email')->labelTag() ?></dt>
@@ -1922,8 +1932,8 @@ get_header();
         <p class="form-alert"><?= esc_html($error) ?></p>
     <?php endforeach; ?>
     <?= $vm->form->open(['class' => 'contact-form']) ?>
-    <?= $vm->form->field('name')->input(['class' => 'w-full']) ?>
-    <?= $vm->form->field('name')->errors() ?>
+    <?= $vm->form->field('full_name')->input(['class' => 'w-full']) ?>
+    <?= $vm->form->field('full_name')->errors() ?>
     <?= $vm->form->field('email')->input(['type' => 'email']) ?>
     <?= $vm->form->field('email')->errors() ?>
     <!-- ...他フィールド -->
@@ -2052,6 +2062,7 @@ add_filter(
 - [ ] `applyDefaults()` が、`handle()` の後・フォームに無い項目・値の形の違い・ファイルの項目で例外になる
 - [ ] checkbox/checkboxesのPOSTキー欠損が `''` / `[]` にバインドされる(hiddenハック不要の実証テスト)
 - [ ] 同一ページに2フォームを置いた場合、POSTが宛先フォームだけを処理する
+- [ ] POSTで送る項目の名前がWordPressの公開のクエリ変数(既定の`name`・`s`、登録した投稿タイプの`query_var`、`query_vars`フィルタで足した名前)とぶつかると、フロントの`handle()`・`open()`が`FormConfigException`になり、管理画面では検査しない(ユニットテストと統合テスト)
 - [ ] 利用者の入力(数値のキー、配列のファイル、不正な形のファイルのエントリ、不正なUTF-8、未知のトークンの項目)で例外にならず、項目のエラー(未知のトークンの項目は §handle() の扱い)になる。確認画面の有無の両方で確かめる(統合テスト)
 - [ ] 確認画面の項目(`confirmFields()`)が、hidden・パスワード・`hideOnConfirm()` の項目を除き、単一チェックボックスを `checkedLabel` で表示する
 

@@ -33,6 +33,7 @@ final class StarterSetupTest extends UnitTestCase
 
         $composer = $this->composerJson($project);
         self::assertSame('local/client-theme', $composer['name']);
+        self::assertSame('Client Theme (WordPress theme)', $composer['description']);
         self::assertSame('proprietary', $composer['license']);
         self::assertSame(['psr-4' => ['ClientTheme\\' => 'app/']], $composer['autoload']);
         self::assertSame(['psr-4' => ['ClientTheme\\Tests\\' => 'tests/']], $composer['autoload-dev']);
@@ -71,6 +72,55 @@ final class StarterSetupTest extends UnitTestCase
         $this->assertPhpFilesAreValid($project);
     }
 
+    /**
+     * npmのパッケージの名前を、スラッグにする(npmの名前に使える`_`を含むスラッグでも同じ)。package.jsonには先頭に
+     * nameを足し、package-lock.jsonは先頭のnameとルートのパッケージ(packages[""])のnameを変える。npmが同じ
+     * package.jsonから書くのと同じ形で、ほかの内容と字下げは変えない。
+     */
+    public function testThemeSetupRenamesTheNpmPackageToTheSlug(): void
+    {
+        $starter = \dirname(__DIR__, 2) . '/starters/theme';
+        $project = $this->copyStarter('theme', 'shop_theme');
+
+        $result = $this->runSetup($project, ['--slug=shop_theme', '--name=Shop Theme']);
+
+        self::assertSame(0, $result['code'], $result['stderr']);
+        self::assertSame(
+            preg_replace('/\A\{\n/', "{\n  \"name\": \"shop_theme\",\n", $this->read($starter . '/package.json'), 1, $added),
+            $this->read($project . '/package.json'),
+        );
+        self::assertSame(1, $added);
+
+        $lock = $this->read($starter . '/package-lock.json');
+        self::assertStringStartsWith("{\n  \"name\": \"theme\",\n", $lock);
+        self::assertStringContainsString("\n    \"\": {\n      \"devDependencies\": {\n", $lock);
+        self::assertSame(
+            strtr($lock, [
+                "{\n  \"name\": \"theme\",\n" => "{\n  \"name\": \"shop_theme\",\n",
+                "\n    \"\": {\n      \"devDependencies\": {\n" => "\n    \"\": {\n      \"name\": \"shop_theme\",\n      \"devDependencies\": {\n",
+            ]),
+            $this->read($project . '/package-lock.json'),
+        );
+    }
+
+    /**
+     * ルートのパッケージ(packages[""])の無いpackage-lock.json(npm 6以前の形式)は、名前を書き換えられないため、
+     * プロジェクトを書き換えずに止まる。
+     */
+    public function testPackageLockWithoutTheRootPackageStopsWithoutChangingTheProject(): void
+    {
+        $project = $this->copyStarter('theme', 'old-lock');
+        file_put_contents($project . '/package-lock.json', "{\n  \"name\": \"theme\",\n  \"lockfileVersion\": 1\n}\n");
+        $before = $this->snapshot($project);
+
+        $result = $this->runSetup($project, ['--slug=old-lock', '--name=Old Lock']);
+
+        self::assertSame(1, $result['code']);
+        self::assertStringStartsWith('ERROR: ', $result['stderr']);
+        self::assertStringEndsWith("/old-lock/package-lock.json has no root package (packages[\"\"]); regenerate it with npm 7 or later\n", $result['stderr']);
+        self::assertSame($before, $this->snapshot($project));
+    }
+
     public function testPluginSetupRenamesTheMainFileAndAcceptsEnvironmentVariables(): void
     {
         $project = $this->copyStarter('plugin', 'member_area');
@@ -91,6 +141,10 @@ final class StarterSetupTest extends UnitTestCase
         self::assertStringContainsString("__DIR__ . '/member_area.php'", $this->read($project . '/.php-cs-fixer.dist.php'));
         self::assertStringContainsString('namespace MemberArea\Hook;', $this->read($project . '/app/Hook/PluginSetupHook.php'));
         self::assertSame(['psr-4' => ['MemberArea\\' => 'app/']], $this->composerJson($project)['autoload']);
+        self::assertSame('Member Area (WordPress plugin)', $this->composerJson($project)['description']);
+        // npmを使わないプラグインには、package.json・package-lock.jsonを作らない
+        self::assertFileDoesNotExist($project . '/package.json');
+        self::assertFileDoesNotExist($project . '/package-lock.json');
         self::assertSame([], $this->filesContaining($project, ['{{', 'TmswpStarterPlugin', "'/plugin.php'"]));
         $this->assertPhpFilesAreValid($project);
     }

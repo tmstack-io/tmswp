@@ -184,7 +184,7 @@ final class ProfileForm
     {
         return new Form(
             FormDefinition::create('profile')
-                ->text('name', __('Name', 'my-theme'), [new Required()])
+                ->text('full_name', __('Name', 'my-theme'), [new Required()])
                 ->add(KanaTextField::create('name_kana', __('Name (katakana)', 'my-theme'), KanaType::Katakana, [new Required()], maxLength: 50))
         );
     }

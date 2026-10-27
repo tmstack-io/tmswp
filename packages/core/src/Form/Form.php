@@ -13,6 +13,7 @@ use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Exception\RuntimeException;
 use TMSWP\Core\Form\Composite\CompositeField;
 use TMSWP\Core\Kernel\Kernel;
+use WP;
 
 final class Form
 {
@@ -66,6 +67,8 @@ final class Form
      * バインド・CSRF の検証・送信トークンの検証・スパム対策・値の検証・状態遷移・完了処理を行う。
      * 2回目以降の呼び出しは、初回の FormResult をそのまま返す。
      *
+     * @throws FormConfigException フォームがPOSTで送る名前が、WordPressの公開のクエリ変数とぶつかる場合
+     *                             (assertNoQueryVarConflicts())
      * @throws Throwable debug のとき、onComplete が投げた例外と、JtiStore のデータベースのエラー
      */
     public function handle(?FormRequest $request = null): FormResult
@@ -73,6 +76,8 @@ final class Form
         if ($this->result instanceof FormResult) {
             return $this->result;
         }
+
+        $this->assertNoQueryVarConflicts();
 
         $this->excludeFromPageCache();
         $request ??= FormRequest::fromGlobals();
@@ -160,10 +165,12 @@ final class Form
      * @param array<array-key, mixed> $attrs action は送信先を指定できる(既定は '' で、自分のページ)。method は常に
      *                                       post、enctype はファイルの項目の有無で決まるため、どちらも指定できない
      *
-     * @throws FormConfigException method・enctype を指定した場合と、action が文字列にできない値の場合
+     * @throws FormConfigException method・enctypeを指定した場合と、actionが文字列にできない値の場合と、フォームがPOST
+     *                             で送る名前がWordPressの公開のクエリ変数とぶつかる場合(assertNoQueryVarConflicts())
      */
     public function open(array $attrs = []): string
     {
+        $this->assertNoQueryVarConflicts();
         $this->excludeFromPageCache();
         $attrs = FormHtml::normalizeAttributes($attrs);
         $action = '';
@@ -1008,6 +1015,63 @@ final class Form
         }
 
         nocache_headers();
+    }
+
+    /**
+     * フォームがPOSTで送る項目の名前(ファイルの項目は{name}__token)が、WordPressの公開のクエリ変数とぶつからないことを
+     * 確かめる。WordPressはフロントの要求の解析(WP::parse_request())で、公開のクエリ変数と同じ名前のPOSTの値をクエリ
+     * 変数として読む。ぶつかると、送信が別のページの表示や404になり、フォームの処理まで届かない。
+     *
+     * 公開のクエリ変数は、$wp->public_query_varsにquery_varsフィルタを通したもの(登録した投稿タイプ・タクソノミーの
+     * query_varを含む)。投稿タイプの登録の後に決まるため、handle()・open()の時点で確かめる。ファイルの本体は$_FILESで
+     * 送り、WordPressは読まないため、ファイルの項目は{name}__tokenだけを確かめる。管理画面(admin-ajax.phpを含む)は
+     * 要求の解析をせず、POSTの値をクエリ変数として読まないため、確かめない。
+     *
+     * @throws FormConfigException ぶつかる名前がある場合と、WordPressの$wpが無く確かめられない場合
+     */
+    private function assertNoQueryVarConflicts(): void
+    {
+        if (is_admin()) {
+            return;
+        }
+
+        $id = $this->definition->id;
+        $wp = $GLOBALS['wp'] ?? null;
+
+        if (!$wp instanceof WP) {
+            throw new FormConfigException("cannot check the field names of form '{$id}' against the public query vars of WordPress: the global \$wp is not a WP instance");
+        }
+
+        $queryVars = apply_filters('query_vars', $wp->public_query_vars);
+
+        if (!\is_array($queryVars)) {
+            throw new FormConfigException("cannot check the field names of form '{$id}': the 'query_vars' filter did not return an array");
+        }
+
+        $conflicts = [];
+
+        foreach ($this->definition->fields() as $name => $field) {
+            $postName = $field instanceof Field && $field->type === FieldType::File ? $name . '__token' : $name;
+
+            if (\in_array($postName, $queryVars, true)) {
+                $conflicts[$name] = "'{$postName}'";
+            }
+        }
+
+        if ($conflicts === []) {
+            return;
+        }
+
+        $field = array_key_first($conflicts);
+        $example = str_replace('-', '_', $id) . '_' . $field;
+
+        throw new FormConfigException(\sprintf(
+            "form '%s' posts %s, the same name as a public query var of WordPress. WordPress reads public query vars from POST values, so submitting the form shows another page or a 404; rename the field (for example, '%s' instead of '%s')",
+            $id,
+            implode(', ', $conflicts),
+            $example,
+            $field,
+        ));
     }
 
     /**

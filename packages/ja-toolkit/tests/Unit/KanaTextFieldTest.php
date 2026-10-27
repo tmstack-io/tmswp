@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\JaToolkit\Tests\Unit;
 
 use Brain\Monkey\Functions;
+use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Form\Field;
 use TMSWP\Core\Form\Form;
@@ -18,6 +19,7 @@ use TMSWP\JaToolkit\Form\KanaTextField;
 use TMSWP\JaToolkit\Form\KanaType;
 use TMSWP\Testing\UnitTestCase;
 use TMSWP\Testing\WpdbTestDouble;
+use WP;
 
 /**
  * KanaTextFieldの正規化(前後の空白の除去の後のmb_convert_kanaと、ヴ・ゔ等の変換)と、正規化の後の検証。
@@ -33,12 +35,18 @@ final class KanaTextFieldTest extends UnitTestCase
         Functions\when('wp_verify_nonce')->justReturn(1);
         Functions\when('wp_salt')->justReturn('secret');
         Functions\when('nocache_headers')->justReturn();
+        // フロントの要求。Formはhandle()で、POSTで送る名前を公開のクエリ変数と照らす(照合はtmswp/coreのテスト)
+        Functions\when('is_admin')->justReturn(false);
+        $wp = Mockery::mock(WP::class);
+        self::assertInstanceOf(WP::class, $wp);
+        $wp->public_query_vars = [];
+        $GLOBALS['wp'] = $wp;
         $GLOBALS['wpdb'] = WpdbTestDouble::create();
     }
 
     protected function tearDown(): void
     {
-        unset($GLOBALS['wpdb']);
+        unset($GLOBALS['wpdb'], $GLOBALS['wp']);
 
         parent::tearDown();
     }

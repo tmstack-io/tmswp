@@ -5,6 +5,7 @@
 
 - 例のテキストドメイン`my-theme`は、テーマのstyle.css(プラグインはプラグインヘッダ)の`Text Domain`に置き換える。アプリの文言は、ソースを英語にしてアプリのテキストドメインで`__()`に渡し、日本語は翻訳ファイルで用意する。`tmswp`ドメインはFWの文言専用で、アプリの文言には使わない。
 - 対象は入力・確認・完了の3画面まで。4画面以上のウィザード形式はFWの対象外。フォームを分けて作る。
+- 項目名に、WordPressの公開のクエリ変数(`name`・`s`・`p`・`page`・`year`・`author`等と、登録した投稿タイプ・タクソノミーの`query_var`)を使わない。WordPressがPOSTの値をクエリ変数として読み、送信が404になるため、フロントでは`handle()`・`open()`が`FormConfigException`にする。お名前は`full_name`等にする。
 
 ## 手順
 
@@ -51,7 +52,7 @@ final class ContactForm
 
         return new Form(
             FormDefinition::create('contact')
-                ->text('name', self::label('name'), [new Required(), new MaxLength(50)])
+                ->text('full_name', self::label('full_name'), [new Required(), new MaxLength(50)])
                 ->text('kana', self::label('kana'), [new Required(), new Katakana(), new MaxLength(50)])
                 ->text('company', self::label('company'), [new MaxLength(100)])
                 ->text('email', self::label('email'), [new Required(), new Email(), new MaxLength(254)])
@@ -81,7 +82,7 @@ final class ContactForm
     public static function label(string $name): string
     {
         return match ($name) {
-            'name' => __('Name', 'my-theme'),
+            'full_name' => __('Name', 'my-theme'),
             'kana' => __('Name (katakana)', 'my-theme'),
             'company' => __('Company', 'my-theme'),
             'email' => __('Email address', 'my-theme'),
@@ -263,10 +264,10 @@ get_header();
 
         <?php echo $form->open(['class' => 'contact-form']); ?>
         <dl>
-            <dt><?php echo $form->field('name')->labelTag(); ?></dt>
+            <dt><?php echo $form->field('full_name')->labelTag(); ?></dt>
             <dd>
-                <?php echo $form->field('name')->input(['autocomplete' => 'name']); ?>
-                <?php echo $form->field('name')->errors(); ?>
+                <?php echo $form->field('full_name')->input(['autocomplete' => 'name']); ?>
+                <?php echo $form->field('full_name')->errors(); ?>
             </dd>
 
             <dt><?php echo $form->field('kana')->labelTag(); ?></dt>
@@ -420,7 +421,7 @@ final class EntryForm
     {
         return new Form(
             FormDefinition::create('entry')
-                ->text('name', __('Name', 'my-theme'), [new Required(), new MaxLength(50)])
+                ->text('full_name', __('Name', 'my-theme'), [new Required(), new MaxLength(50)])
                 ->text('email', __('Email address', 'my-theme'), [new Required(), new Email(), new MaxLength(254)])
                 ->file('resume', __('Resume', 'my-theme'), [new Required(), new FileExtension(['pdf']), MaxFileSize::mb(5)])
                 ->tempFileStore(self::store())
@@ -493,9 +494,9 @@ get_header();
 
         <?php echo $form->open(); ?>
         <p>
-            <?php echo $form->field('name')->labelTag(); ?>
-            <?php echo $form->field('name')->input(['autocomplete' => 'name']); ?>
-            <?php echo $form->field('name')->errors(); ?>
+            <?php echo $form->field('full_name')->labelTag(); ?>
+            <?php echo $form->field('full_name')->input(['autocomplete' => 'name']); ?>
+            <?php echo $form->field('full_name')->errors(); ?>
         </p>
         <p>
             <?php echo $form->field('email')->labelTag(); ?>

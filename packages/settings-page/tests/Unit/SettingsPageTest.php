@@ -237,6 +237,8 @@ final class SettingsPageTest extends UnitTestCase
     public function testFormApplyDefaultsSurvivesGetHandle(): void
     {
         Functions\when('nocache_headers')->justReturn();
+        // 設定ページは管理画面で処理する。管理画面では、Formは項目名を公開のクエリ変数と照らさない
+        Functions\when('is_admin')->justReturn(true);
         $form = new Form(FormDefinition::create('site')->text('title', 'Title'));
 
         $form->applyDefaults(['title' => 'Configured']);

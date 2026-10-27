@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Unit;
 
 use Brain\Monkey\Functions;
+use Mockery;
 use TMSWP\Core\Form\Field;
 use TMSWP\Core\Form\FieldView;
 use TMSWP\Core\Form\Form;
@@ -13,6 +14,7 @@ use TMSWP\Core\Form\FormHtml;
 use TMSWP\Core\Form\FormRequest;
 use TMSWP\Core\Form\FormStep;
 use TMSWP\Testing\UnitTestCase;
+use WP;
 
 /**
  * FormHtml(純関数のレンダラ)と FieldView の出力のスナップショット。旧 iwf2b の FormTest・FormChoiceTest の
@@ -26,6 +28,13 @@ final class FormHtmlTest extends UnitTestCase
 
         Functions\when('esc_attr')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
         Functions\when('esc_html')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
+    }
+
+    protected function tearDown(): void
+    {
+        unset($GLOBALS['wp']);
+
+        parent::tearDown();
     }
 
     /**
@@ -153,6 +162,12 @@ final class FormHtmlTest extends UnitTestCase
      */
     public function testUserInputContainingScriptIsEscapedInEveryOutput(): void
     {
+        // フロントの要求。Formはhandle()・open()で、POSTで送る名前を公開のクエリ変数と照らす(照合はFormRuntimeTest)
+        Functions\when('is_admin')->justReturn(false);
+        $wp = Mockery::mock(WP::class);
+        self::assertInstanceOf(WP::class, $wp);
+        $wp->public_query_vars = [];
+        $GLOBALS['wp'] = $wp;
         Functions\when('wp_verify_nonce')->justReturn(1);
         Functions\when('nocache_headers')->justReturn();
         $script = '"><script>alert(1)</script>';

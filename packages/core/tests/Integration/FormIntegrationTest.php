@@ -6,6 +6,7 @@ namespace TMSWP\Core\Tests\Integration;
 
 use Closure;
 use RuntimeException as PhpRuntimeException;
+use TMSWP\Core\Exception\Form\FormConfigException;
 use TMSWP\Core\Exception\RuntimeException;
 use TMSWP\Core\Form\ConfirmToken;
 use TMSWP\Core\Form\Form;
@@ -66,11 +67,67 @@ final class FormIntegrationTest extends IntegrationTestCase
         parent::tear_down();
     }
 
+    /**
+     * POSTで送る名前が、その要求の時点の公開のクエリ変数(WordPressの既定のname・s、登録した投稿タイプのquery_var、
+     * query_varsフィルタで足した名前)とぶつかる項目は、実物の$wpで照らして設定の誤りの例外にする。WordPressは
+     * 公開のクエリ変数のPOSTの値を読み、送信を別のページの表示や404にするため。ぶつからないfull_nameは通す。
+     */
+    public function testFieldNamedLikeAPublicQueryVarIsAConfigurationErrorOnTheFront(): void
+    {
+        $addCampaign = static fn(array $vars): array => [...$vars, 'campaign'];
+        register_post_type('tmswp_qv_probe', ['public' => true, 'query_var' => 'tmswp_qv_probe']);
+        add_filter('query_vars', $addCampaign);
+
+        try {
+            foreach (['name', 's', 'tmswp_qv_probe', 'campaign'] as $name) {
+                $form = new Form(FormDefinition::create('contact')->text('full_name', 'Full name')->text($name, 'Field'));
+
+                try {
+                    $form->open();
+                    self::fail("項目 {$name} が例外になりません");
+                } catch (FormConfigException $exception) {
+                    self::assertStringStartsWith("form 'contact' posts '{$name}', the same name as a public query var of WordPress.", $exception->getMessage());
+                    self::assertStringEndsWith("rename the field (for example, 'contact_{$name}' instead of '{$name}')", $exception->getMessage());
+                }
+            }
+        } finally {
+            remove_filter('query_vars', $addCampaign);
+            unregister_post_type('tmswp_qv_probe');
+        }
+
+        // 投稿タイプの登録の解除とフィルタの除去で公開のクエリ変数から外れた名前は、次の照合で通る
+        $form = new Form(FormDefinition::create('contact')->text('full_name', 'Full name')->text('tmswp_qv_probe', 'Probe')->text('campaign', 'Campaign'));
+
+        self::assertSame(FormStep::Input, $form->handle(new FormRequest('GET'))->step);
+        self::assertStringContainsString('name="_form_id"', $form->open());
+    }
+
+    /**
+     * 管理画面は要求の解析をせず、POSTの値をクエリ変数として読まないため、照らさない(設定ページのフォームは、
+     * 公開のクエリ変数と同じ名前の項目を使える)。
+     */
+    public function testAdminScreenDoesNotCheckTheQueryVars(): void
+    {
+        set_current_screen('options-general');
+
+        try {
+            self::assertTrue(is_admin());
+            $form = new Form(FormDefinition::create('settings')->text('name', 'Name')->text('year', 'Year'));
+
+            self::assertSame(FormStep::Input, $form->handle(new FormRequest('GET'))->step);
+            self::assertStringContainsString('name="name"', $form->open() . $form->field('name')->input());
+        } finally {
+            unset($GLOBALS['current_screen']);
+        }
+
+        self::assertFalse(is_admin());
+    }
+
     public function testReloadAndDoubleClickOfFormWithoutConfirmationRunOnCompleteOnce(): void
     {
         $form = $this->formFactory(debug: false);
         $definition = $this->contactDefinition();
-        $post = $this->submitRequest($form($definition)->open(), ['name' => 'Taro']);
+        $post = $this->submitRequest($form($definition)->open(), ['full_name' => 'Taro']);
 
         self::assertSame(FormStep::Complete, $form($definition)->handle($post)->step);
 
@@ -81,7 +138,7 @@ final class FormIntegrationTest extends IntegrationTestCase
             self::assertSame(['This form has already been submitted.'], $result->formErrors, $case);
         }
 
-        self::assertSame([['name' => 'Taro']], $this->completed);
+        self::assertSame([['full_name' => 'Taro']], $this->completed);
         self::assertSame(
             ['notice', 'notice'],
             array_map(static fn(array $record): mixed => $record['level'], $this->logger->records),
@@ -111,18 +168,18 @@ final class FormIntegrationTest extends IntegrationTestCase
             'missing' => '',
         ] as $case => $nonce) {
             $this->logger->records = [];
-            $result = $form($definition)->handle(new FormRequest('POST', [...$hidden, Form::FIELD_NONCE => $nonce, Form::FIELD_STEP => 'submit', 'name' => 'Taro']));
+            $result = $form($definition)->handle(new FormRequest('POST', [...$hidden, Form::FIELD_NONCE => $nonce, Form::FIELD_STEP => 'submit', 'full_name' => 'Taro']));
 
             self::assertSame(FormStep::Input, $result->step, $case);
             self::assertSame(['Your session has expired. Please submit the form again.'], $result->formErrors, $case);
-            self::assertSame('Taro', $result->values['name'], $case);
+            self::assertSame('Taro', $result->values['full_name'], $case);
             self::assertSame(['warning'], array_column($this->logger->records, 'level'), $case);
             self::assertSame('tmswp.form: the CSRF check (nonce) of form {form} failed', $this->logger->records[0]['message'], $case);
         }
 
         self::assertSame([], $this->completed);
-        self::assertSame(FormStep::Complete, $form($definition)->handle($this->submitRequest($form($definition)->open(), ['name' => 'Taro']))->step);
-        self::assertSame([['name' => 'Taro']], $this->completed);
+        self::assertSame(FormStep::Complete, $form($definition)->handle($this->submitRequest($form($definition)->open(), ['full_name' => 'Taro']))->step);
+        self::assertSame([['full_name' => 'Taro']], $this->completed);
     }
 
     /**
@@ -135,8 +192,8 @@ final class FormIntegrationTest extends IntegrationTestCase
 
         foreach (['without confirmation' => false, 'with confirmation' => true] as $case => $confirm) {
             $this->completed = [];
-            $definition = FormDefinition::create('contact')->text('name', 'Name')->confirm($confirm);
-            $submit = $this->submitRequestFor($form, $definition, ['name' => 'Taro']);
+            $definition = FormDefinition::create('contact')->text('full_name', 'Name')->confirm($confirm);
+            $submit = $this->submitRequestFor($form, $definition, ['full_name' => 'Taro']);
             // 1本目の onComplete の中で処理した2本目の結果
             $concurrent = [];
             $definition->onComplete(function (array $values) use (&$concurrent, $form, $definition, $submit): void {
@@ -152,7 +209,7 @@ final class FormIntegrationTest extends IntegrationTestCase
             self::assertCount(1, $concurrent, $case);
             self::assertSame(FormStep::Input, $concurrent[0]->step, $case);
             self::assertSame(['This form has already been submitted.'], $concurrent[0]->formErrors, $case);
-            self::assertSame([['name' => 'Taro']], $this->completed, $case);
+            self::assertSame([['full_name' => 'Taro']], $this->completed, $case);
         }
     }
 
@@ -195,25 +252,25 @@ final class FormIntegrationTest extends IntegrationTestCase
         $newsletterCompleted = [];
         $newsletter = FormDefinition::create('newsletter')
             ->text('email', 'Email', [new Required()])
-            ->text('name', 'Name', default: 'Subscriber')
+            ->text('full_name', 'Name', default: 'Subscriber')
             ->onComplete(static function (array $values) use (&$newsletterCompleted): void {
                 $newsletterCompleted[] = $values;
             });
         $contact = $this->contactDefinition();
         // 同じページで2つのフォームを描画し、利用者は contact を送る
         $form($newsletter)->open();
-        $post = $this->submitRequest($form($contact)->open(), ['name' => 'Taro', 'email' => 'taro@example.com']);
+        $post = $this->submitRequest($form($contact)->open(), ['full_name' => 'Taro', 'email' => 'taro@example.com']);
 
         $newsletterResult = $form($newsletter)->handle($post);
         $contactResult = $form($contact)->handle($post);
 
         self::assertSame(FormStep::Input, $newsletterResult->step);
-        self::assertSame(['email' => '', 'name' => 'Subscriber'], $newsletterResult->values);
+        self::assertSame(['email' => '', 'full_name' => 'Subscriber'], $newsletterResult->values);
         self::assertSame([], $newsletterResult->fieldErrors);
         self::assertSame([], $newsletterResult->formErrors);
         self::assertSame([], $newsletterCompleted);
         self::assertSame(FormStep::Complete, $contactResult->step);
-        self::assertSame([['name' => 'Taro']], $this->completed);
+        self::assertSame([['full_name' => 'Taro']], $this->completed);
         self::assertSame([], $this->logger->records);
     }
 
@@ -222,22 +279,22 @@ final class FormIntegrationTest extends IntegrationTestCase
         $form = $this->formFactory(debug: false);
         $definition = $this->contactDefinition()->confirm();
         $confirm = $form($definition);
-        $confirm->handle($this->confirmRequest($form($definition)->open(), ['name' => 'Taro']));
+        $confirm->handle($this->confirmRequest($form($definition)->open(), ['full_name' => 'Taro']));
         $submit = $this->submitRequest($confirm->open());
 
         self::assertSame(FormStep::Complete, $form($definition)->handle($submit)->step);
         self::assertSame(['This form has already been submitted.'], $form($definition)->handle($submit)->formErrors);
-        self::assertSame([['name' => 'Taro']], $this->completed);
+        self::assertSame([['full_name' => 'Taro']], $this->completed);
     }
 
     public function testConfirmTokenValuesThatNoLongerPassTheRulesAreRejectedWithoutConsumingTheJti(): void
     {
         $form = $this->formFactory(debug: false);
         $before = $this->contactDefinition()->confirm();
-        $submit = $this->submitRequestFor($form, $before, ['name' => 'Taro Yamada']);
+        $submit = $this->submitRequestFor($form, $before, ['full_name' => 'Taro Yamada']);
         // 確認の後のデプロイで MaxLength を足した
         $after = FormDefinition::create('contact')
-            ->text('name', 'Name', [new Required(), new MaxLength(5)])
+            ->text('full_name', 'Name', [new Required(), new MaxLength(5)])
             ->confirm()
             ->onComplete(function (array $values): void {
                 $this->completed[] = $values;
@@ -246,14 +303,14 @@ final class FormIntegrationTest extends IntegrationTestCase
         $result = $form($after)->handle($submit);
 
         self::assertSame(FormStep::Input, $result->step);
-        self::assertArrayHasKey('name', $result->fieldErrors);
+        self::assertArrayHasKey('full_name', $result->fieldErrors);
         self::assertSame([], $this->completed);
         // jti を claim していない(wp_options に行が無い)
         $wpdb = self::wpdb();
         self::assertNull($wpdb->get_var($wpdb->prepare('SELECT option_name FROM %i WHERE option_name LIKE %s', $wpdb->options, $wpdb->esc_like('tmswp_form_jti_') . '%')));
 
         self::assertSame(FormStep::Complete, $form($before)->handle($submit)->step);
-        self::assertSame([['name' => 'Taro Yamada']], $this->completed);
+        self::assertSame([['full_name' => 'Taro Yamada']], $this->completed);
     }
 
     public function testSingleCheckboxRejectsValuesOtherThanItsCheckedValueThroughTheRealRuleMessageFilter(): void
@@ -296,14 +353,14 @@ final class FormIntegrationTest extends IntegrationTestCase
         foreach ([false, true] as $confirmEnabled) {
             $this->logger->records = [];
             $definition = $this->contactDefinition()->confirm($confirmEnabled);
-            $submit = $this->submitRequestFor($form, $definition, ['name' => 'Taro']);
+            $submit = $this->submitRequestFor($form, $definition, ['full_name' => 'Taro']);
             $this->failOnComplete = true;
 
             $failed = $form($definition)->handle($submit);
 
             self::assertSame(FormStep::Input, $failed->step);
             self::assertSame(['The form could not be sent. Please try again.'], $failed->formErrors);
-            self::assertSame('Taro', $failed->values['name']);
+            self::assertSame('Taro', $failed->values['full_name']);
             self::assertCount(1, $this->logger->records);
             self::assertSame('error', $this->logger->records[0]['level']);
             self::assertSame('tmswp.form: onComplete of form {form} threw an exception', $this->logger->records[0]['message']);
@@ -316,14 +373,14 @@ final class FormIntegrationTest extends IntegrationTestCase
             self::assertSame(FormStep::Complete, $form($definition)->handle($submit)->step);
         }
 
-        self::assertSame([['name' => 'Taro'], ['name' => 'Taro']], $this->completed);
+        self::assertSame([['full_name' => 'Taro'], ['full_name' => 'Taro']], $this->completed);
     }
 
     public function testOnCompleteExceptionInDebugIsThrownAndTheSameTokenCanBeResubmitted(): void
     {
         $form = $this->formFactory(debug: true);
         $definition = $this->contactDefinition();
-        $submit = $this->submitRequestFor($form, $definition, ['name' => 'Taro']);
+        $submit = $this->submitRequestFor($form, $definition, ['full_name' => 'Taro']);
         $this->failOnComplete = true;
 
         try {
@@ -336,7 +393,7 @@ final class FormIntegrationTest extends IntegrationTestCase
         $this->failOnComplete = false;
 
         self::assertSame(FormStep::Complete, $form($definition)->handle($submit)->step);
-        self::assertSame([['name' => 'Taro']], $this->completed);
+        self::assertSame([['full_name' => 'Taro']], $this->completed);
     }
 
     /**
@@ -356,7 +413,7 @@ final class FormIntegrationTest extends IntegrationTestCase
                 0 => 'numeric key',
                 '7' => 'numeric string key',
                 Form::FIELD_STEP => $step,
-                'name' => 'Taro',
+                'full_name' => 'Taro',
             ] + $this->hiddenValues($form($definition)->open()), ['resume' => [
                 'name' => ['a.pdf', 'b.pdf'],
                 'type' => ['application/pdf', 'application/pdf'],
@@ -367,13 +424,13 @@ final class FormIntegrationTest extends IntegrationTestCase
 
             self::assertSame(FormStep::Input, $result->step);
             self::assertSame(['resume' => ['The file upload failed.']], $result->fieldErrors);
-            self::assertSame('Taro', $result->values['name']);
+            self::assertSame('Taro', $result->values['full_name']);
 
             // error の無い、不正な形のファイルのエントリ
             $result = $this->handleGlobals($form($definition), [
                 ...$this->hiddenValues($form($definition)->open()),
                 Form::FIELD_STEP => $step,
-                'name' => 'Taro',
+                'full_name' => 'Taro',
             ], ['resume' => ['name' => 'a.pdf', 'type' => 'application/pdf', 'tmp_name' => '/tmp/phpA', 'size' => 1]]);
 
             self::assertSame(FormStep::Input, $result->step);
@@ -383,18 +440,18 @@ final class FormIntegrationTest extends IntegrationTestCase
             $result = $this->handleGlobals($form($definition), [
                 ...$this->hiddenValues($form($definition)->open()),
                 Form::FIELD_STEP => $step,
-                'name' => "Taro\xC3\x28",
+                'full_name' => "Taro\xC3\x28",
             ]);
 
             self::assertSame(FormStep::Input, $result->step);
-            self::assertSame(['name' => ['Name contains characters that cannot be used.']], $result->fieldErrors);
-            self::assertSame('', $result->values['name']);
+            self::assertSame(['full_name' => ['Name contains characters that cannot be used.']], $result->fieldErrors);
+            self::assertSame('', $result->values['full_name']);
 
             // 未知のトークンの項目と、一時保管のトークンの形に合わない値
             $result = $this->handleGlobals($form($definition), [
                 ...$this->hiddenValues($form($definition)->open()),
                 Form::FIELD_STEP => $step,
-                'name' => 'Taro',
+                'full_name' => 'Taro',
                 'resume__token' => '../../wp-config',
                 'unknown__token' => '0123456789abcdef0123456789abcdef',
             ]);
@@ -408,12 +465,12 @@ final class FormIntegrationTest extends IntegrationTestCase
         $result = $this->handleGlobals($form($definition), [
             ...$this->hiddenValues($form($definition)->open()),
             Form::FIELD_STEP => 'submit',
-            Form::FIELD_CONFIRM_TOKEN => ConfirmToken::issue('entry', ['name' => 'Taro', 'resume' => '', 'unknown' => 'value']),
+            Form::FIELD_CONFIRM_TOKEN => ConfirmToken::issue('entry', ['full_name' => 'Taro', 'resume' => '', 'unknown' => 'value']),
         ]);
 
         self::assertSame(FormStep::Input, $result->step);
         self::assertSame(['The confirmation screen has expired. Please review your entries and continue again.'], $result->formErrors);
-        self::assertSame([['name' => 'Taro', 'resume' => '']], $this->completed);
+        self::assertSame([['full_name' => 'Taro', 'resume' => '']], $this->completed);
     }
 
     public function testJtiStoreClaimsReleasesAndCollectsOnTheRealDatabase(): void
@@ -514,7 +571,7 @@ final class FormIntegrationTest extends IntegrationTestCase
     private function contactDefinition(): FormDefinition
     {
         return FormDefinition::create('contact')
-            ->text('name', 'Name', [new Required()])
+            ->text('full_name', 'Name', [new Required()])
             ->onComplete(function (array $values): void {
                 if ($this->failOnComplete) {
                     throw new PhpRuntimeException('mail server is down');
@@ -527,7 +584,7 @@ final class FormIntegrationTest extends IntegrationTestCase
     private function entryDefinition(): FormDefinition
     {
         return FormDefinition::create('entry')
-            ->text('name', 'Name', [new Required()])
+            ->text('full_name', 'Name', [new Required()])
             ->file('resume', 'Resume')
             ->tempFileStore(new TempFileStore($this->createTempDirectory('integration-form-store')))
             ->onComplete(function (array $values): void {

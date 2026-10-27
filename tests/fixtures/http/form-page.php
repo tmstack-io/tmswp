@@ -14,11 +14,11 @@ use TMSWP\Core\Form\FormDefinition;
 require dirname(__DIR__, 6) . '/wp-load.php';
 require dirname(__DIR__, 3) . '/vendor/autoload.php';
 
-$form = new Form(FormDefinition::create('nocache_probe')->text('name', 'Name'));
+$form = new Form(FormDefinition::create('nocache_probe')->text('full_name', 'Full name'));
 $form->handle();
 
 header('X-Tmswp-Donotcachepage: ' . (defined('DONOTCACHEPAGE') ? var_export(constant('DONOTCACHEPAGE'), true) : 'undefined'));
 
 echo $form->open();
-echo $form->field('name')->input();
+echo $form->field('full_name')->input();
 echo $form->close();

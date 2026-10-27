@@ -32,10 +32,10 @@ final class ViewIntegrationTest extends IntegrationTestCase
 
     public function testThemePartRendersFormPassedThroughArgs(): void
     {
-        $form = new Form(FormDefinition::create('contact')->text('name', 'お名前', [new Required()]));
+        $form = new Form(FormDefinition::create('contact')->text('full_name', 'お名前', [new Required()]));
 
         self::assertStringContainsString(
-            'name="name"',
+            'name="full_name"',
             Template::render('parts/contact-form', ['form' => $form]),
         );
     }
@@ -68,12 +68,12 @@ final class ViewIntegrationTest extends IntegrationTestCase
         $html = Template::render('plugin/form');
 
         self::assertStringContainsString('class="plugin-form-name"', $html);
-        self::assertStringContainsString('name="name"', $html);
+        self::assertStringContainsString('name="full_name"', $html);
     }
 
     public function testTemplatePartFiresGetTemplatePartHooksLikeCoreGetTemplatePart(): void
     {
-        $form = new Form(FormDefinition::create('contact')->text('name', 'お名前', [new Required()]));
+        $form = new Form(FormDefinition::create('contact')->text('full_name', 'お名前', [new Required()]));
         $args = ['form' => $form];
 
         $coreCalls = $this->recordGetTemplatePartHooks('parts/contact-form', static function () use ($args): void {
