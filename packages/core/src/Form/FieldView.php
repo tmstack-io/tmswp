@@ -245,9 +245,10 @@ final class FieldView
         return $this->errors;
     }
 
+    /** ラベル(エスケープ済み)。部品のビューは部品の、複合フィールドのビュー(part() なし)は複合フィールドのラベル */
     public function label(): string
     {
-        return esc_html($this->baseField()->label);
+        return esc_html(($this->partField ?? $this->field)->label);
     }
 
     /**

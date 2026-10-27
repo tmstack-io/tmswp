@@ -12,6 +12,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use stdClass;
 use TMSWP\Core\Exception\Form\FormConfigException;
+use TMSWP\Core\Form\Composite\CompositeField;
 use TMSWP\Core\Form\Field;
 use TMSWP\Core\Form\FieldType;
 use TMSWP\Core\Form\FieldView;
@@ -266,9 +267,62 @@ final class FieldViewTest extends UnitTestCase
         self::assertSame('Large', (new FieldView($field, '2', [], 'contact', '%s'))->display());
     }
 
+    /**
+     * 複合フィールドのビュー(part()なし)の label() は複合フィールドのラベルを返す。確認画面で confirmFields() を回して
+     * label() と display() を出せるようにするため。labelTag()・id()・name() は対象の入力部品が1つに決まらないため、
+     * part() を求める。
+     */
+    public function testCompositeFieldViewHasItsLabelButRequiresPartForControls(): void
+    {
+        $this->stubEscapers();
+        $view = new FieldView(new FieldViewTestNameField('full_name', 'Full <name>'), 'Yamada Taro', [], 'contact', '%s');
+
+        self::assertSame('Full &lt;name&gt;', $view->label());
+        self::assertSame('Family &lt;name&gt;', $view->part('family')->label());
+        self::assertSame('<label for="contact-full_name-family">Family &lt;name&gt;</label>', $view->part('family')->labelTag());
+
+        $renders = [
+            'labelTag()' => static fn(): string => $view->labelTag(),
+            'id()' => static fn(): string => $view->id(),
+            'name()' => static fn(): string => $view->name(),
+        ];
+
+        foreach ($renders as $method => $render) {
+            try {
+                $render();
+                self::fail("{$method} of the composite field view did not require part()");
+            } catch (FormConfigException $exception) {
+                self::assertSame('composite field requires part() before rendering input controls', $exception->getMessage(), $method);
+            }
+        }
+    }
+
     private function stubEscapers(): void
     {
         Functions\when('esc_attr')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
         Functions\when('esc_html')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
+    }
+}
+
+final class FieldViewTestNameField extends CompositeField
+{
+    public function parts(): array
+    {
+        return [
+            'family' => Field::text($this->name . '_family', 'Family <name>'),
+            'given' => Field::text($this->name . '_given', 'Given name'),
+        ];
+    }
+
+    public function compose(array $partValues): string
+    {
+        return ($partValues['family'] ?? '') . ' ' . ($partValues['given'] ?? '');
+    }
+
+    public function decompose(string $value): array
+    {
+        [$family, $given] = array_pad(explode(' ', $value, 2), 2, '');
+
+        return ['family' => $family, 'given' => $given];
     }
 }

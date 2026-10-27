@@ -1543,7 +1543,9 @@ final class FieldView
     public function hidden(): string;
 
     /** CompositeFieldのパーツビュー(例: $form->field('birthday')->part('year')->select())。
-     *  単一Fieldに対して呼ぶと FormConfigException */
+     *  単一Fieldに対して呼ぶと FormConfigException。複合フィールドのビュー(part()なし)で使えるのは label()(複合フィールドの
+     *  ラベル)・display()・value()・errors()・hasError()・errorList() で、入力部品・hidden()・labelTag()・id()・name() は
+     *  対象の部品が1つに決まらないため part() を通す(通さないと FormConfigException) */
     public function part(string $key): self;
 
     // ---- エラー・メタ情報 ----

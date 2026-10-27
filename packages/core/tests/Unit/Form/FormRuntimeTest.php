@@ -1553,6 +1553,41 @@ final class FormRuntimeTest extends UnitTestCase
     }
 
     /**
+     * 確認画面は confirmFields() を回して label() と display() で出す(docs/05)。複合フィールドのビューも part() なしで
+     * 両方を呼べる。
+     */
+    public function testConfirmFieldsWithACompositeFieldRenderLabelAndDisplay(): void
+    {
+        $this->stubRuntimeFunctions();
+        $this->bootKernel(debug: false);
+        Functions\when('esc_html')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
+        $definition = FormDefinition::create('entry')
+            ->text('name', 'Name', [new Required()])
+            ->add(new RuntimeTestDateField('birth', 'Birth <date>', minYear: 2000, maxYear: 2026))
+            ->confirm()
+            ->onComplete($this->recordCompletion(...));
+        $form = $this->form($definition);
+
+        $result = $form->handle(new FormRequest('POST', [
+            Form::FIELD_FORM_ID => 'entry',
+            Form::FIELD_NONCE => 'ok',
+            Form::FIELD_STEP => 'confirm',
+            'name' => 'Taro',
+            'birth' => ['year' => '2026', 'month' => '6', 'day' => '13'],
+        ]));
+
+        self::assertSame(FormStep::Confirm, $result->step);
+
+        $rows = [];
+
+        foreach ($form->confirmFields() as $name => $view) {
+            $rows[$name] = [$view->label(), $view->display()];
+        }
+
+        self::assertSame(['name' => ['Name', 'Taro'], 'birth' => ['Birth &lt;date&gt;', '2026-06-13']], $rows);
+    }
+
+    /**
      * 複合フィールドの部品のパスワードも、部品の display()・親の display()・confirmFields() のどこにも出さない。部品の
      * ビューの内部の field は複合フィールドの親のままのため、部品の実際の型で判定する。
      */
