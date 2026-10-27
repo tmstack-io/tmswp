@@ -185,6 +185,35 @@ final class ThumbCacheTest extends UnitTestCase
         (new ThumbCache($this->createTempDirectory('thumb-cache'), 'https://example.test/cache'))->clear(0);
     }
 
+    /**
+     * 日数の上限は、秒に換算(86400倍)してintに収まる最大の日数である。上限ちょうどは受け入れ(それより前のファイルは
+     * 無いので何も消さない)、上限+1は、秒への換算の前にInvalidArgumentExceptionにして何も消さない。
+     */
+    public function testClearAcceptsTheMaximumDaysAndRejectsLargerDays(): void
+    {
+        self::assertSame(intdiv(\PHP_INT_MAX, 86400), ThumbCache::maxOlderThanDays());
+        $base = $this->createTempDirectory('thumb-cache');
+        $this->stubMkdir();
+        $cache = new ThumbCache($base, 'https://example.test/cache');
+        $cache->ensureDirectory(self::KEY);
+        $file = $base . '/ab/' . self::KEY . '.jpg';
+        self::assertNotFalse(file_put_contents($file, 'old'));
+        self::assertTrue(touch($file, time() - 365 * 86400));
+
+        self::assertSame(0, $cache->clear(ThumbCache::maxOlderThanDays()));
+        self::assertFileExists($file);
+
+        try {
+            $cache->clear(ThumbCache::maxOlderThanDays() + 1);
+            self::fail('InvalidArgumentException was not thrown');
+        } catch (InvalidArgumentException $exception) {
+            self::assertSame('the number of days to keep thumbnail cache files must be at most ' . ThumbCache::maxOlderThanDays() . ', ' . (ThumbCache::maxOlderThanDays() + 1) . ' given', $exception->getMessage());
+        }
+
+        self::assertFileExists($file);
+        self::assertFileExists($base . '/index.html');
+    }
+
     /** 集計は、生成したサムネイルと失敗の印だけを数え、index.html・ロック・一時ファイルは数えない。 */
     public function testStatusCountsOnlyThumbnails(): void
     {

@@ -46,6 +46,14 @@ final class ThumbCache
     /** lock()が、開いたファイルとパスの今のファイルの食い違いで取り直す上限の回数 */
     private const int LOCK_ATTEMPTS = 3;
 
+    /**
+     * clear()に渡せる日数の上限。秒に換算(86400倍)してintに収まる最大の日数である。
+     */
+    public static function maxOlderThanDays(): int
+    {
+        return intdiv(\PHP_INT_MAX, self::DAY_IN_SECONDS);
+    }
+
     public function __construct(
         private readonly string $baseDir,
         private readonly string $baseUrl,
@@ -233,7 +241,7 @@ final class ThumbCache
      *
      * @param int|null $olderThanDays 指定すると、更新日時がこの日数より前のファイルだけを消す。nullならすべて消す
      *
-     * @throws InvalidArgumentException $olderThanDaysが1未満の場合
+     * @throws InvalidArgumentException $olderThanDaysが1未満の場合、maxOlderThanDays()を超える場合(何も消さない)
      * @throws RuntimeException 消せないファイルがあった場合(消せたファイルは消したまま。件数を含める)、ロックを扱えない場合、
      *                          キャッシュのディレクトリがあるのに印が無い場合(何も消さない)
      *
@@ -243,6 +251,12 @@ final class ThumbCache
     {
         if ($olderThanDays !== null && $olderThanDays < 1) {
             throw new InvalidArgumentException("the number of days to keep thumbnail cache files must be positive, {$olderThanDays} given");
+        }
+
+        $maxDays = self::maxOlderThanDays();
+
+        if ($olderThanDays !== null && $olderThanDays > $maxDays) {
+            throw new InvalidArgumentException("the number of days to keep thumbnail cache files must be at most {$maxDays}, {$olderThanDays} given");
         }
 
         $threshold = $olderThanDays === null ? null : time() - ($olderThanDays * self::DAY_IN_SECONDS);

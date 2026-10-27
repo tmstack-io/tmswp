@@ -6,6 +6,7 @@ namespace TMSWP\Thumbnail\Cli;
 
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\RuntimeException;
+use TMSWP\Thumbnail\ThumbCache;
 use TMSWP\Thumbnail\Thumbnail;
 use WP_CLI;
 
@@ -25,7 +26,7 @@ final class ThumbCommand
      *
      * ## OPTIONS
      *
-     * [--days=<days>]
+     * [--days[=<days>]]
      * : Delete only the files that were last returned through the REST API (or generated) more than this many days ago. A positive integer whose length in seconds exceeds the cache lifetime of the REST redirects (redirectMaxAge).
      *
      * ## EXAMPLES
@@ -36,15 +37,23 @@ final class ThumbCommand
      * @param list<string> $args
      * @param array<string, mixed> $assocArgs
      *
-     * @throws InvalidArgumentException --daysが正の整数でない場合、302のキャッシュの期間以下の場合
      * @throws RuntimeException WP-CLIの外で呼んだ場合、消せないファイルがあった場合
      */
     public function clear(array $args, array $assocArgs): void
     {
-        $days = $this->days($assocArgs);
-
         if (!class_exists('WP_CLI')) {
             throw new RuntimeException('WP_CLI is not available');
+        }
+
+        try {
+            $days = $this->days($assocArgs);
+        } catch (InvalidArgumentException $exception) {
+            // --daysの誤りは利用者の入力の誤りなので、何も消さずにWP-CLIのエラー(終了コード1)で知らせる。
+            // WP_CLI::error()は終了するためreturnには進まないが、PHPStanはWP_CLIの型を知らないため、$daysが未定義のまま
+            // 先へ進まないことをreturnで示す
+            WP_CLI::error($exception->getMessage());
+
+            return;
         }
 
         $deleted = $this->thumbnail->cache()->clear($days);
@@ -78,7 +87,8 @@ final class ThumbCommand
     /**
      * @param array<string, mixed> $assocArgs
      *
-     * @throws InvalidArgumentException --daysが正の整数でない場合、302のキャッシュの期間以下の場合
+     * @throws InvalidArgumentException --daysが正の整数でない場合、秒に換算するとintに収まらない場合、302のキャッシュの
+     *                                  期間以下の場合
      */
     private function days(array $assocArgs): ?int
     {
@@ -92,7 +102,15 @@ final class ThumbCommand
             throw new InvalidArgumentException('wp tmswp thumb clear --days must be a positive integer');
         }
 
-        $days = (int) $value;
+        // ThumbCache::clear()に渡せる日数(秒に換算してintに収まる日数)に限る。PHP_INT_MAXを超える文字列は(int)で
+        // 丸まるため、変換と範囲の判定をfilter_var()でまとめて行う
+        $maxDays = ThumbCache::maxOlderThanDays();
+        $days = filter_var($value, \FILTER_VALIDATE_INT, ['options' => ['max_range' => $maxDays]]);
+
+        if (!\is_int($days)) {
+            throw new InvalidArgumentException("wp tmswp thumb clear --days must be at most {$maxDays}");
+        }
+
         $redirectMaxAge = $this->thumbnail->config()->redirectMaxAge;
 
         if ($days * self::DAY_IN_SECONDS <= $redirectMaxAge) {

@@ -226,7 +226,7 @@ cacheKey = substr(hash('sha256', serialize(
   - GCと`status`は、キャッシュのディレクトリが無ければ0件である。あるのに印が無ければ、何も消さずに`TMSWP\Core\Exception\RuntimeException`にする(D-29。`cacheDirName`の誤りを知らせる)。印のファイルは、GCと`status`の対象にしない。
   - GCと`status`が扱うのは、キャッシュ自身が作ったファイルだけである。shardのディレクトリの直下にあり、名前が40桁の16進のキーで始まり、そのキーの先頭2文字がshardのディレクトリ名と同じ、シンボリックリンクでない通常のファイルに限る。それ以外のファイル・ディレクトリ(キャッシュのディレクトリの直下のファイル、`cacheDirName`がuploadsの既存のディレクトリと同じ名前のときの元画像等)には触れない。
   - キーのファイル(`{key}.*`)は、キーごとにそのキーのロックを待たずに取り、取れたキーのファイルだけを消す。生成中(ロックを持たれている)のキーは飛ばすため、生成中のロックと一時ファイルは消えない。ロックのファイルは、ロックを持ったまま手放す前に消す(異常終了で残ったロックのファイルも消える)。
-  - `n`は正の整数で、n日は`redirectMaxAge`秒より長くなければならない(違えば`TMSWP\Core\Exception\InvalidArgumentException`)。ブラウザ等にキャッシュされた302が、消したファイルを指さないためである。
+  - `n`は正の整数で、n日は`redirectMaxAge`秒より長くなければならない(違えば、何も消さずに`WP_CLI::error()`で`Error:`を出し、終了コード1で終わる)。ブラウザ等にキャッシュされた302が、消したファイルを指さないためである。
   - 静的なURLへの直接のアクセス(`tms_thumb()`が静的なURLを返した後の表示や、ページキャッシュのHTML)は、Apacheが返すため更新日時を変えない。消したファイルは、次の`tms_thumb()`がRESTのURLを返して作り直す。ページキャッシュのHTMLに残った静的なURLは、ページキャッシュが切れるまで404になるため、`--days`はページキャッシュの寿命より長くする。
   - 自動cronは持たない(DECISION: 運用判断。必要ならapp側で `wp_schedule_event` からCLI相当処理を呼ぶレシピをrules/に記載)。
 
@@ -376,7 +376,8 @@ final class ThumbCache
     public function commit(string $writtenPath, string $key): string;   // rename()で置き換え、キャッシュのパスを返す
     public function discard(string $path): void;
     /** @return int 削除ファイル数 */
-    public function clear(?int $olderThanDays = null): int;  // キーごとにロックを取って消す。1未満はInvalidArgumentException
+    public function clear(?int $olderThanDays = null): int;  // キーごとにロックを取って消す。1未満とmaxOlderThanDays()を超える日数はInvalidArgumentException(何も消さない)
+    public static function maxOlderThanDays(): int;          // clear()の日数の上限。intdiv(PHP_INT_MAX, 86400)(秒に換算してintに収まる最大の日数)。CLIの--daysも同じ上限を使う
     /** @return array{files: int, bytes: int, failed: int} */
     public function status(): array;                         // index.html・ロック・一時ファイルは数えない
 }
@@ -443,7 +444,7 @@ final class RestRouteCheck
 final class ThumbCommand
 {
     public function __construct(Thumbnail $thumbnail);
-    /** wp tmswp thumb clear [--days=<days>] : キャッシュ削除(--days指定時は更新日時がn日より前のもののみ) */
+    /** wp tmswp thumb clear [--days[=<days>]] : キャッシュ削除(--days指定時は更新日時がn日より前のもののみ) */
     public function clear(array $args, array $assocArgs): void;
     /** wp tmswp thumb status : サムネイルの件数・合計サイズと、失敗の印の件数を表示 */
     public function status(array $args, array $assocArgs): void;
@@ -451,7 +452,8 @@ final class ThumbCommand
 ```
 
 - 各メソッドは、WP-CLIのsynopsisのdocblock(`## OPTIONS`・`## EXAMPLES`)を持つ。
-- `--days`は正の整数で、n日が`redirectMaxAge`秒より長くなければ`TMSWP\Core\Exception\InvalidArgumentException`(§1.3)。
+- `--days`は正の整数で、秒に換算してintに収まる日数(`intdiv(PHP_INT_MAX, 86400)`日、64ビットで106751991167300日)以下でなければ、またn日が`redirectMaxAge`秒より長くなければ、利用者の入力の誤りとして何も消さずに`WP_CLI::error()`で終わる(`Error:`・終了コード1。§1.3)。キャッシュの操作の失敗(消せないファイル、キャッシュのディレクトリの印が無い等)は、設定や環境の誤りなので例外のまま伝える。
+- synopsisは、`--days`の値を任意(`[--days[=<days>]]`)にする。値を必須(`[--days=<days>]`)にすると、WP-CLIは値の無い`--days`を警告だけで捨ててコマンドを続け、すべてのファイルを消すためである。値の無い`--days`は、ほかの誤りと同じく`Error:`で終わる。
 - WP-CLIのAPIは`WP_CLI::success()`等で直接呼ぶ(`['WP_CLI', ...]`のcallableを組み立てない)。
 - `Thumbnail::register()`が、WP-CLIの環境で`WP_CLI::add_command('tmswp thumb', ...)`で登録する。
 
@@ -1128,7 +1130,7 @@ FormDefinition::create('contact')
 - [ ] `tms_thumb()`が、アイキャッチ未設定・添付ファイルの実体が無いときはdebugでも例外を投げずに`null`を返す。引数・オプションの誤りはdebugに関係なく例外。実行時の失敗は、登録したKernelがdebugなら例外、本番ならKernelのロガーにerrorで記録して`null`を返す(文脈に例外のオブジェクト・メッセージ・トレースが無い)。`WP_DEBUG`を見ない
 - [ ] thumbnailを2つ目のKernelに登録すると`LogicException`になり、登録が無い状態の`tms_thumb()`も`LogicException`になる
 - [ ] RESTのルートが訪問者から使えない(ルートの削除・訪問者への認証のエラー)ことを検出して、管理画面で`manage_options`のユーザーに通知し、使えるときと権限の無いユーザーには通知しない。管理画面の要求のnonce(GET・POST・REQUEST・X-WP-Nonce)で誤って通知せず、確かめた後(例外のときを含む)にユーザー・nonceのキーの有無と値・認証のフィルタの順序が元のままである(統合テスト)
-- [ ] `wp tmswp thumb clear --days=30` が、更新日時が30日より前のファイルだけを削除し、`index.html`を残す。`--days`の0・負・整数でない値・`redirectMaxAge`以下の日数が例外になる。`wp tmswp thumb status`が`index.html`・ロック・一時ファイルを数えない
+- [ ] `wp tmswp thumb clear --days=30` が、更新日時が30日より前のファイルだけを削除し、`index.html`を残す。`--days`の0・負・整数でない値・値の無い`--days`・上限(`intdiv(PHP_INT_MAX, 86400)`日)を超える日数・`redirectMaxAge`以下の日数が、何も消さずに`Error:`と終了コード1になる(`WP_CLI::error()`)。`wp tmswp thumb status`が`index.html`・ロック・一時ファイルを数えない
 - [ ] `tms_thumb()`が`function_exists`のガードで囲まれていない(コードレビュー)
 - [ ] 検証: `wp-env` 上で `curl -i "$(wp eval 'echo tms_thumb(123, 100, 100);')"` → 302 → 画像取得
 

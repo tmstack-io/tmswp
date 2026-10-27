@@ -7,7 +7,8 @@ namespace TMSWP\Thumbnail\Tests\Unit;
 use Brain\Monkey\Functions;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
-use TMSWP\Core\Exception\InvalidArgumentException;
+use ReflectionMethod;
+use RuntimeException;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\Thumbnail\Cli\ThumbCommand;
@@ -19,7 +20,8 @@ use TMSWP\Thumbnail\ThumbnailConfig;
  * `wp tmswp thumb clear`・`wp tmswp thumb status`と、WP-CLIの環境でのコマンドの登録。
  *
  * コマンドの実行と登録は、WP_CLIの代役クラスをテスト用の一時ファイルに書いて読み込むため、ほかのテストにWP_CLIの
- * クラス(と定数)を残さないよう別プロセスで動かす。代役は呼び出しを`$GLOBALS['tmswp_test_wp_cli']`に記録する。
+ * クラス(と定数)を残さないよう別プロセスで動かす。代役は呼び出しを`$GLOBALS['tmswp_test_wp_cli']`に記録し、
+ * `WP_CLI::error()`は終了の代わりに`\RuntimeException`を投げる。
  */
 final class ThumbCommandTest extends UnitTestCase
 {
@@ -29,6 +31,9 @@ final class ThumbCommandTest extends UnitTestCase
 
     /** KEYと同じshardの、別のキー */
     private const string OTHER_KEY = 'ab99999999999999999999999999999999999999';
+
+    /** `--days`の上限。秒に換算(86400倍)してintに収まる最大の日数(intdiv(PHP_INT_MAX, 86400)) */
+    private const int MAX_DAYS = 106751991167300;
 
     protected function setUp(): void
     {
@@ -46,26 +51,70 @@ final class ThumbCommandTest extends UnitTestCase
     }
 
     /**
-     * @return iterable<string, array{0: mixed}>
+     * @return iterable<string, array{0: mixed, 1: string}>
      */
     public static function invalidDaysProvider(): iterable
     {
-        yield '負の値' => ['-1'];
-        yield '0' => ['0'];
-        yield '整数でない' => ['1.5'];
-        yield '値の無いフラグ' => [true];
-        yield '302のキャッシュの期間(2日)以下' => ['2'];
+        $notPositiveInteger = 'wp tmswp thumb clear --days must be a positive integer';
+        $tooLarge = 'wp tmswp thumb clear --days must be at most ' . self::MAX_DAYS;
+
+        yield '負の値' => ['-1', $notPositiveInteger];
+        yield '0' => ['0', $notPositiveInteger];
+        yield '整数でない' => ['1.5', $notPositiveInteger];
+        yield '数字でない' => ['abc', $notPositiveInteger];
+        yield '値の無いフラグ' => [true, $notPositiveInteger];
+        yield '秒への換算がintに収まる上限+1' => [(string) (self::MAX_DAYS + 1), $tooLarge];
+        yield 'PHP_INT_MAXを超える' => ['9223372036854775808', $tooLarge];
+        yield '302のキャッシュの期間(1日)以下' => ['1', 'wp tmswp thumb clear --days must be longer than the cache lifetime of the REST redirects (86400 seconds); a cached redirect could point to a deleted file'];
     }
 
+    /**
+     * `--days`の誤りは、利用者の入力の誤りとして`WP_CLI::error()`で知らせ(例外を外へ投げない)、何も消さない。
+     * 消されないことを確かめるため、どの`--days`の値より古いファイルを置く。
+     */
     #[DataProvider('invalidDaysProvider')]
-    public function testClearRejectsInvalidDays(mixed $days): void
+    #[RunInSeparateProcess]
+    public function testClearReportsInvalidDaysAsWpCliErrorAndDeletesNothing(mixed $days, string $message): void
     {
-        $command = new ThumbCommand(new Thumbnail(new ThumbnailConfig(redirectMaxAge: 2 * 86400)));
+        $this->loadWpCliDouble();
+        [$thumbnail, $cacheDir] = $this->thumbnailWithCache();
+        $file = $cacheDir . '/ab/' . self::KEY . '.jpg';
+        self::assertNotFalse(file_put_contents($file, 'old'));
+        self::assertTrue(touch($file, time() - 365 * 86400));
 
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('wp tmswp thumb clear --days must be');
+        self::assertSame($message, $this->clearFailing(new ThumbCommand($thumbnail), ['days' => $days]));
+        self::assertSame([['error', $message]], $GLOBALS['tmswp_test_wp_cli']);
+        self::assertFileExists($file);
+        self::assertFileExists($cacheDir . '/index.html');
+        self::assertFileExists($cacheDir . '/ab/index.html');
+    }
 
-        $command->clear([], ['days' => $days]);
+    /** `--days`は、秒に換算してintに収まる上限ちょうどの日数を受け入れる(それより前のファイルは無いので、何も消さない)。 */
+    #[RunInSeparateProcess]
+    public function testClearAcceptsTheMaximumDays(): void
+    {
+        $this->loadWpCliDouble();
+        [$thumbnail, $cacheDir] = $this->thumbnailWithCache();
+        $file = $cacheDir . '/ab/' . self::KEY . '.jpg';
+        self::assertNotFalse(file_put_contents($file, 'old'));
+        self::assertTrue(touch($file, time() - 365 * 86400));
+
+        (new ThumbCommand($thumbnail))->clear([], ['days' => (string) self::MAX_DAYS]);
+
+        self::assertSame([['success', 'deleted 0 thumbnail cache file(s)']], $GLOBALS['tmswp_test_wp_cli']);
+        self::assertFileExists($file);
+    }
+
+    /**
+     * synopsisは`--days`の値を任意にする。値を必須(`[--days=<days>]`)にすると、WP-CLIは値の無い`--days`を警告だけで
+     * 捨てて`clear`を呼び、すべてのファイルを消す。値を任意にすると、値の無い`--days`はtrueとして届き、誤りになる。
+     */
+    public function testClearSynopsisLetsDaysWithoutValueReachTheValidation(): void
+    {
+        $docComment = (new ReflectionMethod(ThumbCommand::class, 'clear'))->getDocComment();
+
+        self::assertIsString($docComment);
+        self::assertStringContainsString("* [--days[=<days>]]\n", $docComment);
     }
 
     /**
@@ -143,10 +192,30 @@ final class ThumbCommandTest extends UnitTestCase
         self::assertInstanceOf(ThumbCommand::class, $command);
 
         // 追加したコマンドは、登録したThumbnailの設定(redirectMaxAgeが2日)で動く
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('must be longer than the cache lifetime of the REST redirects (172800 seconds)');
+        self::assertStringContainsString(
+            'must be longer than the cache lifetime of the REST redirects (172800 seconds)',
+            $this->clearFailing($command, ['days' => '2']),
+        );
+    }
 
-        $command->clear([], ['days' => '2']);
+    /**
+     * `clear`を実行し、`WP_CLI::error()`に渡されたメッセージを返す。
+     *
+     * @param array<string, mixed> $assocArgs
+     */
+    private function clearFailing(ThumbCommand $command, array $assocArgs): string
+    {
+        try {
+            $command->clear([], $assocArgs);
+        } catch (RuntimeException $exception) {
+            $calls = $GLOBALS['tmswp_test_wp_cli'];
+            self::assertIsArray($calls);
+            self::assertSame(['error', $exception->getMessage()], end($calls));
+
+            return $exception->getMessage();
+        }
+
+        self::fail('WP_CLI::error() was not called');
     }
 
     /**
@@ -189,6 +258,13 @@ final class WP_CLI
     public static function success(string $message): void
     {
         $GLOBALS['tmswp_test_wp_cli'][] = ['success', $message];
+    }
+
+    public static function error(string $message): never
+    {
+        $GLOBALS['tmswp_test_wp_cli'][] = ['error', $message];
+
+        throw new \RuntimeException($message);
     }
 }
 PHP));
