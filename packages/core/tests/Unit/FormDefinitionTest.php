@@ -152,6 +152,14 @@ final class FormDefinitionTest extends UnitTestCase
         self::assertInstanceOf(Field::class, $topics);
         self::assertSame(['2'], $topics->default);
     }
+
+    /** Form::isConfirmEnabled()は、FormDefinitionの確認画面の設定を返す。 */
+    public function testFormReportsWhetherTheConfirmationScreenIsEnabled(): void
+    {
+        self::assertTrue((new Form(FormDefinition::create('entry')->text('name', 'Name')->confirm()))->isConfirmEnabled());
+        self::assertFalse((new Form(FormDefinition::create('entry')->text('name', 'Name')))->isConfirmEnabled());
+        self::assertFalse((new Form(FormDefinition::create('entry')->text('name', 'Name')->confirm()->confirm(false)))->isConfirmEnabled());
+    }
 }
 
 final class DefinitionTestSpamGuard implements SpamGuardInterface

@@ -209,6 +209,15 @@ final class Form
         return $this->definition->id;
     }
 
+    /**
+     * 確認画面が有効か(FormDefinition::confirm()の設定)。フォームを使う側が、確認画面の有無に合った送信ボタンを
+     * 出すときや、確認画面に対応しない用途(設定ページ等)で確認画面の有効なフォームを拒否するときに使う。
+     */
+    public function isConfirmEnabled(): bool
+    {
+        return $this->definition->isConfirmEnabled();
+    }
+
     /** @return array<string, mixed> */
     public function values(): array
     {

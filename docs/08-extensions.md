@@ -43,29 +43,38 @@ tmswp/acf-bridge は本書のスコープ外(専用文書が定義)。CSVイン�
 ```
 
 - パッケージ固有の追加require: thumbnail=`ext-gd`(DR-14でコアから移設)、ja-toolkit=`ext-mbstring`。settings-pageは追加なし。
-- WPプラグインヘッダは持たない。各パッケージは「テーマ/プラグインのvendor/に入るライブラリ」であり、有効化はapp側コードによる明示ブート(下記)で行う。
+- WPプラグインヘッダは持たない。各パッケージは「テーマ/プラグインのvendor/に入るライブラリ」であり、有効化はapp側の`KernelConfig`への明示的な登録(下記)で行う。
 
-### ブートAPI(明示オプトイン)
+### 登録API(KernelConfig経由・明示オプトイン)
 
-拡張は自動では何もしない。`Kernel::boot()` の直後(functions.php / プラグイン本体)で明示的にブートする。
+拡張は自動では何もしない。各パッケージの入口のクラス(`TMSWP\Core\Kernel\ExtensionInterface`の実装)のインスタンスを、テーマ・プラグインのルートの`tmswp-kernel.php`で`KernelConfig::theme()` / `plugin()`の`extensions`に渡す。拡張は、渡したKernelでだけ有効になる(文書02 §3.10)。テーマとプラグインがそれぞれ同じ拡張を登録した場合は、Kernelごとに別々に動く。
 
 ```php
-\TMSWP\Core\Kernel\Kernel::boot(KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App'));
+// tmswp-kernel.php(functions.php / プラグイン本体は、このファイルのKernelConfigでKernel::boot()する)
+use TMSWP\Core\Kernel\KernelConfig;
+use TMSWP\SettingsPage\SettingsPages;
 
-\TMSWP\Thumbnail\Thumbnail::register();                       // (1)
-\TMSWP\SettingsPage\SettingsPages::register();                // (2)
-\TMSWP\JaToolkit\JaToolkit::enable([JapaneseSlug::class]);    // (3)
+return KernelConfig::theme(
+    __DIR__ . '/app',
+    'App',
+    extensions: [new SettingsPages()],
+);
 ```
 
-各 `register()`/`enable()` は二重呼び出しで `TMSWP\Core\Exception\LogicException` を投げる(冪等な握り潰しはしない。設定差異の取り違えを早期検出するため)。
+入口のクラスは、各パッケージの節に書く(settings-pageは§2.2の`SettingsPages`)。
 
-Kernelごとに登録する拡張(`KernelConfig`の`extensions`に渡す`ExtensionInterface`の実装。acf-bridgeは文書09 §2.1)の`register(Kernel $kernel)`が、`init`等のフックに処理を予約するときは、`add_action()`ではなく`$kernel->defer($hook, $priority, $callback)`を使う。本番の遅延boot(フックの発火後のboot)では`add_action()`で登録した処理が二度と実行されないが、`defer()`はKernelのキャッチアップの中で実行するためである(文書02 §3.3)。
+- Kernelは、bootの中で`extensions`の各インスタンスの`register(Kernel $kernel)`を、渡した順に1回ずつ呼ぶ。
+- 同じクラスの拡張を同じKernelに2つ渡すと、`KernelConfig`が`TMSWP\Core\Exception\KernelException`を投げる。1つのインスタンスを2つのKernelに渡すと、2つ目のKernelの`register()`が例外を投げる(1つのインスタンスは1つのKernelにだけ登録できる)。どちらも設定の誤りなので、debugに関係なく起動を止める。冪等な握り潰しはしない。設定差異の取り違えを早期に検出するためである。
+- 拡張のdebugによる分岐は、登録したKernelの`config()->debug`に従う。`WP_DEBUG`を直接見ない。拡張の内部のログは、登録したKernelの`logger()`に記録する。
 
-Kernelごとに登録する拡張のコンストラクタは、WordPressの関数を呼ばない。WordPressに触れる処理は`register()`以降で行う。拡張はテーマ・プラグインのルートの`tmswp-kernel.php`の中で`KernelConfig`と一緒に生成され、このファイルはWordPressを起動しない`tms-acf`(文書09 §5.1)も読むためである(文書02 §3.10)。
+`register(Kernel $kernel)`が、`init`等のフックに処理を予約するときは、`add_action()`ではなく`$kernel->defer($hook, $priority, $callback)`を使う。本番の遅延boot(フックの発火後のboot)では`add_action()`で登録した処理が二度と実行されないが、`defer()`はKernelのキャッチアップの中で実行するためである(文書02 §3.3)。
+
+拡張のコンストラクタは、WordPressの関数を呼ばない。WordPressに触れる処理は`register()`以降で行う。拡張は`tmswp-kernel.php`の中で`KernelConfig`と一緒に生成され、このファイルはWordPressを起動しない`tms-acf`(文書09 §5.1)も読むためである(文書02 §3.10)。
 
 ### 例外・ログ・i18n
 
-- 例外は各パッケージの `TMSWP\<Pascal>\Exception\` 配下に置き、すべて `TMSWP\Core\Exception\RuntimeException`(または `LogicException`)を継承する。
+- 汎用の宣言の誤り・型の誤り(設定の誤りや、拡張に固有の情報を持たない実行時の失敗)は、coreの`TMSWP\Core\Exception\LogicException`・`RuntimeException`を直接使う。中身の無いラッパーの例外クラスは作らない。
+- 拡張に固有の例外は、各パッケージの`TMSWP\<Pascal>\Exception\`配下に置き、`TMSWP\Core\Exception\RuntimeException`(または`LogicException`)を継承する。
 - ログは、受け取った Kernel の `logger()`(PSR-3)に記録する(Kernel設計書§3.10、View/Support/Log設計書§5.1)。`echo` によるログ出力は全パッケージで禁止。
 - テキストドメインは `tmswp`(DR-17)。拡張独自ドメインは作らない。
 
@@ -360,23 +369,32 @@ WP Settings API(`register_setting`/`add_settings_section`)は採用しない。F
 
 ## 2.2 クラス仕様
 
-### `TMSWP\SettingsPage\SettingsPages`(パッケージエントリ)
+### `TMSWP\SettingsPage\SettingsPages`(パッケージの入口)
 
 ```php
-final class SettingsPages
+final class SettingsPages implements \TMSWP\Core\Kernel\ExtensionInterface
 {
-    /** @param list<class-string<SettingsPage>> $pages 手動登録(属性探索を使わない場合) */
-    public static function register(array $pages = []): void;
-    public static function isRegistered(): bool;
-    public static function reset(): void;  // テスト用
+    /** @param list<class-string> $pages 属性探索で見つからない(app/の外にある)設定ページのクラス */
+    public function __construct(array $pages = []);
+
+    public function register(\TMSWP\Core\Kernel\Kernel $kernel): void;
+
+    /** Kernelに登録したSettingsPages。無ければLogicException */
+    public static function forKernel(\TMSWP\Core\Kernel\Kernel $kernel): self;
 }
 ```
 
-`register()` の振る舞い:
+`KernelConfig`の`extensions`に`new SettingsPages()`を渡したKernelでだけ、設定ページが有効になる(共通規約「登録API」)。コンストラクタは、WordPressの関数もページの`definition()`も呼ばない。
 
-1. パッケージを登録済み状態にする(`SettingsPageInitializer` の前提条件ゲート。下記)。二重呼び出しは `LogicException`。
-2. 手動指定 `$pages` の各クラスについて `PageRegistrar` を生成し、`add_action('admin_menu', ..., 10)` でメニュー登録を予約、`load-{hook_suffix}` でPOST処理を接続する(属性探索を使わない場合・appDir外のクラスのための経路)。クラスが `SettingsPage` を継承していなければ即時に `TMSWP\Core\Exception\LogicException`。
-3. slug重複は経路(属性探索/手動)を問わず内部レジストリ(slug → class)で検出し `LogicException`。
+`register()`の振る舞い(登録したKernelのbootの中で1回):
+
+1. このインスタンスを登録済みなら`TMSWP\Core\Exception\LogicException`(1つのインスタンスは1つのKernelにだけ登録できる)。コンストラクタの`$pages`に`SettingsPage`を継承しないクラスがあれば`LogicException`。
+2. 訳の読み込み(`init` priority 1。`load_textdomain('tmswp', <settings-page>/languages/tmswp-{$locale}.mo)`)を`$kernel->defer()`で予約する。
+3. `$pages`があれば、`admin_menu`(priority 10)でそれぞれをメニューに登録する処理を`$kernel->defer()`で予約する(属性探索を使わない場合・appDirの外のクラスのための経路)。
+
+ページの`definition()`は、メニューに登録するとき(`admin_menu`。`init`の後)に初めて呼ぶ。`definition()`の中で`__()`を使っても、`init`より前の翻訳の読み込み(WP 6.7以降の`_doing_it_wrong`)にならない。
+
+slugの重複は、経路(属性探索/コンストラクタ)を問わず、起動したすべてのKernelのSettingsPagesにまたがって検出し、`LogicException`にする(管理画面のページはサイトで1つの名前空間を共有するため)。
 
 `#[AsSettingsPage]` 付きクラスの収集に、本パッケージ独自の探索機構・Kernelへのハンドラ登録は**存在しない**。コアDiscoveryの `scan()` は `ComponentAttributeInterface` 実装属性を `getAttributes(ComponentAttributeInterface::class, IS_INSTANCEOF)` でinstanceof収集する(Kernel設計書§4/§5)ため、下記のとおり属性が同インターフェースを実装するだけで、Kernel側の改修・登録テーブルなしに「app/に置くだけ」で収集・スケジュールされる。
 
@@ -428,12 +446,11 @@ final class SettingsPageInitializer implements \TMSWP\Core\Kernel\ComponentIniti
 Kernelの初期化スケジューラから `admin_menu`(priority 10)の発火中に、発見コンポーネント1件につき1回呼ばれる(KernelのContainerからシングルトンとして解決される)。`initialize()` の確定アルゴリズム:
 
 ```
-1. SettingsPages::isRegistered() が false
-   → LogicException('SettingsPages::register() を Kernel::boot() 直後に呼ぶこと')
-   (「拡張は自動では何もしない」共通規約のゲート。設定の誤りなので、Kernelの
-    runInitializerはdebugに関係なく例外をそのまま投げる)
+1. SettingsPages::forKernel($kernel)が、そのKernelに登録したSettingsPagesを返す。
+   無ければLogicException(「拡張は自動では何もしない」共通規約のゲート。設定の誤りなので、
+   Kernelの初期化(runInitializer)はdebugに関係なく例外をそのまま投げる)
 2. $component->class が SettingsPage 非継承 → LogicException
-3. definition()->slug を内部レジストリへ登録。重複slugは LogicException
+3. definition()->slug を、起動したすべてのKernelのSettingsPagesのslugと照合して登録する。重複slugは LogicException
 4. new PageRegistrar($component->class) を生成し registerMenu() を即時実行
    (admin_menu発火中のため add_menu_page/add_submenu_page を直接呼べる。
     registerMenu() が hook_suffix を取得し load-{hook_suffix} へ handleRequest() を接続する)
@@ -463,7 +480,7 @@ final readonly class SettingsPageDefinition
 }
 ```
 
-7スカラのみを保持する不変の値オブジェクト(`ThumbnailConfig`・`BridgeConfig` と同じreadonly+コンストラクタ昇格スタイル)。利用側はnamed argumentsで必要な項目だけを指定する: `new SettingsPageDefinition(slug: 'site-settings', pageTitle: __('サイト設定', 'tmswp'), parent: 'options-general.php')`。`PageRegistrar` はgetterを介さずpublic readonlyプロパティを直読みする(PHPStanが型を直接追える)。
+7スカラのみを保持する不変の値オブジェクト(`ThumbnailConfig`・`BridgeConfig` と同じreadonly+コンストラクタ昇格スタイル)。利用側はnamed argumentsで必要な項目だけを指定する: `new SettingsPageDefinition(slug: 'site-settings', pageTitle: __('サイト設定', 'my-theme'), parent: 'options-general.php')`(テキストドメインはアプリ自身のもの。01-architecture.md §7.4)。`PageRegistrar` はgetterを介さずpublic readonlyプロパティを直読みする(PHPStanが型を直接追える)。
 
 注記: コアの `PostTypeDefinition`(エンティティ定義設計書)は流暢ビルダのまま据え置く。あちらは `toArgs()` が「呼ばれなかったセッターのキーを含めない」疎args意味論(WP側既定値への委譲)を持つためビルダ様式に技術的必然があるが、本クラスの7スカラは `add_menu_page`/`add_submenu_page` の位置引数へ流すだけで「不在 vs 既定値」の区別が不要である。この様式差は正当な理由のある既知の許容差分としてrules/にも1行記載する。
 
@@ -472,9 +489,10 @@ final readonly class SettingsPageDefinition
 ```php
 abstract class SettingsPage
 {
+    /** admin_menu以降(initの後)に呼ばれる。__()で訳した文字列を使える */
     abstract public static function definition(): SettingsPageDefinition;
 
-    /** 設定フォーム。フォーム不要の情報表示ページはnullのまま */
+    /** 設定フォーム。フォーム不要の情報表示ページはnullのまま。確認画面の有効なフォームはLogicException */
     protected function createForm(): ?\TMSWP\Core\Form\Form
     {
         return null;
@@ -485,13 +503,19 @@ abstract class SettingsPage
     {
     }
 
-    /** ページ本体の描画(echoする)。$formはcreateForm()の戻り(handle済み) */
+    /**
+     * ページ本体の描画(echoする)。$formはcreateForm()の戻り(handle済み)。
+     * フォームのあるページでは、FWが出す<form>の中(項目の部分)だけを描画する
+     */
     abstract protected function render(?\TMSWP\Core\Form\Form $form): void;
 
-    // ===== フレームワーク管理(finalメソッド。PageRegistrarから呼ばれる) =====
-    final public function url(array $queryArgs = []): string;     // menu_page_url相当+引数
+    // ===== フレームワーク管理(finalメソッド) =====
+    /** このページの生のURL(esc_url前)+クエリの引数。admin_menuで登録した後に使える。未登録ならLogicException */
+    final public function url(array $queryArgs = []): string;
 }
 ```
+
+`url()`はmenu_page_url()と同じ規則でURLを組み立てるが、esc_url()を通さない生のURLを返す(menu_page_url()の戻り値は`&`が`&#038;`になっており、リダイレクト先やadd_query_arg()の入力に使えないため)。HTMLに出すときは、出力の時点でesc_url()でエスケープする。
 
 ### `TMSWP\SettingsPage\PageRegistrar`(内部クラス)
 
@@ -512,52 +536,75 @@ final class PageRegistrar
 ```
 admin_menu:
   definition()を読み、parent有無で add_menu_page / add_submenu_page。
+  add_submenu_pageがfalseを返したら(今のユーザーがcapabilityを持たないためWordPressが登録しなかった)、
+  正常な結果として何もしない(load-{hook_suffix}も接続しない)。
   戻り値hook_suffixを保持し add_action("load-{$hookSuffix}", handleRequest)
 
 load-{hook_suffix}(画面出力前):
-  1. current_user_can(capability) を再確認(失敗は wp_die)
-  2. $form = createForm()。nullなら何もしない
+  1. current_user_can(capability) を再確認(失敗は wp_die(..., '', ['response' => 403]))
+  2. $form = createForm()。nullなら何もしない。$form->isConfirmEnabled()ならLogicException(設定の誤り)
   3. $result = $form->handle()
      (Form層がメソッド判定・バインド・nonce検証・バリデーション・状態遷移を行う。
       nonce不一致はForm層の仕様に従いエラー終了し、onSubmitへは到達しない)
   4. $result->step === FormStep::Complete のとき:
      a. onSubmit($result) を呼ぶ(保存処理)
      b. wp_safe_redirect(url(['updated' => '1'])); exit  — PRGで再POST防止
-  5. Form/Resultをインスタンスに保持し output() へ引き継ぐ
+        (このexitは設計原則1のexit禁止の例外。00-overview.md §3、D-35)
+  5. Formをインスタンスに保持し output() へ引き継ぐ
 
 output():
-  1. $_GET['updated'] === '1' なら成功notice(.notice-success)を出力
-  2. <div class="wrap"><h1>{pageTitle}</h1> を出力し render($form) を呼び </div> を閉じる
-     (wrap枠とnoticeのみFW側が描画し、フォームHTML本体はrender()=app側の責務)
+  1. <div class="wrap"><h1>{pageTitle}</h1> を出力する
+  2. $_GET['updated'] === '1' で、POSTでないなら成功notice(.notice-success)を出力
+  3. フォームが無ければrender(null)を呼び</div>を閉じる
+  4. フォームがあれば:
+     a. Formのフォームエラー(formErrors()。nonceの失効等)を1件ずつエラーnotice(.notice-error)で出力
+     b. 項目のエラーがあれば、保存しなかったことを示すエラーnoticeを出力
+     c. $form->open()(<form>の開始タグと必須のhidden)、render($form)(項目)、
+        保存ボタン(<button type="submit" name="_step" value="submit">)、$form->close()の順に出力し</div>を閉じる
 ```
 
-- 設定フォームは確認画面を使わないのが既定。`createForm()` で確認ステップ無効のFormDefinitionを構成する(Form設計書の確認ステップ有効/無効APIに従う)。
+- 外枠(wrap・見出し・通知・`<form>`の開始タグと必須のhidden・`_step=submit`の保存ボタン・終了タグ)はFWが描画し、render()は項目だけを描画する。`_step`の値は文書05の予約POSTキーのとおり、確認画面の無いフォームの送信(`submit`)である。
+- 設定フォームは確認画面を使えない。`createForm()`が確認画面の有効なフォーム(`Form::isConfirmEnabled()`がtrue)を返すと、`handle()`の前に`LogicException`になる(設定の誤り。debugに関係なく投げる)。保存ボタンは`_step=submit`だけを送り、確認画面の有効なフォームは保存できないためである。
 - GET時(`handle()` が `FormStep::Input` を返す)は `OptionFormBridge::applyDefaults()`(下記)等で初期値を与える。
+- FWの文言(通知・保存ボタン・権限エラー)のソース文字列は英語で、ja訳を`languages/`に同梱する(テキストドメインは`tmswp`)。
 
 ### `TMSWP\SettingsPage\OptionFormBridge`
 
-オプショングループ enum(コアOption層。`#[AsOptionGroup]` 付き string backed enum、`OptionAccess` trait を use)とFormの橋渡しヘルパ。フィールド名とオプションキー(`OptionSchema` 付き enum ケースの backing 値)が一致するものを転送する。両メソッドはオプショングループ enum の class-string を受け取る。
+オプショングループ enum(コアOption層。`#[AsOptionGroup]` 付き string backed enum)とFormの橋渡しヘルパ。フィールド名とオプションキー(`OptionSchema` 付き enum ケースの backing 値)が一致するものを、スキーマの型とFormの値の形の間で変換して転送する。両メソッドはオプショングループ enum の class-string を受け取る。
 
 ```php
 final class OptionFormBridge
 {
     /**
-     * オプショングループの現在値をFormの初期値へ流し込む(GET時)
-     * @param class-string $optionGroupClass #[AsOptionGroup] 付きの string backed enum(OptionAccess を use)
+     * オプショングループの現在値をFormの初期値へ流し込む(handle()の前)
+     * @param class-string $optionGroupClass #[AsOptionGroup] 付きの string backed enum
      */
     public static function applyDefaults(\TMSWP\Core\Form\Form $form, string $optionGroupClass): void;
 
     /**
-     * 検証済みフォーム値をオプショングループへ保存する(onSubmit時)
-     * @param class-string $optionGroupClass #[AsOptionGroup] 付きの string backed enum(OptionAccess を use)
-     * @param list<string> $only 指定時はこのフィールド名のみ転送
+     * 検証済みフォーム値をスキーマの型に変換してオプショングループへ保存する(onSubmit時)
+     * @param class-string $optionGroupClass #[AsOptionGroup] 付きの string backed enum
+     * @param list<string> $only 指定時はこのキーのみ保存。#[OptionSchema]で宣言していない名前はLogicException
      */
     public static function persist(\TMSWP\Core\Form\FormResult $result, string $optionGroupClass, array $only = []): void;
 }
 ```
 
-- 転送規則: `$optionGroupClass` の `OptionSchema` 宣言済みキー集合とフォームのフィールド名集合の積集合のみを転送する。片側にしかない名前は黙って無視せず `Log::debug()` に記録する。
+- 転送規則: `$optionGroupClass` の `OptionSchema` 宣言済みキー集合とフォームのフィールド名集合の積集合のみを転送する。片側にしかない名前は黙って無視せず、オプショングループのKernel(SettingsPagesを登録したKernel)のロガー(`$kernel->logger()`)にdebugで記録する。オプショングループのKernelにSettingsPagesが無ければ`LogicException`。
 - 値の読み書きはコア `OptionRepository` を経由する(直接 `get_option` を呼ばない)。
+- スキーマの型とFormの値の形の対応:
+
+| スキーマの型 | Formの値の形(applyDefaultsが渡す形・persistが受け付ける形) | 保存する値 |
+|---|---|---|
+| string | 文字列 | 文字列 |
+| integer | 整数の文字列(先頭の`+`と0を許す) | int |
+| number | 数値の文字列(`is_numeric()`。有限の値) | 整数ならint、それ以外はfloat |
+| boolean | `'1'`(true)・`''`(false)。`Field::checkbox()`の既定のcheckedValue`'1'`とチェックしない場合の値 | bool |
+| array | 文字列のlist(複数選択の項目) | 文字列のlist |
+| object | 項目と結べない(`LogicException`) | — |
+
+- `applyDefaults()`は、保存値(無ければスキーマの既定値)を上の形に変換して`Form::applyDefaults()`に渡す。値が無いキーは項目の既定値のままにする。WordPressのoptionsテーブルを経た保存値(`update_option()`がintやboolを文字列で保存し、次のリクエストで`'5'`・`'1'`・`''`として読める値)も受け付ける。保存値が型の形でない場合はデータの取得の失敗として扱い、登録したKernelのdebugなら`RuntimeException`、本番ならKernelのロガーにerrorで記録してその項目を項目の既定値のままにする(エラー方針、00-overview.md §5.6)。変換した値の形が項目に合わない場合(array型のキーを単一の値の項目と結んだ等)は、`Form::applyDefaults()`の`FormConfigException`になる。
+- `persist()`は、すべての値を変換してから保存する。変換できない値(整数の項目に整数以外を許す等、項目の検証の規則が足りない場合)は`LogicException`にし、どのキーも保存しない。例外のメッセージに利用者の入力値は入れない。`OptionRepository::set()`の戻り値(false=保存値が変わらなかった)は失敗ではないため扱わない。
 
 ## 2.3 利用例(app側)
 
@@ -569,7 +616,8 @@ namespace App\SettingsPage;
 
 use TMSWP\SettingsPage\Attribute\AsSettingsPage;
 use TMSWP\SettingsPage\{SettingsPage, SettingsPageDefinition, OptionFormBridge};
-use TMSWP\Core\Form\{Form, FormResult};
+use TMSWP\Core\Form\{Form, FormDefinition, FormResult};
+use TMSWP\Core\Form\Rule\MaxLength;
 use TMSWP\Core\View\Template;
 use App\Option\SiteOption;
 
@@ -580,14 +628,17 @@ final class SiteSettingsPage extends SettingsPage
     {
         return new SettingsPageDefinition(
             slug: 'site-settings',
-            pageTitle: __('サイト設定', 'tmswp'),
+            pageTitle: __('サイト設定', 'my-theme'),   // アプリ自身のテキストドメイン(01-architecture.md §7.4)
             parent: 'options-general.php',
         );
     }
 
     protected function createForm(): ?Form
     {
-        $form = SiteSettingsForm::create(); // app側で定義したFormサブクラス(確認ステップなし)
+        $form = new Form(
+            FormDefinition::create('site_settings')   // 確認画面なし
+                ->text('site_catchphrase', __('キャッチコピー', 'my-theme'), [new MaxLength(100)]),
+        );
         OptionFormBridge::applyDefaults($form, SiteOption::class);
 
         return $form;
@@ -600,26 +651,39 @@ final class SiteSettingsPage extends SettingsPage
 
     protected function render(?Form $form): void
     {
-        Template::part('admin/site-settings', ['form' => $form]);
+        Template::part('parts/admin/site-settings', ['form' => $form]);
     }
 }
 ```
 
 ```php
-<?php /* parts/admin/site-settings.php — 通常のPHPテンプレート。echoの書き味 */ ?>
-<form method="post">
-    <?php $form->renderHiddenFields(); // nonce等はForm層が自動出力 ?>
-    <table class="form-table">
-        <tr>
-            <th><label for="site_catchphrase">キャッチコピー</label></th>
-            <td><?php echo $form->field('site_catchphrase')->input(['class' => 'regular-text']); ?></td>
-        </tr>
-    </table>
-    <?php submit_button(); ?>
-</form>
-```
+<?php
 
-(`renderHiddenFields()` 等のForm側APIの正準名はForm設計書に従う。本書のテンプレート例は書き味の提示であり、Form APIを本書が定義するものではない)
+// parts/admin/site-settings.php — <form>・必須のhidden・保存ボタン・エラーの通知はFWが出す。ここは項目だけ
+declare(strict_types=1);
+
+use TMSWP\Core\Exception\LogicException;
+use TMSWP\Core\Form\Form;
+
+// Template::part()のテンプレートから見える変数は$argsだけ。渡したFormは$args['form']から取り、型を確かめてから使う
+$form = $args['form'] ?? null;
+
+if (!$form instanceof Form) {
+    throw new LogicException("parts/admin/site-settings.php requires a Form in \$args['form']");
+}
+
+$field = $form->field('site_catchphrase');
+?>
+<table class="form-table">
+    <tr>
+        <th><?php echo $field->labelTag(); ?></th>
+        <td>
+            <?php echo $field->input(['class' => 'regular-text']); ?>
+            <?php echo $field->errors(); ?>
+        </td>
+    </tr>
+</table>
+```
 
 ## 2.4 旧iwf2bからの設計根拠
 
@@ -868,13 +932,18 @@ FormDefinition::create('contact')
 
 ## tmswp/settings-page
 
-- [ ] `#[AsSettingsPage]` クラスがapp/に置くだけでメニュー登録される(wp-env統合テスト。コアDiscoveryの `ComponentAttributeInterface` instanceof収集経由であり、本パッケージ独自の探索コードが存在しないことをコードレビューで確認)
-- [ ] `SettingsPages::register()` 未呼び出し時、`#[AsSettingsPage]` クラスの初期化がdebugに関係なく `LogicException` になる
+- [ ] `KernelConfig`の`extensions`に`new SettingsPages()`を渡したKernelで、`#[AsSettingsPage]` クラスがapp/に置くだけでメニュー登録される(wp-env統合テスト。コアDiscoveryの `ComponentAttributeInterface` instanceof収集経由であり、本パッケージ独自の探索コードが存在しないことをコードレビューで確認)
+- [ ] KernelにSettingsPagesを登録していない場合、`#[AsSettingsPage]` クラスの初期化がdebugに関係なく `LogicException` になる。1つのSettingsPagesを2つのKernelに登録すると`LogicException`になる
+- [ ] コンストラクタに渡したページの`definition()`が、bootでは呼ばれず`admin_menu`(initの後)で呼ばれる
 - [ ] nonce欠落・不正nonceのPOSTで `onSubmit` が呼ばれない(CSRFテスト=本パッケージ最重要)
-- [ ] `capability` を満たさないユーザーがページ表示・POSTの両方を拒否される
-- [ ] 送信成功時に302(PRG)が返り、リダイレクト先で成功noticeが表示される
-- [ ] `OptionFormBridge::persist` がOptionSchema宣言済みキーのみ保存し、未宣言フィールドを保存しない
-- [ ] slug重複登録が `LogicException`
+- [ ] `capability` を満たさないユーザーで管理画面のメニューの作成が例外にならず(`add_submenu_page()`のfalseを正常として扱う)、ページ表示・POSTの両方が`wp_die()`の403で拒否される(統合テスト)
+- [ ] FWがフォームの外枠(`$form->open()`・`_step=submit`の保存ボタン・`$form->close()`)と、フォームエラー・項目のエラーのエラーnoticeを出し、render()は項目だけを描画する(統合テスト)
+- [ ] 送信成功時に302(PRG)が返り、リダイレクト先(`url()`の生のURL)で成功noticeが表示される。`wp_safe_redirect()`の直後の`exit`は、00-overview.mdの原則1の例外の範囲だけにある
+- [ ] `OptionFormBridge::applyDefaults`が、int・bool・arrayのオプション(optionsテーブルを経た文字列の形を含む)を項目の既定値の形に変換し、int・boolのオプションを結んだ設定ページが例外にならない(統合テスト)
+- [ ] `OptionFormBridge::persist` がOptionSchema宣言済みキーのみをスキーマの型に変換して保存し、未宣言フィールドを保存しない。変換できない値と`$only`の未宣言の名前は`LogicException`になり、どのキーも保存しない
+- [ ] 片側にしかない名前と、型の形でない保存値(本番)が、登録したKernelのロガーに記録される
+- [ ] slug重複登録(Kernelをまたぐ場合を含む)が `LogicException`
+- [ ] gettextのソース文字列が英語で、ja訳(`languages/`)が`init`で読み込まれる(統合テスト)
 - [ ] 旧 `action` クエリパラメータに相当するファイルinclude機構が存在しない(コードレビュー項目)
 
 ## tmswp/ja-toolkit

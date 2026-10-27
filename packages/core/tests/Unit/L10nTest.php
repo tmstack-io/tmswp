@@ -30,6 +30,7 @@ final class L10nTest extends UnitTestCase
     {
         yield 'core' => ['core'];
         yield 'ja-toolkit' => ['ja-toolkit'];
+        yield 'settings-page' => ['settings-page'];
     }
 
     #[DataProvider('packages')]

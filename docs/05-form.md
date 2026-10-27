@@ -1204,6 +1204,9 @@ final class Form
     public function step(): FormStep;
     public function id(): string;
 
+    /** 確認画面が有効か(FormDefinition::confirm()の設定)。確認画面に対応しない用途が拒否に使う */
+    public function isConfirmEnabled(): bool;
+
     /** @return array<string, mixed> */
     public function values(): array;
 

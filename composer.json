@@ -69,7 +69,11 @@
       "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/ja-toolkit/src packages/ja-toolkit/languages/tmswp-ja-toolkit.pot --domain=tmswp --package-name=tmswp-ja-toolkit --headers='{\"POT-Creation-Date\":\"\"}'",
       "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/ja-toolkit/languages/tmswp-ja-toolkit.pot",
       "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/ja-toolkit/languages",
-      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/ja-toolkit/languages"
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/ja-toolkit/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/settings-page/src packages/settings-page/languages/tmswp-settings-page.pot --domain=tmswp --package-name=tmswp-settings-page --headers='{\"POT-Creation-Date\":\"\"}'",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/settings-page/languages/tmswp-settings-page.pot",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/settings-page/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/settings-page/languages"
     ],
     "discover:build": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover",
     "discover:check": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --check",
