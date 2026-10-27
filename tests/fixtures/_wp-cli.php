@@ -16,6 +16,17 @@ declare(strict_types=1);
 (require __DIR__ . '/_activate.php')(WP_CLI::add_wp_hook(...));
 
 /*
+ * 有効なテーマの置き場を、オプションの読み出しの上書きでfixtureのテーマの置き場(_activate.phpが登録する
+ * ディレクトリ)に固定する。WordPressは有効なテーマの置き場をtemplate_root・stylesheet_rootのオプションで探し、
+ * 無ければsite transientのtheme_rootsで探す。theme_rootsは、このファイルを読まないWP-CLIの実行や
+ * 開発用サイトへの通常のリクエストで、fixtureのテーマの置き場を含まない形で作られうる。それを読むとfixtureの
+ * テーマが見つからず、テーマのKernelが起動しない。
+ */
+$themeRoot = static fn(): string => __DIR__ . '/themes';
+WP_CLI::add_wp_hook('pre_option_template_root', $themeRoot);
+WP_CLI::add_wp_hook('pre_option_stylesheet_root', $themeRoot);
+
+/*
  * Composer のオートローダは、実際のテーマ・プラグインと同じくプラグインを読み込む時点で登録する。
  * WP-CLI の phar は --require の後に自身の依存(古い psr/container 1.0 を含む)のオートローダを先頭に登録するため、
  * ここで登録すると psr/container が phar 側から読まれ、Kernel::boot() がその非互換を検出して KernelException で

@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /*
- * 複数の clover(ユニット層と統合層)を行単位で合算し、行カバレッジが閾値以上かを判定する。
+ * 複数のclover(ユニット層と統合層)を行単位で合算し、行カバレッジが閾値以上かを、全体の合算とパッケージ別に判定する。
  *
  * ユニット層(ホストの PHPUnit 11)と統合層(wp-env のコンテナ内の PHPUnit 9.6)は内部のカバレッジ形式に
  * 互換が無いため、clover どうしを合わせる。ファイルのパスはリポジトリからの相対パスに正規化し、
@@ -11,6 +11,8 @@ declare(strict_types=1);
  *
  * clover は、実行可能な行がメソッドの開始行と重なる場合、その行を type="method"(メソッド全体の集計値)として
  * 出力し、行単位の実行有無を持たない。合算は行単位の実行有無を持つ type="stmt" の行だけで行う。
+ *
+ * 閾値との比較は丸める前の値で行う(表示は小数2桁で切り捨てる)。
  */
 
 /** ホスト側のリポジトリのルート(このスクリプトは bin/ に置く) */
@@ -19,7 +21,7 @@ $hostRoot = realpath(dirname(__DIR__));
 /** wp-env のコンテナ内のリポジトリのルート(.wp-env.json の mappings の wp-content/plugins/tmswp) */
 const CONTAINER_ROOT = '/var/www/html/wp-content/plugins/tmswp';
 
-const USAGE = "Usage: php bin/coverage-check.php <minimum-percent> <clover.xml> [<clover.xml> ...]\n";
+const USAGE = "Usage: php bin/coverage-check.php <minimum-percent> [--package=<name>:<minimum-percent> ...] <clover.xml> [<clover.xml> ...]\n";
 
 /**
  * 入力の不備で判定できない場合に、理由を出して exit 2 で止める。
@@ -30,32 +32,75 @@ function abortCheck(string $message): never
     exit(2);
 }
 
+/**
+ * 引数の不備で判定できない場合に、usageを出してexit 2で止める。
+ */
+function abortUsage(): never
+{
+    fwrite(STDERR, USAGE);
+    exit(2);
+}
+
+/**
+ * 閾値の引数(0〜100の数値、%)を読む。数値でない・範囲外ならusageで止める。
+ */
+function parseMinimum(string $value): float
+{
+    if (!is_numeric($value)) {
+        abortUsage();
+    }
+
+    $minimum = (float) $value;
+
+    if ($minimum < 0.0 || $minimum > 100.0) {
+        abortUsage();
+    }
+
+    return $minimum;
+}
+
 // $argc/$argv はスクリプトのトップレベルにだけ CLI SAPI が注入する暗黙の変数で、静的解析からは未定義に見える。
 // 引数は $_SERVER['argv'] から取り、型と個数をここで検証する。
 $arguments = $_SERVER['argv'] ?? null;
 
-if (!is_array($arguments) || count($arguments) < 3 || !is_string($arguments[1]) || !is_numeric($arguments[1])) {
-    fwrite(STDERR, USAGE);
-    exit(2);
+if (!is_array($arguments) || count($arguments) < 3 || !is_string($arguments[1])) {
+    abortUsage();
 }
 
-$minimum = (float) $arguments[1];
+$minimum = parseMinimum($arguments[1]);
 
-if ($minimum < 0.0 || $minimum > 100.0) {
-    fwrite(STDERR, USAGE);
-    exit(2);
-}
+/**
+ * パッケージ名(packages/の直下のディレクトリ名) => 閾値
+ *
+ * @var array<string, float> $packageMinimums
+ */
+$packageMinimums = [];
 
 /** @var list<string> $cloverPaths */
 $cloverPaths = [];
 
 foreach (array_slice($arguments, 2) as $argument) {
     if (!is_string($argument) || $argument === '') {
-        fwrite(STDERR, USAGE);
-        exit(2);
+        abortUsage();
+    }
+
+    if (str_starts_with($argument, '--package=')) {
+        $matches = [];
+
+        if (preg_match('/\A--package=([a-z0-9][a-z0-9-]*):(.+)\z/', $argument, $matches) !== 1 || isset($packageMinimums[$matches[1]])) {
+            abortUsage();
+        }
+
+        $packageMinimums[$matches[1]] = parseMinimum($matches[2]);
+
+        continue;
     }
 
     $cloverPaths[] = $argument;
+}
+
+if ($cloverPaths === []) {
+    abortUsage();
 }
 
 if ($hostRoot === false) {
@@ -191,28 +236,109 @@ foreach ($cloverPaths as $cloverPath) {
     }
 
     fwrite(STDOUT, sprintf(
-        "%s: %d/%d lines (%.2f%%)\n",
+        "%s: %d/%d lines (%s%%)\n",
         $cloverPath,
         $coveredCount,
         $statementCount,
-        $coveredCount / $statementCount * 100,
+        formatCoverage($coveredCount, $statementCount),
     ));
 }
 
-$statements = 0;
-$coveredStatements = 0;
+/**
+ * リポジトリからの相対パスが属するパッケージ名(packages/<名前>/の<名前>)を返す。packages/の外ならnull。
+ */
+function packageOf(string $relativePath): ?string
+{
+    $matches = [];
 
-foreach ($merged as $lines) {
-    $statements += count($lines);
-    $coveredStatements += count(array_filter($lines));
+    return preg_match('#\Apackages/([^/]+)/#', $relativePath, $matches) === 1 ? $matches[1] : null;
 }
 
-$coverage = round($coveredStatements / $statements * 100, 2);
-$summary = "Combined coverage {$coverage}% ({$coveredStatements}/{$statements} lines in " . count($merged) . ' files)';
-
-if ($coverage < $minimum) {
-    fwrite(STDERR, "{$summary} is below required {$minimum}%\n");
-    exit(1);
+/**
+ * 実行済みの行数が、行数に対して閾値(%)以上か。丸める前の値で比べる(77.995%は閾値78を満たさない)。
+ */
+function meetsMinimum(int $covered, int $statements, float $minimum): bool
+{
+    return $covered * 100 >= $minimum * $statements;
 }
 
-fwrite(STDOUT, "{$summary} (>= {$minimum}%)\n");
+/**
+ * 行カバレッジを小数2桁で切り捨てた表記にする(閾値を満たさない値を、満たすように見せない)。
+ */
+function formatCoverage(int $covered, int $statements): string
+{
+    $hundredths = intdiv($covered * 10000, $statements);
+
+    return sprintf('%d.%02d', intdiv($hundredths, 100), $hundredths % 100);
+}
+
+/**
+ * 判定の1行を出し、閾値を満たすかを返す。満たせばSTDOUT、満たさなければSTDERRに出す。
+ *
+ * @param array<string, array<int, bool>> $files リポジトリからの相対パス => [行番号 => 実行済みか]
+ */
+function reportCoverage(string $label, array $files, float $minimum): bool
+{
+    $statements = 0;
+    $covered = 0;
+
+    foreach ($files as $lines) {
+        $statements += count($lines);
+        $covered += count(array_filter($lines));
+    }
+
+    if ($statements === 0) {
+        abortCheck("{$label} has zero statements");
+    }
+
+    $summary = sprintf('%s %s%% (%d/%d lines in %d files)', $label, formatCoverage($covered, $statements), $covered, $statements, count($files));
+
+    if (!meetsMinimum($covered, $statements, $minimum)) {
+        fwrite(STDERR, "{$summary} is below required {$minimum}%\n");
+
+        return false;
+    }
+
+    fwrite(STDOUT, "{$summary} (>= {$minimum}%)\n");
+
+    return true;
+}
+
+/**
+ * パッケージ名 => [リポジトリからの相対パス => [行番号 => 実行済みか]]
+ *
+ * @var array<string, array<string, array<int, bool>>> $packages
+ */
+$packages = [];
+
+if ($packageMinimums !== []) {
+    // パッケージ別の判定では、閾値の無いパッケージのファイルを判定から漏らさない。閾値を渡したパッケージに
+    // ファイルが1つも無い場合も、何も比べずに通さない
+    foreach ($merged as $relativePath => $lines) {
+        $package = packageOf($relativePath);
+
+        if ($package === null || !isset($packageMinimums[$package])) {
+            abortCheck("No package minimum for {$relativePath} (pass --package=<name>:<minimum-percent> for every measured package)");
+        }
+
+        $packages[$package][$relativePath] = $lines;
+    }
+
+    ksort($packageMinimums);
+
+    foreach (array_keys($packageMinimums) as $package) {
+        if (!isset($packages[$package])) {
+            abortCheck("Coverage reports contain no files of package {$package}");
+        }
+    }
+}
+
+$passed = true;
+
+foreach ($packageMinimums as $package => $packageMinimum) {
+    $passed = reportCoverage("Package {$package} coverage", $packages[$package], $packageMinimum) && $passed;
+}
+
+$passed = reportCoverage('Combined coverage', $merged, $minimum) && $passed;
+
+exit($passed ? 0 : 1);

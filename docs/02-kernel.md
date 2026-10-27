@@ -513,7 +513,7 @@ boot(config):
 boot 時、`WP_CLI` 環境であれば次の1コマンドを登録する(プロセス内1回のみ)。
 
 ```
-wp tmswp discover [--check]
+wp tmswp discover [--check] [--kernels=<count>]
 ```
 
 実装は`TMSWP\Core\Kernel\DiscoverCommand`で、`Kernel::all()`の全Kernelについて、debugに関係なく`Discovery::scan()`(§4)でappDirと、テーマ・プラグインのルートの`build/blocks/`(独自ブロックのビルド出力)を走査し、各Kernelの探索結果ファイル(§6)を書く。Kernelの中のブロック名の重複と、未登録のブロックカテゴリも走査の失敗になる(§4ブロックの走査)。テーマとプラグインのKernelをまたぐブロック名の重複は、Kernelごとに走査するこのコマンドでは検出できないため、実行時の登録で例外にする(§7ブロックの登録)。
@@ -521,6 +521,12 @@ wp tmswp discover [--check]
 - 全 Kernel の走査を終えてから書く(後の Kernel の走査の失敗で、前の Kernel のファイルだけが更新された状態を作らない)。内容が同じファイルは書き換えない。
 - 走査の失敗・書き込みの失敗は `WP_CLI::error()` で非0終了する。起動中の Kernel が1つも無い場合も `WP_CLI::error()` にする(照合が何も比べずに成功しないようにする)。
 - `--check`はファイルを書かず、メモリ上で生成した内容と各Kernelのファイルをバイト単位で比べる。ファイルが無い、または内容が違うKernelがあれば、そのappNamespaceとファイルパスを列挙して`WP_CLI::error()`で非0終了する。CIはこれで探索結果ファイルが最新かを照合する(10-quality §5)。探索結果ファイルはblock.jsonの内容のハッシュを持つ(§6)ため、block.jsonだけを変えて作り直さなかった場合も古いと報告される。
+- `--kernels=<count>`(任意)は、起動中のKernelの数を確かめる。生成と照合のどちらのモードにも効く。起動中のKernelが1つも無い場合は前項のエラーになり、1つ以上で数が違えば、走査も書き込みもせずに`WP_CLI::error()`で非0終了する。メッセージは`expected 2 booted kernel(s) but found 1: TmswpFixturePlugin; check that the theme and plugins that boot the kernels are active`の形で、期待した数・起動中の数・起動中のKernelのappNamespaceを挙げる。有効にしたはずのテーマ・プラグインのKernelが起動していないと、照合はそのKernelを比べないまま成功するため、照合する数が決まっている環境(monorepoのfixtureのテーマとプラグインの2つ。`composer discover:build`・`discover:check`が`--kernels=2`を渡す)ではこれを指定する。値は1以上の整数の10進表記(先頭に0が付かない)だけを受け付け、それ以外(`0`・`01`・`two`・値の無い`--kernels`等)はusageの`WP_CLI::error()`にする。
+
+    ```
+    wp tmswp discover --check --kernels=2
+    ```
+
 - 本番(debug=false)で探索結果ファイルが無い・構成と合わない場合は boot が例外になる(§4)ため、そのサイトでは WP-CLI のコマンドも動かない。探索結果ファイルは debug の環境(開発環境)で生成し、コードと一緒にデプロイする。
 
 マイグレーション系コマンド(`wp tmswp migrate` 等)は Model 文書が同じ `tmswp` トップレベル名前空間配下に定義する。

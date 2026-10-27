@@ -14,7 +14,7 @@
   "require-dev": {
     "bamarni/composer-bin-plugin": "^1.8",
     "brain/monkey": "^2.6",
-    "friendsofphp/php-cs-fixer": "^3.64",
+    "friendsofphp/php-cs-fixer": "^3.88",
     "mikey179/vfsstream": "^1.6.12",
     "mockery/mockery": "^1.6",
     "php-stubs/acf-pro-stubs": "^6.0",
@@ -82,8 +82,8 @@
       "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/thumbnail/languages",
       "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/thumbnail/languages"
     ],
-    "discover:build": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover",
-    "discover:check": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --check",
+    "discover:build": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --kernels=2",
+    "discover:check": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --check --kernels=2",
     "test:unit": "phpunit -c phpunit.unit.xml.dist",
     "test:coverage": [
       "@test:coverage:unit",
@@ -95,7 +95,7 @@
       "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/unit.xml"
     ],
     "test:coverage:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --coverage-clover=var/coverage/integration.xml",
-    "test:coverage:check": "php bin/coverage-check.php 78 var/coverage/unit.xml var/coverage/integration.xml",
+    "test:coverage:check": "php bin/coverage-check.php 78 --package=acf-bridge:80 --package=core:80 --package=ja-toolkit:80 --package=settings-page:80 --package=testing:80 --package=thumbnail:80 var/coverage/unit.xml var/coverage/integration.xml",
     "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
     "test:integration:acf-pro": [
       "Composer\\Config::disableProcessTimeout",

@@ -44,6 +44,7 @@
             <directory suffix=".php">packages/settings-page/src</directory>
             <directory suffix=".php">packages/acf-bridge/src</directory>
             <directory suffix=".php">packages/ja-toolkit/src</directory>
+            <directory suffix=".php">packages/testing/src</directory>
         </include>
     </coverage>
 </phpunit>

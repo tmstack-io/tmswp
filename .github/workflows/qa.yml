@@ -12,14 +12,14 @@ concurrency:
 jobs:
   lint:
     name: Coding Standards
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - name: Forbid PHPStan baseline
         run: |
           if ls phpstan-baseline* 2>/dev/null; then
@@ -30,40 +30,40 @@ jobs:
 
   analyse:
     name: Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - run: composer analyse
       # WordPressを起動しないtms-acfで、fixtureのテーマとプラグインの生成物とacf-jsonの一致を確かめる(--strict)
       - run: composer acf:check:fixtures
 
   monorepo:
     name: Monorepo Validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - run: composer monorepo:validate
 
   rules-verify:
     name: Rules Code Examples
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - name: Extract rules code examples
         run: php tools/extract-rules-code.php
       - name: Verify extracted examples
@@ -71,23 +71,23 @@ jobs:
 
   unit:
     name: Unit (PHP ${{ matrix.php }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         php: ['8.3', '8.5']
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php }}
           coverage: none
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - run: composer test:unit
 
   integration:
     name: Integration (PHP ${{ matrix.php }} / WP ${{ matrix.wp }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [unit]
     timeout-minutes: 20
     strategy:
@@ -96,17 +96,17 @@ jobs:
         php: ['8.3', '8.5']
         wp: ['7.0', 'latest']
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php }}
           coverage: none
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       # 検証する WordPress の版を確定する。latest は WordPress.org の版情報 API から最新版を取得する。
       # テストライブラリは、wp-env がこの版と同じタグの wordpress-develop から取得する(WP_TESTS_DIR)。
       - name: Resolve WordPress version
@@ -146,21 +146,21 @@ jobs:
   # unit は pcov、integration は wp-env の Xdebug(--xdebug=coverage)で計測し、clover を行単位で合算する。
   coverage:
     name: Coverage (PHP 8.3 / WP latest)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [unit]
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: pcov
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - name: Resolve WordPress version
         id: wp
         shell: bash
@@ -200,7 +200,7 @@ jobs:
       - name: Run integration tests with coverage
         run: composer test:coverage:integration
       - name: Upload coverage reports
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-clover
           path: |
@@ -212,3 +212,129 @@ jobs:
       - name: Show wp-env logs on failure
         if: failure()
         run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+
+  # examples/sample-siteのcomposer qa(lint・analyse・tms-acf check --strict・discover:check・test)。
+  # discover:checkはsample-siteのwp-env(examples/sample-site/.wp-env.json)で、テーマを有効にしてから行う。
+  sample-site:
+    name: Sample Site QA
+    runs-on: ubuntu-24.04
+    needs: [unit]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+        with:
+          working-directory: examples/sample-site
+      # pathリポジトリのversionsのtmswp/coreが、Kernel::VERSIONと同じかを確かめる(リリースの道具はsample-siteを書き換えないため)
+      - name: Check the tmswp/core version of the path repository
+        working-directory: examples/sample-site
+        run: |
+          expected=$(php -r 'require "vendor/autoload.php"; echo TMSWP\Core\Kernel\Kernel::VERSION;')
+          actual=$(jq -er '.repositories[] | select(.type == "path") | .options.versions["tmswp/core"]' composer.json)
+          if [ "${actual}" != "${expected}" ]; then
+            echo "::error file=examples/sample-site/composer.json::the path repository has tmswp/core ${actual}, but Kernel::VERSION is ${expected}"
+            exit 1
+          fi
+      - name: Start wp-env
+        working-directory: examples/sample-site
+        run: |
+          for attempt in 1 2 3; do
+            if composer wp:start; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+      - name: Activate the theme
+        working-directory: examples/sample-site
+        run: node ../../node_modules/@wordpress/env/bin/wp-env run cli wp theme activate sample-site
+      - name: Run QA
+        working-directory: examples/sample-site
+        run: composer qa
+      - name: Show wp-env logs on failure
+        if: failure()
+        working-directory: examples/sample-site
+        run: node ../../node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+
+  # スターターから、composer create-projectでプロジェクトを作って確かめる(tools/ci/create-starter-project.sh)。
+  # 作るのは、スターターのテーマをそのまま写したもの(tmswp-starter-theme)と、bin/setup.phpで初期化したテーマ(client-theme)・
+  # プラグイン(shop-tools)の3つ。tmswp/coreはmonorepoのpackages/coreをpathリポジトリで入れる。
+  # 3つを1つのwp-envのサイトに置き、プロジェクトのスクリプトの`wp`(WP-CLI)は、tools/ci/bin/wpがwp-envのcliコンテナへ渡す。
+  starters:
+    name: Starter Projects
+    runs-on: ubuntu-24.04
+    needs: [unit]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            starters/theme/package-lock.json
+      - run: npm ci
+      - name: Create projects from the starters
+        run: |
+          site="${RUNNER_TEMP}/starter-site"
+          tools/ci/create-starter-project.sh theme "${site}/tmswp-starter-theme"
+          tools/ci/create-starter-project.sh theme "${site}/client-theme" client-theme 'Client Theme'
+          tools/ci/create-starter-project.sh plugin "${site}/shop-tools" shop-tools 'Shop Tools'
+          printf '%s\n' '{"core": null, "phpVersion": "8.3", "testsEnvironment": false, "themes": ["./tmswp-starter-theme", "./client-theme"], "plugins": ["./shop-tools"]}' > "${site}/.wp-env.json"
+          echo "TMSWP_WP_ENV_DIR=${site}" >> "$GITHUB_ENV"
+          echo "${GITHUB_WORKSPACE}/tools/ci/bin" >> "$GITHUB_PATH"
+      - name: Start wp-env
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}
+        run: |
+          for attempt in 1 2 3; do
+            if node "${GITHUB_WORKSPACE}/node_modules/@wordpress/env/bin/wp-env" start; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+      # スターターのテーマのblocks/をビルドし(npm run buildは、wp-scriptsのビルドとwp tmswp discover)、
+      # ビルドの出力と探索結果ファイルが、コミット済みのstarters/theme/build/blocks/・tmswp-discovery.phpと同じかを確かめる
+      - name: Build the blocks of the starter theme
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}/tmswp-starter-theme
+        run: |
+          wp theme activate tmswp-starter-theme
+          npm ci
+          npm run build
+          diff -r build/blocks "${GITHUB_WORKSPACE}/starters/theme/build/blocks"
+          diff tmswp-discovery.php "${GITHUB_WORKSPACE}/starters/theme/tmswp-discovery.php"
+      # 作ったテーマとプラグインは、README.mdの「セットアップの後」の手順で探索結果ファイルを作ってから、composer qaを実行する
+      - name: Run QA of the theme created from the starter
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}/client-theme
+        run: |
+          wp theme activate client-theme
+          npm ci
+          npm run build
+          composer qa
+      - name: Run QA of the plugin created from the starter
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}/shop-tools
+        run: |
+          composer discover
+          composer qa
+      - name: Show wp-env logs on failure
+        if: failure()
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}
+        run: node "${GITHUB_WORKSPACE}/node_modules/@wordpress/env/bin/wp-env" logs development --no-watch

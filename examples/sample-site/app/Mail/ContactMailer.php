@@ -26,7 +26,7 @@ final class ContactMailer
         $to = SiteOption::contactEmail() !== '' ? SiteOption::contactEmail() : get_bloginfo('admin_email');
         $siteName = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
         /* translators: 1: site name, 2: sender name */
-        $subject = sprintf(__('[%1$s] Inquiry from %2$s', 'sample-site'), $siteName, self::string($values, 'full_name'));
+        $subject = \sprintf(__('[%1$s] Inquiry from %2$s', 'sample-site'), $siteName, self::string($values, 'full_name'));
         $lines = [];
 
         foreach (['full_name', 'kana', 'email', 'message'] as $name) {

@@ -418,7 +418,7 @@ env:
 jobs:
   split:
     name: Split ${{ matrix.package.local }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -432,7 +432,7 @@ jobs:
           - { local: 'starters/theme', repo: 'tmswp-starter-theme' }
           - { local: 'starters/plugin', repo: 'tmswp-starter-plugin' }
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate split source
         run: test -d "${{ matrix.package.local }}"
       - name: Split branch

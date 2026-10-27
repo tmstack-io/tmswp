@@ -23,7 +23,7 @@ final class CoverageCheckTest extends UnitTestCase
         $result = $this->runCheck(['66', $unit, $integration]);
 
         self::assertSame(0, $result['code'], $result['stderr']);
-        self::assertStringContainsString('Combined coverage 66.67% (2/3 lines in 1 files) (>= 66%)', $result['stdout']);
+        self::assertStringContainsString('Combined coverage 66.66% (2/3 lines in 1 files) (>= 66%)', $result['stdout']);
     }
 
     public function testFailsWhenCombinedCoverageIsBelowMinimum(): void
@@ -34,7 +34,120 @@ final class CoverageCheckTest extends UnitTestCase
         $result = $this->runCheck(['51', $unit]);
 
         self::assertSame(1, $result['code']);
-        self::assertStringContainsString('Combined coverage 50% (1/2 lines in 1 files) is below required 51%', $result['stderr']);
+        self::assertStringContainsString('Combined coverage 50.00% (1/2 lines in 1 files) is below required 51%', $result['stderr']);
+    }
+
+    /**
+     * 閾値とは丸める前の値で比べる。77.995%は小数2桁に丸めると78.00%になるが、閾値78を満たさない。
+     * 表示は切り捨てるため、閾値を満たさない値が閾値以上に見えることもない。
+     */
+    #[DataProvider('boundaryCoverages')]
+    public function testComparesUnroundedCoverageWithMinimum(int $covered, int $statements, int $expectedCode, string $expectedSummary): void
+    {
+        $lines = [];
+
+        for ($number = 1; $number <= $statements; ++$number) {
+            $lines[$number] = $number <= $covered ? 1 : 0;
+        }
+
+        $unit = $this->writeClover('unit', [$this->hostRoot() . '/packages/core/src/Example.php' => $lines]);
+
+        $result = $this->runCheck(['78', $unit]);
+
+        self::assertSame($expectedCode, $result['code'], $result['stderr']);
+        self::assertStringContainsString($expectedSummary, $result['stdout'] . $result['stderr']);
+    }
+
+    /**
+     * @return iterable<string, array{int, int, int, string}>
+     */
+    public static function boundaryCoverages(): iterable
+    {
+        yield '77.995% is below 78' => [15599, 20000, 1, 'Combined coverage 77.99% (15599/20000 lines in 1 files) is below required 78%'];
+        yield 'exactly 78% meets 78' => [39, 50, 0, 'Combined coverage 78.00% (39/50 lines in 1 files) (>= 78%)'];
+    }
+
+    public function testChecksEachPackageInAdditionToTheCombinedCoverage(): void
+    {
+        $root = $this->hostRoot();
+        $unit = $this->writeClover('unit', [
+            $root . '/packages/core/src/Example.php' => [1 => 1, 2 => 1, 3 => 1, 4 => 0],
+            $root . '/packages/thumbnail/src/Example.php' => [1 => 1, 2 => 0],
+        ]);
+        $integration = $this->writeClover('integration', [
+            self::CONTAINER_ROOT . '/packages/thumbnail/src/Other.php' => [1 => 1, 2 => 1],
+        ]);
+
+        $result = $this->runCheck(['75', '--package=thumbnail:75', '--package=core:75', $unit, $integration]);
+
+        self::assertSame(0, $result['code'], $result['stderr']);
+        self::assertSame(
+            "Package core coverage 75.00% (3/4 lines in 1 files) (>= 75%)\n"
+            . "Package thumbnail coverage 75.00% (3/4 lines in 2 files) (>= 75%)\n"
+            . "Combined coverage 75.00% (6/8 lines in 3 files) (>= 75%)\n",
+            substr($result['stdout'], (int) strpos($result['stdout'], 'Package ')),
+        );
+    }
+
+    /**
+     * 合算が閾値を満たしても、閾値を満たさないパッケージがあれば失敗する。結果はすべて出してから終わる。
+     */
+    public function testFailsWhenAPackageIsBelowItsMinimumEvenIfTheCombinedCoverageMeetsIt(): void
+    {
+        $root = $this->hostRoot();
+        $unit = $this->writeClover('unit', [
+            $root . '/packages/core/src/Example.php' => [1 => 1, 2 => 1, 3 => 1, 4 => 1, 5 => 1, 6 => 1, 7 => 1, 8 => 1],
+            $root . '/packages/ja-toolkit/src/Example.php' => [1 => 1, 2 => 0],
+        ]);
+
+        $result = $this->runCheck(['80', '--package=core:80', '--package=ja-toolkit:80', $unit]);
+
+        self::assertSame(1, $result['code']);
+        self::assertSame("Package ja-toolkit coverage 50.00% (1/2 lines in 1 files) is below required 80%\n", $result['stderr']);
+        self::assertStringContainsString('Package core coverage 100.00% (8/8 lines in 1 files) (>= 80%)', $result['stdout']);
+        self::assertStringContainsString('Combined coverage 90.00% (9/10 lines in 2 files) (>= 80%)', $result['stdout']);
+    }
+
+    /**
+     * パッケージ別の判定では、閾値の無いパッケージ(とpackages/の外)のファイルを、判定せずに通さない。
+     */
+    #[DataProvider('unmatchedPackages')]
+    public function testRejectsPackagesWithoutMinimumOrFiles(string $file, string $option, string $expectedMessage): void
+    {
+        $unit = $this->writeClover('unit', [$this->hostRoot() . '/' . $file => [1 => 1]]);
+
+        $result = $this->runCheck(['0', $option, $unit]);
+
+        self::assertSame(2, $result['code']);
+        self::assertSame("{$expectedMessage}\n", $result['stderr']);
+    }
+
+    /**
+     * @return iterable<string, array{string, string, string}>
+     */
+    public static function unmatchedPackages(): iterable
+    {
+        yield 'package without minimum' => [
+            'packages/thumbnail/src/Example.php',
+            '--package=core:80',
+            'No package minimum for packages/thumbnail/src/Example.php (pass --package=<name>:<minimum-percent> for every measured package)',
+        ];
+        yield 'file outside packages' => [
+            'bin/example.php',
+            '--package=core:80',
+            'No package minimum for bin/example.php (pass --package=<name>:<minimum-percent> for every measured package)',
+        ];
+    }
+
+    /** 閾値を渡したパッケージのファイルが無い場合も、何も比べずに通さない。*/
+    public function testRejectsPackageMinimumWithoutFiles(): void
+    {
+        $unit = $this->writeClover('unit', [$this->hostRoot() . '/packages/core/src/Example.php' => [1 => 1]]);
+
+        $result = $this->runCheck(['0', '--package=core:80', '--package=thumbnail:80', $unit]);
+
+        self::assertSame(2, $result['code']);
+        self::assertSame("Coverage reports contain no files of package thumbnail\n", $result['stderr']);
     }
 
     public function testCountsAlternativeNotationsOfTheSameFileOnce(): void
@@ -48,7 +161,7 @@ final class CoverageCheckTest extends UnitTestCase
         $result = $this->runCheck(['100', $unit, $integration]);
 
         self::assertSame(0, $result['code'], $result['stderr']);
-        self::assertStringContainsString('Combined coverage 100% (2/2 lines in 1 files)', $result['stdout']);
+        self::assertStringContainsString('Combined coverage 100.00% (2/2 lines in 1 files)', $result['stdout']);
     }
 
     /**
@@ -74,6 +187,12 @@ final class CoverageCheckTest extends UnitTestCase
         yield 'minimum above 100' => [['101', 'clover.xml']];
         yield 'negative minimum' => [['-1', 'clover.xml']];
         yield 'empty clover path' => [['58', '']];
+        yield 'package option only' => [['58', '--package=core:80']];
+        yield 'package option without minimum' => [['58', '--package=core', 'clover.xml']];
+        yield 'package option with non-numeric minimum' => [['58', '--package=core:abc', 'clover.xml']];
+        yield 'package minimum above 100' => [['58', '--package=core:101', 'clover.xml']];
+        yield 'package option with invalid name' => [['58', '--package=Core/src:80', 'clover.xml']];
+        yield 'duplicate package option' => [['58', '--package=core:80', '--package=core:70', 'clover.xml']];
     }
 
     #[DataProvider('unreadableReports')]

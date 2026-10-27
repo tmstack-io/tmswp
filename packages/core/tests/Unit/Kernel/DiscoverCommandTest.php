@@ -121,7 +121,66 @@ final class DiscoverCommandTest extends UnitTestCase
     {
         $this->loadWpCliDouble();
 
-        self::assertSame('Usage: wp tmswp discover [--check]', $this->runFailing(new DiscoverCommand(), ['force' => true]));
+        self::assertSame('Usage: wp tmswp discover [--check] [--kernels=<count>]', $this->runFailing(new DiscoverCommand(), ['force' => true]));
+    }
+
+    /**
+     * `--kernels`は起動中のKernelの数を確かめる。数が合えば生成・照合し、照合の結果に数を出す。
+     */
+    #[RunInSeparateProcess]
+    public function testItGeneratesAndChecksWhenTheBootedKernelCountMatches(): void
+    {
+        $this->loadWpCliDouble();
+        $alpha = $this->bootKernel('Alpha');
+        $beta = $this->bootKernel('Beta');
+        $command = new DiscoverCommand();
+
+        $command([], ['kernels' => '2']);
+        self::assertFileExists($alpha->discoveryFile());
+        self::assertFileExists($beta->discoveryFile());
+
+        $command([], ['check' => true, 'kernels' => '2']);
+        self::assertSame(['success', 'discovery files are up to date for 2 kernel(s)'], $this->lastCall());
+    }
+
+    /**
+     * 起動しなかったKernelがあると、起動したKernelのファイルが最新でも照合は失敗し、生成もファイルを書かない
+     * (起動しなかったKernelを比べないまま成功しない)。
+     */
+    #[RunInSeparateProcess]
+    public function testItFailsWhenTheBootedKernelCountDiffersFromExpected(): void
+    {
+        $this->loadWpCliDouble();
+        $alpha = $this->bootKernel('Alpha');
+        $command = new DiscoverCommand();
+        $command([], []);
+        $command([], ['check' => true]);
+        self::assertSame(['success', 'discovery files are up to date for 1 kernel(s)'], $this->lastCall());
+        $expected = "expected 2 booted kernel(s) but found 1: {$alpha->appNamespace}; check that the theme and plugins that boot the kernels are active";
+
+        self::assertSame($expected, $this->runFailing($command, ['check' => true, 'kernels' => '2']));
+
+        unlink($alpha->discoveryFile());
+        self::assertSame($expected, $this->runFailing($command, ['kernels' => '2']));
+        self::assertFileDoesNotExist($alpha->discoveryFile());
+    }
+
+    /**
+     * `--kernels`の値は1以上の整数だけを受け付ける。値の無い`--kernels`(WP-CLIはtrueを渡す)もusageになる。
+     */
+    #[RunInSeparateProcess]
+    public function testItRejectsInvalidKernelCounts(): void
+    {
+        $this->loadWpCliDouble();
+        $this->bootKernel('Alpha');
+
+        foreach (['0', '-1', '01', '1.5', 'two', '', true] as $value) {
+            self::assertSame(
+                'Usage: wp tmswp discover [--check] [--kernels=<count>]',
+                $this->runFailing(new DiscoverCommand(), ['check' => true, 'kernels' => $value]),
+                var_export($value, true),
+            );
+        }
     }
 
     #[RunInSeparateProcess]

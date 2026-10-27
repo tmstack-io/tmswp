@@ -69,11 +69,11 @@ packages/testing/src/UnitTestCase.php (TMSWP\Testing\UnitTestCase)
 | `composer test:coverage` | `test:coverage:unit` → `test:coverage:integration` → `test:coverage:check`(wp-env を `wp:start:coverage` で起動しておく) | **必要** |
 | `composer test:coverage:unit` | ユニットテスト + pcov で clover を `var/coverage/unit.xml` に出力 | 不要 |
 | `composer test:coverage:integration` | 統合テスト + Xdebug で clover を `var/coverage/integration.xml` に出力(wp-env の `cli` コンテナ内) | **必要** |
-| `composer test:coverage:check` | 2 つの clover を行単位で合算し、閾値を判定(`bin/coverage-check.php`。4.8) | 不要 |
+| `composer test:coverage:check` | 2つのcloverを行単位で合算し、全体とパッケージ別の閾値を判定(`bin/coverage-check.php`。4.8) | 不要 |
 | `composer test:integration` | 統合テスト(wp-env の `cli` コンテナ内で PHPUnit 9.6 実行) | **必要** |
 | `composer test` | `test:unit` → `test:integration` | 必要 |
-| `composer discover:build` | fixture のテーマ・プラグインの探索結果ファイルを `wp tmswp discover` で生成する(wp-env の `cli` コンテナ内。4.6) | **必要** |
-| `composer discover:check` | fixture の探索結果ファイルが最新かを `wp tmswp discover --check` で照合する(古ければ非 0) | **必要** |
+| `composer discover:build` | fixtureのテーマ・プラグインの探索結果ファイルを`wp tmswp discover --kernels=2`で生成する(wp-envの`cli`コンテナ内。起動したKernelが2つでなければ非0。4.6) | **必要** |
+| `composer discover:check` | fixtureの探索結果ファイルが最新かを`wp tmswp discover --check --kernels=2`で照合する(古い、または起動したKernelが2つでなければ非0) | **必要** |
 | `composer qa:fast` | `lint` → `analyse` → `test:unit`(Docker 不要の全 QA) | 不要 |
 | `composer acf:check:fixtures` | fixtureのテーマ・プラグインのacf-bridgeの生成物を、WordPressを起動しない`tms-acf check --strict`で照合する(1.2) | 不要 |
 | `composer qa` | `lint` → `analyse` → `acf:check:fixtures` → `discover:check` → `test`(全QA) | 必要 |
@@ -102,7 +102,7 @@ packages/testing/src/UnitTestCase.php (TMSWP\Testing\UnitTestCase)
     "require-dev": {
         "bamarni/composer-bin-plugin": "^1.8",
         "brain/monkey": "^2.6",
-        "friendsofphp/php-cs-fixer": "^3.64",
+        "friendsofphp/php-cs-fixer": "^3.88",
         "mikey179/vfsstream": "^1.6.12",
         "mockery/mockery": "^1.6",
         "php-stubs/acf-pro-stubs": "^6.0",
@@ -170,8 +170,8 @@ packages/testing/src/UnitTestCase.php (TMSWP\Testing\UnitTestCase)
             "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/thumbnail/languages",
             "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/thumbnail/languages"
         ],
-        "discover:build": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover",
-        "discover:check": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --check",
+        "discover:build": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --kernels=2",
+        "discover:check": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --check --kernels=2",
         "test:unit": "phpunit -c phpunit.unit.xml.dist",
         "test:coverage": [
             "@test:coverage:unit",
@@ -183,7 +183,7 @@ packages/testing/src/UnitTestCase.php (TMSWP\Testing\UnitTestCase)
             "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/unit.xml"
         ],
         "test:coverage:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --coverage-clover=var/coverage/integration.xml",
-        "test:coverage:check": "php bin/coverage-check.php 78 var/coverage/unit.xml var/coverage/integration.xml",
+        "test:coverage:check": "php bin/coverage-check.php 78 --package=acf-bridge:80 --package=core:80 --package=ja-toolkit:80 --package=settings-page:80 --package=testing:80 --package=thumbnail:80 var/coverage/unit.xml var/coverage/integration.xml",
         "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
         "test:integration:acf-pro": [
             "Composer\\Config::disableProcessTimeout",
@@ -253,7 +253,10 @@ packages/testing/src/UnitTestCase.php (TMSWP\Testing\UnitTestCase)
   "description": "TMStack WordPress Framework (monorepo) development tooling",
   "license": "GPL-2.0-or-later",
   "devDependencies": {
-    "@wordpress/env": "11.17.0"
+    "@wordpress/env": "12.0.0"
+  },
+  "allowScripts": {
+    "fs-ext-extra-prebuilt": false
   }
 }
 ```
@@ -386,6 +389,15 @@ parameters:
 
    monorepo ルートでは `packages/core` が vendor 配下に存在しない(replace 運用)ため extension-installer の対象外であり、上記のとおり**明示 includes** で同じ `packages/core/phpstan/extension.neon` を登録する。拡張の設定ファイルはこの 1 枚だけで、別の neon から include し直す 2 段構成にはしない(01 文書 §3.4・§3.5)。
 5. 統合テストコードも解析対象に含める。`WP_UnitTestCase` 等のシンボルは `php-stubs/wordpress-tests-stubs`(ルートの require-dev)から、Yoast Polyfills は `vendor-bin/wp-tests` の実体から解決する。テストライブラリの実体は wp-env のコンテナ内にしか無い(§4.2)ため、解析はスタブで行う。スタブの版は確認できた最新版に固定し、WordPress の新しい版に合わせて上げる。`vendor-bin/wp-tests` が未インストールの状態で `composer analyse` を実行した場合は scanDirectories 不在のエラーになるため、セットアップ手順(後述)どおり `composer install` を先に完了させること。
+6. **ワーカーのメモリの上限**。上限はcomposer.jsonの`analyse`の`--memory-limit`の1か所で定義する(現在2G)。PHPStanはファイルを分けて複数のワーカー(別のプロセス)で解析し、上限はワーカーごとに効く。どのワーカーが重いファイルを受け持つかで最大量が変わり、上限に達するとCIのStatic Analysisだけが失敗しうるため、次の手順で測る。
+
+    ```bash
+    php tools/phpstan-memory.php
+    ```
+
+   - CIと同じ条件(4ワーカー・結果のキャッシュなし)で`phpstan.neon.dist`を解析し、プロセスごとのメモリの最大量(`memory_get_peak_usage(true)`)と、上限に対する余裕を出す。PHPStanはワーカーごとのメモリを出力しないため、ワーカーにも引き継がれる環境変数`PHP_INI_SCAN_DIR`で`auto_prepend_file`を足し、各プロセスの終了時に記録させる。作業ファイルは`var/phpstan-memory/`に置く。解析の失敗(エラーの検出・上限への到達)は非0で終わる。
+   - ファイルの受け持ちは実行ごとに変わるため、CIと同じPHP 8.3で3回以上測り、その最大値を各版の受け入れ記録に、上限に対する余裕とともに書く。
+   - 最大量が上限の80%を超えたら、上限を上げる前に、`phpstan.neon.dist`の解析の分割(重いパスを別の設定に分け、`analyse`で順に実行する)を検討する。
 
 ---
 
@@ -405,20 +417,35 @@ use PhpCsFixer\Runner\Parallel\ParallelConfigFactory;
 $finder = (new Finder())
     ->in([
         __DIR__ . '/packages',
-        __DIR__ . '/starters',
         __DIR__ . '/tests',
         __DIR__ . '/bin',
         __DIR__ . '/tools',
+        // スターターは、スターター自身の.php-cs-fixer.dist.phpと同じ対象(app/・tests/・テンプレートでないルートのPHP)と
+        // bin/setup.phpに限る。テンプレート(テーマのテンプレート階層のファイル・parts/・ブロックのrender.php、
+        // プラグインのtemplates/)と、ビルドの生成物(build/)は含めない
+        __DIR__ . '/starters/theme/app',
+        __DIR__ . '/starters/theme/tests',
+        __DIR__ . '/starters/plugin/app',
+        __DIR__ . '/starters/plugin/tests',
     ])
     ->name('*.php')
+    // 例外の階層は、具体クラス(RuntimeException・LogicException等)をFWの例外が継承するため、final_classを適用できない
     ->notPath('#^core/src/Exception/#')
-    ->notPath('#tests/(.+/)?fixtures/#')
+    // coreのテストのfixtureは、外部のコードの写し(古いpsr/log・psr/container)と、PHPStanの拡張の検査の入力を含む
+    ->notPath('#^core/tests/fixtures/#')
     // packages/*/languages/ の .l10n.php は `wp i18n make-php` の生成物で、出力をそのままコミットする
     ->notPath('#^[^/]+/languages/#')
-    // スターターのbuild/は@wordpress/scriptsのビルドの生成物(index.asset.php等)で、出力をそのままコミットする。
-    // node_modules/はビルドのために入れるnpmの依存
-    ->notPath('#^[^/]+/(build|node_modules)/#')
-    ->append([__FILE__, __DIR__ . '/monorepo-builder.php', __DIR__ . '/packages/acf-bridge/bin/tms-acf']);
+    ->append([
+        __FILE__,
+        __DIR__ . '/monorepo-builder.php',
+        __DIR__ . '/packages/acf-bridge/bin/tms-acf',
+        __DIR__ . '/starters/theme/functions.php',
+        __DIR__ . '/starters/theme/tmswp-kernel.php',
+        __DIR__ . '/starters/theme/bin/setup.php',
+        __DIR__ . '/starters/plugin/plugin.php',
+        __DIR__ . '/starters/plugin/tmswp-kernel.php',
+        __DIR__ . '/starters/plugin/bin/setup.php',
+    ]);
 
 return (new Config())
     ->setRiskyAllowed(true)
@@ -426,8 +453,8 @@ return (new Config())
     ->setCacheFile(__DIR__ . '/var/php-cs-fixer.cache')
     ->setFinder($finder)
     ->setRules([
-        // PER Coding Style 2.0(PSR-12 の後継規格)。php-cs-fixer ではドット表記の
-        // @PER-CS2.0 識別子が非推奨(4.0 で削除予定)のため 'x' 表記を用いる
+        // PER Coding Style 2.0(PSR-12の後継規格)。php-cs-fixerではドット表記の
+        // @PER-CS2.0識別子が非推奨(4.0で削除予定)のため'x'表記を用いる
         '@PER-CS2x0' => true,
         '@PER-CS2x0:risky' => true,
 
@@ -439,7 +466,7 @@ return (new Config())
         'final_class' => true,
         'nullable_type_declaration_for_default_null_value' => true,
 
-        // --- import 規律 ---
+        // --- import規律 ---
         'global_namespace_import' => [
             'import_classes' => true,
             'import_constants' => false,
@@ -453,6 +480,9 @@ return (new Config())
         ],
         'native_function_invocation' => [
             'include' => ['@compiler_optimized'],
+            // `\call_user_func_array()` はコンパイル時に直接の呼び出しへ置き換わり、呼び出し元の strict_types が
+            // コールバックの引数に効く。Kernel はフックメソッドを WordPress と同じ弱い型変換で呼ぶため、名前空間を付けない
+            'exclude' => ['call_user_func_array'],
             'scope' => 'namespaced',
         ],
 
@@ -466,9 +496,9 @@ return (new Config())
         'no_useless_return' => true,
 
         // --- 表記統一 ---
-        // concat_space(one)/ cast_spaces(single)/ trailing_comma_in_multiline は
-        // @PER-CS2x0 基底に内包されるため手動指定しない。trailing comma の適用対象は
-        // 基底の既定(array_destructuring を含む)へ拡張される(意図した挙動確定)
+        // concat_space(one)/ cast_spaces(single)/ trailing_comma_in_multilineは
+        // @PER-CS2x0基底に内包されるため手動指定しない。trailing commaの適用対象は
+        // 基底の既定(array_destructuringを含む)へ拡張される(意図した挙動確定)
         'single_quote' => true,
         'binary_operator_spaces' => true,
         'blank_line_before_statement' => ['statements' => ['return', 'throw', 'try']],
@@ -492,7 +522,11 @@ return (new Config())
 
 - `final_class` は非 abstract クラスを一律 final 化する。FW の拡張ポイント(`PostType` / `Taxonomy` / `UserRole` / `OptionGroup` / `Model` / `Hook` / `Form` の各基底)は **abstract で宣言する**ことで両立する(コーディング規約「final 優先」と一致)。
 - final クラスは Mockery でモックできない。テストで差し替えが必要な協調オブジェクトは**インターフェース経由で注入する**(`MetaStorageInterface` 等)。final を外す回避は禁止。
-- ビューテンプレート(スターターのテーマテンプレート、`View\Template` が読む `template-parts/` 等)は Finder の対象に**含めない**(starters の対象は `app/` のみ)。WordPress 標準のテーマ構築手法を壊さないという絶対原則(要件 3)に基づき、テンプレートファイルには FW のスタイル規約を強制しない。
+- `packages/core/src/Exception/`はFinderから除く。例外の階層は、具体クラス(`RuntimeException`・`LogicException`・`ContainerException`)をFWの他の例外が継承するため、`final_class`を適用できない。`packages/core/tests/fixtures/`も除く(外部のコードの写しである古いpsr/log・psr/containerと、PHPStanの拡張の検査の入力を含む)。他のパッケージのfixture(acf-bridgeの生成物の見本等)は対象に含める。
+- ビューテンプレート(スターターのテーマテンプレート、`View\Template`が読む`template-parts/`等)はFinderの対象に**含めない**。WordPress標準のテーマ構築手法を壊さないという絶対原則(要件3)に基づき、テンプレートファイルにはFWのスタイル規約を強制しない(§7項4)。
+  - monorepoのFinderのstartersの対象は、各スターター自身の`.php-cs-fixer.dist.php`の対象と同じもの(`app/`・`tests/`・テンプレートでないルートのPHP。テーマは`functions.php`・`tmswp-kernel.php`、プラグインは本体ファイル`plugin.php`・`tmswp-kernel.php`)と、`bin/setup.php`に限る。テンプレート(テーマのテンプレート階層のファイル・`parts/`・ブロックの`render.php`、プラグインの`templates/`)と、ビルドの生成物(`build/`)は含めない。
+- スターター自身の`.php-cs-fixer.dist.php`は、monorepoと同じ規則(§3.1の`setRules()`。`native_function_invocation`の`exclude`だけはFWのKernelの事情のため持たない)を使う。作ったプロジェクトにacf-bridgeの生成物(`app/Acf/*Fields.php`。PER-CSの`fn(`の書き方)を置いても、そのままlintを通る。
+  - プラグインのスターターは、本体ファイルを`__DIR__ . '/plugin.php'`で参照する。`bin/setup.php`は本体ファイルの名前を`<スラッグ>.php`に変え、同時にこの参照も書き換えるため、setup.phpの実行の前と後のどちらでも、実在するファイルだけを参照する。
 
 ---
 
@@ -646,6 +680,7 @@ WordPress コアテストスイート(wordpress-develop の `tests/phpunit/inclu
             <directory>packages/settings-page/src</directory>
             <directory>packages/acf-bridge/src</directory>
             <directory>packages/ja-toolkit/src</directory>
+            <directory>packages/testing/src</directory>
         </include>
     </source>
 </phpunit>
@@ -814,6 +849,7 @@ abstract class UnitTestCase extends TestCase
             <directory suffix=".php">packages/settings-page/src</directory>
             <directory suffix=".php">packages/acf-bridge/src</directory>
             <directory suffix=".php">packages/ja-toolkit/src</directory>
+            <directory suffix=".php">packages/testing/src</directory>
         </include>
     </coverage>
 </phpunit>
@@ -823,7 +859,7 @@ testsuite `testing`(`packages/testing/tests/Integration/`)は、ユニット層�
 
 `<groups>`の除外により、ACF Pro専用のテスト(グループ`acf-pro`)は`composer test:integration`・カバレッジの計測・CIでは走らない(4.9)。
 
-`<coverage>` の計測対象は、4.3 の `<source>` と同じ 5 パッケージの src である(4.8)。`--coverage-clover` を付けない通常の実行(`composer test:integration`)では計測しない。
+`<coverage>` の計測対象は、4.3 の `<source>` と同じ6パッケージのsrcである(4.8)。`--coverage-clover` を付けない通常の実行(`composer test:integration`)では計測しない。
 
 `convertDeprecationsToExceptions="true"` により、テスト中に出た非推奨(`E_DEPRECATED` / `E_USER_DEPRECATED`)はテストの失敗になる。ユニット層の `failOnDeprecation` と同じ方針である。発生元が FW か WordPress 本体かは区別しない。FW が WordPress や PHP の関数に不正な値を渡した結果の非推奨は、呼び出された側のファイルで報告されるため、発生元のパスでは FW 由来かどうかを判定できないからである。WordPress 本体や ACF が出す非推奨で失敗した場合は、その版の組み合わせと非推奨の内容を確かめてから対処を決める。
 
@@ -905,7 +941,7 @@ boot は WordPress 自身が行う。fixture のプラグイン本体ファイ�
 
 fixture のテーマとプラグインの探索結果ファイル(`tmswp-discovery.php`。02 文書 §6)は、利用者と同じ `wp tmswp discover` で生成してコミットする。
 
-- `composer discover:build` / `discover:check` は、wp-env の `cli` コンテナで `wp --require=tests/fixtures/_wp-cli.php tmswp discover`(照合は `--check` 付き)を実行する。WP-CLI は wp-env の開発用サイト(接頭辞 `wp_`)を読み込み、統合テストのテーブル(`wptests_`)には触れない。
+- `composer discover:build` / `discover:check` は、wp-env の `cli` コンテナで `wp --require=tests/fixtures/_wp-cli.php tmswp discover --kernels=2`(照合は`--check`付き)を実行する。`--kernels=2`は、fixtureのテーマとプラグインの2つのKernelが起動したことを確かめる(02文書§3.6。どちらかが起動しないと、照合はそのKernelを比べないまま成功するため)。`_wp-cli.php`は、有効なテーマの置き場を`template_root`・`stylesheet_root`のオプションの読み出しの上書きでfixtureのテーマの置き場に固定し、開発用サイトのsite transient `theme_roots`(fixtureのテーマの置き場を含まない形で作られうる)に左右されないようにする。WP-CLI は wp-env の開発用サイト(接頭辞 `wp_`)を読み込み、統合テストのテーブル(`wptests_`)には触れない。
 - `_wp-cli.php` は `_activate.php` のフィルタを `WP_CLI::add_wp_hook()` で登録し、そのプロセスの中だけ fixture のテーマとプラグインを有効にする。有効化はオプションの読み出しの上書きで、これ自体は DB に書かない。boot は WordPress が fixture を読み込むときに fixture 自身が行い、コマンドは利用者と同じ `Kernel::all()` の Kernel を走査する。
 - fixture は利用者と同じ経路で起動するため、fixture のコンポーネントの実行時の登録(`#[AsUserRole]` の `add_role` / `add_cap` 等)は開発用サイトの `wp_` のテーブルに反映されうる。開発用サイトはこのリポジトリの開発専用のため、これを許容し、隔離はしない。
 - ルートの Composer のオートローダは、実際のテーマ・プラグインと同じくプラグインの読み込み時(`muplugins_loaded`)に登録する。WP-CLI の phar は `--require` の後に自身の依存(古い psr/container を含む)のオートローダを先頭に登録するため、`--require` の時点で登録すると psr/container が phar 側から読まれ、`Container` の宣言と合わずに止まる。
@@ -986,7 +1022,7 @@ define('WP_DEBUG', true);
 ```
 
 - `core: null` は最新安定版。特定バージョンは `"core": "https://wordpress.org/wordpress-7.0.zip"` 形式で override する。`phpVersion` の既定は下限の 8.3。
-- `testsEnvironment: false` により、wp-env は開発用の環境(`wordpress` / `cli` / `mysql`)だけを作る。@wordpress/env 11 では development と tests の 2 環境を同時に作る既定の動作が非推奨のため、統合テストはこの環境の `cli` コンテナで実行し、テーブル接頭辞 `wptests_` で開発用サイトのテーブルと分ける。
+- `testsEnvironment: false` により、wp-env は開発用の環境(`wordpress` / `cli` / `mysql`)だけを作る。@wordpress/env では11から(package.jsonで固定した12.0.0も同じ)、development と tests の 2 環境を同時に作る既定の動作が非推奨のため、統合テストはこの環境の `cli` コンテナで実行し、テーブル接頭辞 `wptests_` で開発用サイトのテーブルと分ける。
 - `plugins` に wordpress.org の無料版 ACF(本家 WP Engine の `advanced-custom-fields`)を、版を固定した zip で入れる(D-11)。ACF Pro 限定機能のテストは CI では行わず、手元で隔離した環境で走らせる(4.9)。
 - `mappings` により monorepo 全体が `wp-content/plugins/tmswp` にマウントされ、コンテナ内からルートの `vendor/` / `vendor-bin/` / 各設定ファイルにそのままアクセスできる。これが `composer test:integration` の `--env-cwd=wp-content/plugins/tmswp` の前提。
 - スターターから作ったテーマ・プラグインのためのマウントは足さない。スターターの統合テスト(4.6)は、写しを`var/starter-site/`(このマウントの中)に作り、別のプロセスの中だけ有効にするため、開発用サイトの設定とマウントを変えずに済む。
@@ -994,7 +1030,7 @@ define('WP_DEBUG', true);
 
 ### 4.8 カバレッジ方針
 
-- 計測対象は 5 パッケージの src である。4.3 の `<source>` と 4.5 の `<coverage><include>` は同じディレクトリを指す。
+- 計測対象は6パッケージ(core・acf-bridge・settings-page・thumbnail・ja-toolkit・testing)のsrcである。4.3の`<source>`と4.5の`<coverage><include>`は同じディレクトリを指す。testing(テストの支援コード)も、案件のプロジェクトのテストが使う配布物なので計測する。
 - ユニット層と統合層のカバレッジを合算して判定する(DR-12)。WordPress に依存するクラス(PostType・Taxonomy・UserRole・PageRegistrar・AcfFieldAccess・AcfCommand・thumbnail の RestController 等)は、モックを多用したユニットテストではなく、実物の WordPress での統合テストで確かめる。
 - 計測の方法:
 
@@ -1008,8 +1044,11 @@ define('WP_DEBUG', true);
 - 合算の方式: PHPUnit 9 系と 11 系では、内部のカバレッジ形式(`.cov`)に互換が無い。そのため、両層の clover を `bin/coverage-check.php` が行単位で合わせる。
   - ファイルのパスは、リポジトリからの相対パスに正規化する。ホストのパスはリポジトリのルートを、コンテナ内のパスは `/var/www/html/wp-content/plugins/tmswp`(4.7 の `mappings`)を除く。
   - 同じファイルの同じ行は、どちらかの層で実行されていれば実行済みとする。行の集合は両層の和集合である(PHPUnit の版によって、実行可能と判定する行がわずかに異なるため)。
-- CI ゲート: **5 パッケージ合算の行カバレッジ ≥ 版ごとの閾値**。閾値は composer.json の `test:coverage:check` の引数の 1 か所で定義し、`12-implementation-plan.md` §0.7 の版ごとの表と一致させる。v0.9.0(導入できる版)の閾値は 85%。判定は qa.yml の `coverage` ジョブ(PHP 8.3 / WordPress 最新版の 1 セル)で行う(5.1)。
-- モジュール別の目標値(レビュー指針。合算の行カバレッジで見る。CI 自動ゲートは合算の閾値のみ):
+- CIゲート: 次の2つをどちらも満たすこと。判定はqa.ymlの`coverage`ジョブ(PHP 8.3 / WordPress最新版の1セル)で行う(5.1)。
+  - **6パッケージ全体の行カバレッジ ≥ 版ごとの閾値**。`12-implementation-plan.md` §0.7の版ごとの表と一致させる。v0.9.0(導入できる版)の閾値は85%。
+  - **パッケージ別の行カバレッジ ≥ パッケージ別の閾値**。全体の値に、薄いパッケージの不足が埋もれないようにする。閾値は6パッケージ(core・acf-bridge・settings-page・thumbnail・ja-toolkit・testing)とも80%(v0.8.0で決めた。下表の「拡張パッケージ各src」の目標と同じ値)。
+  - どちらの値も、unitとintegrationを合算した値である。閾値はcomposer.jsonの`test:coverage:check`の引数の1か所で定義する(全体は第1引数、パッケージ別は`--package=<名前>:<閾値>`)。
+- モジュール別の目標値(レビュー指針。合算の行カバレッジで見る。CI自動ゲートは全体とパッケージ別の閾値のみ):
 
 | モジュール | 目標(行) | 根拠 |
 |---|---|---|
@@ -1025,13 +1064,14 @@ define('WP_DEBUG', true);
 
 `bin/coverage-check.php` の仕様(完全):
 
-- 引数: `argv[1]` = 最低カバレッジ(0〜100 の数値、%)、`argv[2]` 以降 = clover のパス(1 つ以上)。個数・型・範囲が不正なら usage を STDERR に出して exit(2)。
+- 引数: `argv[1]` =全体の最低カバレッジ(0〜100の数値、%)、`argv[2]`以降= `--package=<名前>:<最低カバレッジ>`(0個以上。名前は`packages/`の直下のディレクトリ名で、英小文字・数字・`-`)とcloverのパス(1つ以上)。個数・型・範囲が不正な場合、同じパッケージの`--package`が重なる場合は、usageをSTDERRに出してexit(2)。
 - 手順:
   1. 各 clover を `simplexml_load_file()` で読む。ファイルが無い・XML として読めない場合、ルート要素が `coverage` でない・`project` が無い場合、`file` が 1 つも無い場合、`type="stmt"` の行が 0 の場合は、STDERR にメッセージを出し exit(2)。
   2. 各 `file` の `name` をリポジトリからの相対パスに正規化する。まずパスの要素の `.`・`..`・重複したスラッシュを解消し(同じファイルの別表記を同じ計測対象にする)、そのうえでホストのルート(`bin/` の親を realpath したもの)とコンテナ内のルートのどちらかの下にあるかを確かめる。絶対パスでない、ファイルシステムのルートより上を指す、どちらのルートの下にも無い(`<ホストのルート>/../outside.php` を含む)パスは exit(2)。
   3. 各 `file` の `type="stmt"` の行を集める。`num` が 1 以上、`count` が 0 以上の、int で表せる範囲(`PHP_INT_MAX` 以下)の整数でなければ exit(2)。受け付ける表記は、先頭に 0 が付かない 10 進表記(`0` は可。`01`・`00` は不可)だけである(PHPUnit の clover はこれ以外を出力しないため、誤りを早く検出する)。ファイルと行番号の組ごとに、どれかの clover で `count > 0` なら実行済みとする。
-  4. clover ごとの行数と実行済みの行数を STDOUT に出す。合算の `coverage = 実行済みの行数 / 行数 * 100`(小数 2 桁丸め)。
-  5. `coverage < argv[1]` なら `Combined coverage 57.11% (3534/6188 lines in 206 files) is below required 58%` 形式で STDERR に出し exit(1)。以上なら `Combined coverage 58.34% (3610/6188 lines in 206 files) (>= 58%)` を STDOUT に出し exit(0)。
+  4. cloverごとの行数と実行済みの行数をSTDOUTに出す。
+  5. `--package`があれば、合算したファイルを相対パスの`packages/<名前>/`でパッケージに分ける。`--package`の無いパッケージのファイル(`packages/`の外のファイルを含む)があれば`No package minimum for <相対パス> …`、ファイルが1つも無いパッケージの`--package`があれば`Coverage reports contain no files of package <名前>`をSTDERRに出しexit(2)(判定から漏れたパッケージや、何も比べない判定を通さない)。
+  6. パッケージ(名前の順)ごと、続いて全体について、`実行済みの行数/行数* 100`を閾値と比べる。比べるのは**丸める前の値**である(`実行済みの行数* 100 >=閾値*行数`。77.995%は閾値78を満たさない)。表示する値は小数2桁で**切り捨てる**(閾値を満たさない値を、満たすように見せない)。閾値以上なら`Package core coverage 91.81% (5286/5757 lines in 172 files) (>= 80%)`・`Combined coverage 92.90% (7951/8558 lines in 236 files) (>= 78%)`の形式でSTDOUTに、閾値未満なら`Combined coverage 77.99% (15599/20000 lines in 1 files) is below required 78%`の形式でSTDERRに出す。すべての結果を出したうえで、どれか1つでも閾値未満ならexit(1)、すべて閾値以上ならexit(0)。
 - clover は、実行可能な行がメソッドの開始行と重なる場合、その行を `type="method"`(メソッド全体の集計値)として出力し、行単位の実行有無を持たない。合算は `type="stmt"` の行だけで行うため、行数は PHPUnit が表示する `statements` よりわずかに少ない。
 
 ### 4.9 ACF Proでの統合テスト(手元だけ)
@@ -1073,14 +1113,14 @@ concurrency:
 jobs:
   lint:
     name: Coding Standards
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - name: Forbid PHPStan baseline
         run: |
           if ls phpstan-baseline* 2>/dev/null; then
@@ -1091,40 +1131,40 @@ jobs:
 
   analyse:
     name: Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - run: composer analyse
       # WordPressを起動しないtms-acfで、fixtureのテーマとプラグインの生成物とacf-jsonの一致を確かめる(--strict)
       - run: composer acf:check:fixtures
 
   monorepo:
     name: Monorepo Validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - run: composer monorepo:validate
 
   rules-verify:
     name: Rules Code Examples
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - name: Extract rules code examples
         run: php tools/extract-rules-code.php
       - name: Verify extracted examples
@@ -1132,23 +1172,23 @@ jobs:
 
   unit:
     name: Unit (PHP ${{ matrix.php }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         php: ['8.3', '8.5']
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php }}
           coverage: none
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - run: composer test:unit
 
   integration:
     name: Integration (PHP ${{ matrix.php }} / WP ${{ matrix.wp }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [unit]
     timeout-minutes: 20
     strategy:
@@ -1157,17 +1197,17 @@ jobs:
         php: ['8.3', '8.5']
         wp: ['7.0', 'latest']
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php }}
           coverage: none
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       # 検証する WordPress の版を確定する。latest は WordPress.org の版情報 API から最新版を取得する。
       # テストライブラリは、wp-env がこの版と同じタグの wordpress-develop から取得する(WP_TESTS_DIR)。
       - name: Resolve WordPress version
@@ -1207,21 +1247,21 @@ jobs:
   # unit は pcov、integration は wp-env の Xdebug(--xdebug=coverage)で計測し、clover を行単位で合算する。
   coverage:
     name: Coverage (PHP 8.3 / WP latest)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [unit]
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: pcov
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - uses: ramsey/composer-install@a8d0d959dab41457692a5e2041bd9b757a119e3f # 3.2.1
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - name: Resolve WordPress version
         id: wp
         shell: bash
@@ -1261,7 +1301,7 @@ jobs:
       - name: Run integration tests with coverage
         run: composer test:coverage:integration
       - name: Upload coverage reports
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-clover
           path: |
@@ -1273,6 +1313,132 @@ jobs:
       - name: Show wp-env logs on failure
         if: failure()
         run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+
+  # examples/sample-siteのcomposer qa(lint・analyse・tms-acf check --strict・discover:check・test)。
+  # discover:checkはsample-siteのwp-env(examples/sample-site/.wp-env.json)で、テーマを有効にしてから行う。
+  sample-site:
+    name: Sample Site QA
+    runs-on: ubuntu-24.04
+    needs: [unit]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+        with:
+          working-directory: examples/sample-site
+      # pathリポジトリのversionsのtmswp/coreが、Kernel::VERSIONと同じかを確かめる(リリースの道具はsample-siteを書き換えないため)
+      - name: Check the tmswp/core version of the path repository
+        working-directory: examples/sample-site
+        run: |
+          expected=$(php -r 'require "vendor/autoload.php"; echo TMSWP\Core\Kernel\Kernel::VERSION;')
+          actual=$(jq -er '.repositories[] | select(.type == "path") | .options.versions["tmswp/core"]' composer.json)
+          if [ "${actual}" != "${expected}" ]; then
+            echo "::error file=examples/sample-site/composer.json::the path repository has tmswp/core ${actual}, but Kernel::VERSION is ${expected}"
+            exit 1
+          fi
+      - name: Start wp-env
+        working-directory: examples/sample-site
+        run: |
+          for attempt in 1 2 3; do
+            if composer wp:start; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+      - name: Activate the theme
+        working-directory: examples/sample-site
+        run: node ../../node_modules/@wordpress/env/bin/wp-env run cli wp theme activate sample-site
+      - name: Run QA
+        working-directory: examples/sample-site
+        run: composer qa
+      - name: Show wp-env logs on failure
+        if: failure()
+        working-directory: examples/sample-site
+        run: node ../../node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+
+  # スターターから、composer create-projectでプロジェクトを作って確かめる(tools/ci/create-starter-project.sh)。
+  # 作るのは、スターターのテーマをそのまま写したもの(tmswp-starter-theme)と、bin/setup.phpで初期化したテーマ(client-theme)・
+  # プラグイン(shop-tools)の3つ。tmswp/coreはmonorepoのpackages/coreをpathリポジトリで入れる。
+  # 3つを1つのwp-envのサイトに置き、プロジェクトのスクリプトの`wp`(WP-CLI)は、tools/ci/bin/wpがwp-envのcliコンテナへ渡す。
+  starters:
+    name: Starter Projects
+    runs-on: ubuntu-24.04
+    needs: [unit]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            starters/theme/package-lock.json
+      - run: npm ci
+      - name: Create projects from the starters
+        run: |
+          site="${RUNNER_TEMP}/starter-site"
+          tools/ci/create-starter-project.sh theme "${site}/tmswp-starter-theme"
+          tools/ci/create-starter-project.sh theme "${site}/client-theme" client-theme 'Client Theme'
+          tools/ci/create-starter-project.sh plugin "${site}/shop-tools" shop-tools 'Shop Tools'
+          printf '%s\n' '{"core": null, "phpVersion": "8.3", "testsEnvironment": false, "themes": ["./tmswp-starter-theme", "./client-theme"], "plugins": ["./shop-tools"]}' > "${site}/.wp-env.json"
+          echo "TMSWP_WP_ENV_DIR=${site}" >> "$GITHUB_ENV"
+          echo "${GITHUB_WORKSPACE}/tools/ci/bin" >> "$GITHUB_PATH"
+      - name: Start wp-env
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}
+        run: |
+          for attempt in 1 2 3; do
+            if node "${GITHUB_WORKSPACE}/node_modules/@wordpress/env/bin/wp-env" start; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+      # スターターのテーマのblocks/をビルドし(npm run buildは、wp-scriptsのビルドとwp tmswp discover)、
+      # ビルドの出力と探索結果ファイルが、コミット済みのstarters/theme/build/blocks/・tmswp-discovery.phpと同じかを確かめる
+      - name: Build the blocks of the starter theme
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}/tmswp-starter-theme
+        run: |
+          wp theme activate tmswp-starter-theme
+          npm ci
+          npm run build
+          diff -r build/blocks "${GITHUB_WORKSPACE}/starters/theme/build/blocks"
+          diff tmswp-discovery.php "${GITHUB_WORKSPACE}/starters/theme/tmswp-discovery.php"
+      # 作ったテーマとプラグインは、README.mdの「セットアップの後」の手順で探索結果ファイルを作ってから、composer qaを実行する
+      - name: Run QA of the theme created from the starter
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}/client-theme
+        run: |
+          wp theme activate client-theme
+          npm ci
+          npm run build
+          composer qa
+      - name: Run QA of the plugin created from the starter
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}/shop-tools
+        run: |
+          composer discover
+          composer qa
+      - name: Show wp-env logs on failure
+        if: failure()
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}
+        run: node "${GITHUB_WORKSPACE}/node_modules/@wordpress/env/bin/wp-env" logs development --no-watch
 ```
 
 設計上の要点:
@@ -1280,13 +1446,20 @@ jobs:
 - マトリクスは D-09 のとおり、ユニットが PHP 8.3 / 8.5、統合が **PHP 8.3 / 8.5 × WP 7.0 / 最新版** の 4 セル。ユニットは WP 非依存のため PHP 軸のみ。
 - 統合の各セルは、検証する WP の版を先に確定し(WP 7.0 のセルは 7.0、最新版のセルは WordPress.org の版情報 API の最新版)、wp-env の `core` をその版の zip にする。テストライブラリは wp-env がその版と同じタグから取得する(§4.2)。API の取得に失敗したセルは、その時点で失敗する。
 - wp-env は `npm ci` で package-lock.json どおりに導入し(`actions/setup-node` の npm キャッシュを使う)、composer スクリプト経由でローカルの wp-env だけを呼ぶ(§1.1 補足)。
+- npm(11.19以降)は、依存のインストールスクリプトを、package.jsonの`allowScripts`に無いかぎり実行せず、警告を出す。ルートのpackage.jsonは、@wordpress/envの依存の`fs-ext-extra-prebuilt`(@wp-playground/cliが使う)のインストールスクリプトを`false`で拒否する(`npm install-scripts deny fs-ext-extra-prebuilt`で書く)。このパッケージは各OS・Node.jsの版のビルド済みのバイナリを同梱し、インストールスクリプトはそのバイナリの確認かnode-gypでのビルドだけを行う。wp-envのDockerの実行環境はこのパッケージを使わない。@wordpress/envを更新して、インストールスクリプトを持つ依存が増えた場合は、中身を確かめてから`allowScripts`に許可か拒否を書く。
 - `lint` / `analyse` / `monorepo` / `rules-verify` は下限の PHP 8.3 で実行する(php-cs-fixer の推奨と依存解決の下限に合わせる。§1.1 補足)。PHP 8.5 での解析は PHPStan の `phpVersion`(8.3〜8.5。§2.1)が担う。
-- `integration` と `coverage` は `timeout-minutes: 20` で打ち切る。wp-env の起動(`wp:start` / `wp:start:coverage`)は Docker イメージ取得の一時的な失敗に備えて 10 秒間隔で 3 回まで再試行し、3 回目の失敗でジョブを失敗させる。失敗時は wp-env のログ(`logs development --no-watch`)を出力する。
+- 全ジョブのrunnerを`ubuntu-24.04`に固定する(`ubuntu-latest`は使わない)。`ubuntu-latest`の指す版は予告のうえで新しいUbuntuへ移るため、名前で指定すると、ワークフローを変えなくてもrunnerの版が変わりうる。runnerの版を上げる場合は、全ジョブが新しい版で通ることを確かめてから、qa.yml・split.ymlの`runs-on`と5.1・5.2の完全版を同時に改訂する。
+- wp-envを起動するジョブ(`integration`・`coverage`・`sample-site`・`starters`)は`timeout-minutes: 20`で打ち切る。wp-envの起動は、Dockerイメージの取得の一時的な失敗に備えて10秒の間隔で3回まで再試行し、3回目の失敗でジョブを失敗させる。失敗時はwp-envのログ(`logs development --no-watch`)を出力する。
 - `lint` ジョブが baseline ファイルの不存在を機械的に強制する。
 - 合算カバレッジの判定は `coverage` ジョブ(PHP 8.3 / WordPress 最新版の 1 セル)だけで行う(4.8)。このジョブは pcov で unit を、`wp:start:coverage` で起動した wp-env の Xdebug で integration を計測し、2 つの clover を artifact `coverage-clover` に保存してから `test:coverage:check` で判定する。clover はジョブ内で生成して使うため、ジョブ間の受け渡しは無い。`unit` と `integration` の各セルはカバレッジを計測しない。
 - `coverage` ジョブは wp-env の起動後に `composer i18n:build` を実行し、`packages/*/languages` に差分や未追跡のファイルが出ないことを確かめる(コミット済みの翻訳ファイルが、ソースと .po から作り直したものと一致すること。01 文書 §7.2)。WP-CLI は wp-env の cli コンテナのものを使うため、このジョブで行う。
 - 同じく `coverage` ジョブは `composer discover:check` で、コミット済みの fixture の探索結果ファイルが `wp tmswp discover` で走査した結果とバイト単位で一致するかを照合する(02 文書 §3.6・§6)。ファイルが無い、または古い Kernel があれば、その名前空間とファイルパスを出して失敗する。探索結果ファイルは絶対パスを含まないため、手元(ホスト)と CI のどちらで生成しても内容は同じになる。
-- `integration` と `coverage` は `unit` 成功後に起動し、Docker 起動コストを失敗時に節約する。
+- `sample-site`ジョブは、examples/sample-siteの`composer qa`(lint・analyse・`tms-acf check --strict`・`discover:check`・test)を実行する。依存はsample-siteのcomposer.jsonのpathリポジトリ(`../../packages/*`)で入れ、pathリポジトリの`versions`の`tmswp/core`が`Kernel::VERSION`と同じかを先に確かめる(リリースの道具はsample-siteを書き換えないため、版を上げたときの直し忘れをここで止める)。wp-envはsample-siteの`.wp-env.json`で`composer wp:start`で起動し、`discover:check`の前にテーマ`sample-site`を有効にする。
+- `starters`ジョブは、スターターから`composer create-project`でプロジェクトを作り(`tools/ci/create-starter-project.sh`)、スターターとプロジェクトの手順が通ることを確かめる。スターターと`tmswp/core`は、monorepoの`starters/*`・`packages/core`をpathリポジトリ(シンボリックリンクではなく写し)で入れ、版は`Kernel::VERSION`にする。それ以外の依存はPackagistから入れる。作るのは次の3つで、1つのwp-envのサイト(`$RUNNER_TEMP/starter-site/.wp-env.json`)にテーマ2つとプラグイン1つとして置く。
+  - `tmswp-starter-theme`: テーマのスターターをそのまま写したもの(`--no-scripts`)。テーマを有効にして`npm ci`と`npm run build`(wp-scriptsでblocks/をビルドし、`wp tmswp discover`で探索結果ファイルを作る)を実行し、ビルドの出力と探索結果ファイルが、コミット済みの`starters/theme/build/blocks/`・`starters/theme/tmswp-discovery.php`と同じかを`diff`で確かめる(§1.4・§1.11)。
+  - `client-theme`・`shop-tools`: `bin/setup.php`(post-create-project-cmd)を、スラッグと表示名を環境変数で渡して非対話で実行したテーマとプラグイン。作った直後に、`{{`が残っていない(`grep -rn "{{" <プロジェクト> --exclude-dir=vendor --exclude-dir=node_modules`が一致なし)こと、`bin/setup.php`が消えていること、プラグインの本体ファイルが`shop-tools.php`になり`plugin.php`が無いことを確かめる。続けて各README.mdの「セットアップの後」の手順で探索結果ファイルを作り(テーマは`npm ci`と`npm run build`、プラグインは`composer discover`)、`composer qa`を実行する。
+  - プロジェクトのスクリプトは、WP-CLIがサイトに届く場所で`wp`を実行する前提である。このジョブは`tools/ci/bin`をPATHの先頭に足し、`tools/ci/bin/wp`が引数をそのままwp-envのcliコンテナのWP-CLIへ渡す(wp-envの設定のあるディレクトリは環境変数`TMSWP_WP_ENV_DIR`で渡す)。lint・analyse・testはホストのPHP 8.3で実行する。
+- `integration`・`coverage`・`sample-site`・`starters`は`unit`の成功の後に起動し、失敗時にDockerの起動のコストを省く。
 - 外部アクションはコミットの SHA で固定する(5.3)。
 
 ### 5.2 .github/workflows/split.yml(完全版)
@@ -1308,7 +1481,7 @@ env:
 jobs:
   split:
     name: Split ${{ matrix.package.local }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -1322,7 +1495,7 @@ jobs:
           - { local: 'starters/theme', repo: 'tmswp-starter-theme' }
           - { local: 'starters/plugin', repo: 'tmswp-starter-plugin' }
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate split source
         run: test -d "${{ matrix.package.local }}"
       - name: Split branch
@@ -1360,25 +1533,27 @@ jobs:
 
 ### 5.3 外部アクションの固定
 
-qa.yml と split.yml の外部アクションは、すべてコミットの SHA(40 桁)で固定し、行末にその SHA のタグ名をコメントで書く(`uses: actions/checkout@<SHA> # v4.4.0`)。タグやブランチは付け替えられるため、名前で指定すると、同じワークフローでも実行されるコードが変わりうる。版は、採用しているメジャー版の範囲で最新のタグを使う。
+qa.yml と split.yml の外部アクションは、すべてコミットの SHA(40 桁)で固定し、行末にその SHA のタグ名をコメントで書く(`uses: actions/checkout@<SHA> # v7.0.1`)。タグやブランチは付け替えられるため、名前で指定すると、同じワークフローでも実行されるコードが変わりうる。版は、採用しているメジャー版の範囲で最新のタグを使う。
 
-| アクション | タグ | コミットの SHA |
-|---|---|---|
-| `actions/checkout` | v4.4.0 | `11d5960a326750d5838078e36cf38b85af677262` |
-| `actions/setup-node` | v4.4.0 | `49933ea5288caeca8642d1e84afbd3f7d6820020` |
-| `actions/upload-artifact` | v4.6.2 | `ea165f8d65b6e75b540449e92b4886f43607fa02` |
-| `shivammathur/setup-php` | 2.40.0 | `eb7c497e18156a6bbabfef1d3a82760b9eda3962` |
-| `ramsey/composer-install` | 3.2.1 | `a8d0d959dab41457692a5e2041bd9b757a119e3f` |
-| `danharrin/monorepo-split-github-action` | v2.4.5 | `14e42e2437f674b8987c1f50ca3689116aea1893` |
+| アクション | タグ | コミットの SHA | 実行環境 |
+|---|---|---|---|
+| `actions/checkout` | v7.0.1 | `3d3c42e5aac5ba805825da76410c181273ba90b1` | Node.js 24 |
+| `actions/setup-node` | v7.1.0 | `949feb2413d6458794dcd2491c4babbbce0c15c1` | Node.js 24 |
+| `actions/upload-artifact` | v7.0.2 | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` | Node.js 24 |
+| `shivammathur/setup-php` | 2.40.0 | `eb7c497e18156a6bbabfef1d3a82760b9eda3962` | Node.js 24 |
+| `ramsey/composer-install` | 4.0.0 | `65e4f84970763564f46a70b8a54b90d033b3bdda` | composite(中で`actions/cache` v5.0.3(`cdf6c1fa76f9f475f3d7449005a359c84ca0f306`。Node.js 24)を使う) |
+| `danharrin/monorepo-split-github-action` | v2.4.5 | `14e42e2437f674b8987c1f50ca3689116aea1893` | Docker |
+
+JavaScriptのアクションは、`action.yml`の`runs.using`が`node24`の版を使う。`node20`の版は、GitHubのrunnerがNode.js 24で強制的に実行し、Node.js 20の非推奨の警告を出す。compositeのアクション(`ramsey/composer-install`)は、中で使うアクションの版も確かめる。
 
 更新手順:
 
-1. 採用しているメジャー版の範囲で最新のタグを確かめる(例: `gh api repos/actions/checkout/git/matching-refs/tags/v4.`)。タグ名に `v` が付かないアクション(`shivammathur/setup-php`、`ramsey/composer-install`)は、`v` を除いた接頭辞で調べる。
+1. 採用しているメジャー版の範囲で最新のタグを確かめる(例: `gh api repos/actions/checkout/git/matching-refs/tags/v7.`)。タグ名に `v` が付かないアクション(`shivammathur/setup-php`、`ramsey/composer-install`)は、`v` を除いた接頭辞で調べる。
 2. `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` で SHA を取得する。`object.type` が `tag`(注釈付きタグ)の場合、その SHA はタグオブジェクトのものである。`gh api repos/<owner>/<repo>/git/tags/<sha>` の `object.sha` でコミットの SHA にたどる。
 3. qa.yml と split.yml で同じアクションを使う `uses:` をすべて同じ SHA とタグ名に書き換え、5.1・5.2 の完全版と上の表を同じ内容に改訂する。
 4. `grep -nE "uses:" .github/workflows/*.yml | grep -vE "uses: [^@]+@[0-9a-f]{40} # "` が 0 件であることを確かめる。
 
-メジャー版を上げる場合は、入力・既定値・実行環境(Node.js の版等)の変更点を確かめてから行う。
+メジャー版を上げる場合は、入力・既定値・実行環境(Node.js の版等)の変更点を確かめてから行う。`runs.using`は`gh api "repos/<owner>/<repo>/contents/action.yml?ref=<tag>" --jq .content | base64 -d`で確かめる。
 
 ---
 
@@ -1458,7 +1633,7 @@ vendor/bin/monorepo-builder release vX.Y.Z             # mainとタグをpushす
 1. スターターの composer.json は `require-dev` に `phpstan/phpstan`、`szepeviktor/phpstan-wordpress`、`phpstan/extension-installer`、`friendsofphp/php-cs-fixer` を含み、`lint` / `fix` / `analyse` / `qa` スクリプトを monorepo ルートと**同名・同義**で定義する(AI が同じコマンド体系で作業できること)。
 2. `phpstan/extension-installer` により `tmswp/core` 同梱の PHPStan 拡張(2.2 項 4)が**設定なしで自動有効化**されること。スターターの phpstan.neon は `level: max` + `paths: [app]` を既定とする。
 3. アプリの `app/Acf/*Fields.php`(`@generated`、DR-06)は解析対象に**含める**(生成コードも型検査を通す。CI でのドリフト検知は acf-bridge 文書の管轄)。
-4. テーマテンプレート(`*.php` のうち WP テンプレート階層ファイルと `template-parts/`)は php-cs-fixer / PHPStan(型検査)の対象に含めない(要件 3 の絶対原則)。テンプレートの前処理クラス(`app/Page/`)は `app/` の一部として解析対象に含める(§3A)。
+4. テーマテンプレート(`*.php`のうちWPテンプレート階層ファイルと`template-parts/`)はphp-cs-fixer / PHPStan(型検査)の対象に含めない(要件3の絶対原則)。テンプレートの前処理クラス(`app/Page/`)は`app/`の一部として解析対象に含める(§3A)。スターターのphp-cs-fixerの設定は、monorepoと同じ規則で、テンプレートを除いたPHPを対象にする(§3.2)。
 5. スターターの`composer qa`は`lint` → `analyse` → `discover:check` → `test`の順とする。`discover:check`(`wp tmswp discover --check`)は探索結果ファイルの照合で、WP-CLIがそのテーマ・プラグインを有効にしたサイトに届く場所で実行する。
 
 ---
@@ -1519,7 +1694,7 @@ vendor/bin/monorepo-builder release vX.Y.Z             # mainとタグをpushす
 
 ## 9. 開発環境セットアップ手順
 
-前提ソフトウェア: PHP 8.3〜8.5(CLI、pcov 拡張推奨。lint は 8.3 で実行する)、Composer 2.7+、Node.js 18.12+(@wordpress/env の要件。CI は 24)、Docker(Desktop または Engine + Compose v2)、Git。
+前提ソフトウェア: PHP 8.3〜8.5(CLI、pcov 拡張推奨。lint は 8.3 で実行する)、Composer 2.7+、Node.js 22.13+(@wordpress/env 12.0.0の要件。CI は 24)、Docker(Desktop または Engine + Compose v2)、Git。
 
 ```bash
 # 1. クローン
@@ -1528,7 +1703,7 @@ cd tmswp
 
 # 2. 依存インストール(vendor と vendor-bin/wp-tests の両方が入る)
 composer install
-#    → bamarni/composer-bin-plugin の allow-plugins 確認には yes と答える
+#    → bamarni/composer-bin-pluginはcomposer.jsonのconfig.allow-pluginsで許可済みのため、確認は出ない
 #    → vendor-bin/wp-tests/vendor/bin/phpunit が存在することを確認
 npm ci                  # package-lock.json どおりに @wordpress/env を入れる
 
@@ -1550,7 +1725,7 @@ composer qa
 
 | 症状 | 原因と対処 |
 |---|---|
-| `composer install` 後に `vendor-bin/wp-tests/vendor` がない | allow-plugins で bamarni を拒否した。`composer config allow-plugins.bamarni/composer-bin-plugin true && composer bin wp-tests install` |
+| `composer install`後に`vendor-bin/wp-tests/vendor`がない | bamarni/composer-bin-pluginが動かなかった(`--no-plugins`を付けて実行した等)。`composer bin wp-tests install` |
 | `composer analyse` が scanDirectories エラー | 同上(vendor-bin 未インストール) |
 | `composer wp:start` が失敗 | Docker デーモン未起動。Docker Desktop を起動して再実行 |
 | ポート 8888 が使用中 | `.wp-env.override.json` に `{"port": 8890}` を作成 |
@@ -1640,7 +1815,7 @@ final class EmailTest extends UnitTestCase
 - [ ] 統合テストが wp-env の `cli` コンテナ内で PHPUnit 9.6(vendor-bin 隔離)+ WP_TESTS_DIR のテストライブラリで全件パスする
 - [ ] `phpunit.unit.xml.dist` / `phpunit.integration.xml.dist`に6パッケージ分のtestsuiteが定義されている
 - [ ] packages/*のそれぞれに`phpunit.xml.dist`・`.gitattributes`・`LICENSE`があり、split相当で単独で取り出して`composer install && composer test`が通る
-- [ ] ユニット層と統合層を合算した行カバレッジ(5 パッケージ)が、その版の閾値(`12-implementation-plan.md` §0.7。v0.9.0 で 85%)以上で、`bin/coverage-check.php` が閾値未満を exit 1、不正な引数・読めない clover・正規化できないパスを exit 2 にする
+- [ ] ユニット層と統合層を合算した行カバレッジが、6パッケージ全体でその版の閾値(`12-implementation-plan.md` §0.7。v0.9.0で85%)以上、パッケージ別に各パッケージの閾値(80%)以上で、`bin/coverage-check.php`が閾値未満を丸める前の値で判定してexit 1、不正な引数・読めないclover・正規化できないパス・閾値の無いパッケージのファイル・ファイルの無いパッケージの閾値をexit 2にする
 - [ ] qa.yml に lint / analyse / monorepo / rules-verify / unit(PHP 8.3 / 8.5)/ integration(PHP 8.3 / 8.5 × WP 7.0 / 最新版 = 4 セル。テストライブラリは各セルの WP と同じ系列)/ coverage(PHP 8.3 / WP 最新版)の全ジョブがある
 - [ ] qa.yml と split.yml のすべての `uses:` がコミットの SHA で固定され、行末にタグ名のコメントがある(5.3)
 - [ ] `npm ci` で package.json に固定した版の @wordpress/env が入り、composer スクリプト・qa.yml が wp-env を `node node_modules/@wordpress/env/bin/wp-env` のパスでだけ呼ぶ

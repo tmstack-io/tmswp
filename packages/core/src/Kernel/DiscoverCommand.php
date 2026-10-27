@@ -9,12 +9,14 @@ use TMSWP\Core\Exception\KernelException;
 use WP_CLI;
 
 /**
- * `wp tmswp discover [--check]`。起動中の全 Kernel の appDir を debug に関係なく走査し、探索結果ファイルを
- * 生成する。`--check` は生成する内容とファイルをバイト単位で比べ、無い・古い Kernel があれば非 0 で終わる。
+ * `wp tmswp discover [--check] [--kernels=<count>]`。起動中の全KernelのappDirをdebugに関係なく走査し、
+ * 探索結果ファイルを生成する。`--check`は生成する内容とファイルをバイト単位で比べ、無い・古いKernelがあれば
+ * 非0で終わる。`--kernels`は起動中のKernelの数を確かめ、違えば走査せずに非0で終わる(起動しなかったKernelを
+ * 比べないまま照合が成功しないようにする)。
  */
 final class DiscoverCommand
 {
-    private const USAGE = 'Usage: wp tmswp discover [--check]';
+    private const USAGE = 'Usage: wp tmswp discover [--check] [--kernels=<count>]';
 
     /**
      * @param list<string> $args
@@ -26,14 +28,33 @@ final class DiscoverCommand
             throw new KernelException('WP_CLI is not available');
         }
 
-        if ($args !== [] || array_diff(array_keys($assocArgs), ['check']) !== []) {
+        if ($args !== [] || array_diff(array_keys($assocArgs), ['check', 'kernels']) !== []) {
             WP_CLI::error(self::USAGE);
+        }
+
+        $expectedCount = null;
+
+        if (\array_key_exists('kernels', $assocArgs)) {
+            $expectedCount = self::kernelCount($assocArgs['kernels']);
+
+            if ($expectedCount === null) {
+                WP_CLI::error(self::USAGE);
+            }
         }
 
         $kernels = Kernel::all();
 
         if ($kernels === []) {
             WP_CLI::error('no TMSWP kernel is booted; boot the kernels from the theme or plugins before running wp tmswp discover');
+        }
+
+        if ($expectedCount !== null && \count($kernels) !== $expectedCount) {
+            WP_CLI::error(\sprintf(
+                'expected %d booted kernel(s) but found %d: %s; check that the theme and plugins that boot the kernels are active',
+                $expectedCount,
+                \count($kernels),
+                implode(', ', array_keys($kernels)),
+            ));
         }
 
         try {
@@ -98,6 +119,20 @@ final class DiscoverCommand
         }
 
         return $stale;
+    }
+
+    /**
+     * `--kernels=<count>`の値を、1以上の整数にする。1以上の整数の10進表記(先頭に0が付かない)でなければnull。
+     */
+    private static function kernelCount(mixed $value): ?int
+    {
+        if (!\is_string($value) || !ctype_digit($value)) {
+            return null;
+        }
+
+        $count = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+
+        return $count === false ? null : $count;
     }
 
     private static function file(Kernel $kernel): DiscoveryFile

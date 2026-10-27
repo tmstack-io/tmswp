@@ -30,7 +30,6 @@ return KernelConfig::theme(
         // 日本語のタイトルから作られたスラッグを、{post_type}-{post_id}にする。KanaTextFieldの訳もこの登録で読み込む
         new JaToolkit(new JapaneseSlug()),
     ],
-    // @PSR12とPER-CSのどちらでも同じ整形になるよう、アロー関数でなく無名関数で書く
     logChannels: static function (): array {
         return [
             'default' => new LogChannel(new SimpleLogger()),

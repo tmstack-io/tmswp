@@ -10,7 +10,6 @@ return TMSWP\Core\Kernel\KernelConfig::plugin(
     file: __DIR__ . '/plugin.php',
     appDir: __DIR__ . '/app',
     appNamespace: 'TmswpStarterPlugin',
-    // @PSR12(starter)とPER-CS(monorepo)のどちらでも同じ整形になるよう、アロー関数でなく無名関数で書く
     logChannels: static function (): array {
         return [
             'default' => new TMSWP\Core\Log\LogChannel(new TMSWP\Core\Log\SimpleLogger()),

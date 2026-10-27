@@ -41,6 +41,7 @@
             <directory>packages/settings-page/src</directory>
             <directory>packages/acf-bridge/src</directory>
             <directory>packages/ja-toolkit/src</directory>
+            <directory>packages/testing/src</directory>
         </include>
     </source>
 </phpunit>
