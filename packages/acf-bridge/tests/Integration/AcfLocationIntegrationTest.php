@@ -10,7 +10,7 @@ use TMSWP\AcfBridge\Json\FieldGroup;
 use TMSWP\AcfBridge\Mapping\GenerationTarget;
 use TMSWP\AcfBridge\Mapping\LocationResolver;
 use TMSWP\AcfBridge\Mapping\TargetKind;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Testing\IntegrationTestCase;
 use WP_REST_Request;
 use WP_User;
 

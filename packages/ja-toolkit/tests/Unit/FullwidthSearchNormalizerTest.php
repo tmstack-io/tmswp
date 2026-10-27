@@ -7,8 +7,8 @@ namespace TMSWP\JaToolkit\Tests\Unit;
 use Brain\Monkey\Actions;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
-use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\JaToolkit\Module\FullwidthSearchNormalizer;
+use TMSWP\Testing\UnitTestCase;
 use WP_Query;
 
 /**

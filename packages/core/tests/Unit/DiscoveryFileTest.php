@@ -19,7 +19,7 @@ use TMSWP\Core\Kernel\DiscoveryResult;
 use TMSWP\Core\Kernel\HookMethodKind;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Meta\MetaValueType;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class DiscoveryFileTest extends UnitTestCase
 {

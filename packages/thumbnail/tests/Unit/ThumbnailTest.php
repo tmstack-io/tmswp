@@ -14,7 +14,7 @@ use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Exception\RuntimeException;
 use TMSWP\Core\Kernel\Kernel;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 use TMSWP\Thumbnail\Exception\InvalidThumbOptionException;
 use TMSWP\Thumbnail\Exception\InvalidThumbSourceException;
 use TMSWP\Thumbnail\RestController;

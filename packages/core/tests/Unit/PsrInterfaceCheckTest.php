@@ -13,7 +13,7 @@ use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Log\LoggerRegistry;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * 他のプラグインや WP-CLI の phar が古い psr/container・psr/log を先に読み込んだ構成で、boot が Fatal error ではなく

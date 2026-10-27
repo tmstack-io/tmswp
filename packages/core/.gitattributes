@@ -1,0 +1,5 @@
+# 配布物(splitした読み取り専用リポジトリのzipと、Composerのpathリポジトリの写し)から開発用のファイルを外す
+/.gitattributes export-ignore
+/phpunit.xml.dist export-ignore
+/tests export-ignore
+.DS_Store export-ignore

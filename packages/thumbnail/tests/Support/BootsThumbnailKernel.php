@@ -9,7 +9,7 @@ use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Log\LogChannel;
-use TMSWP\Core\Tests\Support\RecordingLogger;
+use TMSWP\Testing\RecordingLogger;
 use TMSWP\Thumbnail\Thumbnail;
 
 /**

@@ -24,6 +24,9 @@
         <testsuite name="ja-toolkit">
             <directory>packages/ja-toolkit/tests/Integration</directory>
         </testsuite>
+        <testsuite name="testing">
+            <directory>packages/testing/tests/Integration</directory>
+        </testsuite>
         <testsuite name="starters">
             <directory>tests/Integration</directory>
         </testsuite>

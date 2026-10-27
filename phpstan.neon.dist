@@ -26,6 +26,8 @@ parameters:
     - packages/acf-bridge/tests
     - packages/ja-toolkit/src
     - packages/ja-toolkit/tests
+    - packages/testing/src
+    - packages/testing/tests
     - starters/theme/app
     - starters/plugin/app
     - starters/theme/bin/setup.php

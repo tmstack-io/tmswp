@@ -6,7 +6,7 @@ namespace TMSWP\AcfBridge\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\AcfBridge\Generate\NameConverter;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * クラス名に使うstudly()の変換(docs/09 §4.3)。ASCIIの英数字以外で区切り、各語を小文字にしてから先頭を大文字にして連結する。

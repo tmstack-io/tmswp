@@ -10,7 +10,7 @@ use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\InstalledVersionCheck;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * Kernel::VERSION と、読み込まれた vendor の installed.php にある tmswp/core の版の照合を確かめる。

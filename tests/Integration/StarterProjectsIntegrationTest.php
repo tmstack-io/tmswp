@@ -10,7 +10,7 @@ use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
 use SplFileInfo;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Testing\IntegrationTestCase;
 
 /**
  * スターター(starters/theme・starters/plugin)を、wp-envの開発用サイトで動かして確かめる。
@@ -211,12 +211,20 @@ final class StarterProjectsIntegrationTest extends IntegrationTestCase
         $root = self::repositoryRoot();
         $composer = json_decode((string) file_get_contents($project . '/composer.json'), true, 512, JSON_THROW_ON_ERROR);
         $installed = json_decode((string) file_get_contents($root . '/vendor/composer/installed.json'), true, 512, JSON_THROW_ON_ERROR);
+        $core = json_decode((string) file_get_contents($root . '/packages/core/composer.json'), true, 512, JSON_THROW_ON_ERROR);
         self::assertIsArray($composer);
         self::assertIsArray($installed);
         self::assertIsArray($installed['packages'] ?? null);
+        self::assertIsArray($core);
+        // packages/coreの版は、mainの開発版の別名(branch-alias)にする。スターターのtmswp/coreの制約はこれを満たす
+        $extra = $core['extra'] ?? null;
+        self::assertIsArray($extra);
+        self::assertIsArray($extra['branch-alias'] ?? null);
+        $coreVersion = $extra['branch-alias']['dev-main'] ?? null;
+        self::assertIsString($coreVersion);
         $repositories = [
             ['packagist.org' => false],
-            ['type' => 'path', 'url' => $root . '/packages/core', 'options' => ['versions' => ['tmswp/core' => '0.1.x-dev']]],
+            ['type' => 'path', 'url' => $root . '/packages/core', 'options' => ['versions' => ['tmswp/core' => $coreVersion]]],
         ];
 
         foreach ($installed['packages'] as $package) {

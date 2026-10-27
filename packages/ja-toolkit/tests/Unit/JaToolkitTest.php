@@ -13,12 +13,12 @@ use ReflectionFunction;
 use ReflectionMethod;
 use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Kernel\Kernel;
-use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\JaToolkit\JaToolkit;
 use TMSWP\JaToolkit\Module\DisableTexturize;
 use TMSWP\JaToolkit\Module\FullwidthSearchNormalizer;
 use TMSWP\JaToolkit\Module\JapaneseSlug;
 use TMSWP\JaToolkit\Tests\Support\BootsJaToolkitKernel;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * JaToolkitの登録(KernelConfig経由、1インスタンス1Kernel、原子的な登録)と、JapaneseSlugの設定の検査・変換。

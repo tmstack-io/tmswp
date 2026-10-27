@@ -9,7 +9,7 @@ TMStack WordPress Framework 全体の物理構成を確定する。すなわち�
 ## スコープ(対象パッケージ)
 
 - monorepo 全体(リポジトリ構成、ルート composer.json、CI/リリースワークフローの構造)
-- `tmswp/core` / `tmswp/thumbnail` / `tmswp/settings-page` / `tmswp/acf-bridge` / `tmswp/ja-toolkit` / `tmswp/starter-theme` / `tmswp/starter-plugin` のパッケージ境界とメタデータ
+- `tmswp/core` / `tmswp/thumbnail` / `tmswp/settings-page` / `tmswp/acf-bridge` / `tmswp/ja-toolkit` / `tmswp/testing` / `tmswp/starter-theme` / `tmswp/starter-plugin`のパッケージ境界とメタデータ
 - 利用側プロジェクト(テーマ・プラグイン)の標準レイアウト規約
 
 ## 依存文書
@@ -48,6 +48,7 @@ TMStack WordPress Framework 全体の物理構成を確定する。すなわち�
  └────────────┘ └────────────┘ └────────────┘ └────────────┘
 
  starters/theme・starters/plugin → tmswp/core を require する雛形(create-project 用)
+ testing → tmswp/coreをrequireするテストの支援コード。各パッケージはrequire-devでだけ使う
 ```
 
 - 拡張パッケージは `tmswp/core` のみに依存する。**拡張同士の依存は禁止**(必要になった場合は機能をコアへ昇格するか、共通部を切り出す設計判断を行う。安易な拡張間 require は不可)。
@@ -71,7 +72,8 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 ├── .wp-env.json                          # 統合テスト用 WordPress 環境定義
 ├── .editorconfig
 ├── .gitattributes / .gitignore
-├── LICENSE                               # GPL-2.0-or-later(全パッケージ共通)
+├── LICENSE                               # GPL-2.0-or-later(packages/*の各パッケージにも同じLICENSEを置く)
+├── CHANGELOG.md                          # 版ごとの変更(§4.5のリリース手順で更新)
 ├── README.md
 ├── AGENTS.md                             # FW「開発者」向け AI 指示書(monorepo の歩き方)
 ├── docs/                                 # 設計書(本シリーズ)
@@ -84,6 +86,9 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 │   ├── core/                             # tmswp/core
 │   │   ├── composer.json
 │   │   ├── README.md
+│   │   ├── LICENSE                       # GPL-2.0-or-later(ルートのLICENSEと同じ本文)
+│   │   ├── phpunit.xml.dist              # 単独で取り出したときのユニットテスト(composer test)
+│   │   ├── .gitattributes                # 配布物から外すもの(§2.2)
 │   │   ├── src/                          # TMSWP\Core\ → src/ (PSR-4)
 │   │   │   ├── Kernel/                   # Kernel.php, KernelConfig.php, Discovery.php, DiscoveryFile.php, DiscoverCommand.php
 │   │   │   ├── Container/                # Container.php (PSR-11 実装)
@@ -116,8 +121,9 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 │   │   ├── languages/                    # tmswp-core.pot / tmswp-ja.po / tmswp-ja.mo / tmswp-ja.l10n.php(§7.2)
 │   │   └── tests/
 │   │       ├── Unit/                     # WP 非依存(Brain Monkey)
-│   │       └── Integration/              # wp-env + WP_TESTS_DIR
-│   ├── thumbnail/                        # tmswp/thumbnail
+│   │       ├── Integration/              # wp-env + WP_TESTS_DIR
+│   │       └── Support/                  # core自身のテストだけが使う支援コード
+│   ├── thumbnail/                        # tmswp/thumbnail(LICENSE・phpunit.xml.dist・.gitattributesはcoreと同じ。以下の拡張も同じ)
 │   │   ├── composer.json
 │   │   ├── src/                          # TMSWP\Thumbnail\ → src/
 │   │   ├── rules/
@@ -135,15 +141,20 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 │   │   ├── rules/
 │   │   ├── languages/
 │   │   └── tests/
-│   └── ja-toolkit/                       # tmswp/ja-toolkit
+│   ├── ja-toolkit/                       # tmswp/ja-toolkit
+│   │   ├── composer.json
+│   │   ├── src/                          # TMSWP\JaToolkit\ → src/
+│   │   ├── rules/
+│   │   ├── languages/
+│   │   └── tests/
+│   └── testing/                          # tmswp/testing(各パッケージのテストの支援コード。§3.1)
 │       ├── composer.json
-│       ├── src/                          # TMSWP\JaToolkit\ → src/
-│       ├── rules/
-│       ├── languages/
+│       ├── src/                          # TMSWP\Testing\ → src/
 │       └── tests/
 └── starters/
     ├── theme/                            # tmswp/starter-theme(composer create-project 用)
     │   ├── composer.json
+    │   ├── .gitattributes                # node_modules/と.DS_Storeを配布物から外す(§2.2)
     │   ├── style.css
     │   ├── functions.php                 # Kernel::boot() 1 行ブート
     │   ├── AGENTS.md                     # 利用側プロジェクト向け AI 指示書(vendor 内 rules/ を参照)
@@ -171,7 +182,8 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 - PSR-4 ルートは常に `src/`。1 パッケージ = 1 名前空間ルート。`src/` 直下のサブディレクトリ = サブ名前空間。
 - `tests/Unit/` は WP 関数に依存しない(Brain Monkey でスタブ)。`tests/Integration/` のみ WordPress のテストライブラリ(wp-env が提供する WP_TESTS_DIR)を使う。テスト名前空間は `TMSWP\<Pkg>\Tests\`(autoload-dev)。
 - `languages/` には翻訳ファイル(gettext の .pot / .po / .mo と、.po から生成する .l10n.php)のみを置く(§7)。
-- 配布物から `tests/` を除外しない(利用者が仕様の生きた例として参照できるようにする)。ただし `.gitattributes` の `export-ignore` は付与せず、そのまま配布する。
+- 配布物(splitリポジトリのタグのzipと、Composerのpathリポジトリの写し)から、開発用のファイルを各パッケージの`.gitattributes`の`export-ignore`で外す。packages/*は`tests/`(fixtureを含む)・`phpunit.xml.dist`・`.gitattributes`・`.DS_Store`を外し、`src/`・`rules/`・`languages/`・`LICENSE`・`README.md`・`composer.json`(coreは`phpstan/`も)を配布する。starters/*は作ったプロジェクトがそのまま動くための`tests/`・`build/blocks/`・探索結果ファイル(`tmswp-discovery.php`)を外さず、`node_modules/`(テーマ)と`.DS_Store`だけを外す。Composerのpathリポジトリ(`symlink: false`)の写しが従うのは`.gitattributes`の`export-ignore`だけで、composer.jsonの`archive.exclude`は効かないため、除外は`export-ignore`で行う。
+- 各パッケージは、splitで単独で取り出した状態で`composer install && composer test`が通る(§3.2の3)。`composer test`はそのパッケージの`phpunit.xml.dist`の`tests/Unit/`を走らせる。統合テスト(`tests/Integration/`)はmonorepoのルートのfixtureとwp-envを使うため、monorepoでだけ走らせる。
 
 ---
 
@@ -186,10 +198,13 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 | `tmswp/settings-page` | `TMSWP\SettingsPage\` | library | 管理画面設定ページ生成(コアの Form 層ベース、nonce 自動) | `tmswp/core ^X.Y` |
 | `tmswp/acf-bridge` | `TMSWP\AcfBridge\` | library | acf-json を真実源とした型付きアクセサ生成(`app/Acf/*Fields.php`)、`AcfMetaStorage`、CI ドリフト検知 | `tmswp/core ^X.Y`(ACF 本体は実行時検出) |
 | `tmswp/ja-toolkit` | `TMSWP\JaToolkit\` | library | 日本語サイト対応(日本語スラッグ・全角スペース検索正規化・wptexturize 無効化)のオプトインモジュール群 | `tmswp/core ^X.Y` |
-| `tmswp/starter-theme` | `App\`(利用側) | project | `composer create-project` 用テーマ雛形 | `tmswp/core ^X.Y` |
-| `tmswp/starter-plugin` | `App\`(利用側) | project | `composer create-project` 用プラグイン雛形 | `tmswp/core ^X.Y` |
+| `tmswp/testing` | `TMSWP\Testing\` | library | 各パッケージと利用側のテストの支援コード(`UnitTestCase`・`IntegrationTestCase`・`UsesTempDirectories`・`RecordingLogger`・メモリのストレージ・`WpdbTestDouble`等)。require-devでだけ使う | `tmswp/core ^X.Y`, `phpunit/phpunit ^11.5`, `brain/monkey ^2.6`, `mockery/mockery ^1.6`, `psr/log ^3.0` |
+| `tmswp/starter-theme` | `TmswpStarterTheme\`(create-projectでスラッグから生成した名前空間に書き換える) | project | `composer create-project`用テーマ雛形 | `tmswp/core ^X.Y` |
+| `tmswp/starter-plugin` | `TmswpStarterPlugin\`(create-projectでスラッグから生成した名前空間に書き換える) | project | `composer create-project`用プラグイン雛形 | `tmswp/core ^X.Y` |
 
-`^X.Y` は monorepo-builder がリリース時に現行バージョンへ自動同期する(§4.3)。全パッケージのライセンスは **GPL-2.0-or-later**(WordPress 互換。旧 iwf2b と同一)。
+スターターの名前空間は、create-projectの`bin/setup.php`がスラッグから生成した名前空間に書き換える(実装計画§1.6。プラグインごとに名前空間が違うため、同じサイトの複数のプラグインでクラスが衝突しない。詳細はAI資料設計書§10)。
+
+`^X.Y`はmonorepo-builderがリリース時に現行バージョンへ自動同期する(§4.3)。全パッケージのライセンスは**GPL-2.0-or-later**(WordPress互換。旧iwf2bと同一)。packages/*はそれぞれ`LICENSE`のファイルを持つ(splitの配布物にライセンスの本文が入るように)。スターターは`LICENSE`のファイルを置かず、composer.jsonの`license`だけで示す(create-projectで作ったプロジェクトは`bin/setup.php`が`proprietary`に書き換えるため)。
 
 ### 3.2 依存ポリシー(規範)
 
@@ -198,7 +213,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
    - 依存追加は当該拡張の設計書に「何を・なぜ」を記録する(本表の更新を伴う)。
    - WordPress プラグイン同梱で衝突しやすいライブラリ(グローバル関数を定義するもの、メジャーバージョンが乱立しているもの)を避ける。
    - `ext-gd` は `tmswp/thumbnail` のみが require する(旧 iwf2b はコアが ext-gd を要求していた。これを拡張へ移設する)。thumbnail は `WP_Image_Editor` 経由で処理するため Imagick 環境でも動作するが、最低保証として ext-gd を要求する。
-3. **require-dev は monorepo ルートに集約**する(phpstan、szepeviktor/phpstan-wordpress、php-stubs/wordpress-stubs、friendsofphp/php-cs-fixer、phpunit ^11、brain/monkey、bamarni/composer-bin-plugin、symplify/monorepo-builder 等。確定リストは QA・CI 設計書)。統合テスト用の PHPUnit 9.6 と Yoast PHPUnit Polyfills はルートの require-dev に置かず、`vendor-bin/wp-tests` に隔離する。WordPress のテストライブラリは Composer では入れず、wp-env が提供するもの(WP_TESTS_DIR)を使う(QA・CI 設計書 §4.2)。各パッケージの composer.json には split 配布後に単体で `composer install && composer test` が成立する最小限の require-dev を重複記載する(monorepo-builder の validate で乖離を検出)。
+3. **require-devはmonorepoルートに集約**する(phpstan、szepeviktor/phpstan-wordpress、php-stubs/wordpress-stubs、friendsofphp/php-cs-fixer、phpunit ^11、brain/monkey、bamarni/composer-bin-plugin、symplify/monorepo-builder等。確定リストはQA・CI設計書)。統合テスト用のPHPUnit 9.6とYoast PHPUnit Polyfillsはルートのrequire-devに置かず、`vendor-bin/wp-tests`に隔離する。WordPressのテストライブラリはComposerでは入れず、wp-envが提供するもの(WP_TESTS_DIR)を使う(QA・CI設計書§4.2)。各パッケージのcomposer.jsonのrequire-devは、split配布後に単体で`composer install && composer test`が成立する最小限に限る。テストの支援コードとPHPUnit・Brain Monkey・Mockeryは`tmswp/testing`の依存として入るため、各パッケージ(coreを含む)のrequire-devは`tmswp/testing`と、そのパッケージのテストだけが使うもの(coreの`mikey179/vfsstream`・`phpstan/phpstan`)である。ルートと同じ依存の版の制約は、monorepo-builderのvalidateで乖離を検出する。coreのrequire-devの`tmswp/testing`は`tmswp/core`をrequireするが、splitしたcoreではrootパッケージ(`dev-main`をbranch-aliasで`X.Y.x-dev`とみなす)がこれを満たす。
 4. **WordPress 本体・ACF 等のプラグインを composer 依存に含めない**。WP 関数はホスト環境が提供する前提とし、静的解析は wordpress-stubs で行う。統合テスト環境の WordPress と ACF(wordpress.org の無料版 `advanced-custom-fields`。版を固定した zip)は `.wp-env.json` で導入する(QA・CI 設計書 §4.7)。
 
 ### 3.3 同一サイト内の複数インストール共存規約
@@ -252,12 +267,20 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
         },
         "files": ["src/functions.php"]
     },
+    "require-dev": {
+        "mikey179/vfsstream": "^1.6.12",
+        "phpstan/phpstan": "^2.1",
+        "tmswp/testing": "^0.2"
+    },
     "autoload-dev": {
         "psr-4": {"TMSWP\\Core\\Tests\\": "tests/"}
     },
+    "scripts": {
+        "test": "phpunit"
+    },
     "extra": {
         "phpstan": {"includes": ["phpstan/extension.neon"]},
-        "branch-alias": {"dev-main": "0.1.x-dev"}
+        "branch-alias": {"dev-main": "0.2.x-dev"}
     },
     "minimum-stability": "stable",
     "config": {"sort-packages": true}
@@ -268,9 +291,10 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 
 - PSR-4 で `TMSWP\Core\PHPStan\` を先に書いても、composer は最長一致で解決するため `src/` 側と衝突しない。
 - PHPStan 拡張の設定ファイルは `phpstan/extension.neon` の 1 枚だけを置く(§3.4)。`extra.phpstan.includes` とルートの phpstan.neon.dist はどちらもこのファイルを直接指す。
-- `branch-alias` は monorepo-builder の `UpdateBranchAliasReleaseWorker` がリリースごとに `<major>.<minor>.x-dev` 形式で更新する(§4.3)。上の値は v0.1.0 開発中のもの。
+- `branch-alias`はmonorepo-builderの`UpdateBranchAliasReleaseWorker`がリリースごとに`<major>.<minor>.x-dev`形式で更新する(§4.3)。更新するのは`extra.branch-alias`を既に持つcomposer.json(packages/*)だけで、スターターには無い。上の値は`Kernel::VERSION`が0.2.0の間のもので、`tmswp/core`・`tmswp/testing`の制約(`^0.2`)はこの版を満たす。
+- `scripts.test`は、パッケージに置いた`phpunit.xml.dist`(`tests/Unit/`)を走らせる。coreの`phpunit.xml.dist`のbootstrap(`tests/bootstrap.php`)は、Brain MonkeyのPatchworkが`phar://`のストリームを差し替える前にPHPStanのテストのコンテナを作る(PHPStan 2.3のpharは、差し替えた後に初めて読み込むと、同じファイルを別のパスで二度読み込んでクラスの再宣言で止まるため)。
 - `files` オートロードは `src/functions.php` の 1 ファイルのみ(§6)。拡張パッケージがヘルパを持つ場合も同形式(各 1 ファイル)とする。
-- 拡張パッケージの composer.json は本形式から `require` に `"tmswp/core": "^X.Y"` を加え、psr-4・phpstan エントリを各自のものに差し替えた形とする(thumbnail のみ `"ext-gd": "*"` を追加)。
+- 拡張パッケージのcomposer.jsonは本形式から`require`に`"tmswp/core": "^X.Y"`を加え、`require-dev`を`"tmswp/testing": "^X.Y"`だけにし、psr-4・phpstanエントリを各自のものに差し替えた形とする(thumbnailのみ`"ext-gd": "*"`を追加)。`tmswp/testing`は`require`に`tmswp/core`・PHPUnit・Brain Monkey・Mockery・psr/logを持ち、`require-dev`を持たない。
 - スターターの composer.json は §8.4 に正準形を示す。
 
 ---
@@ -318,7 +342,8 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
         "tmswp/thumbnail": "self.version",
         "tmswp/settings-page": "self.version",
         "tmswp/acf-bridge": "self.version",
-        "tmswp/ja-toolkit": "self.version"
+        "tmswp/ja-toolkit": "self.version",
+        "tmswp/testing": "self.version"
     },
     "autoload": {
         "psr-4": {
@@ -337,22 +362,25 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 }
 ```
 
-- `require` / `autoload` は `monorepo-builder merge` で各パッケージの composer.json から機械的に合成する(手動編集しない)。
+- ルートのcomposer.jsonは手で維持する。`require`・`replace`・`autoload`・`autoload-dev`はpackages/*のcomposer.jsonに合わせ、依存の版の制約がパッケージと食い違わないことを`composer monorepo:validate`で検査する。`monorepo-builder merge`は使わない(starters/*のautoloadと、tmswp/testingのrequireのPHPUnit・Brain Monkey・Mockeryをルートの`autoload`・`require`に入れるため。QA・CI設計書§1.1)。
 - `replace` により monorepo 内でのパッケージ相互解決に path repository を使わない(単一 vendor/ で完結)。
+- `tmswp/testing`の`src/`(`TMSWP\Testing\`)は、ルートでは`autoload`ではなく`autoload-dev`に置く(テストの支援コードで、FWのランタイムのコードではないため)。各パッケージの`tests/`(`TMSWP\<Pkg>\Tests\`)も`autoload-dev`に置く。
 - 統合テスト用の PHPUnit 9.6 と Yoast PHPUnit Polyfills は `bamarni/composer-bin-plugin` で `vendor-bin/wp-tests` に隔離し、ルートの require-dev には置かない。WordPress のテストライブラリは wp-env が提供するもの(WP_TESTS_DIR)を使う(QA・CI 設計書 §4.2)。
 - `scripts` の中身(lint/fix/analyse/test/qa)は QA・CI 設計書が定義する。コマンド名はこの 5 つで確定であり、人間・CI・AI が同一コマンドを使う。
-- starters/ は autoload マージ対象外(利用側雛形であり FW のコードではない)。CI では create-project 相当のシナリオテストで検証する(QA・CI 設計書)。
+- starters/はルートのautoloadに入れない(利用側雛形でありFWのコードではない)。CIではcreate-project相当のシナリオテストで検証する(QA・CI設計書)。
 
 ### 4.3 monorepo-builder の利用範囲
 
-`symplify/monorepo-builder ^12` を次の 3 用途に限定して使う:
+`symplify/monorepo-builder ^12`を次の2用途に限定して使う(`merge`は使わない。§4.2):
 
-1. **merge**: packages/*/composer.json → ルート composer.json への require / require-dev / autoload 合成。
-2. **validate**: パッケージ間の依存バージョン矛盾、ルートとの乖離検出(CI で実行)。
-3. **release ワーカー**: `vendor/bin/monorepo-builder release vX.Y.Z` で以下を自動実行する。
-   - 相互依存の固定: 各パッケージの `"tmswp/core": "^X.Y"` を今回リリース版へ更新
-   - git tag `vX.Y.Z` 作成・push
-   - 次期開発バージョンへの戻し(`X.Y+1.0-dev` への相互依存更新、branch-alias 更新)
+1. **validate**:パッケージ間の依存バージョン矛盾、ルートとの乖離検出(CIで実行)。
+2. **releaseワーカー**: `vendor/bin/monorepo-builder release vX.Y.Z`で、monorepo-builder.phpに登録した次のワーカーを順に実行する。mainへのpushとタグのpushをこのコマンドが自ら行う(手順は`docs/RELEASING.md`)。
+   1. 相互依存の固定(`SetCurrentMutualDependenciesReleaseWorker`): packages/*・starters/*のcomposer.jsonの`require`・`require-dev`のtmswp/*の制約を、今回の版の`^X.Y`(PATCHが0より大きければ`^X.Y.Z`)にする。
+   2. CHANGELOGの見出し(`AddTagToChangelogReleaseWorker`): `CHANGELOG.md`の`## Unreleased`を`## X.Y.Z - <日付>`に書き換える。
+   3. コミットとタグ(`TagVersionReleaseWorker`): `git add .`・`git commit -m "prepare release"`・`git push origin main`を行い、`git tag vX.Y.Z`(軽量タグ)を作る。`git add .`は作業ツリーのすべての変更を含めるため、作業ツリーをきれいにしてから実行する。
+   4. タグのpush(`PushTagReleaseWorker`): `git push --tags`(手元のすべてのタグ)。
+   5. 次の開発版への戻し(`SetNextMutualDependenciesReleaseWorker`・`UpdateBranchAliasReleaseWorker`): tmswp/*の制約を`^X.(Y+1)`にし、`extra.branch-alias`を既に持つcomposer.json(packages/*)のbranch-aliasを`X.(Y+1).x-dev`にする。
+   6. 次の開発版のpush(`PushNextDevReleaseWorker`): `git add .`・`git commit --allow-empty -m "open X.(Y+1).x-dev"`・`git push origin main`。
 
 ### 4.4 read-only split 配布
 
@@ -364,14 +392,14 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
   │                         │ GitHub Actions split.yml     │                                   │
   │                         │  packages/core      ────────>│ tmstack-io/tmswp-core             │
   │                         │  packages/thumbnail ────────>│ tmstack-io/tmswp-thumbnail        │
-  │                         │  ...(計 7 split)             │ ...                               │
+  │                         │  ...(計8 split)              │ ...                               │
   │                         │  (subtree push + tag 複製)   │                                   │
   │                         │                              │ webhook ─────────────────────────>│ tmswp/core 等を更新
 ```
 
-- 開発は monorepo(`tmstack-io/tmswp`)で行う。split 対象は packages/ 配下 5 + starters/ 配下 2 の**計 7 リポジトリ**で、送り先は `tmstack-io/tmswp-{パッケージ名}`(tmswp-core、tmswp-acf-bridge、tmswp-settings-page、tmswp-thumbnail、tmswp-ja-toolkit、tmswp-starter-theme、tmswp-starter-plugin)である。Packagist の名前は `tmswp/*` のまま。
+- 開発はmonorepo(`tmstack-io/tmswp`)で行う。split対象はpackages/配下6 + starters/配下2の**計8リポジトリ**で、送り先は`tmstack-io/tmswp-{パッケージ名}`(tmswp-core、tmswp-acf-bridge、tmswp-settings-page、tmswp-thumbnail、tmswp-ja-toolkit、tmswp-testing、tmswp-starter-theme、tmswp-starter-plugin)である。Packagistの名前は`tmswp/*`のまま。
 - split リポジトリは読み取り専用として運用する。Issue と Wiki を無効にし、リポジトリの説明文で monorepo へ案内する。誤って送られたプルリクエストは、各パッケージのディレクトリに置くワークフロー(split で同期先へ複製され、同期先で動く)が自動で閉じ、monorepo へ案内する。アーカイブは使わない(アーカイブしたリポジトリには split が書き込めないため)。
-- 送り先のリポジトリの作成と、送り先への書き込み権限だけを持つトークン(`SPLIT_ACCESS_TOKEN`。fine-grained PAT。対象は送り先の 7 リポジトリ(`tmstack-io/tmswp-*`)だけ。権限は Contents: Read and write と Workflows: Read and write だけ)の登録は、公開の作業で行う。
+- 送り先のリポジトリの作成と、送り先への書き込み権限だけを持つトークン(`SPLIT_ACCESS_TOKEN`。fine-grained PAT。対象は送り先の8リポジトリ(`tmstack-io/tmswp-*`)だけ。権限はContents: Read and writeとWorkflows: Read and writeだけ)の登録は、公開の作業で行う。
 - 実装: `.github/workflows/split.yml` で `danharrin/monorepo-split-github-action` の v2.4.5 をコミットの SHA で固定して使用する(`10-quality.md` §5.3。同等機能の action への差し替えは PATCH 扱いで可。ただし「main への push で HEAD を、タグ push で同名タグを各 split リポジトリへ複製する」挙動は不変条件)。
 - ワークフロー(`10-quality.md` §5.2 の完全版と同じ):
 
@@ -400,6 +428,7 @@ jobs:
           - { local: 'packages/settings-page', repo: 'tmswp-settings-page' }
           - { local: 'packages/acf-bridge', repo: 'tmswp-acf-bridge' }
           - { local: 'packages/ja-toolkit', repo: 'tmswp-ja-toolkit' }
+          - { local: 'packages/testing', repo: 'tmswp-testing' }
           - { local: 'starters/theme', repo: 'tmswp-starter-theme' }
           - { local: 'starters/plugin', repo: 'tmswp-starter-plugin' }
     steps:
@@ -435,7 +464,7 @@ jobs:
         run: echo "SPLIT_ACCESS_TOKEN is not set; validated split source only."
 ```
 
-- Packagist には split リポジトリ 7 件を `tmswp/core` 等の名前で登録し、GitHub webhook で自動更新する。monorepo 本体は登録しない。
+- Packagistにはsplitリポジトリ8件を`tmswp/core`等の名前で登録し、GitHub webhookで自動更新する。monorepo本体は登録しない。
 
 ### 4.5 ブランチ・タグ運用
 
@@ -443,10 +472,10 @@ jobs:
 |---|---|
 | `main` | 次期リリースの開発ブランチ。常に green(composer qa が通る)。split により各 split リポジトリの `main` と同期 |
 | トピックブランチ | `feature/<topic>` / `fix/<topic>`。main へ squash merge |
-| タグ | `vX.Y.Z`(annotated tag)。main 上のコミットにのみ打つ。monorepo-builder release 経由でのみ作成 |
+| タグ | `vX.Y.Z`。main上のコミットにのみ打つ。monorepo-builder release経由でのみ作成する(`TagVersionReleaseWorker`は軽量タグを作る。§4.3) |
 | メンテナンスブランチ | メジャーが進んだ後の旧系列修正用に `1.x` 等を必要時に作成(先行作成しない) |
 | ホットフィックス | 最新タグから `fix/` ブランチ → main へ merge → PATCH リリース。旧系列が必要な場合のみメンテナンスブランチへ cherry-pick |
-| リリース手順 | (1) main で `composer qa` green を確認 → (2) CHANGELOG.md の更新と、`packages/core/src/Kernel/Kernel.php` の `Kernel::VERSION` をリリースの版(`vX.Y.Z` の `X.Y.Z`)へ更新する PR → (3) リリースの版と `Kernel::VERSION` が一致することを確かめてから `vendor/bin/monorepo-builder release vX.Y.Z` → (4) split.yml がタグを複製 → (5) Packagist 反映を確認。`Kernel::VERSION` の更新を忘れると、そのタグの tmswp/core を入れたサイトは boot 時の版の照合(Kernel 設計書 §3.9)が食い違い、起動しなくなる |
+| リリース手順 | (1) mainで`composer qa` greenを確認 → (2) CHANGELOG.mdの更新と、`packages/core/src/Kernel/Kernel.php`の`Kernel::VERSION`をリリースの版(`vX.Y.Z`の`X.Y.Z`)へ更新するPR → (3)リリースの版と`Kernel::VERSION`が一致することを確かめてから`vendor/bin/monorepo-builder release vX.Y.Z`(mainとタグのpushをこのコマンドが行う。§4.3。mainへのpushとタグ付けは毎回ユーザーに確認してから実行する) → (4) split.ymlがタグを複製 → (5) Packagist反映を確認。手順の詳細は`docs/RELEASING.md`。`Kernel::VERSION`の更新を忘れると、そのタグのtmswp/coreを入れたサイトはboot時の版の照合(Kernel設計書§3.9)が食い違い、起動しなくなる |
 
 ---
 
@@ -638,7 +667,7 @@ require_once __DIR__ . '/vendor/autoload.php';
 );
 ```
 
-アプリ名前空間はデフォルト `App\`(スターター既定)。同一サイト内に複数の TMSWP コンポーネントが共存する場合、それぞれの vendor/ オートローダが自身の `App\` を解決するため名前空間としては衝突しないが、可読性のためプラグインでは固有名前空間(例: `MyPlugin\`)への変更を推奨する(`KernelConfig` の `appNamespace` と composer.json の psr-4 を揃えるだけでよい)。
+上の例のアプリ名前空間`App\`は説明用である。同一サイト内のTMSWPコンポーネント(テーマ・各プラグイン)は、それぞれ別の名前空間を使う。各コンポーネントのvendor/のオートローダはサイトの1つのプロセスに順に登録され、同じ名前のクラスは先に登録されたオートローダが読み込んだものが使われ、後のコンポーネントのクラスは隠れる(エラーにならずに別のクラスが動く)。そのため、テーマとプラグインが同じ`App\`を使うと、同じ名前のクラスが衝突する。Kernelも、起動したKernelどうしの名前空間の重複を例外にする(Kernel設計書)。スターターから作るプロジェクトの名前空間は、create-projectの`bin/setup.php`がスラッグから生成する(実装計画§1.6、§3.1)。自分で名前空間を変えるときは、`KernelConfig`の`appNamespace`とcomposer.jsonのpsr-4を揃える。
 
 ### 8.2 テーマの標準レイアウト
 
@@ -718,7 +747,7 @@ my-plugin/
 └── readme.txt                 # WordPress.org 配布時のみ
 ```
 
-利用側 composer.json(テーマ・プラグイン共通の正準形。スターターが同梱):
+利用側composer.json(テーマ・プラグイン共通の正準形。`App\`はプロジェクトの名前空間を表す。スターターから作ったプロジェクトでは、`bin/setup.php`がname・psr-4の名前空間・licenseを書き換えたcomposer.jsonになる。§3.1):
 
 ```json
 {
@@ -765,20 +794,21 @@ my-plugin/
 
 リポジトリ構成:
 
-- [ ] monorepo ルートに §2 のツリーどおり `packages/` 5 パッケージ + `starters/` 2 スターターが存在する
+- [ ] monorepoルートに§2のツリーどおり`packages/`の6パッケージと`starters/`の2スターターが存在する
 - [ ] 各パッケージの composer.json の name / 名前空間 / runtime 依存が §3.1 の表と完全一致する
 - [ ] `tmswp/core` の require が `php >=8.3` / `psr/log ^3.0` / `psr/container ^2.0` のみである(ext 要求なし)
 - [ ] `tmswp/thumbnail` のみ `ext-gd` を require している
 - [ ] 拡張パッケージが `tmswp/core` 以外の tmswp/* を require していない(拡張間依存禁止)
-- [ ] 全パッケージのライセンスが GPL-2.0-or-later である
+- [ ] 全パッケージのライセンスがGPL-2.0-or-laterであり、packages/*のそれぞれに`LICENSE`がある
+- [ ] 各パッケージをsplit相当で単独で取り出して`composer install && composer test`が通り、`.gitattributes`の`export-ignore`で`tests/`等の開発用のファイルと`.DS_Store`が配布物に入らない(§2.2)
 - [ ] PHPStan 拡張が `packages/core/phpstan/`(`TMSWP\Core\PHPStan\`)に配置され、runtime コードから参照されていない
 - [ ] 各パッケージに `rules/` が存在し composer 配布物に含まれる
 
 リリース・配布:
 
 - [ ] `vendor/bin/monorepo-builder validate` が green(相互依存・ルート composer.json の乖離なし)
-- [ ] `split.yml` が main push で 7 split リポジトリの HEAD を、タグ push で同名タグを複製する
-- [ ] Packagist に tmswp/core ほか計 7 パッケージ(5 パッケージ + 2 スターター)が split リポジトリから登録され、タグで `composer require tmswp/core:^X.Y` が解決する
+- [ ] `split.yml`がmain pushで8 splitリポジトリのHEADを、タグpushで同名タグを複製する
+- [ ] Packagistにtmswp/coreほか計8パッケージ(6パッケージと2スターター)がsplitリポジトリから登録され、タグで`composer require tmswp/core:^X.Y`が解決する
 - [ ] 全パッケージのバージョン番号が常に一致する(lockstep)
 
 下限・互換:

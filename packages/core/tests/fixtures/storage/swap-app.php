@@ -20,7 +20,7 @@ use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Core\Option\OptionAccess;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
-use TMSWP\Core\Tests\Support\MemoryMetaStorage;
+use TMSWP\Testing\MemoryMetaStorage;
 use WP_Post;
 
 #[AsPostType]

@@ -27,6 +27,9 @@
         <testsuite name="ja-toolkit">
             <directory>packages/ja-toolkit/tests/Unit</directory>
         </testsuite>
+        <testsuite name="testing">
+            <directory>packages/testing/tests/Unit</directory>
+        </testsuite>
         <testsuite name="tools">
             <directory>tests/Unit</directory>
         </testsuite>

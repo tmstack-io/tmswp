@@ -22,6 +22,7 @@ jobs:
           - { local: 'packages/settings-page', repo: 'tmswp-settings-page' }
           - { local: 'packages/acf-bridge', repo: 'tmswp-acf-bridge' }
           - { local: 'packages/ja-toolkit', repo: 'tmswp-ja-toolkit' }
+          - { local: 'packages/testing', repo: 'tmswp-testing' }
           - { local: 'starters/theme', repo: 'tmswp-starter-theme' }
           - { local: 'starters/plugin', repo: 'tmswp-starter-plugin' }
     steps:

@@ -19,11 +19,11 @@ use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Core\Meta\WpMetaStorage;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Tax\Taxonomy;
-use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
-use TMSWP\Core\Tests\Support\RecordingLogger;
-use TMSWP\Core\Tests\Support\UsesTempDirectories;
 use TMSWP\Core\User\UserRole;
+use TMSWP\Testing\BootsKernelBeforeInit;
+use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\RecordingLogger;
+use TMSWP\Testing\UsesTempDirectories;
 use WP_Post;
 
 final class MetaIntegrationTest extends IntegrationTestCase

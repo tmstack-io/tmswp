@@ -11,7 +11,7 @@ use TMSWP\AcfBridge\Tests\Support\BootsAcfBridgeKernel;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
 use TMSWP\Core\Meta\ObjectType;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * `wp tmswp acf sync|check`の対象の選択(--app=)、E101、オプションページのpost_id。WP_CLIの代役クラスをテスト用の

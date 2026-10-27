@@ -10,7 +10,7 @@ use TMSWP\AcfBridge\Json\FieldGroup;
 use TMSWP\AcfBridge\Mapping\GenerationTarget;
 use TMSWP\AcfBridge\Mapping\LocationResolver;
 use TMSWP\AcfBridge\Mapping\TargetKind;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * LocationResolverがlocationをdocs/09 §4.2のとおりに解決することを確かめる。ACFの実際の判定(どの条件の組み合わせが

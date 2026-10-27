@@ -18,10 +18,10 @@ use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Log\LogChannel;
-use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
-use TMSWP\Core\Tests\Support\RecordingLogger;
-use TMSWP\Core\Tests\Support\UsesTempDirectories;
+use TMSWP\Testing\BootsKernelBeforeInit;
+use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\RecordingLogger;
+use TMSWP\Testing\UsesTempDirectories;
 use WP_Error;
 
 /**

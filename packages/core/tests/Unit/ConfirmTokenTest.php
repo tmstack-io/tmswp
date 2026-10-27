@@ -9,7 +9,7 @@ use TMSWP\Core\Form\ConfirmToken;
 use TMSWP\Core\Form\SubmitToken;
 use TMSWP\Core\Form\TokenSigner;
 use TMSWP\Core\Form\TokenStatus;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class ConfirmTokenTest extends UnitTestCase
 {

@@ -11,7 +11,7 @@ use TMSWP\Core\Kernel\Discovery;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * `wp tmswp discover` の生成と照合。WP_CLI の代役クラスをテスト用の一時ファイルに書いて読み込むため、

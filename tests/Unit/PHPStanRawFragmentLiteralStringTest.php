@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace TMSWP\Core\Tests\Unit;
+namespace TMSWP\Tests\Unit;
 
 use JsonException;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * QueryBuilderのraw断片の引数(whereRaw・orWhereRawの$sql、selectRawの$expression、innerJoinRaw・leftJoinRawの
@@ -45,7 +45,7 @@ final class PHPStanRawFragmentLiteralStringTest extends UnitTestCase
      */
     private function analyse(string $file): array
     {
-        $root = \dirname(__DIR__, 4);
+        $root = \dirname(__DIR__, 2);
         $dir = $this->createTempDirectory('phpstan-literal-string');
         $config = $dir . '/phpstan.neon';
         // 除外(excludePaths)だけを空にし、ほかはcomposer analyseの設定のまま使う。結果のキャッシュは一時ディレクトリに置く

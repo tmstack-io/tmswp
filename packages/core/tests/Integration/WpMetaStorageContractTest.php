@@ -7,7 +7,7 @@ namespace TMSWP\Core\Tests\Integration;
 use TMSWP\Core\Meta\MetaStorageInterface;
 use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Core\Meta\WpMetaStorage;
-use TMSWP\Core\Tests\Support\MetaStorageContractTestCase;
+use TMSWP\Testing\MetaStorageContractTestCase;
 
 /** WpMetaStorageがMetaStorageInterfaceの契約を満たすことを、投稿のメタで確かめる。 */
 final class WpMetaStorageContractTest extends MetaStorageContractTestCase

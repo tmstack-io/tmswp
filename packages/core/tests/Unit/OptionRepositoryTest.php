@@ -15,7 +15,7 @@ use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Option\OptionAccess;
 use TMSWP\Core\Option\OptionRepositoryFactory;
 use TMSWP\Core\Option\OptionStorageInterface;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class OptionRepositoryTest extends UnitTestCase
 {

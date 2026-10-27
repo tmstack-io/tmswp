@@ -16,8 +16,8 @@ use TMSWP\AcfBridge\Generate\Generator;
 use TMSWP\AcfBridge\Generate\GeneratorContext;
 use TMSWP\AcfBridge\Json\FieldGroup;
 use TMSWP\AcfBridge\Tests\Support\RestoresAcfStores;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
-use TMSWP\Core\Tests\Support\UsesTempDirectories;
+use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\UsesTempDirectories;
 
 /**
  * 全型のfixture(packages/acf-bridge/tests/fixtures/acf-jsonのgroup_product_typesとgroup_product)から生成した

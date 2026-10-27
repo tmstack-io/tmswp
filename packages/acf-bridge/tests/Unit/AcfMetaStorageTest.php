@@ -12,7 +12,7 @@ use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Meta\ObjectType;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * ACFを読み込まないユニットテストの環境で、AcfMetaStorageの組み立てと、IDとACFの有無の検査を確かめる。ACFへの委譲の振る舞いは、

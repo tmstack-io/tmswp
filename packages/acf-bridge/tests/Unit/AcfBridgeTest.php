@@ -28,8 +28,8 @@ use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
-use TMSWP\Core\Tests\Support\MemoryMetaStorage;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\MemoryMetaStorage;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * AcfBridgeのKernelごとの登録と、管理キーの申告。

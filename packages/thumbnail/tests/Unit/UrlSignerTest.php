@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Thumbnail\Tests\Unit;
 
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 use TMSWP\Thumbnail\UrlSigner;
 
 /**

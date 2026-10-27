@@ -28,10 +28,10 @@ use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Log\LogChannel;
-use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
-use TMSWP\Core\Tests\Support\RecordingLogger;
-use TMSWP\Core\Tests\Support\UsesTempDirectories;
+use TMSWP\Testing\BootsKernelBeforeInit;
+use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\RecordingLogger;
+use TMSWP\Testing\UsesTempDirectories;
 
 /**
  * フォームの二重送信の防止(実際の nonce と、wp_options への jti の claim)、onComplete の例外の扱い、

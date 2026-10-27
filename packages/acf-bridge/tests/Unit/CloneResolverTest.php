@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\AcfBridge\Generate\CloneResolver;
 use TMSWP\AcfBridge\Json\FieldDefinition;
 use TMSWP\AcfBridge\Json\FieldGroup;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class CloneResolverTest extends UnitTestCase
 {

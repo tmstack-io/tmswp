@@ -13,8 +13,8 @@ use TMSWP\AcfBridge\Json\FieldGroup;
 use TMSWP\AcfBridge\Manifest\ManagedKey;
 use TMSWP\AcfBridge\Manifest\ManagedKeyCollector;
 use TMSWP\AcfBridge\Tests\Support\RestoresAcfStores;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
-use TMSWP\Core\Tests\Support\UsesTempDirectories;
+use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\UsesTempDirectories;
 
 /**
  * cloneのフィールドを、実物のACF Proで確かめる(docs/09 §6.6)。ACFの管理画面と同じ経路(cloneのkeyへのupdate_field()と

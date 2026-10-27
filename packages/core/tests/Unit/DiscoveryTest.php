@@ -19,7 +19,7 @@ use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
 use TMSWP\Core\Kernel\HookMethodKind;
 use TMSWP\Core\Kernel\KernelConfig;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class DiscoveryTest extends UnitTestCase
 {
@@ -1278,7 +1278,7 @@ PHP;
     private function runPhp(string $script, string $root, string $namespace): string
     {
         $process = proc_open(
-            [PHP_BINARY, $script, \dirname(__DIR__, 4) . '/vendor/autoload.php', $root, $namespace],
+            [PHP_BINARY, $script, self::composerAutoloadFile(), $root, $namespace],
             [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
         );

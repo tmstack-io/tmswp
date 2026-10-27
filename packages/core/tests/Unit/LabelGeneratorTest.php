@@ -7,7 +7,7 @@ namespace TMSWP\Core\Tests\Unit;
 use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Label\LabelGenerator;
 use TMSWP\Core\Label\LabelLanguage;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * 期待するキーの一覧は WordPress 7.0 のコアから写したもの。

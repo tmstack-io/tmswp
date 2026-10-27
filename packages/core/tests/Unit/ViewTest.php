@@ -11,9 +11,9 @@ use RuntimeException;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\InvalidTemplateSlugException;
 use TMSWP\Core\Exception\TemplateNotFoundException;
-use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\Core\View\Template;
 use TMSWP\Core\View\TemplateLocator;
+use TMSWP\Testing\UnitTestCase;
 
 final class ViewTest extends UnitTestCase
 {

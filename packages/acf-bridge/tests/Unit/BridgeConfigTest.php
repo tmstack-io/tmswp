@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\AcfBridge\BridgeConfig;
 use TMSWP\AcfBridge\Exception\AcfBridgeRuntimeException;
 use TMSWP\Core\Kernel\KernelConfig;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * BridgeConfigの入力の検証と、Kernelの構成からの既定値。

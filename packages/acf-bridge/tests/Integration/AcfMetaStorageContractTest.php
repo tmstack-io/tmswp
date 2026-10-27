@@ -7,7 +7,7 @@ namespace TMSWP\AcfBridge\Tests\Integration;
 use TMSWP\AcfBridge\AcfMetaStorage;
 use TMSWP\Core\Meta\MetaStorageInterface;
 use TMSWP\Core\Meta\ObjectType;
-use TMSWP\Core\Tests\Support\MetaStorageContractTestCase;
+use TMSWP\Testing\MetaStorageContractTestCase;
 
 /**
  * AcfMetaStorageがMetaStorageInterfaceの契約(docs/04 §4.5)を満たすことを、有効化した無料版ACFで確かめる。

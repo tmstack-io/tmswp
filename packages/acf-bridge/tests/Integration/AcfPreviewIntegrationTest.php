@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\AcfBridge\Tests\Integration;
 
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Testing\IntegrationTestCase;
 use WP_Post;
 
 /**

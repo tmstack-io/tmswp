@@ -10,7 +10,7 @@ use TMSWP\Core\Label\LabelGenerator;
 use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Tax\Taxonomy;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Testing\IntegrationTestCase;
 use WP_Post_Type;
 use WP_Role;
 use WP_Taxonomy;

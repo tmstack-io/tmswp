@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace TMSWP\Core\Tests\Unit;
+namespace TMSWP\Testing\Tests\Unit;
 
 use InvalidArgumentException;
 use stdClass;
 use Stringable;
-use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
 
 /**
  * wpdbの代役が、実wpdbと同じ形のSQLを返すこと(実wpdbとの照合は統合層のWpdbTestDoubleParityTest)。

@@ -9,11 +9,11 @@ use PhpToken;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
-use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\JaToolkit\Module\DisableTexturize;
 use TMSWP\JaToolkit\Module\FullwidthSearchNormalizer;
 use TMSWP\JaToolkit\Module\JapaneseSlug;
 use TMSWP\JaToolkit\ModuleInterface;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * docs/08の受け入れ基準のうち、ja-toolkitのソースの形で決まる項目(grep検証の項目)を、src/のトークンで確かめる。

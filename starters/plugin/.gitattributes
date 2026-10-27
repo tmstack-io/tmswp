@@ -1,0 +1,3 @@
+# create-projectの配布物(読み取り専用リポジトリのzipと、Composerのpathリポジトリの写し)から、ビルドの道具とOSのファイルを外す
+/node_modules export-ignore
+.DS_Store export-ignore

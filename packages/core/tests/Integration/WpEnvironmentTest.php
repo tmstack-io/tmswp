@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Integration;
 
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Testing\IntegrationTestCase;
 
 final class WpEnvironmentTest extends IntegrationTestCase
 {

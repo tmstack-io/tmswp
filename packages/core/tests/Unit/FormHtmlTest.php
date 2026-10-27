@@ -12,7 +12,7 @@ use TMSWP\Core\Form\FormDefinition;
 use TMSWP\Core\Form\FormHtml;
 use TMSWP\Core\Form\FormRequest;
 use TMSWP\Core\Form\FormStep;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * FormHtml(純関数のレンダラ)と FieldView の出力のスナップショット。旧 iwf2b の FormTest・FormChoiceTest の

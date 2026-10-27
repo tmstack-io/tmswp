@@ -17,8 +17,8 @@ use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\PostTypeDefinition;
 use TMSWP\Core\Tax\Taxonomy;
 use TMSWP\Core\Tax\TaxonomyDefinition;
-use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\Core\User\UserRoleDefinition;
+use TMSWP\Testing\UnitTestCase;
 
 final class EntityDefinitionTest extends UnitTestCase
 {

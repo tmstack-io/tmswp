@@ -13,7 +13,7 @@ use TMSWP\Core\Kernel\Discovery;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * Kernel・Discovery・Container・DiscoveryFile・KernelConfig が、__callStatic・extract()・グローバルな可変状態(許可していない

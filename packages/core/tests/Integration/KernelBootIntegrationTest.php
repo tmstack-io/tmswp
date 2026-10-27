@@ -34,13 +34,13 @@ use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Model\Model;
 use TMSWP\Core\Option\OptionRepositoryFactory;
 use TMSWP\Core\Post\PostType;
-use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
-use TMSWP\Core\Tests\Support\MemoryMetaStorage;
 use TMSWP\Core\Tests\Support\RecordingExtension;
 use TMSWP\Core\Tests\Support\RecordingInitializer;
-use TMSWP\Core\Tests\Support\RecordingLogger;
-use TMSWP\Core\Tests\Support\UsesTempDirectories;
+use TMSWP\Testing\BootsKernelBeforeInit;
+use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\MemoryMetaStorage;
+use TMSWP\Testing\RecordingLogger;
+use TMSWP\Testing\UsesTempDirectories;
 use WP_Hook;
 use WP_Rewrite;
 

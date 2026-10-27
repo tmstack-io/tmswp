@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Thumbnail\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\DataProvider;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 use TMSWP\Thumbnail\ThumbGenerator;
 
 /**

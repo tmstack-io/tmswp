@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\DataProvider;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * bin/coverage-check.php(unit と integration の clover の行単位の合算と閾値判定)を CLI として検証する。

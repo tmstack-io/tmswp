@@ -28,8 +28,8 @@ use TMSWP\Core\Model\Model;
 use TMSWP\Core\Model\ModelInitializer;
 use TMSWP\Core\Model\QueryBuilder;
 use TMSWP\Core\Model\TableDefinition;
-use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
 
 final class ModelLayerTest extends UnitTestCase
 {

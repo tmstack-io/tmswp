@@ -14,7 +14,7 @@ use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Support\Arr;
 use TMSWP\Core\Support\Html;
 use TMSWP\Core\Support\Str;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class SupportTest extends UnitTestCase
 {

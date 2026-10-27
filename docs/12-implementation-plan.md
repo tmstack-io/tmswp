@@ -234,7 +234,7 @@ TMSWP の主な利用形態は、1 サイト用のテーマ(必要に応じて�
 ## 1.16 配布
 
 - 各パッケージを read-only split で配布し、Packagist に登録する(DR-11)。ライセンスは GPL-2.0-or-later。CI と split には GitHub Actions を使う。
-- 開発は monorepo(`tmstack-io/tmswp`)で行う。公開時は GitHub Actions で `tmstack-io/tmswp-{パッケージ名}` の読み取り専用リポジトリ 7 つ(tmswp-core、tmswp-acf-bridge、tmswp-settings-page、tmswp-thumbnail、tmswp-ja-toolkit、tmswp-starter-theme、tmswp-starter-plugin)へ自動で同期する。Packagist の名前は `tmswp/*` のまま。
+- 開発はmonorepo(`tmstack-io/tmswp`)で行う。公開時はGitHub Actionsで`tmstack-io/tmswp-{パッケージ名}`の読み取り専用リポジトリ8つ(tmswp-core、tmswp-acf-bridge、tmswp-settings-page、tmswp-thumbnail、tmswp-ja-toolkit、tmswp-testing、tmswp-starter-theme、tmswp-starter-plugin)へ自動で同期する。Packagistの名前は`tmswp/*`のまま。
 - 読み取り専用にする方法は、Issue と Wiki の無効化、説明文での monorepo への案内、誤って送られたプルリクエストの自動クローズと案内である。アーカイブは使わない(同期が書き込めなくなるため)。
 - スターターは `composer create-project tmswp/starter-theme` 等で作る。
 - 名前空間のプレフィックス化(strauss 等)は行わない。

@@ -13,7 +13,7 @@ use TMSWP\AcfBridge\Json\FieldGroup;
 use TMSWP\AcfBridge\Manifest\ManagedKey;
 use TMSWP\AcfBridge\Manifest\ManagedKeyCollector;
 use TMSWP\Core\Meta\ObjectType;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * 管理キーの収集(`wp tmswp acf check`のE101の入力)。

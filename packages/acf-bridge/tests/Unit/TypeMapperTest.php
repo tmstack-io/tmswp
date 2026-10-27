@@ -11,7 +11,7 @@ use TMSWP\AcfBridge\Generate\ClassImports;
 use TMSWP\AcfBridge\Generate\TypeMapper;
 use TMSWP\AcfBridge\Generate\TypeMapping;
 use TMSWP\AcfBridge\Json\FieldDefinition;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class TypeMapperTest extends UnitTestCase
 {

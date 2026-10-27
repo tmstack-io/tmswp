@@ -8,8 +8,8 @@ use Closure;
 use ReflectionFunction;
 use TMSWP\Core\Form\Rule\Required;
 use TMSWP\Core\Kernel\Kernel;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
 use TMSWP\JaToolkit\JaToolkit;
+use TMSWP\Testing\IntegrationTestCase;
 use WP_Hook;
 
 /**

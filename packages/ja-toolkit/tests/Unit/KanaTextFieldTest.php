@@ -14,10 +14,10 @@ use TMSWP\Core\Form\FormResult;
 use TMSWP\Core\Form\FormStep;
 use TMSWP\Core\Form\Rule\Required;
 use TMSWP\Core\Form\SubmitToken;
-use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
 use TMSWP\JaToolkit\Form\KanaTextField;
 use TMSWP\JaToolkit\Form\KanaType;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
 
 /**
  * KanaTextFieldの正規化(前後の空白の除去の後のmb_convert_kanaと、ヴ・ゔ等の変換)と、正規化の後の検証。

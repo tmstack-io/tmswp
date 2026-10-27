@@ -13,7 +13,7 @@ use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\Discovery;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\KernelConfig;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 use UnexpectedValueException;
 
 /**

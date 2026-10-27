@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\AcfBridge\AcfBridge;
 use TMSWP\AcfBridge\Cli\TmsAcf;
 use TMSWP\Core\Kernel\KernelConfig;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * WordPressを起動しない`tms-acf`(docs/09 §5.1): ルートの`tmswp-kernel.php`のKernelConfigから対象を決め、Kernelを

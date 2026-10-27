@@ -9,7 +9,7 @@ use stdClass;
 use Stringable;
 use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Meta\ValueCaster;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class ValueCasterTest extends UnitTestCase
 {

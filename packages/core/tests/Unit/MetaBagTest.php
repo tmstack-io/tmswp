@@ -14,7 +14,7 @@ use TMSWP\Core\Meta\MetaSchemaSet;
 use TMSWP\Core\Meta\MetaStorageInterface;
 use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Meta\ObjectType;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class MetaBagTest extends UnitTestCase
 {

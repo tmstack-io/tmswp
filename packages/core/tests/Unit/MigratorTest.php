@@ -21,9 +21,9 @@ use TMSWP\Core\Model\MigrationAction;
 use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Model\Model;
 use TMSWP\Core\Model\TableDefinition;
-use TMSWP\Core\Tests\Support\RecordingLogger;
-use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
+use TMSWP\Testing\RecordingLogger;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
 
 /**
  * Migrator の管理画面の通知(06-model §5)。テーブル定義のハッシュが DB(保存済みのハッシュ)と食い違うと、権限のある

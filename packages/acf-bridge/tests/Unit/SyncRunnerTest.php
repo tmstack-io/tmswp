@@ -8,7 +8,7 @@ use Closure;
 use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\AcfBridge\BridgeConfig;
 use TMSWP\AcfBridge\Cli\SyncRunner;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * WP-CLI版とtms-acfが共有する生成・照合(SyncRunner)のうち、checkの統一diffとI002。WordPressを使わない。

@@ -18,8 +18,8 @@ use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Tests\Support\RecordingExtension;
-use TMSWP\Core\Tests\Support\RecordingLogger;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\RecordingLogger;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * KernelConfig で宣言する拡張・ログのチャネル・ラベル言語の既定を確かめる。

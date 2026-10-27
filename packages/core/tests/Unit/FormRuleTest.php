@@ -26,7 +26,7 @@ use TMSWP\Core\Form\Rule\RuleInterface;
 use TMSWP\Core\Form\Rule\Url;
 use TMSWP\Core\Form\ValidationContext;
 use TMSWP\Core\Form\Validator;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 use TypeError;
 
 /**
@@ -639,7 +639,7 @@ final class FormRuleTest extends UnitTestCase
             }
             PHP;
         $process = proc_open(
-            [PHP_BINARY, '-d', 'disable_functions=idn_to_ascii', '-r', $code, \dirname(__DIR__, 4) . '/vendor/autoload.php'],
+            [PHP_BINARY, '-d', 'disable_functions=idn_to_ascii', '-r', $code, self::composerAutoloadFile()],
             [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
         );

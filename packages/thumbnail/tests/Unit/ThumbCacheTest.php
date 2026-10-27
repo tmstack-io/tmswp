@@ -7,7 +7,7 @@ namespace TMSWP\Thumbnail\Tests\Unit;
 use Brain\Monkey\Functions;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\RuntimeException;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 use TMSWP\Thumbnail\ThumbCache;
 use TMSWP\Thumbnail\ThumbLock;
 
@@ -578,7 +578,7 @@ final class ThumbCacheTest extends UnitTestCase
                 }
             }
             PHP;
-        $source = strtr($source, ['{autoload}' => \dirname(__DIR__, 4) . '/vendor/autoload.php', '{key}' => self::KEY]);
+        $source = strtr($source, ['{autoload}' => self::composerAutoloadFile(), '{key}' => self::KEY]);
         $file = $this->createTempDirectory('thumb-lock-worker') . '/worker.php';
         self::assertNotFalse(file_put_contents($file, $source));
 

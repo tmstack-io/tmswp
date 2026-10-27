@@ -26,10 +26,10 @@ use TMSWP\Core\Meta\WpMetaStorage;
 use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Option\OptionStorageInterface;
 use TMSWP\Core\Option\WpOptionStorage;
-use TMSWP\Core\Tests\Support\MemoryMetaStorage;
-use TMSWP\Core\Tests\Support\MemoryOptionStorage;
-use TMSWP\Core\Tests\Support\StorageExtension;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\MemoryMetaStorage;
+use TMSWP\Testing\MemoryOptionStorage;
+use TMSWP\Testing\StorageExtension;
+use TMSWP\Testing\UnitTestCase;
 use WP_Post;
 
 /**

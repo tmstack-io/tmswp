@@ -9,8 +9,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Exception\SchemaException;
 use TMSWP\Core\Model\Connection;
 use TMSWP\Core\Model\TableDefinition;
-use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
 
 /**
  * TableDefinitionの受け入れ基準(docs/06の受け入れ基準「TableDefinition」)を、WordPressなしで確かめる。

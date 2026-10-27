@@ -25,8 +25,8 @@ use TMSWP\Core\Model\QueryBuilder;
 use TMSWP\Core\Query\CastType;
 use TMSWP\Core\Query\Compare;
 use TMSWP\Core\Query\SortOrder;
-use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
 
 /**
  * QueryBuilder・Connectionの受け入れ基準(docs/06の受け入れ基準「QueryBuilder / Connection」)のうち、WordPressなしで

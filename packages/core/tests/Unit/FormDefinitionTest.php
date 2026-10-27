@@ -14,7 +14,7 @@ use TMSWP\Core\Form\Form;
 use TMSWP\Core\Form\FormDefinition;
 use TMSWP\Core\Form\FormRequest;
 use TMSWP\Core\Form\SpamGuardInterface;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class FormDefinitionTest extends UnitTestCase
 {

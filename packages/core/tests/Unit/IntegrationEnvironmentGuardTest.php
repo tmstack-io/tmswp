@@ -9,7 +9,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use stdClass;
 use TMSWP\Core\Tests\Support\IntegrationEnvironmentGuard;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class IntegrationEnvironmentGuardTest extends UnitTestCase
 {

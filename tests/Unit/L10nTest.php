@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace TMSWP\Core\Tests\Unit;
+namespace TMSWP\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\DataProvider;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * 同梱翻訳(packages/<pkg>/languages/)の検査。
@@ -125,7 +125,7 @@ final class L10nTest extends UnitTestCase
 
     private static function languagesDir(string $package): string
     {
-        return \dirname(__DIR__, 3) . "/{$package}/languages";
+        return \dirname(__DIR__, 2) . "/packages/{$package}/languages";
     }
 
     /**

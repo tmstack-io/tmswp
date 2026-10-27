@@ -22,7 +22,7 @@ monorepo ルート(リポジトリ `tmswp`)直下の QA 設定ファイル一式
 本書が定義するファイル(すべて monorepo ルート基準):
 
 ```
-composer.json                     … ルート(monorepo-builder merge で維持)
+composer.json                     … ルート(手で維持する。1.1)
 phpstan.neon.dist
 .php-cs-fixer.dist.php
 phpunit.unit.xml.dist
@@ -36,7 +36,10 @@ tests/wp-tests-config.php
 bin/coverage-check.php
 .github/workflows/qa.yml
 .github/workflows/split.yml
-packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestCase)
+packages/*/phpunit.xml.dist          … パッケージを単独で取り出したときのユニットテスト(4.3)
+packages/*/.gitattributes            … 配布物から外すファイル(6.2)
+packages/core/tests/bootstrap.php
+packages/testing/src/UnitTestCase.php (TMSWP\Testing\UnitTestCase)
 ```
 
 ## 依存文書
@@ -80,7 +83,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 
 ### 1.1 ルート composer.json(完全版)
 
-ルート `composer.json` は monorepo-builder の `merge` コマンドで各パッケージの依存をマージして維持する(手編集は scripts / config / extra のみ)。マージ結果として維持すべき完全形:
+ルート`composer.json`は手で維持する。`replace`・`autoload`・`autoload-dev`はpackages/*のcomposer.jsonに合わせ(新しいパッケージを足す手順は6.2)、依存の版の制約がパッケージと食い違わないことを`composer monorepo:validate`で検査する。`monorepo-builder merge`は使わず、composerのスクリプトにも置かない(starters/*のautoloadと、tmswp/testingのrequireのPHPUnit・Brain Monkey・Mockeryをルートの`autoload`・`require`に入れるため)。完全形:
 
 ```json
 {
@@ -91,6 +94,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
     "require": {
         "php": ">=8.3",
         "ext-gd": "*",
+        "ext-intl": "*",
         "ext-mbstring": "*",
         "psr/container": "^2.0",
         "psr/log": "^3.0"
@@ -116,6 +120,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
         "tmswp/core": "self.version",
         "tmswp/ja-toolkit": "self.version",
         "tmswp/settings-page": "self.version",
+        "tmswp/testing": "self.version",
         "tmswp/thumbnail": "self.version"
     },
     "autoload": {
@@ -138,6 +143,8 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
             "TMSWP\\Core\\Tests\\": "packages/core/tests/",
             "TMSWP\\JaToolkit\\Tests\\": "packages/ja-toolkit/tests/",
             "TMSWP\\SettingsPage\\Tests\\": "packages/settings-page/tests/",
+            "TMSWP\\Testing\\": "packages/testing/src/",
+            "TMSWP\\Testing\\Tests\\": "packages/testing/tests/",
             "TMSWP\\Thumbnail\\Tests\\": "packages/thumbnail/tests/"
         }
     },
@@ -153,7 +160,15 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
             "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/ja-toolkit/src packages/ja-toolkit/languages/tmswp-ja-toolkit.pot --domain=tmswp --package-name=tmswp-ja-toolkit --headers='{\"POT-Creation-Date\":\"\"}'",
             "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/ja-toolkit/languages/tmswp-ja-toolkit.pot",
             "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/ja-toolkit/languages",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/ja-toolkit/languages"
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/ja-toolkit/languages",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/settings-page/src packages/settings-page/languages/tmswp-settings-page.pot --domain=tmswp --package-name=tmswp-settings-page --headers='{\"POT-Creation-Date\":\"\"}'",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/settings-page/languages/tmswp-settings-page.pot",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/settings-page/languages",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/settings-page/languages",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/thumbnail/src packages/thumbnail/languages/tmswp-thumbnail.pot --domain=tmswp --package-name=tmswp-thumbnail --headers='{\"POT-Creation-Date\":\"\"}'",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/thumbnail/languages/tmswp-thumbnail.pot",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/thumbnail/languages",
+            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/thumbnail/languages"
         ],
         "discover:build": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover",
         "discover:check": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --check",
@@ -174,15 +189,27 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
             "Composer\\Config::disableProcessTimeout",
             "bash tools/acf-pro-integration.sh"
         ],
-        "test": ["@test:unit", "@test:integration"],
-        "qa:fast": ["@lint", "@analyse", "@test:unit"],
+        "test": [
+            "@test:unit",
+            "@test:integration"
+        ],
+        "qa:fast": [
+            "@lint",
+            "@analyse",
+            "@test:unit"
+        ],
         "acf:check:fixtures": [
             "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/themes/tmswp-fixture-theme",
             "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/plugins/tmswp-fixture-plugin"
         ],
-        "qa": ["@lint", "@analyse", "@acf:check:fixtures", "@discover:check", "@test"],
+        "qa": [
+            "@lint",
+            "@analyse",
+            "@acf:check:fixtures",
+            "@discover:check",
+            "@test"
+        ],
         "monorepo:validate": "monorepo-builder validate",
-        "monorepo:merge": "monorepo-builder merge",
         "wp:start": "node node_modules/@wordpress/env/bin/wp-env start",
         "wp:start:coverage": "node node_modules/@wordpress/env/bin/wp-env start --xdebug=coverage",
         "wp:stop": "node node_modules/@wordpress/env/bin/wp-env stop"
@@ -210,6 +237,7 @@ packages/core/tests/Support/UnitTestCase.php (TMSWP\Core\Tests\Support\UnitTestC
 補足:
 
 - コア(`tmswp/core`)の runtime 依存は `psr/log` と `psr/container` のみ(DR-14)。
+- テストの支援コード(`tmswp/testing`の`src/`。名前空間`TMSWP\Testing\`)は、ランタイムのコードではないため、`autoload`ではなく`autoload-dev`に置く。`replace`には全6パッケージを列挙する。
 - `extra.bamarni-bin.forward-command: true` により、`composer install` 一発で後述の `vendor-bin/wp-tests` 隔離環境も同時にインストールされる。
 - `php-stubs/wordpress-stubs` は `szepeviktor/phpstan-wordpress` の依存として自動導入される(明示 require 不要)。
 - `config.platform.php` を下限の `8.3.0` に固定し、依存を下限の PHP で解決する(上位の PHP で `composer update` しても、8.3 で動かない版が lock に入らない)。`vendor-bin/wp-tests/composer.json` も同じ値を持つ(§4.2)。
@@ -594,6 +622,9 @@ WordPress コアテストスイート(wordpress-develop の `tests/phpunit/inclu
         <testsuite name="ja-toolkit">
             <directory>packages/ja-toolkit/tests/Unit</directory>
         </testsuite>
+        <testsuite name="testing">
+            <directory>packages/testing/tests/Unit</directory>
+        </testsuite>
         <testsuite name="tools">
             <directory>tests/Unit</directory>
         </testsuite>
@@ -610,7 +641,41 @@ WordPress コアテストスイート(wordpress-develop の `tests/phpunit/inclu
 </phpunit>
 ```
 
-`--testsuite core` のようにパッケージ単位の実行が可能(AI が単一パッケージを反復開発する際の推奨形)。
+`--testsuite core`のようにパッケージ単位の実行が可能(AIが単一パッケージを反復開発する際の推奨形)。testsuite `tools`(ルートの`tests/Unit/`)は、ルートの道具(bin/・スターターのsetup.php等)のテストと、複数のパッケージにまたがる検査(全パッケージの例外の階層を確かめる`ExceptionHierarchyTest`、同梱翻訳の`L10nTest`、`composer analyse`の設定で解析する`PHPStanRawFragmentLiteralStringTest`)を置く。これらはmonorepoの構成に依存するため、パッケージのtests/には置かない。
+
+各パッケージ(packages/*)には、splitで単独で取り出したときの`composer test`が使う`phpunit.xml.dist`を置く(`.gitattributes`の`export-ignore`で配布物からは外す)。そのパッケージの`tests/Unit/`だけを走らせ、統合テストはmonorepoのルートでだけ走らせる。coreの例(ほかのパッケージはtestsuiteの名前とbootstrap(`vendor/autoload.php`)だけが違う):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!--このパッケージを単独で取り出したときのユニットテスト(composer test)。統合テストはmonorepoのルートで走らせる-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         executionOrder="depends"
+         colors="true"
+         failOnRisky="true"
+         failOnWarning="true"
+         failOnDeprecation="true"
+         beStrictAboutOutputDuringTests="true"
+         displayDetailsOnTestsThatTriggerDeprecations="true"
+         displayDetailsOnTestsThatTriggerWarnings="true">
+    <testsuites>
+        <testsuite name="core">
+            <directory>tests/Unit</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>src</directory>
+        </include>
+    </source>
+    <php>
+        <ini name="date.timezone" value="UTC"/>
+    </php>
+</phpunit>
+```
+
+coreのbootstrap(`packages/core/tests/bootstrap.php`)は、Composerのオートローダを読み込んだ後、Brain MonkeyのPatchworkが`phar://`のストリームを差し替える前に、PHPStanのテストのコンテナ(`PHPStanTestCase::getContainer()`)を作る。PHPStan 2.3のpharは、内部のクラスを最初に読み込むときに同じファイルを`vendor/composer/../`を含むパスと含まないパスから読み込み、差し替えた後ではPHPが同じファイルと判定できずに、PHPStanの拡張のテストがクラスの再宣言で止まるためである。
 
 ### 4.4 tests/bootstrap-unit.php と UnitTestCase 基底
 
@@ -628,42 +693,65 @@ date_default_timezone_set('UTC');
 
 WP 定数(`ABSPATH` 等)は**意図的に定義しない**。ユニット層のテスト対象が WP 定数や WP 関数へ直接到達した場合、未定義エラー / Brain Monkey の例外として顕在化させ、「WP 関数呼び出しは薄い境界に寄せる」規約(共通前提)の違反を検出する。
 
-全ユニットテストの基底クラス `TMSWP\Core\Tests\Support\UnitTestCase`(完全シグネチャ):
+全ユニットテストの基底クラス`TMSWP\Testing\UnitTestCase`(`tmswp/testing`。完全版):
 
 ```php
 <?php
 
 declare(strict_types=1);
 
-namespace TMSWP\Core\Tests\Support;
+namespace TMSWP\Testing;
 
 use Brain\Monkey;
+use Brain\Monkey\Functions;
+use Composer\Autoload\ClassLoader;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
 
 /**
- * ユニット層の共通基底。Brain Monkey の setUp/tearDown と
- * Mockery の expectation 検証を全テストに保証する。
+ * ユニット層の共通基底。Brain MonkeyとMockeryの検証を全テストに保証する。
+ *
+ * FWのソースは翻訳関数(`__()`等)を常に呼ぶため、翻訳関数はソース文字列をそのまま返すスタブにする。
  */
 abstract class UnitTestCase extends TestCase
 {
     use MockeryPHPUnitIntegration;
+    use UsesTempDirectories;
 
     protected function setUp(): void
     {
         parent::setUp();
         Monkey\setUp();
+        Functions\stubTranslationFunctions();
     }
 
     protected function tearDown(): void
     {
+        $this->cleanupTempDirectories();
         Monkey\tearDown();
         parent::tearDown();
+    }
+
+    /**
+     * テストを走らせているComposerの`vendor/autoload.php`の絶対パスを返す。
+     *
+     * 別のPHPのプロセスでテストのコードを動かすときに渡す。monorepoではルートのvendor/、パッケージを単独で
+     * 取り出したときはそのパッケージのvendor/を指す。
+     */
+    protected static function composerAutoloadFile(): string
+    {
+        $classLoaderFile = (new ReflectionClass(ClassLoader::class))->getFileName();
+        self::assertIsString($classLoaderFile);
+
+        return \dirname($classLoaderFile, 2) . '/autoload.php';
     }
 }
 ```
 
-- 全パッケージのユニットテストはこれを継承する(`abstract` のため final_class ルールと両立)。
+- 全パッケージのユニットテストはこれを継承する(`abstract`のためfinal_classルールと両立)。各パッケージは`tmswp/testing`をrequire-devで入れる。
+- `createTempDirectory()`(`UsesTempDirectories`)は、テストごとに`sys_get_temp_dir()`の下に専用の親ディレクトリを作り、その中に一時ディレクトリを作る。`KernelConfig`がappDirの親に書く探索結果ファイル(`tmswp-discovery.php`)も親ディレクトリに収まり、`tearDown()`で親ディレクトリごと消える。PHP 8.3と8.5のユニットテストを並列に実行しても干渉しない。
+- 別のPHPのプロセスでテストのコードを動かすときは、`composerAutoloadFile()`が返す`vendor/autoload.php`を渡す(monorepoではルート、単独で取り出したパッケージではそのパッケージのvendor/を指す)。
 - WP 関数のモックは Brain Monkey の `Functions\when()` / `Functions\expect()` を使用する。`Filters\expectAdded()` / `Actions\expectAdded()` でフック登録を検証する。
 - ファイル I/O を伴うテスト(SimpleLogger / TempFileStore)は vfsStream を使用する(旧 iwf2b の作法を踏襲)。探索結果ファイル(DiscoveryFile)は `include` で読み込み、`rename` で置き換えるため、一時ディレクトリの実ファイルで確かめる。
 
@@ -696,6 +784,9 @@ abstract class UnitTestCase extends TestCase
         <testsuite name="ja-toolkit">
             <directory>packages/ja-toolkit/tests/Integration</directory>
         </testsuite>
+        <testsuite name="testing">
+            <directory>packages/testing/tests/Integration</directory>
+        </testsuite>
         <testsuite name="starters">
             <directory>tests/Integration</directory>
         </testsuite>
@@ -718,7 +809,7 @@ abstract class UnitTestCase extends TestCase
 </phpunit>
 ```
 
-testsuite `starters`(`tests/Integration/`)は、スターターから作ったテーマとプラグインを開発用サイトで動かす統合テストである(4.6の「スターターの統合テスト」)。
+testsuite `testing`(`packages/testing/tests/Integration/`)は、ユニット層の`WpdbTestDouble`が実際の`wpdb`と同じSQLを返すことを確かめる。testsuite `starters`(`tests/Integration/`)は、スターターから作ったテーマとプラグインを開発用サイトで動かす統合テストである(4.6の「スターターの統合テスト」)。
 
 `<groups>`の除外により、ACF Pro専用のテスト(グループ`acf-pro`)は`composer test:integration`・カバレッジの計測・CIでは走らない(4.9)。
 
@@ -826,7 +917,7 @@ fixtureとの共存は次のとおり。
 
 #### IntegrationTestCase
 
-全パッケージの統合テストは `TMSWP\Core\Tests\Support\IntegrationTestCase`(`WP_UnitTestCase` を継承する抽象クラス)を継承し、テストの中で `Kernel::boot()` を呼ばない。例外は `KernelBootIntegrationTest` の本番相当(debug=false)の起動の確認だけで、一時ディレクトリに作ったプラグイン形態の Kernel を、fixture と重ならない名前空間で boot する(テーマ形態にしないのは、他のテストが発火させるテーマ切替のフックにその Kernel を登録しないため)。`init` の後の boot になるため、遅延 boot のログは Log の出力先を一時的に差し替えて捕まえる。
+全パッケージの統合テストは`TMSWP\Testing\IntegrationTestCase`(`tmswp/testing`。`WP_UnitTestCase`を継承する抽象クラス)を継承し、テストの中で`Kernel::boot()`を呼ばない。例外は`KernelBootIntegrationTest`の本番相当(debug=false)の起動の確認だけで、一時ディレクトリに作ったプラグイン形態のKernelを、fixtureと重ならない名前空間でbootする(テーマ形態にしないのは、他のテストが発火させるテーマ切替のフックにそのKernelを登録しないため)。`init`の後のbootになるため、遅延bootのログはLogの出力先を一時的に差し替えて捕まえる。
 
 - `themeKernel()` / `pluginKernel()` で fixture の Kernel を得る。
 - fixture のクラスは PHPStan の解析対象外のため、テストからは FQCN の文字列で参照し、`fixtureClass($fqcn, $parent)` で親クラスを確かめた class-string として使う。
@@ -1190,7 +1281,7 @@ jobs:
 
 ### 5.2 .github/workflows/split.yml(完全版)
 
-read-only split 配布(DR-11)。各パッケージを個別リポジトリ(`tmstack-io/tmswp-core` 等の 7 件。01 §4.4)へ push し、Packagist はその split リポジトリを `tmswp/*` の名前で購読する。split 先リポジトリはアーカイブせず(split が書き込めなくなるため)、Issue と Wiki を無効にし、説明文で monorepo へ案内する。誤って送られたプルリクエストは、同期先で動くワークフローが自動で閉じて案内する(01 §4.4)。
+read-only split配布(DR-11)。各パッケージを個別リポジトリ(`tmstack-io/tmswp-core`等の8件。01 §4.4)へpushし、Packagistはそのsplitリポジトリを`tmswp/*`の名前で購読する。split先リポジトリはアーカイブせず(splitが書き込めなくなるため)、IssueとWikiを無効にし、説明文でmonorepoへ案内する。誤って送られたプルリクエストは、同期先で動くワークフローが自動で閉じて案内する(01 §4.4)。
 
 ```yaml
 name: Split Packages
@@ -1217,6 +1308,7 @@ jobs:
           - { local: 'packages/settings-page', repo: 'tmswp-settings-page' }
           - { local: 'packages/acf-bridge', repo: 'tmswp-acf-bridge' }
           - { local: 'packages/ja-toolkit', repo: 'tmswp-ja-toolkit' }
+          - { local: 'packages/testing', repo: 'tmswp-testing' }
           - { local: 'starters/theme', repo: 'tmswp-starter-theme' }
           - { local: 'starters/plugin', repo: 'tmswp-starter-plugin' }
     steps:
@@ -1252,7 +1344,7 @@ jobs:
         run: echo "SPLIT_ACCESS_TOKEN is not set; validated split source only."
 ```
 
-- `SPLIT_ACCESS_TOKEN` は split 先への push に使うトークンで、fine-grained PAT。対象は送り先の 7 リポジトリ(`tmstack-io/tmswp-*`)だけ。権限は Contents: Read and write と Workflows: Read and write だけ(同期先へ `.github/workflows/` のプルリクエスト自動クローズ用ワークフローも送るため)。monorepo のリポジトリ Secrets に登録する。split アクションは push 用のトークンを入力ではなく環境変数 `GITHUB_TOKEN` から読むため、ステップの `env` で渡す。未登録の場合は split をせず、split 元のディレクトリの存在だけを確かめる。
+- `SPLIT_ACCESS_TOKEN`はsplit先へのpushに使うトークンで、fine-grained PAT。対象は送り先の8リポジトリ(`tmstack-io/tmswp-*`)だけ。権限はContents: Read and writeとWorkflows: Read and writeだけ(同期先へ`.github/workflows/`のプルリクエスト自動クローズ用ワークフローも送るため)。monorepoのリポジトリSecretsに登録する。splitアクションはpush用のトークンを入力ではなく環境変数`GITHUB_TOKEN`から読むため、ステップの`env`で渡す。未登録の場合はsplitをせず、split元のディレクトリの存在だけを確かめる。
 - `user_name` / `user_email` は split 先に作られるコミットのコミッターで、`tmstack-io` / `tommy@tmstack.io` とする。
 - split アクションは `danharrin/monorepo-split-github-action`(メンテナンス終了した symplify 版の維持後継)の v2.4.5 を正準とし、コミットの SHA で固定する(5.3)。タグは `${{ github.ref_name }}` で渡すこと。`with:` の値内では bash のパラメータ展開(`${GITHUB_REF#refs/tags/}` 等)は評価されず文字列リテラルのままタグ名として渡るため、使用してはならない。同等機能の action への差し替えは PATCH 扱いで可(01 §4.4)。
 
@@ -1307,7 +1399,6 @@ return static function (MBConfig $mbConfig): void {
     $mbConfig->defaultBranch('main');
     $mbConfig->packageAliasFormat('<major>.<minor>.x-dev');
 
-    // merge 時に全パッケージ composer.json へ揃える共通データ
     $mbConfig->dataToAppend([
         'require-dev' => [],
         'config' => [
@@ -1315,32 +1406,35 @@ return static function (MBConfig $mbConfig): void {
         ],
     ]);
 
-    // release ワークフロー(SemVer タグ運用: DR-11)
+    // `monorepo-builder release vX.Y.Z`が順に実行するワーカー。mainとタグのpushをこのコマンドが自ら行う(docs/RELEASING.md)
     $mbConfig->workers([
-        SetCurrentMutualDependenciesReleaseWorker::class, // 相互依存を ^X.Y.Z に固定
-        AddTagToChangelogReleaseWorker::class,            // CHANGELOG.md の Unreleased をタグ化
-        TagVersionReleaseWorker::class,                   // git tag vX.Y.Z
-        PushTagReleaseWorker::class,                      // タグ push → split.yml が発火
-        SetNextMutualDependenciesReleaseWorker::class,    // 相互依存を次期 dev へ
-        UpdateBranchAliasReleaseWorker::class,            // branch-alias 更新
-        PushNextDevReleaseWorker::class,
+        SetCurrentMutualDependenciesReleaseWorker::class, // packages/*・starters/*のtmswp/*の制約を^X.Y(PATCHが0より大きければ^X.Y.Z)にする
+        AddTagToChangelogReleaseWorker::class,            // CHANGELOG.mdの「## Unreleased」を「## X.Y.Z - <日付>」にする
+        TagVersionReleaseWorker::class,                   // git add .・git commit・git push origin mainの後、git tag vX.Y.Z
+        PushTagReleaseWorker::class,                      // git push --tags(split.ymlがタグをsplit先へ複製する)
+        SetNextMutualDependenciesReleaseWorker::class,    // tmswp/*の制約を^X.(Y+1)にする
+        UpdateBranchAliasReleaseWorker::class,            // branch-aliasを既に持つパッケージ(packages/*)だけ、X.(Y+1).x-devにする
+        PushNextDevReleaseWorker::class,                  // git add .・git commit -m "open X.(Y+1).x-dev"・git push origin main
     ]);
 };
 ```
 
 ### 6.2 パッケージ間依存の規律
 
-- 各拡張パッケージの composer.json は `"tmswp/core": "^X.Y"`(リリース時に `SetCurrentMutualDependenciesReleaseWorker` が同期)を宣言する。
-- ルート composer.json の `replace` に全パッケージを列挙する(1.1 参照)。これにより monorepo 内開発では vendor を介さずローカル `packages/*` のコードが使われる。
+- 各拡張パッケージとスターターのcomposer.jsonは`"tmswp/core": "^X.Y"`、packages/*のrequire-devは`"tmswp/testing": "^X.Y"`を宣言する(リリース時に`SetCurrentMutualDependenciesReleaseWorker`が、今回の版の`^X.Y`、PATCHが0より大きければ`^X.Y.Z`に同期する)。`^X.Y`は`Kernel::VERSION`と、packages/*の`branch-alias`(`dev-main` → `X.Y.x-dev`)を満たす。
+- ルートcomposer.jsonの`replace`にpackages/*の全パッケージを列挙する(1.1参照)。これによりmonorepo内開発ではvendorを介さずローカル`packages/*`のコードが使われる。
 - `composer monorepo:validate` が「各パッケージの require と ルートの require の整合」「相互依存バージョンの不一致」を検査する。CI 必須(qa.yml の `monorepo` ジョブ)。
-- 新パッケージ追加手順: `packages/<name>/composer.json` を作成 → ルートの `autoload(-dev)` / `replace` へ `composer monorepo:merge` で反映 → `phpstan.neon.dist` の paths、`phpunit.*.xml.dist` の testsuite、`split.yml` の matrix に追記。この 5 点セットを忘れると `monorepo:validate` または受け入れ基準(後述)で検出される。
+- 新パッケージ追加手順: `packages/<name>/`に`composer.json`(license・require・require-devの`tmswp/testing`・`scripts.test`・`extra.branch-alias`)、`LICENSE`(ルートと同じGPL-2.0-or-later)、`README.md`、`phpunit.xml.dist`、`.gitattributes`を置く → ルートcomposer.jsonの`replace`・`autoload`・`autoload-dev`に手で足す → `phpstan.neon.dist`のpaths、`phpunit.*.xml.dist`のtestsuite、`split.yml`のmatrixに追記 → 01 §2・§3.1・§4.4、本書5.2・受け入れ基準、`RELEASING.md`のパッケージの数を改める。パッケージをsplit相当で取り出して`composer install && composer test`が通ること(`RELEASING.md`)と、`composer monorepo:validate`で確かめる。
+- 各パッケージの`.gitattributes`は、`export-ignore`で`/tests`・`/phpunit.xml.dist`・`/.gitattributes`・`.DS_Store`を配布物から外す。Composerのpathリポジトリ(`symlink: false`)の写しもこれに従う(composer.jsonの`archive.exclude`はpathリポジトリの写しに効かない)。スターターの`.gitattributes`は`.DS_Store`(テーマは`/node_modules`も)だけを外し、作ったプロジェクトが使う`tests/`・`build/blocks/`・探索結果ファイルは外さない。
 
 ### 6.3 リリース手順(正準)
 
+手順の正本は`docs/RELEASING.md`である。`vendor/bin/monorepo-builder release vX.Y.Z`は、6.1のワーカーにより、リリースのコミットのmainへのpush(`TagVersionReleaseWorker`)、タグのpush(`PushTagReleaseWorker`)、次の開発版のコミットのmainへのpush(`PushNextDevReleaseWorker`)を自ら行う。このあと手で`git push`する手順は無い。mainへのpushとタグ付けは毎回ユーザーに確認してから実行する。
+
 ```bash
-vendor/bin/monorepo-builder release v0.2.0   # 検証は事前に composer qa
-git push origin main --tags                  # PushTagReleaseWorker が未 push の場合
-# → split.yml がタグを各 read-only リポジトリへ伝播 → Packagist が自動更新
+vendor/bin/monorepo-builder release vX.Y.Z --dry-run   # 実行するワーカーを表示するだけ(何も変えない)
+vendor/bin/monorepo-builder release vX.Y.Z             # mainとタグをpushする
+# → split.ymlがmainとタグを各read-onlyリポジトリへ複製 → Packagistが自動更新
 ```
 
 バージョンは全パッケージ同一(lockstep)。SemVer に従い、0.x 期はマイナーで破壊的変更を許容する。
@@ -1487,7 +1581,7 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Unit\Form\Rule;
 
 use Brain\Monkey\Functions;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class EmailRuleTest extends UnitTestCase
 {
@@ -1532,16 +1626,17 @@ final class EmailRuleTest extends UnitTestCase
 - [ ] `parameters.ignoreErrors` が空で、`reportUnmatchedIgnoredErrors: true`
 - [ ] php-cs-fixer が `@PER-CS2x0`(+ `:risky`)基底と `declare_strict_types` / `final_class` / `strict_comparison` を含む 3.1 のルール全文で構成され、`composer lint` がクリーンに通る
 - [ ] ユニットテストが PHPUnit 11・`tests/bootstrap-unit.php`(WP 定数を定義しない)で、WP / MySQL / Docker なしで全件パスする
-- [ ] 全ユニットテストが `TMSWP\Core\Tests\Support\UnitTestCase` を継承している
+- [ ] 全ユニットテストが`TMSWP\Testing\UnitTestCase`を継承している
 - [ ] 統合テストが wp-env の `cli` コンテナ内で PHPUnit 9.6(vendor-bin 隔離)+ WP_TESTS_DIR のテストライブラリで全件パスする
-- [ ] `phpunit.unit.xml.dist` / `phpunit.integration.xml.dist` に 5 パッケージ分の testsuite が定義されている
+- [ ] `phpunit.unit.xml.dist` / `phpunit.integration.xml.dist`に6パッケージ分のtestsuiteが定義されている
+- [ ] packages/*のそれぞれに`phpunit.xml.dist`・`.gitattributes`・`LICENSE`があり、split相当で単独で取り出して`composer install && composer test`が通る
 - [ ] ユニット層と統合層を合算した行カバレッジ(5 パッケージ)が、その版の閾値(`12-implementation-plan.md` §0.7。v0.9.0 で 85%)以上で、`bin/coverage-check.php` が閾値未満を exit 1、不正な引数・読めない clover・正規化できないパスを exit 2 にする
 - [ ] qa.yml に lint / analyse / monorepo / rules-verify / unit(PHP 8.3 / 8.5)/ integration(PHP 8.3 / 8.5 × WP 7.0 / 最新版 = 4 セル。テストライブラリは各セルの WP と同じ系列)/ coverage(PHP 8.3 / WP 最新版)の全ジョブがある
 - [ ] qa.yml と split.yml のすべての `uses:` がコミットの SHA で固定され、行末にタグ名のコメントがある(5.3)
 - [ ] `npm ci` で package.json に固定した版の @wordpress/env が入り、composer スクリプト・qa.yml が wp-env を `node node_modules/@wordpress/env/bin/wp-env` のパスでだけ呼ぶ
-- [ ] split.yml がタグ push で 7 リポジトリ(packages 5 + starters 2)を read-only リポジトリへ split し、同名タグを伝播する
-- [ ] `monorepo-builder.php` が packages/ と starters/ を対象に validate / merge / release を構成している
-- [ ] ルート composer.json の `replace` に全 5 パッケージが列挙されている
+- [ ] split.ymlがタグpushで8リポジトリ(packages 6 + starters 2)をread-onlyリポジトリへsplitし、同名タグを伝播する
+- [ ] `monorepo-builder.php`がpackages/とstarters/を対象にvalidate / releaseを構成している
+- [ ] ルートcomposer.jsonの`replace`に全6パッケージが列挙されている
 - [ ] 8.1 の移植対応表のうち「移植」と記した全行に対応する新テストが存在する(廃棄行は存在しないこと)
 - [ ] 8.2 の新規テスト必須リストの全行に対応するテストが存在する
 - [ ] 9 章の手順を新規環境で実施し、`composer qa` まで成功する

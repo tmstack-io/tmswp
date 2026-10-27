@@ -19,7 +19,7 @@ use TMSWP\AcfBridge\Generate\Report;
 use TMSWP\AcfBridge\Json\AcfJsonRepository;
 use TMSWP\AcfBridge\Json\FieldGroup;
 use TMSWP\Core\Exception\InvalidArgumentException;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * Generatorの生成物を確かめる。fixtures/acf-jsonは、docs/09 §6.2の表の全行(値を持たないmessage・tab・accordionと、
@@ -761,7 +761,7 @@ final class GeneratorTest extends UnitTestCase
 
         $lint = self::runPhp(['-l', $file]);
         self::assertSame(0, $lint['exit'], $lint['output']);
-        $load = self::runPhp(['-r', 'require $argv[1]; require $argv[2]; echo class_exists($argv[3], false) ? "loaded" : "missing";', \dirname(__DIR__, 4) . '/vendor/autoload.php', $file, "{$namespace}\\{$className}"]);
+        $load = self::runPhp(['-r', 'require $argv[1]; require $argv[2]; echo class_exists($argv[3], false) ? "loaded" : "missing";', self::composerAutoloadFile(), $file, "{$namespace}\\{$className}"]);
         self::assertSame(['exit' => 0, 'output' => 'loaded'], $load);
     }
 
@@ -795,7 +795,7 @@ final class GeneratorTest extends UnitTestCase
 
         $lint = self::runPhp(['-l', $file]);
         self::assertSame(0, $lint['exit'], $lint['output']);
-        $load = self::runPhp(['-r', 'require $argv[1]; require $argv[2]; echo class_exists($argv[3], false) ? "loaded" : "missing";', \dirname(__DIR__, 4) . '/vendor/autoload.php', $file, "{$namespace}\\{$className}"]);
+        $load = self::runPhp(['-r', 'require $argv[1]; require $argv[2]; echo class_exists($argv[3], false) ? "loaded" : "missing";', self::composerAutoloadFile(), $file, "{$namespace}\\{$className}"]);
         self::assertSame(['exit' => 0, 'output' => 'loaded'], $load);
     }
 
@@ -836,7 +836,7 @@ final class GeneratorTest extends UnitTestCase
 
         $lint = self::runPhp(['-l', $file]);
         self::assertSame(0, $lint['exit'], $lint['output']);
-        $load = self::runPhp(['-r', 'require $argv[1]; require $argv[2]; echo class_exists($argv[3], false) ? "loaded" : "missing";', \dirname(__DIR__, 4) . '/vendor/autoload.php', $file, "{$namespace}\\{$className}"]);
+        $load = self::runPhp(['-r', 'require $argv[1]; require $argv[2]; echo class_exists($argv[3], false) ? "loaded" : "missing";', self::composerAutoloadFile(), $file, "{$namespace}\\{$className}"]);
         self::assertSame(['exit' => 0, 'output' => 'loaded'], $load);
     }
 
@@ -903,7 +903,7 @@ final class GeneratorTest extends UnitTestCase
 
         $lint = self::runPhp(['-l', $file]);
         self::assertSame(0, $lint['exit'], $lint['output']);
-        $load = self::runPhp(['-r', 'require $argv[1]; require $argv[2]; echo class_exists($argv[3], false) ? "loaded" : "missing";', \dirname(__DIR__, 4) . '/vendor/autoload.php', $file, "{$namespace}\\BoxOptions"]);
+        $load = self::runPhp(['-r', 'require $argv[1]; require $argv[2]; echo class_exists($argv[3], false) ? "loaded" : "missing";', self::composerAutoloadFile(), $file, "{$namespace}\\BoxOptions"]);
         self::assertSame(['exit' => 0, 'output' => 'loaded'], $load);
     }
 

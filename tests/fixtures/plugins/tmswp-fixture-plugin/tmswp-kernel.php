@@ -6,8 +6,8 @@ use TMSWP\AcfBridge\AcfBridge;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Tests\Support\RecordingExtension;
-use TMSWP\Core\Tests\Support\RecordingLogger;
 use TMSWP\JaToolkit\JaToolkit;
+use TMSWP\Testing\RecordingLogger;
 
 // プラグインのKernelの構成。本体ファイルのブートと、WordPressを起動しないtms-acfが読む(D-48)。
 // 本体ファイルのパスはこのファイルの位置から決めるため、どちらの経路でも同じ値になる。

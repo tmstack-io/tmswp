@@ -14,7 +14,7 @@ use TMSWP\Core\Exception\QueryException;
 use TMSWP\Core\Exception\SchemaException;
 use TMSWP\Core\Model\MigrateCommand;
 use TMSWP\Core\Model\Model;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * エンティティ層(docs/03 §16「静的解析・規約」)、メタ・オプション層(docs/04の受け入れ基準)、Model層(docs/06の

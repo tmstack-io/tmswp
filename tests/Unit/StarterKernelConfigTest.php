@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Kernel\KernelContext;
 use TMSWP\Core\Label\LabelLanguage;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * スターターのtmswp-kernel.phpが返すKernelの構成を確かめる。

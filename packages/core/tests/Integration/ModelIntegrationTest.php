@@ -21,7 +21,7 @@ use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Model\Model;
 use TMSWP\Core\Model\QueryBuilder;
 use TMSWP\Core\Model\TableDefinition;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Testing\IntegrationTestCase;
 use WP_Error;
 use WP_Hook;
 

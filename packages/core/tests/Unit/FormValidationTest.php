@@ -34,8 +34,8 @@ use TMSWP\Core\Form\StoredFile;
 use TMSWP\Core\Form\SubmitToken;
 use TMSWP\Core\Form\ValidationContext;
 use TMSWP\Core\Form\Validator;
-use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
 
 final class FormValidationTest extends UnitTestCase
 {

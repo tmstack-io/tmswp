@@ -8,10 +8,10 @@ use RuntimeException;
 use TMSWP\Core\Form\Form;
 use TMSWP\Core\Form\FormDefinition;
 use TMSWP\Core\Form\Rule\Required;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
-use TMSWP\Core\Tests\Support\UsesTempDirectories;
 use TMSWP\Core\View\Template;
 use TMSWP\Core\View\TemplateLocator;
+use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\UsesTempDirectories;
 
 final class ViewIntegrationTest extends IntegrationTestCase
 {

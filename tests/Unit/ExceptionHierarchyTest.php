@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace TMSWP\Core\Tests\Unit;
+namespace TMSWP\Tests\Unit;
 
 use OutOfBoundsException;
 use PhpToken;
@@ -94,7 +94,7 @@ final class ExceptionHierarchyTest extends TestCase
      */
     private static function sourceFiles(): array
     {
-        $packages = glob(\dirname(__DIR__, 3) . '/*/src', GLOB_ONLYDIR);
+        $packages = glob(\dirname(__DIR__, 2) . '/packages/*/src', GLOB_ONLYDIR);
         self::assertIsArray($packages);
 
         $files = [];

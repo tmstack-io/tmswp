@@ -27,10 +27,10 @@ use TMSWP\Core\Query\UserSearchColumn;
 use TMSWP\Core\Tax\Taxonomy;
 use TMSWP\Core\Tax\TaxonomyDefinition;
 use TMSWP\Core\Tax\TermQuery;
-use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\Core\User\UserQuery;
 use TMSWP\Core\User\UserRole;
 use TMSWP\Core\User\UserRoleDefinition;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * エンティティのクエリ3種の引数の組み立て・値の検証・矛盾する指定・空の IN 指定を、WordPress を読み込まずに確かめる。

@@ -10,8 +10,8 @@ use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Log\LoggerRegistry;
-use TMSWP\Core\Tests\Support\RecordingLogger;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\RecordingLogger;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * Log の静的な呼び出しと tms_log() が、呼び出したファイルを含むルートの Kernel に記録することを確かめる。

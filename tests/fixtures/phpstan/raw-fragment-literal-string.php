@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace TMSWP\Core\Tests\Fixtures\PHPStan\RawFragment;
+namespace TMSWP\Tests\Fixtures\PHPStan\RawFragment;
 
 use TMSWP\Core\Model\QueryBuilder;
 

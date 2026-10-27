@@ -1,0 +1,248 @@
+# 変更履歴
+
+新しい版を上に書く。v0.1.0〜v0.7.0は実装計画(docs/12-implementation-plan.md)の版で、タグを付けて公開していない。各版の詳細は、docs/acceptance/の受け入れ記録にある。
+先頭のUnreleasedの節の見出しは、次のリリースで`vendor/bin/monorepo-builder release`が「`<版> - <日付>`」に書き換える。monorepo-builderは見出しの文字列でこの節を探すため、見出しは英語のUnreleasedのまま変えない。また、ファイルの中の「##」と「Unreleased」を半角スペース1つでつないだ文字列はすべて書き換えられるため、見出し以外にその文字列を書かない。
+
+## Unreleased
+
+v0.8.0の途中の変更(T1〜T3)。
+
+### 追加
+
+- 独自ブロックの自動登録を足した。探索コマンド(`wp tmswp discover`)とdebugのbootが、テーマ・プラグインのルートの`build/blocks/`以下(入れ子を含み、ソースの`blocks/`は含まない)の`block.json`を走査し、Kernelが`init`の10で`register_block_type()`に登録する。
+- ブロックの探索の誤りを例外にした。Kernelの中のブロック名の重複・未登録のカテゴリ・壊れたJSON・nameの形の誤りは`DiscoveryException`、Kernelをまたぐ名前の重複・コア等との重複・探索結果ファイルと食い違うnameは`KernelException`になる。
+- `KernelConfig::theme()`・`plugin()`の`blockCategories`(`Block\BlockCategory`)でブロックカテゴリを登録し(重複とコアのスラッグは例外)、`PostTypeDefinition::allowedBlocks()`で投稿タイプごとに使えるブロックを指定できる。allowedBlocksは`allowed_block_types_all`でその投稿タイプにだけ反映し、先に動いたフィルタの制限は広げない(builtinの投稿タイプでは呼べない)。
+- 置き場・npmのビルドと探索コマンドの連結・対象外(ブロックテーマとACF Blocks)を書いたpackages/core/rules/blocks.mdを新設した。
+- テストの支援コードのパッケージ`tmswp/testing`(packages/testing、名前空間`TMSWP\Testing\`)を新設し、`UnitTestCase`・`IntegrationTestCase`・`UsesTempDirectories`・`RecordingLogger`・`BootsKernelBeforeInit`・`MemoryMetaStorage`・`MemoryOptionStorage`・`StorageExtension`・`MetaStorageContract`・`MetaStorageContractTestCase`・`WpdbTestDouble`を`packages/core/tests/Support`(名前空間`TMSWP\Core\Tests\Support\`)から移した。各パッケージはrequire-devで使う。
+- 各パッケージ(packages/*)にLICENSE(GPL-2.0-or-later)・phpunit.xml.dist・.gitattributesと、composer.jsonのrequire-dev・`composer test`を置き、単独で取り出して`composer install && composer test`を実行できるようにした。.gitattributesのexport-ignoreで、各パッケージのtests/・phpunit.xml.dist・.gitattributes・.DS_Storeと、starters/theme・starters/pluginのnode_modules/・.DS_Storeを、配布物とpathリポジトリの写しから外す。
+
+### 変更
+
+- 探索結果ファイル(`tmswp-discovery.php`)の形式をschema 5にし、`blocks`(name・path・metadataHash)を足した。既存の探索結果ファイルは`wp tmswp discover`で作り直す必要があり、`block.json`だけを変えて作り直さないと`wp tmswp discover --check`が失敗する。
+- スターターの`bin/setup.php`を作り直し、スラッグから作ったStudlyCaseの名前空間で、composer.jsonのpsr-4とname(`local/<slug>`)、本体ファイルの名前(`plugin.php`→`<slug>.php`)、app/の名前空間、AGENTS.md、ブロック名を書き換えて、最後に自分を消すようにした。値は`--slug`・`--name`、環境変数`TMSWP_SETUP_SLUG`・`TMSWP_SETUP_NAME`、対話の順に探し、端末が無く値が欠けていればエラーで止まる。
+- スターターのpost-create-project-cmdを`setup.php`と`composer dump-autoload`の2つにし、`config.autoloader-suffix`を生成した名前空間にした。同じ版のスターターから作ったプラグイン2本を同じサイトで有効にしても、オートローダのクラスが重複しない。
+- スターターのcomposer.jsonのlicenseをGPL-2.0-or-laterにし、`setup.php`が作ったプロジェクトのlicenseを`proprietary`にする。スターターのラベル言語の既定を日本語にした(`tmswp-kernel.php`の`labelLanguage`)。
+- テーマのスターターにブロックの例(`blocks/example`)とビルドした出力(`build/blocks`)を置き、package.jsonの`build`でビルドと探索コマンドを続けて実行する。各スターターの探索結果ファイルをコミットし、スターターの`composer qa`に`discover:check`を入れた。
+- `KernelConfig`のTMSWPの予約の判定と、Kernelの名前空間の重複・入れ子の判定を、大文字と小文字を区別しない比較にした。
+- packages/*とstarters/*の`tmswp/core`の制約を`^0.1`から`^0.2`にし(`Kernel::VERSION`は0.2.0)、各パッケージのbranch-aliasを`dev-main`→`0.2.x-dev`にした。
+
+### 削除
+
+- スターターのCLAUDE.mdを削除した。
+
+### 開発
+
+- スターターから作ったテーマ1つとプラグイン2本が、同じサイトで別々のKernelとして起動し、フロントがHTTP 200を返すことを確かめる統合テスト(tests/Integration/、testsuite starters)を足した。
+- テストの一時ディレクトリを、テストごとに専用の親ディレクトリの下に作るようにした。探索結果ファイルが`sys_get_temp_dir()`の直下に残らず、PHP 8.3と8.5のユニットテストを並列に実行しても干渉しない。
+- split.yml・docs/RELEASING.mdの同期先を8つ(tmswp-testingを追加)にし、docs/RELEASING.mdのリリース手順を、`monorepo-builder release`が自らmainとタグをpushする動作に合わせた。CHANGELOG.mdを新設した。
+
+## v0.7.0 — settings-page・thumbnail・ja-toolkit
+
+### 追加
+
+- thumbnailの`RestRouteCheck`が、訪問者からRESTのルートが使えないことを検出して管理者に通知する。REST APIが使えることをthumbnailの利用条件にした。
+
+### 変更
+
+- settings-page・thumbnail・ja-toolkitの入口のクラス(`SettingsPages`・`Thumbnail`・`JaToolkit`)を`ExtensionInterface`の実装にし、`KernelConfig`の`extensions`にインスタンスを渡したKernelでだけ有効にした。1つのインスタンスは1つのKernelにだけ登録でき、同じクラスを同じKernelに2つ渡すと`KernelException`になる。
+- settings-page:app/の外のページはコンストラクタに渡し、`admin_menu`で`definition()`を評価する。slugの重複は、起動したすべてのKernelをまたいで検出する。
+- settings-page:フォームの外枠(wrap・見出し・通知・`$form->open()`・保存ボタン・`$form->close()`)とエラー通知をFWが描画し、`render()`は項目だけを描く。coreのFormに読み取り専用の`Form::isConfirmEnabled()`を足し、確認画面の有効なフォームは`handle()`の前に`LogicException`にする。
+- settings-page:`OptionFormBridge::persist()`はスキーマの型に変換してから保存し、変換できない値と`$only`の未宣言の名前は`LogicException`にして何も保存しない。`SettingsPage::url()`は生のURLを返し、gettextのソース文字列を英語にしてja訳を同梱した。
+- thumbnail:登録できるKernelをサイトに1つにし(2つ目と、登録が無い状態の`tms_thumb()`は`LogicException`)、`url()`・`tms_thumb()`は`?string`を返す。画像が無いときはdebugでもnull、引数・オプションの誤りはdebugに関係なく例外、実行時の失敗はdebugなら例外、本番ならKernelのロガーに記録してnullを返す。
+- thumbnail:RESTが既存のファイルを返すたびにmtimeを更新し、生成済みのファイルへの302を`public, max-age={redirectMaxAge}`(既定3600秒)にした。`wp tmswp thumb clear`のGCは`--days`より古いファイルだけを消し、キャッシュのディレクトリの印のファイル`.tmswp-thumb-cache`とキャッシュ自身が作ったファイルだけを扱う。
+- thumbnail:署名の対象を`serialize([src, w, h, o])`にし、鍵を`wp_salt('auth')`からHKDFで導出する。`ThumbnailConfig`の全項目をコンストラクタで検証し、`cacheDirName`を1つの安全な名前に限った。
+- ja-toolkit:モジュールはインスタンスを可変長引数で渡し、モジュールが0個の`new JaToolkit()`でも訳を読み込む。JapaneseSlugは許可リストの投稿タイプだけを対象にし、最悪の長さが200を超えるformatを`LogicException`にする。
+- ja-toolkit:全角・半角のスペースだけの検索語は、`is_search()`を真のまま0件にする。KanaTextFieldの違反のメッセージは、新設の`KanaRule`で検証の時点に解決する。
+
+### 削除
+
+- 静的なAPIの`SettingsPages::register()`・`isRegistered()`・`registerPage()`・`reset()`、`Thumbnail::register()`・`reset()`・`isRegistered()`・`config()`、`JaToolkit::enable()`・`isEnabled()`・`reset()`を削除した。
+
+### 修正
+
+- settings-page:`add_submenu_page()`のfalseを、権限が無いため登録しなかった正常な結果として扱い、権限の無いユーザーのページ表示とPOSTを`wp_die()`の403で拒否する。
+- thumbnail:生成を一時ファイルへの保存と`rename()`とキー単位の`flock`で行い、URLの値は`rawurlencode`してから埋め込む。拡大の要求は元画像の寸法で頭打ちにし、画像エディタが扱えない元画像は再生成しない。
+- `wp tmswp thumb clear`の`--days`の誤りを、何も消さずに`WP_CLI::error()`(終了コード1)で返し、synopsisを`[--days[=<days>]]`にした。値の無い`--days`がキャッシュを全件消す不具合と、上限(`ThumbCache::maxOlderThanDays()`)を超える日数のTypeErrorを直した。
+
+### 開発
+
+- docs/08の受け入れ基準(CSRF・権限の拒否・PRG・RESTの実応答・CLI・二重登録)をユニット・統合テストで確かめた。packages/core/rules/extensions.mdの登録例を`KernelConfig`の`extensions`に渡す形にした。
+
+## v0.6.0 — acf-bridge
+
+### 追加
+
+- coreに`KernelConfig::load()`を足し、テーマ・プラグインのルートの`tmswp-kernel.php`がKernelConfigを返す形にした。functions.php・プラグインの本体と`tms-acf`が同じ構成を読む。
+- WordPressを起動しない`vendor/bin/tms-acf`(syncとcheck、`--dry-run`・`--strict`・`--root=`)を足した。WP-CLIの`wp tmswp acf`と同じ処理(SyncRunner)を使う。
+- `Kernel::defer()`を拡張の公開APIにした。boot中に発火済みのフックへ予約したものも、キャッチアップで実行する。
+- 単一のテンプレートを条件に持つACFのグループを、テンプレート別のクラス`{Studly}TemplateFields`に出す。locationのpost_templateに対応し、locationのblockは非対応としてW006で案内する。
+- packages/acf-bridge/rules/sync-check.mdとREADMEを新設し、packages/core/rules/acf.mdを書き直した。
+
+### 変更
+
+- `AcfBridge`を`ExtensionInterface`の実装にし、static状態と`boot()`・`config()`・`reset()`・`registerManagedKeys()`を削除した。`KernelConfig`の`extensions`に`new AcfBridge(?BridgeConfig)`を渡し、テーマとプラグインで別々に登録する。
+- 対応するACFの下限を6.2にし、6.2より古いACFが有効なら例外にする。`acf/json/save_paths`で、ACFが実際に読み込んだファイルが自分のacf-jsonにあるときだけ、そこへ書き戻す。
+- `AcfMetaStorage`は、値を`WpMetaStorage`で読み書きし、参照のメタ`_{キー}`にfield keyを書いてACFの値のキャッシュを消す。扱えるのは、ACFの`update_value`が値を変えない単純な型だけで、ほかの型の書き込みは`AcfBridgeRuntimeException`にする。
+- `AcfFieldAccess`の型強制で未設定(null・false・'')と形の不一致を区別し、形の不一致はdebugで例外、本番でロガーに記録して未設定の値を返す。`has()`はメタの行の有無で判定する。
+- 生成アクセサはfield key(`KEY_`定数)でACFを呼び、keyのフィールドがACFに登録されていなければ例外にする。名前で呼ぶのは、traitの`value()`・`rawValue()`・`update()`・`delete()`・`has()`だけにした。
+- 生成される`of()`と`AcfMetaStorage`の全メソッドは、IDが1未満なら`InvalidArgumentException`にする。traitのメソッド名との衝突(大文字小文字を区別しない)・`class`・整数のキーになるサブフィールド名は生成時のE002にする。
+- 同じkeyのacf-jsonはjsonDirsの並び(テーマの既定では子テーマが先)で先勝ちにし、負けた側をW010で報告して、実行時のACFも生成と同じファイルを使う。テーマのjsonDirsの既定は`{ルート}/acf-json`だけにした。
+- cloneの展開をACF Proの展開(保存名・ラベル・cloneのcloneの名前)を再現する形にし、displayの既定をseamlessにした。`KEY_`定数と管理キーは元のkeyを使う。
+- date_time_pickerで同じ現地の時刻が2つの瞬間を表すときは早い方に解決し、return_formatがarrayのcolor_pickerで値の無いときの`rgba(0,0,0,0)`はnullにする。flexible_contentのレイアウトをJSONの順のlistにし、shapeを`@phpstan-type`の別名にした。
+
+### 削除
+
+- `PreviewAcfSupport`と`BridgeConfig`の`previewMeta`を削除した(プレビュー時の値はACF標準の保存に任せる)。I001と`type_map`フィルタを仕様から外した。
+
+### 開発
+
+- 全31型のfixtureから生成したアクセサを実物のACFで確かめるAcfFieldTypesIntegrationTestと、ACF Proのzipで走らせる`composer test:integration:acf-pro`を足した。`composer acf:check:fixtures`を`composer qa`とCIに入れた。
+
+## v0.5.0 — Model・Migrator・テンプレート前処理
+
+### 追加
+
+- `wp tmswp migrate`(`--dry-run`・`--force`)を足し、結果の`action`をenumの`MigrationAction`(Migrated・Skipped)にした。テーブル定義のハッシュが保存済みのものと食い違うときは、`manage_options`を持つ利用者にだけ`admin_notices`で通知する。
+- `Model::query()`や`new QueryBuilder`から始まるチェーンの`get`・`first`・`Model::find`の行の型を、`as()`か`rowClass()`の宣言型で絞るPHPStan拡張を足した。
+
+### 変更
+
+- マイグレーションは`wp tmswp migrate`だけで適用し、公開の`migrate()`を削除した。起動時・プラグインの有効化・`after_switch_theme`・`admin_init`・ajax・cronでは適用しない。
+- dbDeltaの後に、実際の構造(NULLの可否・既定値・照合順序・主キー・索引)を定義と照らし合わせ、食い違えば`MigrationException`にしてハッシュを更新しない。
+- TableDefinitionで、予約語のカラム名・インデックス名、charsetの無いcollation、`rawColumn()`の型の別名(`json`等)とdbDeltaが収束しない表記を、宣言の時点で`SchemaException`にする。JSONの列は`json()`(longtext)で宣言する。
+- `rowClass()`の既定をnull(行はstdClass)にし、Modelのコンストラクタを引数なしの`final public`にした。Modelのクラスは行のクラスにできず、`as()`・`rowClass()`・QueryBuilderのコンストラクタで例外にする。
+- `update`・`delete`・`count`をdocs/06のシグネチャに合わせ、`useConnection()`を全Modelに共通にしてnullで解除できるようにした。どのKernelにも属さないModelは、`useConnection()`を案内する例外にする。
+- Connectionの`insert`・`update`・`delete`とQueryBuilderの`update`でNULLを代入でき、テーブル名はベア名だけを受け付ける。プレースホルダは`%d`・`%f`・`%s`・`%i`・`%%`だけを受け付け、`value()`・`pluck()`は既存のSELECT句を保って結果に無いキーを例外にする。
+- `Template`は、どのクラスにも束縛しないクロージャでincludeし、テンプレートから見える変数を`$args`だけにした。`Template::part()`は、slugの検証の後に`get_template_part_{$slug}`と`get_template_part`を発火してからテンプレートを解決する。
+- `TableDefinition::toSql()`の索引の行を、PRIMARY KEY → UNIQUE KEY → KEYの順に出す。KEYをUNIQUEより先に宣言したテーブルはハッシュが変わり、管理画面に通知が出るため、`wp tmswp migrate`をもう一度実行する。
+- Emailルールが、国際化ドメイン名のメールアドレスとローカル部に非ASCIIを含むメールアドレスを違反にすることをdocs/05に明記した。
+
+### 削除
+
+- テンプレート前処理のActionRouter・View・NotFound・`tms_var()`・NoOutputRule・NoSet404Rule・tms-checkと、`KernelConfig`の`actions`の引数と、rules/actions.mdを削除した。代わりに、テンプレートの先頭で前処理クラスを明示的に呼ぶ方式のレシピrules/page.mdを新設した。
+
+### 修正
+
+- `Connection::prepare()`の結果を`remove_placeholder_escape()`に通して返す。DTOの日時の変換で、NULを含む値を`HydrationException`にした(今まではValueErrorがそのまま出ていた)。
+- Kernelのフックのメソッドの失敗のログの文脈を、許可したキー(`class`・`method`・`hook`・`exceptionClass`・`exceptionAt`・`previousClasses`)だけにした。
+
+### 開発
+
+- WpdbTestDoubleの`prepare()`を実wpdbに合わせ、両者を比べるWpdbTestDoubleParityTestを足した。docs/06・07の受け入れ基準を直接確かめるテストを足し、rules/model.mdを書き直した。
+
+## v0.4.0 — Form
+
+### 追加
+
+- `SpamGuardInterface`と`FormDefinition::spamGuard()`を足し、honeypotとTurnstileの手本をrules/form.mdに置いた。`handle()`と`open()`で`nocache_headers()`と`DONOTCACHEPAGE`を付ける。
+- `Form::confirmFields()`・`FormDefinition::hideOnConfirm()`・チェックボックスの`checkedLabel`を足した。`open()`のaction、入力のid、`labelTag()`のforを上書きできる。
+- `JtiStore::isClaimed()`を足し、一時ファイルが消えた後の確認トークンの再送を拒否する。`RequiredIf::equals`をcheckboxesの値に対応させ、`MaxFileSize::mb()`にmessageの引数を足した。
+- Urlルールで、ホスト名の国際化ドメイン名を`idn_to_ascii()`(UTS #46)で変換してから判定する。ext-intlが無い環境では、Urlのコンストラクタが`FormConfigException`を投げる。
+- rules/form.mdを書き直し、rules/form-mail.md(ヘッダインジェクションの対策・自動返信・添付・送信の失敗)を新設した。
+
+### 変更
+
+- 確認画面の無いフォームは`open()`で使い捨ての送信トークン(SubmitToken)を埋め込み、確認画面ありのフォームはConfirmTokenのjtiに一本化して、二重送信を防ぐ。トークンは`base64url(正準JSON).HMAC-SHA256`で鍵を用途ごとにHKDFで派生させ、`ConfirmTokenStatus`を`TokenStatus`に改名した。
+- `JtiStore::claim()`は`JtiClaim`(Claimed・Duplicate)を返し、データベースのエラーは例外にする。onCompleteの例外は、debugでは例外、本番ではFormのKernelのロガーに記録して送信失敗のエラーを出し、同じトークンで再送できる。
+- 確認画面の有無にかかわらず、受け取ったファイルを`TempFileStore`に保管してonCompleteには常に`StoredFile`を渡し、onCompleteが正常に終わったら消費されなかった一時ファイルを消す。一時ファイルの保存名は固定の`file`にし、gcはWP-Cronの毎時のイベント(TempFileGc)だけで行う。
+- `FormRequest::fromGlobals()`は例外を投げない。数値のキー、配列のファイル、不正な形のファイルのエントリ、不正なUTF-8の入力は、その項目のエラーにする。
+- パスワードの項目は再描画・確認画面・トークンに出さず、確認画面ありのフォームに置いたら定義の時点で例外にする。FWが決める属性(method・enctype・name・checked等)の指定は`FormConfigException`にする。
+- メッセージの解決を`Messages::resolve()`に一本化し、フィルタの文字列以外の戻り値と、Callbackのboolと文字列以外の戻り値を`FormConfigException`にする。検証は「入力の不正 → アップロードの失敗 → 規則のエラー」の順にする。
+- `applyDefaults()`は、`handle()`の後の呼び出しと、未知の項目・形の違う値を例外にする。`Field::checkbox()`の空の`checkedValue`は`FormConfigException`にする。
+
+### 削除
+
+- `FormHtml::escHtml()`を削除し、`esc_html()`を直接呼ぶ。UploadFileルールと、確率的な一時ファイルのgcを削除した。
+
+### 修正
+
+- `toAttachment()`は、フロントでもwp-admin/includesを読み込んでから`media_handle_sideload()`を呼ぶ。`.htaccess`をApache 2.4と2.2の両方の構文にした。
+- 確認トークンの値をclaimの前に今の規則で検証し直し、単一のチェックボックスの`checkedValue`との一致・複合フィールドの部品の暗黙の選択肢・複数選択に直接渡した文字列を検証する。CSRFの失敗・改ざん・再送の拒否・ファイルの消失・onCompleteの例外を、フォームのIDと例外のクラス名・投げられた場所だけの文脈でログに残す。
+
+### 開発
+
+- docs/05の受け入れ基準の全項目にテストを対応させ、FormRuleTest・FormHtmlTest・FormStructureTestを新設した。
+
+## v0.3.0 — エンティティ・メタ・オプション・検索
+
+### 追加
+
+- `markExternallyManagedInAllSubtypes()`を足し、サブタイプの文字列`'all'`の特別扱いをやめた。
+- クエリのenumの`TermField`・`TermOperator`・`UserSearchColumn`と、任意の引数を足す`args(array)`・`withArgs(array)`を足した。
+- `EntityDataException`を足し、`parents()`の深さの超過を実行時のデータの不整合として扱う(debugは例外、本番はKernelのロガーに記録して空配列)。
+- メタ・オプションの既定のストレージを、拡張の`register()`で`MetaStorageInterface`・`OptionStorageInterface`のidに登録した実装に差し替えられる(bootの後の差し替えと、interfaceを実装しない登録は`ContainerException`)。`WpMetaStorage`・`WpOptionStorage`はコンストラクタで所属するKernelを受け取る。
+- rules/user-role.md(認証のレシピを含む)を新設した。
+
+### 変更
+
+- メタ・オプションの書き込みの戻り値を、true(書き込んだ)・false(保存値が変わっていない)・`RuntimeException`(データベースのエラー)の3通りにした。キーと値を`wp_slash()`してから保存する。
+- `null`の書き込みを拒否して宣言した型と値の型を検査し、`register_*_meta`がfalseを返したら例外にする。非公開の定数への`#[MetaSchema]`を拒否し、`#[OptionSchema]`をenumのケースだけに限った。
+- `MetaBag::all()`はsingle=falseのキーの全行を返し、`deleteAll()`は実際に削除した名前だけを返す。falseを保存したBooleanのキーは`MetaBag::bool()`でfalseに戻す。
+- メタスキーマをKernelのbootの中で登録し(`register_*_meta`はinit 20、ロールの登録はinit 11)、initの前でも`meta()`が使える。`meta()`に存在しない対象・スコープ外の対象を渡したら、debugに関係なく`InvalidArgumentException`にする。
+- 単独の読み取りのデータベースのエラーは、debugでは例外、本番ではKernelのロガーに記録して既定値を返す。クエリの`WP_Error`は、debugでは`QueryException`、本番ではエンティティのKernelのロガーに記録して既定値を返す。
+- 存在しないbuiltinの投稿タイプ・タクソノミー・ロールのアダプタを、`register()`で例外にする。`UserRole::register()`はKernelを受け取り、登録済みのロールとの差分をwarningで記録する。
+- `PostQuery`・`TermQuery`・`UserQuery`がCompare・CastType・SortOrder等のenumを受け取り、空のIN指定は検索を実行せずに0件にする。件数を指定しない`get()`は全件、`first()`は常に1件を返し、矛盾する指定は`InvalidQueryException`にする。
+
+### 削除
+
+- WpBridgeを削除し、WordPressの関数を直接呼ぶ。オプションのnullのセンチネル(WpOptionNullValue)、QueryValidator、slugから作るクエリのファクトリ(`ofType`・`ofTaxonomy`・`ofRole`)を削除した。
+
+### 修正
+
+- Thumbnailのimg要素の属性を`Support\Html::attributes()`で組み立て、許可されないプロトコルのURLを拒否する。
+- `create()`のslash(PostType・Taxonomy・UserRole)、`PostQuery::author()`の0と負の値、`#[WithMetaRevisions]`のプレビューの偽の値、`parents()`の祖先がちょうど100件の場合を直した。`orderByMeta()`はメタを持たないレコードを落とさずに並べる。
+
+### 開発
+
+- 統合テストでinitの前にKernelをbootする基盤(BootsKernelBeforeInit)と、`MetaStorageInterface`の契約テスト(`MetaStorageContract`・`MetaStorageContractTestCase`)を足した。
+
+## v0.2.0 — core基盤
+
+### 追加
+
+- `wp tmswp discover [--check]`と、探索結果ファイル(`tmswp-discovery.php`)をビルド時に生成してコミットする方式を足した。`composer discover:build`・`discover:check`を足した。
+- `ExtensionInterface::register(Kernel)`と`KernelConfig`の`extensions`で、拡張をKernelごとに登録する。同じKernelへの二重登録は例外にする。
+- `KernelConfig`の`logChannels`でログのチャネルを宣言し、`labelLanguage`でラベル言語の既定をKernelごとに指定する。
+- `TmswpExceptionInterface`を新設し、全パッケージの例外が実装するようにした。
+- `Kernel::VERSION`を、読み込まれた全vendorのinstalled.phpのtmswp/coreの版と起動時に照合する。psr/container 2・psr/log 3と違う宣言を検出して例外にする。
+
+### 変更
+
+- 実行時のキャッシュ(ComponentCache)を廃止し、本番(debug=false)は探索結果ファイルだけを読んで、無ければ例外にする。app/の走査はdebugのときだけ行う。
+- `label()`を`label(string $singular, ?string $plural = null)`にし、Enでは複数形を必須、Jaでは省略すると単数形を使う。WordPress 7.0のコアの全キーを出す。
+- `Container::get()`に`@template`と条件付きの戻り値型を付け、型の合わない登録は登録の時点で例外にする。`has()`は`get()`と同じ規則で判定し、factoryの中の例外はidを含む`ContainerException`で包む。
+- フックメソッドを`call_user_func_array`で呼び、`#[Filter]`は最低1個の引数で登録する。フックメソッドの実行時の失敗は、本番ではKernelのロガーに記録してそのメソッドだけスキップし、Filterは元の値を返す。
+- Initializerの失敗と属性を復元できない場合は、debugに関係なく例外にする。WordPress 7.0未満と、bootの途中からの別のKernelのbootを例外にする。
+- debugの既定値を`WP_DEBUG`の真偽から取る。有効化と無効化は`rewrite_rules`の削除だけにした。
+- LoggerRegistryをKernelごとに持ち、静的な`Log::*()`・`tms_log()`は呼び出し元のファイルを含むKernelに記録する。
+- ログのファイル名に`wp_hash()`由来の接尾辞を付けた。書き込みの失敗はその行を`error_log`へ出し、例外のpreviousチェーンを出力し、1記録を1行にする。
+- `Html`のURL属性に`esc_url`を適用し、許可されないプロトコルは例外にする。ヘルパの`function_exists`のガードを外した。
+
+### 削除
+
+- `Log::set()`・`Log::setRegistry()`、使われていない`StorageException`、`UnsupportedComponentException`・`UnsupportedComponentInitializer`を削除した。
+
+### 開発
+
+- `Kernel::reset()`をテスト以外から呼ぶことを禁じるPHPStanルールを足した。PHPStan拡張をReflectionProviderだけで実装し、解析中に利用者のコードを実行しない。
+
+## v0.1.0 — 基盤の健全化
+
+### 変更
+
+- 対応範囲をPHP 8.3〜8.5、WordPress 7.0以上にした。全composer.jsonのPHPの下限を8.3にした。
+- 翻訳ファイルの生成を、`composer i18n:build`(wp-envのWP-CLIによる`make-pot` → `update-po` → `make-mo` → `make-php`)にした。`.l10n.php`はWordPressが読む形式で生成し、ja-toolkitのpotの名前は`tmswp-ja-toolkit.pot`になった。
+- Formのルールと`KanaTextField`の訳を`__('…', 'tmswp')`のリテラル呼び出しにし、`function_exists('__')`による代替経路を削除した。
+- docs/11からレシピの複製を除き、レシピの正本を各パッケージのrules/にした。docs/12を版ごとのロードマップに書き換えた。
+- read-only splitの送り先を`tmstack-io/tmswp-{パッケージ名}`の7リポジトリにした。
+
+### 削除
+
+- tools/build-l10n.phpを削除した。
+
+### 開発
+
+- `@wordpress/env`をpackage.jsonで11.17.0に固定し、.wp-env.jsonにPHP 8.3と無料版ACF 6.8.10を固定した。
+- CIのunitをPHP 8.3・8.5、integrationをPHP 8.3・8.5 × WordPress 7.0・最新版の4セルにした。外部アクションをコミットのSHAで固定した。
+- 統合テストを、fixtureのテーマとプラグインをinitの前にbootする経路で実行し、偽のACF関数をやめてwp-envの無料版ACFで検証する。偽wpdbをWpdbTestDoubleに一本化した。
+- unitとintegrationのcloverを行単位で合算してカバレッジを判定する`coverage`ジョブを足した。

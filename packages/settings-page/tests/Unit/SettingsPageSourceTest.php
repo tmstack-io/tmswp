@@ -10,7 +10,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * docs/08の受け入れ基準のうち、settings-pageのソースの形で決まる項目(exitの位置・ファイルのinclude・独自の探索)を、

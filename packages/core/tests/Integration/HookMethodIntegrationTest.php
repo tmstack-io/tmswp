@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Integration;
 
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
+use TMSWP\Testing\IntegrationTestCase;
 
 /**
  * fixture の ThemeProbeHook / PluginProbeHook は、生成時と呼び出し時に観測用アクションを発火する。

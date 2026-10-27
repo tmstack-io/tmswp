@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace TMSWP\Core\Tests\Integration;
+namespace TMSWP\Testing\Tests\Integration;
 
 use Closure;
 use DateTimeImmutable;
@@ -11,8 +11,8 @@ use ReflectionMethod;
 use stdClass;
 use Stringable;
 use Throwable;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
+use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\WpdbTestDouble;
 use wpdb;
 
 /**

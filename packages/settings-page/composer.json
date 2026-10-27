@@ -5,7 +5,10 @@
   "license": "GPL-2.0-or-later",
   "require": {
     "php": ">=8.3",
-    "tmswp/core": "^0.1"
+    "tmswp/core": "^0.2"
+  },
+  "require-dev": {
+    "tmswp/testing": "^0.2"
   },
   "autoload": {
     "psr-4": {
@@ -15,6 +18,14 @@
   "autoload-dev": {
     "psr-4": {
       "TMSWP\\SettingsPage\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit"
+  },
+  "extra": {
+    "branch-alias": {
+      "dev-main": "0.2.x-dev"
     }
   },
   "minimum-stability": "stable",

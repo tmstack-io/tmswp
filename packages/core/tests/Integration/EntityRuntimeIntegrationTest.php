@@ -23,12 +23,12 @@ use TMSWP\Core\Post\PostTypeDefinition;
 use TMSWP\Core\Post\Thumbnail;
 use TMSWP\Core\Tax\Taxonomy;
 use TMSWP\Core\Tax\TaxonomyDefinition;
-use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
-use TMSWP\Core\Tests\Support\RecordingLogger;
-use TMSWP\Core\Tests\Support\UsesTempDirectories;
 use TMSWP\Core\User\UserRole;
 use TMSWP\Core\User\UserRoleDefinition;
+use TMSWP\Testing\BootsKernelBeforeInit;
+use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\RecordingLogger;
+use TMSWP\Testing\UsesTempDirectories;
 use WP_Error;
 use WP_Hook;
 

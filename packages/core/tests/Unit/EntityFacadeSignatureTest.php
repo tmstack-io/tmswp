@@ -15,9 +15,9 @@ use TMSWP\Core\Post\PostType;
 use TMSWP\Core\Post\Thumbnail;
 use TMSWP\Core\Tax\Taxonomy;
 use TMSWP\Core\Tax\TermQuery;
-use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\Core\User\UserQuery;
 use TMSWP\Core\User\UserRole;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * エンティティの取得系の戻り値の型(docs/03 §1.3の?Tの統一)を、宣言から確かめる。

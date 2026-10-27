@@ -9,7 +9,7 @@ use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Kernel\KernelContext;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class KernelConfigTest extends UnitTestCase
 {

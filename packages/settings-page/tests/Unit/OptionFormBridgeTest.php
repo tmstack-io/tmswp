@@ -15,11 +15,11 @@ use TMSWP\Core\Form\FormDefinition;
 use TMSWP\Core\Form\FormResult;
 use TMSWP\Core\Form\FormStep;
 use TMSWP\Core\Kernel\Kernel;
-use TMSWP\Core\Tests\Support\MemoryOptionStorage;
-use TMSWP\Core\Tests\Support\RecordingLogger;
-use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\SettingsPage\OptionFormBridge;
 use TMSWP\SettingsPage\Tests\Support\BootsSettingsPagesKernel;
+use TMSWP\Testing\MemoryOptionStorage;
+use TMSWP\Testing\RecordingLogger;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * OptionFormBridgeの、スキーマの型とFormの値の形の変換・宣言の照合・Kernelのロガーへの記録。

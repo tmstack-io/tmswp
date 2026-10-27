@@ -15,7 +15,7 @@ use TMSWP\Core\Form\Form;
 use TMSWP\Core\Form\FormDefinition;
 use TMSWP\Core\Form\Messages;
 use TMSWP\Core\Form\Rule\RuleInterface;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * Form 層の構造の受け入れ基準(docs/05 の「API/構造」と、セキュリティのうちコードの形で確かめる項目)を、ソースの

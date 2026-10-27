@@ -16,7 +16,7 @@ use TMSWP\Core\Container\Container;
 use TMSWP\Core\Exception\CircularDependencyException;
 use TMSWP\Core\Exception\ContainerException;
 use TMSWP\Core\Exception\NotFoundException;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 use TypeError;
 
 final class ContainerTest extends UnitTestCase

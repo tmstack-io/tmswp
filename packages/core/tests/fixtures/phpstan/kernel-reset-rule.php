@@ -7,7 +7,7 @@ namespace TMSWP\Core\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\Kernel as AliasedKernel;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 Kernel::reset(); // static
 

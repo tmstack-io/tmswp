@@ -11,7 +11,7 @@ use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
 use SplFileInfo;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * スターターのbin/setup.php(create-projectの直後の初期化)を、スターターの写しでCLIとして実行して確かめる。

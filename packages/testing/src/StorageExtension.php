@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace TMSWP\Core\Tests\Support;
+namespace TMSWP\Testing;
 
 use TMSWP\Core\Kernel\ExtensionInterface;
 use TMSWP\Core\Kernel\Kernel;

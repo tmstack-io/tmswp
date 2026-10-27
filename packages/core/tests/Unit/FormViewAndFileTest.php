@@ -25,7 +25,7 @@ use TMSWP\Core\Form\StoredFile;
 use TMSWP\Core\Form\TempFileGc;
 use TMSWP\Core\Form\TempFileStore;
 use TMSWP\Core\Form\UploadedFile;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class FormViewAndFileTest extends UnitTestCase
 {

@@ -14,7 +14,6 @@ use TMSWP\Core\Form\FormDefinition;
 use TMSWP\Core\Form\FormRequest;
 use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\Kernel;
-use TMSWP\Core\Tests\Support\UnitTestCase;
 use TMSWP\SettingsPage\Attribute\AsSettingsPage;
 use TMSWP\SettingsPage\PageRegistrar;
 use TMSWP\SettingsPage\SettingsPage;
@@ -22,6 +21,7 @@ use TMSWP\SettingsPage\SettingsPageDefinition;
 use TMSWP\SettingsPage\SettingsPageInitializer;
 use TMSWP\SettingsPage\SettingsPages;
 use TMSWP\SettingsPage\Tests\Support\BootsSettingsPagesKernel;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * SettingsPagesのKernelごとの登録と、メニューの登録。

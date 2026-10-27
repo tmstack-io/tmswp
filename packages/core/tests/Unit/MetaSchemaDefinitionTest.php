@@ -11,7 +11,7 @@ use TMSWP\Core\Attribute\MetaSchema;
 use TMSWP\Core\Exception\InvalidSchemaException;
 use TMSWP\Core\Meta\MetaSchemaDefinition;
 use TMSWP\Core\Meta\MetaValueType;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class MetaSchemaDefinitionTest extends UnitTestCase
 {

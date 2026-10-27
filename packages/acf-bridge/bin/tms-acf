@@ -7,8 +7,9 @@ declare(strict_types=1);
 $autoload = $GLOBALS['_composer_autoload_path'] ?? null;
 
 if (!is_string($autoload)) {
-    // Composerのbinの代理を通さずに実行した場合: 依存として入れたとき(vendor/tmswp/acf-bridge/bin)と、monorepo(packages/acf-bridge/bin)
-    foreach ([__DIR__ . '/../../../autoload.php', __DIR__ . '/../../../vendor/autoload.php'] as $candidate) {
+    // Composerのbinの代理を通さずに実行した場合: 依存として入れたとき(vendor/tmswp/acf-bridge/bin)と、monorepo(packages/acf-bridge/bin)と、
+    // このパッケージを単独で取り出して開発するとき(bin)
+    foreach ([__DIR__ . '/../../../autoload.php', __DIR__ . '/../../../vendor/autoload.php', __DIR__ . '/../vendor/autoload.php'] as $candidate) {
         if (is_file($candidate)) {
             $autoload = $candidate;
             break;

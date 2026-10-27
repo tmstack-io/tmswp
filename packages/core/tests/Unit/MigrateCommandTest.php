@@ -14,8 +14,8 @@ use TMSWP\Core\Model\MigrateCommand;
 use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Model\Model;
 use TMSWP\Core\Model\TableDefinition;
-use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
 
 /**
  * `wp tmswp migrate [--force] [--dry-run]` の出力(06-model §6)。WP_CLI の代役クラスと wpdb の出力形式定数を

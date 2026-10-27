@@ -9,7 +9,7 @@ use TMSWP\AcfBridge\Exception\GenerationException;
 use TMSWP\AcfBridge\Json\AcfJsonRepository;
 use TMSWP\AcfBridge\Json\FieldGroup;
 use TMSWP\AcfBridge\Json\FlexibleLayout;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * AcfJsonRepositoryが、ACFのLocal JSON(ACF 6.2〜6.8のscan_files()・get_files())と同じ規則でacf-jsonを読むことを

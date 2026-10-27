@@ -22,7 +22,7 @@ use TMSWP\Core\Exception\UnknownLogChannelException;
 use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Log\LoggerRegistry;
 use TMSWP\Core\Log\SimpleLogger;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 final class LogTest extends UnitTestCase
 {

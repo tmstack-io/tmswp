@@ -32,6 +32,7 @@
     "tmswp/core": "self.version",
     "tmswp/ja-toolkit": "self.version",
     "tmswp/settings-page": "self.version",
+    "tmswp/testing": "self.version",
     "tmswp/thumbnail": "self.version"
   },
   "autoload": {
@@ -54,6 +55,8 @@
       "TMSWP\\Core\\Tests\\": "packages/core/tests/",
       "TMSWP\\JaToolkit\\Tests\\": "packages/ja-toolkit/tests/",
       "TMSWP\\SettingsPage\\Tests\\": "packages/settings-page/tests/",
+      "TMSWP\\Testing\\": "packages/testing/src/",
+      "TMSWP\\Testing\\Tests\\": "packages/testing/tests/",
       "TMSWP\\Thumbnail\\Tests\\": "packages/thumbnail/tests/"
     }
   },
@@ -119,7 +122,6 @@
       "@test"
     ],
     "monorepo:validate": "monorepo-builder validate",
-    "monorepo:merge": "monorepo-builder merge",
     "wp:start": "node node_modules/@wordpress/env/bin/wp-env start",
     "wp:start:coverage": "node node_modules/@wordpress/env/bin/wp-env start --xdebug=coverage",
     "wp:stop": "node node_modules/@wordpress/env/bin/wp-env stop"

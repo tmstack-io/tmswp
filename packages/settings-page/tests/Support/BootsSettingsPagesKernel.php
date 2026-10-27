@@ -10,11 +10,11 @@ use TMSWP\Core\Kernel\ExtensionInterface;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Log\LogChannel;
-use TMSWP\Core\Tests\Support\MemoryMetaStorage;
-use TMSWP\Core\Tests\Support\MemoryOptionStorage;
-use TMSWP\Core\Tests\Support\RecordingLogger;
-use TMSWP\Core\Tests\Support\StorageExtension;
 use TMSWP\SettingsPage\SettingsPages;
+use TMSWP\Testing\MemoryMetaStorage;
+use TMSWP\Testing\MemoryOptionStorage;
+use TMSWP\Testing\RecordingLogger;
+use TMSWP\Testing\StorageExtension;
 
 /**
  * ユニットテストで、一時ディレクトリのアプリにSettingsPagesを登録したKernel(テーマ形態)をbootする。オプションは

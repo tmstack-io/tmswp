@@ -8,8 +8,8 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Exception\SchemaException;
 use TMSWP\Core\Model\Connection;
 use TMSWP\Core\Model\TableDefinition;
-use TMSWP\Core\Tests\Support\UnitTestCase;
-use TMSWP\Core\Tests\Support\WpdbTestDouble;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
 
 /**
  * rawColumn() の型の別名と、DB が別の表記で記録する型の表記(serial・精度の引数が1つの float / double・表示幅の無い

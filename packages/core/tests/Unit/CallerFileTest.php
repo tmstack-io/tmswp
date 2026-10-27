@@ -8,7 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Log\CallerFile;
 use TMSWP\Core\Log\Log;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * Log・tms_log() の呼び出し元のファイルを、パスの文字列ではなくフレームの関数の種類で決めることを確かめる。

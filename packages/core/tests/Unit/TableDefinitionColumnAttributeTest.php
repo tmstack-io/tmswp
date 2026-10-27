@@ -7,7 +7,7 @@ namespace TMSWP\Core\Tests\Unit;
 use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Exception\SchemaException;
 use TMSWP\Core\Model\TableDefinition;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * TableDefinition が持つ列の属性(NULL の可否・既定値・既定値の種類)。Migrator が適用後の構造と照らし合わせる

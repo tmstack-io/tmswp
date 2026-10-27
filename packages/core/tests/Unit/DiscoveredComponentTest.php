@@ -17,7 +17,7 @@ use TMSWP\Core\Hook\HookInitializer;
 use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\KernelContext;
 use TMSWP\Core\Meta\MetaValueType;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 use TypeError;
 
 /**

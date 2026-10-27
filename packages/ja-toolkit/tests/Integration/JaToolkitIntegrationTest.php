@@ -11,15 +11,15 @@ use TMSWP\Core\Form\FormRequest;
 use TMSWP\Core\Form\FormStep;
 use TMSWP\Core\Form\SubmitToken;
 use TMSWP\Core\Kernel\KernelConfig;
-use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
-use TMSWP\Core\Tests\Support\IntegrationTestCase;
-use TMSWP\Core\Tests\Support\UsesTempDirectories;
 use TMSWP\JaToolkit\Form\KanaTextField;
 use TMSWP\JaToolkit\Form\KanaType;
 use TMSWP\JaToolkit\JaToolkit;
 use TMSWP\JaToolkit\Module\DisableTexturize;
 use TMSWP\JaToolkit\Module\FullwidthSearchNormalizer;
 use TMSWP\JaToolkit\Module\JapaneseSlug;
+use TMSWP\Testing\BootsKernelBeforeInit;
+use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\UsesTempDirectories;
 use WP_Post;
 use WP_Query;
 

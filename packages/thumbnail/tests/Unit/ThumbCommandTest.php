@@ -10,7 +10,7 @@ use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use ReflectionMethod;
 use RuntimeException;
 use TMSWP\Core\Kernel\Kernel;
-use TMSWP\Core\Tests\Support\UnitTestCase;
+use TMSWP\Testing\UnitTestCase;
 use TMSWP\Thumbnail\Cli\ThumbCommand;
 use TMSWP\Thumbnail\Tests\Support\BootsThumbnailKernel;
 use TMSWP\Thumbnail\Thumbnail;

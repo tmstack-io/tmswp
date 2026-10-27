@@ -8,6 +8,11 @@
     "psr/container": "^2.0",
     "psr/log": "^3.0"
   },
+  "require-dev": {
+    "mikey179/vfsstream": "^1.6.12",
+    "phpstan/phpstan": "^2.1",
+    "tmswp/testing": "^0.2"
+  },
   "suggest": {
     "ext-intl": "Required by TMSWP\\Core\\Form\\Rule\\Url to validate internationalized domain names",
     "ext-mbstring": "Required for multibyte string handling in TMSWP\\Core\\Support\\Str",
@@ -28,6 +33,9 @@
       "TMSWP\\Core\\Tests\\": "tests/"
     }
   },
+  "scripts": {
+    "test": "phpunit"
+  },
   "extra": {
     "phpstan": {
       "includes": [
@@ -35,7 +43,7 @@
       ]
     },
     "branch-alias": {
-      "dev-main": "0.1.x-dev"
+      "dev-main": "0.2.x-dev"
     }
   },
   "minimum-stability": "stable",
