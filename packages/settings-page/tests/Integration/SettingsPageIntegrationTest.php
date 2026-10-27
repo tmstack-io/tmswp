@@ -7,6 +7,9 @@ namespace TMSWP\SettingsPage\Tests\Integration;
 use RuntimeException;
 use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Form\Form;
+use TMSWP\Core\Kernel\Discovery;
+use TMSWP\Core\Kernel\DiscoveryFile;
+use TMSWP\Core\Kernel\ExtensionInterface;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Tests\Support\BootsKernelBeforeInit;
@@ -26,6 +29,11 @@ use WPDieException;
  * - 設定の下のページ(slug tmswp-sp-general、manage_options)。site_name(必須)・max_items(int)・enabled(bool)・
  *   channels(array)の項目を、同じ名前のオプションと結ぶ
  * - トップレベルのフォームの無いページ(slug tmswp-sp-tools、manage_options)
+ * - トップレベルのフォームのあるページ(slug tmswp-sp-top、manage_options)。add_menu_page()は権限で登録を止めないため、
+ *   capabilityを持たないユーザーのPOSTがhandleRequest()に届く
+ *
+ * フォームのあるページのonSubmit()は、`tmswp_sp_test_submitted`のアクションを発火する(onSubmit()が呼ばれたかを
+ * did_action()で数えるため)。
  */
 final class SettingsPageIntegrationTest extends IntegrationTestCase
 {
@@ -37,6 +45,10 @@ final class SettingsPageIntegrationTest extends IntegrationTestCase
     private const SUBMENU_HOOK = 'settings_page_tmswp-sp-general';
 
     private const TOOLS_HOOK = 'toplevel_page_tmswp-sp-tools';
+
+    private const TOP_HOOK = 'toplevel_page_tmswp-sp-top';
+
+    private const SUBMITTED_ACTION = 'tmswp_sp_test_submitted';
 
     private const PREFIX = 'tmswp_sp_';
 
@@ -111,6 +123,7 @@ final class GeneralSettingsPage extends SettingsPage
 
     protected function onSubmit(FormResult $result): void
     {
+        do_action('tmswp_sp_test_submitted');
         OptionFormBridge::persist($result, SiteOption::class);
     }
 
@@ -152,6 +165,47 @@ final class ToolsPage extends SettingsPage
     protected function render(?Form $form): void
     {
         echo '<p class="tmswp-sp-tools">tools</p>';
+    }
+}
+PHP;
+
+    private const TOP_FORM_PAGE = <<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+namespace {namespace}\SettingsPage;
+
+use TMSWP\Core\Form\Form;
+use TMSWP\Core\Form\FormDefinition;
+use TMSWP\Core\Form\FormResult;
+use TMSWP\SettingsPage\Attribute\AsSettingsPage;
+use TMSWP\SettingsPage\SettingsPage;
+use TMSWP\SettingsPage\SettingsPageDefinition;
+
+#[AsSettingsPage]
+final class TopFormPage extends SettingsPage
+{
+    public static function definition(): SettingsPageDefinition
+    {
+        return new SettingsPageDefinition(slug: 'tmswp-sp-top', pageTitle: 'Top settings');
+    }
+
+    protected function createForm(): ?Form
+    {
+        return new Form(FormDefinition::create('tmswp_sp_top')->text('note', 'Note'));
+    }
+
+    protected function onSubmit(FormResult $result): void
+    {
+        do_action('tmswp_sp_test_submitted');
+    }
+
+    protected function render(?Form $form): void
+    {
+        if ($form !== null) {
+            echo $form->field('note')->input();
+        }
     }
 }
 PHP;
@@ -385,16 +439,135 @@ PHP;
     }
 
     /**
-     * 一時ディレクトリのプラグインのKernel(debug、SettingsPagesを登録)をinitより前にbootする。
+     * CSRFの検証(nonce)を通らないPOSTは、onSubmit()を呼ばず、保存もリダイレクトもせずに、セッション切れのエラーの
+     * 通知を出す。nonceの欠落・空・改ざん・別のフォームのnonce・別のユーザー(同じ権限の管理者)のnonceのどれでも同じ。
+     * nonce以外の送信の値(送信トークン・項目)は正しい。
+     */
+    public function testPostWithoutValidNonceDoesNotCallOnSubmit(): void
+    {
+        $this->bootApp();
+        $this->loginAsAdministrator();
+        $hidden = self::hiddenValues($this->requestPage('GET'));
+        $valid = [...$hidden, Form::FIELD_STEP => 'submit', 'site_name' => 'Shop', 'max_items' => '5'];
+        $withoutNonce = $valid;
+        unset($withoutNonce[Form::FIELD_NONCE]);
+        $nonce = $hidden[Form::FIELD_NONCE];
+        $cases = [
+            'nonceが無い' => $withoutNonce,
+            'nonceが空' => [...$valid, Form::FIELD_NONCE => ''],
+            'nonceの改ざん' => [...$valid, Form::FIELD_NONCE => substr($nonce, 0, -1) . (str_ends_with($nonce, 'a') ? 'b' : 'a')],
+            '別のフォームのnonce' => [...$valid, Form::FIELD_NONCE => wp_create_nonce('tmswp_form_tmswp_sp_top')],
+        ];
+        // CSRFの検証を通ってしまった場合に、保存の後のexitへ進ませない
+        add_filter('wp_redirect', [SettingsPageRedirected::class, 'stop'], 10, 2);
+
+        try {
+            foreach ($cases as $case => $post) {
+                $this->assertRejectedByCsrfCheck($post, $case);
+            }
+
+            $this->loginAsAdministrator();
+            $this->assertRejectedByCsrfCheck($valid, '別のユーザーのnonce');
+        } finally {
+            remove_filter('wp_redirect', [SettingsPageRedirected::class, 'stop'], 10);
+        }
+    }
+
+    /**
+     * capabilityを持たないユーザーは、フォームのあるページの表示(GET)も送信(POST)も、handleRequest()のwp_die()の403で
+     * 拒否され、onSubmit()は呼ばれない。送信の値(そのユーザーのnonceと送信トークン)は正しく、同じ値でもcapabilityを
+     * 持てば保存できる(拒否の理由がcapabilityだけである)。
+     */
+    public function testUserWithoutCapabilityIsRejectedOnGetAndPost(): void
+    {
+        $this->bootApp();
+        $this->loginAs('editor');
+        $grant = static fn(array $allcaps): array => [...$allcaps, 'manage_options' => true];
+        $submitted = did_action(self::SUBMITTED_ACTION);
+
+        // capabilityを持つ間に、メニューを作って(描画のコールバックを接続し)、このユーザーのnonceと送信トークンを得る
+        add_filter('user_has_cap', $grant);
+
+        try {
+            do_action('admin_menu');
+            $hidden = self::hiddenValues($this->requestPage('GET', ['page' => 'tmswp-sp-top'], hook: self::TOP_HOOK));
+        } finally {
+            remove_filter('user_has_cap', $grant);
+        }
+
+        $post = [...$hidden, Form::FIELD_STEP => 'submit', 'note' => 'x'];
+        add_filter('wp_redirect', [SettingsPageRedirected::class, 'stop'], 10, 2);
+
+        try {
+            foreach (['GET' => [], 'POST' => $post] as $method => $body) {
+                try {
+                    $this->requestPage($method, ['page' => 'tmswp-sp-top'], $body, self::TOP_HOOK);
+                    self::fail("{$method}: 権限の無いユーザーが拒否されませんでした");
+                } catch (WPDieException $exception) {
+                    self::assertSame(403, $exception->getCode(), $method);
+                    self::assertSame('Sorry, you are not allowed to access this page.', $exception->getMessage(), $method);
+                }
+            }
+        } finally {
+            remove_filter('wp_redirect', [SettingsPageRedirected::class, 'stop'], 10);
+        }
+
+        self::assertSame($submitted, did_action(self::SUBMITTED_ACTION), '権限の無いユーザーのPOSTでonSubmit()が呼ばれました');
+
+        add_filter('user_has_cap', $grant);
+
+        try {
+            self::assertSame(admin_url('admin.php?page=tmswp-sp-top&updated=1'), $this->submitExpectingRedirect($post, self::TOP_HOOK, 'tmswp-sp-top'));
+        } finally {
+            remove_filter('user_has_cap', $grant);
+        }
+
+        self::assertSame($submitted + 1, did_action(self::SUBMITTED_ACTION));
+    }
+
+    /**
+     * KernelにSettingsPagesを登録していなければ、app/の`#[AsSettingsPage]`のページの初期化(admin_menu)が、debugに
+     * 関係なく例外になる。
+     *
+     * @dataProvider debugModes
+     */
+    public function testAttributePageWithoutSettingsPagesFailsOnAdminMenu(bool $debug): void
+    {
+        $this->bootApp([], $debug);
+        $this->loginAsAdministrator();
+
+        try {
+            do_action('admin_menu');
+            self::fail('SettingsPagesの無いKernelの設定ページの初期化が例外になりませんでした');
+        } catch (LogicException $exception) {
+            self::assertSame("SettingsPages is not registered to the kernel '{$this->namespace}'; pass new SettingsPages() in the extensions of its KernelConfig", $exception->getMessage());
+        }
+
+        $parentPages = $GLOBALS['_parent_pages'];
+        self::assertIsArray($parentPages);
+        self::assertArrayNotHasKey(self::SLUG, $parentPages);
+    }
+
+    /** @return array<string, array{bool}> */
+    public static function debugModes(): iterable
+    {
+        return ['debug' => [true], '本番' => [false]];
+    }
+
+    /**
+     * 一時ディレクトリのプラグインのKernel(既定はdebugで、SettingsPagesを登録)をinitより前にbootする。
+     *
+     * @param list<ExtensionInterface>|null $extensions nullなら`new SettingsPages()`だけ
+     * @param bool $debug falseなら本番のboot(探索結果ファイルを先に作る)
      *
      * @return list<array{hook: string, priority: int, function: mixed, acceptedArgs: int}> bootがinitに登録したコールバック
      */
-    private function bootApp(): array
+    private function bootApp(?array $extensions = null, bool $debug = true): array
     {
         $root = $this->createTempDirectory('integration-settings-page');
         $this->namespace = 'TmswpIntegrationSettingsPage' . uniqid();
 
-        foreach (['Option/SiteOption.php' => self::OPTION_GROUP, 'SettingsPage/GeneralSettingsPage.php' => self::GENERAL_PAGE, 'SettingsPage/ToolsPage.php' => self::TOOLS_PAGE] as $path => $contents) {
+        foreach (['Option/SiteOption.php' => self::OPTION_GROUP, 'SettingsPage/GeneralSettingsPage.php' => self::GENERAL_PAGE, 'SettingsPage/ToolsPage.php' => self::TOOLS_PAGE, 'SettingsPage/TopFormPage.php' => self::TOP_FORM_PAGE] as $path => $contents) {
             $this->writeFile($root . '/app/' . $path, str_replace('{namespace}', $this->namespace, $contents));
         }
 
@@ -404,13 +577,34 @@ PHP;
             $root . '/plugin.php',
             $root . '/app',
             $this->namespace,
-            true,
-            [new SettingsPages()],
+            $debug,
+            $extensions ?? [new SettingsPages()],
             static fn(): array => ['integration' => new LogChannel($logger)],
         );
         $this->registerAppAutoloader($config);
 
+        if (!$debug) {
+            (new DiscoveryFile($config))->write((new Discovery($config, new DiscoveryFile($config)))->scan());
+        }
+
         return $this->bootBeforeInit($config);
+    }
+
+    /**
+     * CSRFの検証で拒否された送信: onSubmit()を呼ばず、保存せず、セッション切れのエラーの通知を出す。
+     *
+     * @param array<string, mixed> $post
+     */
+    private function assertRejectedByCsrfCheck(array $post, string $case): void
+    {
+        $submitted = did_action(self::SUBMITTED_ACTION);
+
+        $html = $this->requestPage('POST', ['page' => self::SLUG], $post);
+
+        self::assertSame($submitted, did_action(self::SUBMITTED_ACTION), "{$case}: onSubmit()が呼ばれました");
+        self::assertStringContainsString('<div class="notice notice-error"><p>Your session has expired. Please submit the form again.</p></div>', $html, $case);
+        self::assertFalse(get_option(self::PREFIX . 'site_name'), $case);
+        self::assertFalse(get_option(self::PREFIX . 'max_items'), $case);
     }
 
     private function loginAsAdministrator(): void
@@ -457,19 +651,25 @@ PHP;
     }
 
     /**
-     * 保存の送信を処理し、リダイレクト先を返す。wp_safe_redirect()の後のexitに進まないよう、wp_redirectのフィルタで
-     * 止める。
+     * 保存の送信を処理し、302のリダイレクト(PRG)であることを確かめて、リダイレクト先を返す。wp_safe_redirect()の後の
+     * exitに進まないよう、wp_redirectのフィルタで止める。
      *
      * @param array<string, mixed> $post
+     * @param non-empty-string $hook ページのhook_suffix
+     * @param string $slug ページのslug(`page`のクエリ)
      */
-    private function submitExpectingRedirect(array $post): string
+    private function submitExpectingRedirect(array $post, string $hook = self::SUBMENU_HOOK, string $slug = self::SLUG): string
     {
-        add_filter('wp_redirect', [SettingsPageRedirected::class, 'stop']);
+        add_filter('wp_redirect', [SettingsPageRedirected::class, 'stop'], 10, 2);
 
         try {
-            $this->requestPage('POST', ['page' => self::SLUG], [...$post, Form::FIELD_STEP => 'submit']);
+            $this->requestPage('POST', ['page' => $slug], [...$post, Form::FIELD_STEP => 'submit'], $hook);
         } catch (SettingsPageRedirected $redirect) {
+            self::assertSame(302, $redirect->getCode(), 'PRGのリダイレクトが302ではありません');
+
             return $redirect->getMessage();
+        } finally {
+            remove_filter('wp_redirect', [SettingsPageRedirected::class, 'stop'], 10);
         }
 
         self::fail('保存の後にリダイレクトしませんでした');
@@ -499,17 +699,17 @@ PHP;
     }
 }
 
-/** 保存の後のリダイレクトを、exitの前に止めるための例外。メッセージはリダイレクト先 */
+/** 保存の後のリダイレクトを、exitの前に止めるための例外。メッセージはリダイレクト先、コードは状態コード */
 final class SettingsPageRedirected extends RuntimeException
 {
     /**
-     * wp_redirectのフィルタ。テストの設定ページへのリダイレクトなら、リダイレクト先をメッセージにして投げ、
+     * wp_redirectのフィルタ。テストの設定ページへのリダイレクトなら、リダイレクト先と状態コードを持たせて投げ、
      * wp_safe_redirect()の後のexitに進ませない。ほかのリダイレクトは変えない。
      */
-    public static function stop(string $location): string
+    public static function stop(string $location, int $status): string
     {
         if (str_contains($location, 'page=tmswp-sp-')) {
-            throw new self($location);
+            throw new self($location, $status);
         }
 
         return $location;

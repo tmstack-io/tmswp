@@ -7,6 +7,7 @@ namespace TMSWP\Thumbnail\Tests\Unit;
 use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Closure;
+use PhpToken;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Throwable;
 use TMSWP\Core\Exception\InvalidArgumentException;
@@ -68,19 +69,48 @@ final class ThumbnailTest extends UnitTestCase
     }
 
     /** thumbnailを登録できるKernelはサイトに1つ。2つ目のKernelの登録は、debugに関係なく例外(D-50)。 */
-    public function testSecondKernelCannotRegisterThumbnail(): void
+    #[DataProvider('debugModes')]
+    public function testSecondKernelCannotRegisterThumbnail(bool $debug): void
     {
         $first = new Thumbnail();
         $this->bootThumbnailKernel('First', $first);
 
         try {
-            $this->bootThumbnailKernel('Second', new Thumbnail(), false);
+            $this->bootThumbnailKernel('Second', new Thumbnail(), $debug);
             self::fail('2つ目のKernelへの登録が例外になりませんでした。');
         } catch (LogicException $exception) {
             self::assertStringContainsString('thumbnail is already registered to the kernel', $exception->getMessage());
         }
 
         self::assertSame($first, Thumbnail::current());
+    }
+
+    /**
+     * 1つのインスタンスを2つのKernelに渡すと、2つ目のKernelのbootが、debugに関係なく例外になる(インスタンスの検査が
+     * D-50の検査より先に効く)。
+     */
+    #[DataProvider('debugModes')]
+    public function testOneInstanceCannotBeRegisteredToTwoKernels(bool $debug): void
+    {
+        $thumbnail = new Thumbnail();
+        $booted = $this->bootThumbnailKernel('Shared', $thumbnail);
+
+        try {
+            $this->bootThumbnailKernel('SharedOther', $thumbnail, $debug);
+            self::fail('1つのインスタンスの2つ目のKernelへの登録が例外になりませんでした。');
+        } catch (LogicException $exception) {
+            self::assertSame("this Thumbnail instance is already registered to the kernel '{$booted['kernel']->config()->appNamespace}'", $exception->getMessage());
+        }
+
+        self::assertSame($booted['kernel'], $thumbnail->kernel());
+        self::assertSame($thumbnail, Thumbnail::current());
+    }
+
+    /** @return iterable<string, array{bool}> */
+    public static function debugModes(): iterable
+    {
+        yield 'debug' => [true];
+        yield '本番' => [false];
     }
 
     /** 1つのインスタンスは1つのKernelにだけ登録できる。 */
@@ -386,6 +416,87 @@ final class ThumbnailTest extends UnitTestCase
         } finally {
             unlink($uploads . '/link.jpg');
         }
+    }
+
+    /**
+     * URLの形のsrcは、uploadsのURL(baseurl+`/`)で始まるものだけを受け付ける。ほかのホスト・スキーム・同じ接頭辞の
+     * 別のパス・クエリやフラグメント付き・許可されない拡張子は、ファイルの有無に関係なく例外になる。
+     *
+     * @return iterable<string, array{string, string}>
+     */
+    public static function rejectedUrlProvider(): iterable
+    {
+        $outside = 'must be an attachment ID or a URL under the uploads directory';
+        $extension = 'must be a jpg, png, gif, webp or avif image';
+
+        yield 'ほかのホスト' => ['https://evil.example/wp-content/uploads/photo.jpg', $outside];
+        yield 'ほかのスキーム' => ['http://example.test/wp-content/uploads/photo.jpg', $outside];
+        yield '同じ接頭辞の別のパス' => [self::BASE_URL . '-evil/photo.jpg', $outside];
+        yield 'uploadsの外の同じホストのURL' => ['https://example.test/wp-content/themes/photo.jpg', $outside];
+        yield 'プロトコル相対のURL' => ['//example.test/wp-content/uploads/photo.jpg', $outside];
+        yield 'uploadsのURLそのもの' => [self::BASE_URL . '/', 'does not name a file'];
+        yield 'クエリ付き' => [self::BASE_URL . '/photo.jpg?ver=1', $extension];
+        yield 'フラグメント付き' => [self::BASE_URL . '/photo.jpg#top', $extension];
+        yield '許可されない拡張子' => [self::BASE_URL . '/photo.php', $extension];
+        yield 'エンコードしたNUL' => [self::BASE_URL . '/photo%00.jpg', 'does not name a file'];
+    }
+
+    #[DataProvider('rejectedUrlProvider')]
+    public function testSourceResolverRejectsUrlOutsideTheUploadsUrl(string $src, string $message): void
+    {
+        $uploads = $this->stubUploads();
+        self::assertNotFalse(file_put_contents($uploads . '/photo.jpg', 'jpeg'));
+        self::assertNotFalse(file_put_contents($uploads . '/photo.php', '<?php'));
+
+        $this->expectException(InvalidThumbSourceException::class);
+        $this->expectExceptionMessage($message);
+
+        (new SourceResolver())->resolve($src);
+    }
+
+    /**
+     * uploadsのURLの下の画像は、パーセントエンコードを1回デコードした名前のファイルに解決する。無いファイルはnull
+     * (画像が無い)。
+     */
+    public function testSourceResolverResolvesUrlUnderTheUploadsUrl(): void
+    {
+        $uploads = $this->stubUploads();
+        self::assertTrue(mkdir($uploads . '/2026/10', 0755, true));
+        self::assertNotFalse(file_put_contents($uploads . '/2026/10/a b%c.jpg', 'jpeg'));
+        self::assertNotFalse(file_put_contents($uploads . '/2026/10/UPPER.JPEG', 'jpeg'));
+        $resolver = new SourceResolver();
+
+        self::assertSame(realpath($uploads . '/2026/10/a b%c.jpg'), $resolver->resolve(self::BASE_URL . '/2026/10/' . rawurlencode('a b%c.jpg')));
+        self::assertSame(realpath($uploads . '/2026/10/UPPER.JPEG'), $resolver->resolve(self::BASE_URL . '/2026/10/UPPER.JPEG'));
+        self::assertNull($resolver->resolve(self::BASE_URL . '/2026/10/missing.jpg'));
+    }
+
+    /**
+     * `tms_thumb()`は`function_exists`のガードで囲まずに、ファイルの最上位で定義する(同名の関数が先にあれば、再宣言の
+     * エラーで止まる)。
+     */
+    public function testTmsThumbIsDefinedWithoutFunctionExistsGuard(): void
+    {
+        $contents = file_get_contents(\dirname(__DIR__, 2) . '/src/functions.php');
+        self::assertIsString($contents);
+        $depth = 0;
+        $definedAtTopLevel = false;
+        $tokens = PhpToken::tokenize($contents);
+
+        foreach ($tokens as $index => $token) {
+            self::assertFalse($token->is(T_STRING) && $token->text === 'function_exists', 'functions.phpがfunction_existsを使っています。');
+
+            if ($token->text === '{') {
+                ++$depth;
+            } elseif ($token->text === '}') {
+                --$depth;
+            } elseif ($token->is(T_FUNCTION)) {
+                $next = $tokens[$index + 2] ?? null;
+                $definedAtTopLevel = $definedAtTopLevel || ($depth === 0 && $next?->text === 'tms_thumb');
+            }
+        }
+
+        self::assertTrue($definedAtTopLevel, 'tms_thumbがファイルの最上位で定義されていません。');
     }
 
     /** 名前が画像の拡張子でも、実体が許可されない拡張子のファイル(シンボリックリンクの先)なら拒む。 */

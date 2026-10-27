@@ -22,6 +22,7 @@ use TMSWP\Thumbnail\RestRouteCheck;
 use TMSWP\Thumbnail\ThumbLock;
 use TMSWP\Thumbnail\Thumbnail;
 use TMSWP\Thumbnail\ThumbnailConfig;
+use TMSWP\Thumbnail\UrlSigner;
 use WP_Error;
 use WP_Hook;
 use WP_REST_Request;
@@ -532,6 +533,164 @@ final class ThumbnailIntegrationTest extends IntegrationTestCase
         }
     }
 
+    /**
+     * 署名の無い要求と、署名が値に合わない要求(改ざん・別の鍵・URLの生成のときと違う表記の値)は、生成せずに403になる。
+     * 署名は受け取ったクエリの生の文字列で照合するため、`w=0100`のように整数としては同じ値でも一致しない。
+     */
+    public function testUnsignedOrMismatchedRequestIsRejectedWith403(): void
+    {
+        $this->bootThumbnail();
+        $attachment = $this->createAttachment('signed/source.jpg');
+        $other = $this->createAttachment('signed/other.jpg');
+        $url = tms_thumb($attachment, 100, 80);
+        self::assertIsString($url);
+        $params = $this->queryParams($url);
+        $signature = $params['s'];
+        $withoutSignature = $params;
+        unset($withoutSignature['s']);
+        $cases = [
+            '署名が無い' => [$withoutSignature, 'tmswp_thumb_unsigned'],
+            '署名が16進の64文字でない' => [[...$params, 's' => 'abc'], 'tmswp_thumb_unsigned'],
+            '署名の改ざん' => [[...$params, 's' => substr($signature, 0, -1) . (str_ends_with($signature, '0') ? '1' : '0')], 'tmswp_thumb_bad_signature'],
+            '別の鍵の署名' => [[...$params, 's' => (new UrlSigner(UrlSigner::deriveKey('another-secret')))->sign('id:' . $attachment, 100, 80, '')], 'tmswp_thumb_bad_signature'],
+            'srcの差し替え' => [[...$params, 'src' => 'id:' . $other], 'tmswp_thumb_bad_signature'],
+            'wの別の表記(先頭の0)' => [[...$params, 'w' => '0100'], 'tmswp_thumb_bad_signature'],
+            'wの別の表記(+)' => [[...$params, 'w' => '+100'], 'tmswp_thumb_bad_signature'],
+            'hの変更' => [[...$params, 'h' => '81'], 'tmswp_thumb_bad_signature'],
+            'oの追加' => [[...$params, 'o' => 'quality=90'], 'tmswp_thumb_bad_signature'],
+        ];
+
+        foreach ($cases as $case => [$query, $code]) {
+            $response = $this->dispatchQuery($query);
+
+            self::assertSame(403, $response->get_status(), $case);
+            self::assertSame($code, $response->as_error()?->get_error_code(), $case);
+        }
+
+        self::assertSame(0, $this->editorLoads);
+        self::assertDirectoryDoesNotExist($this->uploads . '/tmswp-thumb');
+
+        // 同じ値の正しい署名なら生成する(拒否の理由が署名だけである)
+        $this->assertRedirect($this->dispatchQuery($params), 'public, max-age=3600');
+    }
+
+    /**
+     * 署名が正しくても、寸法(maxDimensionの超過・負・両方0)と`o`(qualityの範囲外・許可されないキー・形の誤り)の誤りは、
+     * 生成せずに400になる(多層防御)。
+     */
+    public function testSignedRequestWithInvalidDimensionsOrOptionsIsRejectedWith400(): void
+    {
+        $this->bootThumbnail();
+        $src = 'id:' . $this->createAttachment('invalid/source.jpg');
+        $cases = [
+            '幅がmaxDimensionを超える' => [2561, 100, ''],
+            '高さがmaxDimensionを超える' => [100, 2561, ''],
+            '幅が負' => [-1, 100, ''],
+            '幅と高さが0' => [0, 0, ''],
+            'qualityが0' => [100, 100, 'quality=0'],
+            'qualityが101' => [100, 100, 'quality=101'],
+            'qualityが整数でない' => [100, 100, 'quality=high'],
+            'cropが0・1でない' => [100, 100, 'crop=2'],
+            '許可されないキー' => [100, 100, 'format=webp'],
+            '許可されたキーに混ぜた許可されないキー' => [100, 100, 'crop=0&format=webp'],
+            '=の無い組' => [100, 100, 'crop'],
+        ];
+
+        foreach ($cases as $case => [$width, $height, $options]) {
+            $response = $this->dispatchQuery(self::signedQuery($src, $width, $height, $options));
+
+            self::assertSame(400, $response->get_status(), $case);
+            self::assertSame('tmswp_thumb_bad_request', $response->as_error()?->get_error_code(), $case);
+        }
+
+        self::assertSame(0, $this->editorLoads);
+        self::assertDirectoryDoesNotExist($this->uploads . '/tmswp-thumb');
+    }
+
+    /**
+     * 署名が正しくても、uploadsの外を指すsrc(`..`の区間・同じ接頭辞の別のディレクトリ・ほかのホスト・uploadsの外の
+     * URL・uploadsの外を指す添付ファイルのメタ・外を指すシンボリックリンク)と、許可されない拡張子・無い添付ファイルは、
+     * 生成せずに404になる。
+     */
+    public function testSignedRequestForSourceOutsideUploadsReturns404(): void
+    {
+        $this->bootThumbnail();
+        $this->createImage('inside/source.jpg', 400, 300);
+        // uploadsと同じ接頭辞の別のディレクトリ(uploads-evil)と、その中の実在する画像
+        $evil = $this->uploads . '-evil';
+        self::assertTrue(mkdir($evil));
+        self::assertTrue(copy($this->uploads . '/inside/source.jpg', $evil . '/secret.jpg'));
+        self::assertTrue(symlink($evil . '/secret.jpg', $this->uploads . '/inside/link.jpg'));
+        self::assertNotFalse(file_put_contents($this->uploads . '/inside/data.php', '<?php'));
+        $outsideAttachment = $this->createAttachment('inside/attached.jpg');
+        update_post_meta($outsideAttachment, '_wp_attached_file', $evil . '/secret.jpg');
+
+        try {
+            $cases = [
+                '..の区間' => self::BASE_URL . '/inside/../../' . basename($evil) . '/secret.jpg',
+                'エンコードした..の区間' => self::BASE_URL . '/inside/%2E%2E/%2E%2E/' . basename($evil) . '/secret.jpg',
+                '同じ接頭辞の別のディレクトリのURL' => self::BASE_URL . '-evil/secret.jpg',
+                'ほかのホストのURL' => 'https://evil.example/tmswp-thumbnail-uploads/inside/source.jpg',
+                'uploadsの外のURL' => 'http://example.org/wp-content/themes/source.jpg',
+                'uploadsの外を指す添付ファイルのメタ' => 'id:' . $outsideAttachment,
+                'uploadsの外を指すシンボリックリンク' => self::BASE_URL . '/inside/link.jpg',
+                '許可されない拡張子' => self::BASE_URL . '/inside/data.php',
+                '無い添付ファイル' => 'id:999999',
+            ];
+
+            foreach ($cases as $case => $src) {
+                $response = $this->dispatchQuery(self::signedQuery($src, 100, 100, ''));
+
+                self::assertSame(404, $response->get_status(), $case);
+                self::assertSame('tmswp_thumb_not_found', $response->as_error()?->get_error_code(), $case);
+            }
+        } finally {
+            unlink($this->uploads . '/inside/link.jpg');
+            unlink($evil . '/secret.jpg');
+            rmdir($evil);
+        }
+
+        self::assertSame(0, $this->editorLoads);
+        self::assertSame([], $this->logger->records);
+        // 拒んだ要求は、キャッシュのディレクトリを作らない
+        self::assertDirectoryDoesNotExist($this->uploads . '/tmswp-thumb');
+    }
+
+    /**
+     * キャッシュのキーは、元画像の更新日時と、ThumbnailConfigの既定のcrop・qualityで変わる。元画像を更新した後と、
+     * 既定値を変えた後は、生成済みのファイルを使わずに、署名付きのRESTのURLを返す(`o`は空のまま)。
+     */
+    public function testCacheKeyChangesWithSourceModificationTimeAndConfigDefaults(): void
+    {
+        $this->bootThumbnail();
+        $attachment = $this->createAttachment('key/source.jpg');
+        $source = $this->uploads . '/key/source.jpg';
+        $restUrl = tms_thumb($attachment, 100, 100);
+        self::assertIsString($restUrl);
+        $location = $this->assertRedirect($this->dispatch($restUrl), 'public, max-age=3600');
+        self::assertSame($location, tms_thumb($attachment, 100, 100));
+
+        self::assertTrue(touch($source, (int) filemtime($source) + 60));
+        clearstatcache();
+        $afterUpdate = tms_thumb($attachment, 100, 100);
+        self::assertIsString($afterUpdate);
+        self::assertSame(strtok(rest_url('tmswp/v1/thumb'), '?'), strtok($afterUpdate, '?'));
+        $updated = $this->assertRedirect($this->dispatch($afterUpdate), 'public, max-age=3600');
+        self::assertNotSame($location, $updated);
+        self::assertSame(2, $this->editorLoads);
+        self::assertSame($updated, tms_thumb($attachment, 100, 100));
+
+        foreach (['defaultQuality' => new ThumbnailConfig(defaultQuality: 60), 'defaultCrop' => new ThumbnailConfig(defaultCrop: false)] as $case => $config) {
+            $this->restoreFixtureKernels();
+            $this->bootThumbnail(config: $config);
+            $url = tms_thumb($attachment, 100, 100);
+
+            self::assertIsString($url, $case);
+            self::assertSame(strtok(rest_url('tmswp/v1/thumb'), '?'), strtok($url, '?'), $case);
+            self::assertSame('', $this->queryParams($url)['o'], $case);
+        }
+    }
+
     /** thumbnailを登録できるKernelはサイトに1つ。2つ目のKernelのbootは例外になり、tms_thumb()は1つ目に従う。 */
     public function testSecondKernelCannotRegisterThumbnail(): void
     {
@@ -552,15 +711,16 @@ final class ThumbnailIntegrationTest extends IntegrationTestCase
      * 一時ディレクトリのプラグインのKernel(Thumbnailを登録)をinitより前にbootする。
      *
      * @param bool $debug falseなら本番のboot(探索結果ファイルを先に作る)
+     * @param ThumbnailConfig|null $config nullなら既定の設定
      */
-    private function bootThumbnail(bool $debug = true): Thumbnail
+    private function bootThumbnail(bool $debug = true, ?ThumbnailConfig $config = null): Thumbnail
     {
         $root = $this->createTempDirectory('integration-thumbnail');
         $this->writeFile($root . '/plugin.php', "<?php\n");
         self::assertTrue(mkdir($root . '/app'));
         $logger = $this->logger;
-        $thumbnail = new Thumbnail(new ThumbnailConfig());
-        $config = KernelConfig::plugin(
+        $thumbnail = new Thumbnail($config ?? new ThumbnailConfig());
+        $kernelConfig = KernelConfig::plugin(
             $root . '/plugin.php',
             $root . '/app',
             'TmswpIntegrationThumbnail' . uniqid(),
@@ -570,10 +730,10 @@ final class ThumbnailIntegrationTest extends IntegrationTestCase
         );
 
         if (!$debug) {
-            (new DiscoveryFile($config))->write((new Discovery($config, new DiscoveryFile($config)))->scan());
+            (new DiscoveryFile($kernelConfig))->write((new Discovery($kernelConfig, new DiscoveryFile($kernelConfig)))->scan());
         }
 
-        $this->initCallbacks = $this->bootBeforeInit($config);
+        $this->initCallbacks = $this->bootBeforeInit($kernelConfig);
 
         return $thumbnail;
     }
@@ -637,10 +797,39 @@ final class ThumbnailIntegrationTest extends IntegrationTestCase
 
     private function dispatch(string $url): WP_REST_Response
     {
+        return $this->dispatchQuery($this->queryParams($url));
+    }
+
+    /**
+     * RESTのルートに、クエリ(受け取った側の$_GETにあたる、デコード済みの値)を渡して要求する。
+     *
+     * @param array<string, string> $query
+     */
+    private function dispatchQuery(array $query): WP_REST_Response
+    {
         $request = new WP_REST_Request('GET', self::ROUTE);
-        $request->set_query_params($this->queryParams($url));
+        $request->set_query_params($query);
 
         return rest_do_request($request);
+    }
+
+    /**
+     * サイトの鍵(wp_salt('auth')から導出したもの)で署名した、RESTのルートのクエリ。
+     *
+     * @return array<string, string>
+     */
+    private static function signedQuery(string $src, int $width, int $height, string $options): array
+    {
+        $salt = wp_salt('auth');
+        self::assertNotSame('', $salt);
+
+        return [
+            'src' => $src,
+            'w' => (string) $width,
+            'h' => (string) $height,
+            'o' => $options,
+            's' => (new UrlSigner(UrlSigner::deriveKey($salt)))->sign($src, $width, $height, $options),
+        ];
     }
 
     /**

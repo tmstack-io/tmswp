@@ -281,6 +281,21 @@ PHP;
         self::assertSame(5, $app['options']->get('unit_max_items'));
     }
 
+    /**
+     * `#[OptionSchema]`で宣言したキーだけを保存する。宣言の無いケース(undeclared)とオプショングループに無い名前の
+     * 送信の値は、保存しない。
+     */
+    public function testPersistSavesOnlyDeclaredKeys(): void
+    {
+        $app = $this->bootApp('DeclaredOnly');
+
+        OptionFormBridge::persist(self::completed(['site_name' => 'Shop', 'undeclared' => 'x', 'note' => 'y']), $app['group']);
+
+        self::assertSame('Shop', $app['options']->get('unit_site_name'));
+        self::assertFalse($app['options']->has('unit_undeclared'));
+        self::assertFalse($app['options']->has('unit_note'));
+    }
+
     /** 片側にしかない名前は、黙って無視せず、登録したKernelのロガーにdebugで記録する。 */
     public function testUnmatchedNamesAreLoggedToTheKernelLogger(): void
     {

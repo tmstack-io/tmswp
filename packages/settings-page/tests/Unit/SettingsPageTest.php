@@ -7,6 +7,7 @@ namespace TMSWP\SettingsPage\Tests\Unit;
 use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Closure;
+use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Form\Form;
 use TMSWP\Core\Form\FormDefinition;
@@ -96,7 +97,9 @@ final class SettingsPageTest extends UnitTestCase
         $init();
     }
 
-    public function testOneInstanceCannotBeRegisteredToTwoKernels(): void
+    /** 1つのインスタンスを2つのKernelに渡すと、2つ目のKernelのbootが、debugに関係なく例外になる。 */
+    #[DataProvider('debugModes')]
+    public function testOneInstanceCannotBeRegisteredToTwoKernels(bool $debug): void
     {
         $extension = new SettingsPages();
         $app = $this->bootSettingsPagesKernel('Shared', extensions: [$extension]);
@@ -104,7 +107,47 @@ final class SettingsPageTest extends UnitTestCase
         $this->expectException(LogicException::class);
         $this->expectExceptionMessage("this SettingsPages instance is already registered to the kernel '{$app['namespace']}'");
 
-        $this->bootSettingsPagesKernel('SharedOther', extensions: [$extension]);
+        $this->bootSettingsPagesKernel('SharedOther', extensions: [$extension], debug: $debug);
+    }
+
+    /** @return iterable<string, array{bool}> */
+    public static function debugModes(): iterable
+    {
+        yield 'debug' => [true];
+        yield '本番' => [false];
+    }
+
+    /**
+     * 同じ種類の拡張(SettingsPages)は、Kernelごとに別のインスタンスなら2つのKernelに登録できる。それぞれのKernelが
+     * 自分のSettingsPagesを持ち、コンストラクタに渡したページを自分のadmin_menuでメニューに登録する。
+     */
+    #[DataProvider('debugModes')]
+    public function testSettingsPagesCanBeRegisteredToEachKernel(bool $debug): void
+    {
+        $adminMenus = [];
+        Actions\expectAdded('admin_menu')->twice()->whenHappen(static function (mixed $callback) use (&$adminMenus): void {
+            $adminMenus[] = $callback;
+        });
+        $theme = $this->bootSettingsPagesKernel('EachTheme', extensions: [$themePages = new SettingsPages([SiteSettingsPageFixture::class])], debug: $debug);
+        $plugin = $this->bootSettingsPagesKernel('EachPlugin', extensions: [$pluginPages = new SettingsPages([OtherSettingsPageFixture::class])], debug: $debug);
+
+        self::assertSame($themePages, SettingsPages::forKernel($theme['kernel']));
+        self::assertSame($pluginPages, SettingsPages::forKernel($plugin['kernel']));
+        self::assertCount(2, $adminMenus);
+
+        $slugs = [];
+        Functions\expect('add_submenu_page')->twice()->andReturnUsing(static function (string $parent, string $pageTitle, string $menuTitle, string $capability, string $slug) use (&$slugs): string {
+            $slugs[] = $slug;
+
+            return 'settings_page_' . $slug;
+        });
+
+        foreach ($adminMenus as $adminMenu) {
+            self::assertInstanceOf(Closure::class, $adminMenu);
+            $adminMenu();
+        }
+
+        self::assertSame(['site-settings', 'other-settings'], $slugs);
     }
 
     public function testConstructorPageThatDoesNotExtendSettingsPageFailsTheBoot(): void
@@ -148,6 +191,20 @@ final class SettingsPageTest extends UnitTestCase
         $this->expectExceptionMessage("duplicate settings page slug 'site-settings': " . SiteSettingsPageFixture::class . ', ' . DuplicateSiteSettingsPageFixture::class);
 
         SettingsPages::forKernel($plugin['kernel'])->addPage(DuplicateSiteSettingsPageFixture::class);
+    }
+
+    /** 同じKernelの中のslugの重複も例外になる。 */
+    public function testDuplicateSlugWithinOneKernelIsRejected(): void
+    {
+        Functions\when('add_submenu_page')->justReturn('settings_page_site-settings');
+        $app = $this->bootSettingsPagesKernel('DuplicateSame');
+        $pages = SettingsPages::forKernel($app['kernel']);
+        $pages->addPage(SiteSettingsPageFixture::class);
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage("duplicate settings page slug 'site-settings': " . SiteSettingsPageFixture::class . ', ' . DuplicateSiteSettingsPageFixture::class);
+
+        $pages->addPage(DuplicateSiteSettingsPageFixture::class);
     }
 
     /**
@@ -198,6 +255,16 @@ final class SiteSettingsPageFixture extends SettingsPage
         ++self::$definitionCalls;
 
         return new SettingsPageDefinition(slug: 'site-settings', parent: 'options-general.php');
+    }
+
+    protected function render(?Form $form): void {}
+}
+
+final class OtherSettingsPageFixture extends SettingsPage
+{
+    public static function definition(): SettingsPageDefinition
+    {
+        return new SettingsPageDefinition(slug: 'other-settings', parent: 'options-general.php');
     }
 
     protected function render(?Form $form): void {}

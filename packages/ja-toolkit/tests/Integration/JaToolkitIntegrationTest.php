@@ -17,6 +17,7 @@ use TMSWP\Core\Tests\Support\UsesTempDirectories;
 use TMSWP\JaToolkit\Form\KanaTextField;
 use TMSWP\JaToolkit\Form\KanaType;
 use TMSWP\JaToolkit\JaToolkit;
+use TMSWP\JaToolkit\Module\DisableTexturize;
 use TMSWP\JaToolkit\Module\FullwidthSearchNormalizer;
 use TMSWP\JaToolkit\Module\JapaneseSlug;
 use WP_Post;
@@ -36,8 +37,28 @@ final class JaToolkitIntegrationTest extends IntegrationTestCase
     /** 「東京」をURLエンコードしたスラッグ(sanitize_title()が日本語のタイトルから作る形) */
     private const ENCODED_SLUG = '%e6%9d%b1%e4%ba%ac';
 
+    /** wptexturizeが変換する文字を含む文字列 */
+    private const TEXTURIZE_PROBE = 'He said "Tokyo" -- wait...';
+
+    /** TEXTURIZE_PROBEにwptexturizeを適用した結果 */
+    private const TEXTURIZED_PROBE = 'He said &#8220;Tokyo&#8221; &#8212; wait&#8230;';
+
+    /** @var array<string, mixed> テストの前のスーパーグローバルとWPのオブジェクト(go_to()が書き換える) */
+    private array $globalsBackup = [];
+
+    public function set_up(): void
+    {
+        parent::set_up();
+        $this->globalsBackup = ['_GET' => $_GET, '_POST' => $_POST, '_REQUEST' => $_REQUEST, '_SERVER' => $_SERVER, 'wp' => $GLOBALS['wp'] ?? null];
+    }
+
     public function tear_down(): void
     {
+        $_GET = $this->globalsBackup['_GET'];
+        $_POST = $this->globalsBackup['_POST'];
+        $_REQUEST = $this->globalsBackup['_REQUEST'];
+        $_SERVER = $this->globalsBackup['_SERVER'];
+        $GLOBALS['wp'] = $this->globalsBackup['wp'];
         $this->cleanupTempDirectories();
         parent::tear_down();
     }
@@ -202,6 +223,62 @@ final class JaToolkitIntegrationTest extends IntegrationTestCase
     }
 
     /**
+     * 要求のクエリ(`?s=東京%E3%80%80タワー`)のメインの検索も、全角スペースを半角にして検索する。空白だけの要求の
+     * 検索(`?s=%E3%80%80`)は、検索のまま0件になる。
+     */
+    public function testMainSearchQueryFromTheRequestIsNormalized(): void
+    {
+        $this->bootApp('MainSearch', new JaToolkit(new FullwidthSearchNormalizer()));
+        $matchId = self::factory()->post->create(['post_title' => '東京の展望', 'post_content' => 'タワーに登る', 'post_status' => 'publish']);
+        self::assertIsInt($matchId);
+        self::factory()->post->create(['post_title' => '大阪の展望', 'post_content' => 'タワーに登る', 'post_status' => 'publish']);
+
+        $this->go_to(home_url('/?s=東京%E3%80%80タワー'));
+
+        self::assertTrue(is_search());
+        self::assertSame('東京 タワー', get_query_var('s'));
+        self::assertSame([$matchId], array_map(static fn(WP_Post $post): int => $post->ID, self::mainQueryPosts()));
+
+        $this->go_to(home_url('/?s=%E3%80%80'));
+
+        self::assertTrue(is_search());
+        self::assertSame('', get_query_var('s'));
+        self::assertSame([], self::mainQueryPosts());
+    }
+
+    /**
+     * DisableTexturizeを有効にすると、タイトル・本文にwptexturizeを適用しない(引用符・ダッシュ・省略記号を変換しない)。
+     *
+     * wptexturize()は、run_wptexturizeのフィルタの結果を関数の静的変数に1回だけ保存し、falseになった後は同じプロセスで
+     * 元に戻せない。ほかのテストに影響しないよう、別プロセスで動かす。適用されることの対照は
+     * testTexturizeIsAppliedWithoutDisableTexturizeが確かめる。
+     *
+     * @runInSeparateProcess
+     *
+     * @preserveGlobalState disabled
+     */
+    public function testDisableTexturizeKeepsTitleAndContentUntouched(): void
+    {
+        // 別プロセスのテストの失敗は、例外を直列化して親のプロセスに返す。トレースの引数のクロージャは直列化できず、
+        // 失敗の内容が分からなくなるため、このプロセスでは例外のトレースに引数を入れない
+        ini_set('zend.exception_ignore_args', '1');
+        $this->bootApp('Texturize', new JaToolkit(new DisableTexturize()));
+        $postId = $this->createTexturizeProbe();
+
+        self::assertSame(self::TEXTURIZE_PROBE, get_the_title($postId));
+        self::assertSame('<p>' . self::TEXTURIZE_PROBE . "</p>\n", apply_filters('the_content', self::TEXTURIZE_PROBE));
+    }
+
+    /** DisableTexturizeが無ければ、同じタイトル・本文にwptexturizeが適用される(上のテストの対照)。 */
+    public function testTexturizeIsAppliedWithoutDisableTexturize(): void
+    {
+        $postId = $this->createTexturizeProbe();
+
+        self::assertSame(self::TEXTURIZED_PROBE, get_the_title($postId));
+        self::assertSame('<p>' . self::TEXTURIZED_PROBE . "</p>\n", apply_filters('the_content', self::TEXTURIZE_PROBE));
+    }
+
+    /**
      * 一時ディレクトリのプラグインのKernel(debug)に、渡したJaToolkitを登録してinitより前にbootする。
      *
      * @return list<array{hook: string, priority: int, function: mixed, acceptedArgs: int}> bootがinitに登録したコールバック
@@ -223,6 +300,31 @@ final class JaToolkitIntegrationTest extends IntegrationTestCase
         wp_update_post(['ID' => $postId, 'post_status' => 'publish']);
 
         return $postId;
+    }
+
+    /** wptexturizeが変換する文字(二重引用符・`--`・`...`)を含むタイトルの投稿 */
+    private function createTexturizeProbe(): int
+    {
+        $postId = self::factory()->post->create(['post_title' => self::TEXTURIZE_PROBE, 'post_status' => 'publish']);
+        self::assertIsInt($postId);
+        self::assertSame(self::TEXTURIZE_PROBE, $this->post($postId)->post_title);
+
+        return $postId;
+    }
+
+    /** @return list<WP_Post> メインのクエリの投稿 */
+    private static function mainQueryPosts(): array
+    {
+        $query = $GLOBALS['wp_query'];
+        self::assertInstanceOf(WP_Query::class, $query);
+        $posts = [];
+
+        foreach ($query->posts as $post) {
+            self::assertInstanceOf(WP_Post::class, $post);
+            $posts[] = $post;
+        }
+
+        return $posts;
     }
 
     private function post(int $postId): WP_Post

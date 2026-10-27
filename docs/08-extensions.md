@@ -1096,7 +1096,8 @@ FormDefinition::create('contact')
 
 - [ ] 3パッケージとも `composer.json` が共通規約(php>=8.3、tmswp/core ^1.0、PSR-4)に従い、固有依存(ext-gd/ext-mbstring)が正しいパッケージにのみ存在する
 - [ ] 全クラスが `declare(strict_types=1)`・PSR-12・final優先・全シグネチャ型宣言・マジックメソッド不使用・`extract()` 不使用
-- [ ] 各 `register()`/`enable()` の二重呼び出しが `LogicException` になるユニットテストがある
+- [ ] 3パッケージとも、1つのインスタンス(`SettingsPages`・`Thumbnail`・`JaToolkit`)を2つのKernelの`KernelConfig`の`extensions`に渡すと、2つ目のKernelのbootが`LogicException`になる(debugに関係なく。ユニットテスト)
+- [ ] 同じ種類の拡張を、2つのKernelにそれぞれ別のインスタンスで登録すると、settings-pageとja-toolkitはどちらのKernelでも有効になり、thumbnailは2つ目のKernelのbootが`LogicException`になる(D-50。debugに関係なく。ユニットテスト)
 - [ ] PHPStan level max(szepeviktor/phpstan-wordpress)をbaselineなしで通過: `composer analyse`
 - [ ] `composer lint` / `composer test` / `composer qa` が成功
 

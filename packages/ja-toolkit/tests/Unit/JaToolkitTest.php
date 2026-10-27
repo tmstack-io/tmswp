@@ -8,7 +8,9 @@ use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Closure;
 use PHPUnit\Framework\Attributes\DataProvider;
+use ReflectionClass;
 use ReflectionFunction;
+use ReflectionMethod;
 use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Tests\Support\UnitTestCase;
@@ -70,20 +72,76 @@ final class JaToolkitTest extends UnitTestCase
         self::assertFalse(has_filter('wp_unique_post_slug'));
     }
 
-    /** 1つのインスタンスは1つのKernelにだけ登録できる。2つ目のKernelの登録は、何も登録せずに例外になる。 */
-    public function testInstanceCannotBeRegisteredToTwoKernels(): void
+    /**
+     * KernelConfigのextensionsにJaToolkitを渡さないKernelでは、JaToolkitとモジュールを作っても、WordPressの挙動を
+     * 変えない(訳の読み込みもモジュールのフックも登録しない)。
+     */
+    public function testKernelWithoutJaToolkitRegistersNoHooks(): void
+    {
+        $unregistered = new JaToolkit(new JapaneseSlug(), new FullwidthSearchNormalizer(), new DisableTexturize());
+
+        $kernel = $this->bootJaToolkitKernel('Without', null);
+
+        self::assertNotContains($unregistered, $kernel->config()->extensions);
+
+        self::assertSame([], $this->textdomainLoaders);
+        self::assertFalse(has_filter('run_wptexturize'));
+        self::assertFalse(has_action('pre_get_posts'));
+        self::assertFalse(has_filter('wp_unique_post_slug'));
+    }
+
+    /**
+     * 登録の経路はKernelConfigのextensionsだけで、JaToolkitとモジュールに静的な登録のAPI(公開の静的メソッド)が無い。
+     */
+    public function testThereIsNoStaticRegistrationApi(): void
+    {
+        foreach ([JaToolkit::class, JapaneseSlug::class, FullwidthSearchNormalizer::class, DisableTexturize::class] as $class) {
+            $publicStatic = array_filter((new ReflectionClass($class))->getMethods(ReflectionMethod::IS_STATIC), static fn(ReflectionMethod $method): bool => $method->isPublic());
+
+            self::assertSame([], array_values(array_map(static fn(ReflectionMethod $method): string => $method->getName(), $publicStatic)), $class);
+        }
+    }
+
+    /** 1つのインスタンスは1つのKernelにだけ登録できる。2つ目のKernelの登録は、debugに関係なく、何も登録せずに例外になる。 */
+    #[DataProvider('debugModes')]
+    public function testInstanceCannotBeRegisteredToTwoKernels(bool $debug): void
     {
         $jaToolkit = new JaToolkit();
         $this->bootJaToolkitKernel('First', $jaToolkit);
 
         try {
-            $this->bootJaToolkitKernel('Second', $jaToolkit);
+            $this->bootJaToolkitKernel('Second', $jaToolkit, $debug);
             self::fail('2つ目のKernelへの登録が例外になりませんでした。');
         } catch (LogicException $exception) {
             self::assertStringContainsString('this JaToolkit instance is already registered to the kernel', $exception->getMessage());
         }
 
         self::assertSame([1], $this->textdomainLoaders);
+    }
+
+    /** @return iterable<string, array{bool}> */
+    public static function debugModes(): iterable
+    {
+        yield 'debug' => [true];
+        yield '本番' => [false];
+    }
+
+    /**
+     * 同じ種類の拡張(JaToolkit)は、Kernelごとに別のインスタンスなら2つのKernelに登録できる。それぞれが訳の読み込みを
+     * 予約し、それぞれのモジュールのフックを登録する。
+     */
+    #[DataProvider('debugModes')]
+    public function testJaToolkitCanBeRegisteredToEachKernel(bool $debug): void
+    {
+        $themeModule = new FullwidthSearchNormalizer();
+        $pluginModule = new FullwidthSearchNormalizer();
+
+        $this->bootJaToolkitKernel('EachTheme', new JaToolkit($themeModule), $debug);
+        $this->bootJaToolkitKernel('EachPlugin', new JaToolkit($pluginModule), $debug);
+
+        self::assertSame([1, 1], $this->textdomainLoaders);
+        self::assertSame(10, has_action('pre_get_posts', [$themeModule, 'normalize']));
+        self::assertSame(10, has_action('pre_get_posts', [$pluginModule, 'normalize']));
     }
 
     /**
