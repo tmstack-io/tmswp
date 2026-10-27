@@ -5,6 +5,7 @@
  * Requires at least: 7.0
  * Requires PHP: 8.3
  * Text Domain: {{project_slug}}
+ * Domain Path: /languages
  */
 
 declare(strict_types=1);

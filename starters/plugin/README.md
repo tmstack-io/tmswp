@@ -5,7 +5,7 @@ TMStack WordPress Framework を使用したWordPressプラグイン。
 <!-- tmswp-starter-setup -->
 ## 新規プロジェクトの作成
 
-新規プロジェクトはこの雛形から作成する。作成の直後に`bin/setup.php`が、スラッグから名前空間(例: `my-shop` → `MyShop\`)を作り、composer.json・本体ファイル・`app/`・AGENTS.mdを書き換えて、自身を削除する。
+新規プロジェクトはこの雛形から作成する。作成の直後に`bin/setup.php`が、スラッグから名前空間(例: `my-shop` → `MyShop\`)を作り、composer.json・本体ファイルの名前(`plugin.php`→`<スラッグ>.php`)・`tmswp-kernel.php`・`app/`・AGENTS.mdを書き換えて、自身を削除する。
 
 ```bash
 composer create-project tmswp/starter-plugin my-plugin
@@ -39,4 +39,5 @@ composer qa
 ## 開発規約
 
 - 開発規約・禁止事項・必須コマンド: [AGENTS.md](./AGENTS.md)
-- タスク別レシピ: `vendor/tmswp/core/rules/*.md`
+- タスク別レシピ: `vendor/tmswp/core/rules/*.md`(どのレシピを読むかはAGENTS.mdの「最初に読むもの」)
+- 拡張のレシピ: 拡張を入れると`vendor/tmswp/<拡張>/rules/*.md`に入る

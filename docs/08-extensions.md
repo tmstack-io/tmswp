@@ -34,7 +34,7 @@ tmswp/acf-bridge は本書のスコープ外(専用文書が定義)。CSVイン�
     "type": "library",
     "require": {
         "php": ">=8.3",
-        "tmswp/core": "^1.0"
+        "tmswp/core": "^0.2"
     },
     "autoload": {
         "psr-4": { "TMSWP\\<Pascal>\\": "src/" }
@@ -228,7 +228,7 @@ cacheKey = substr(hash('sha256', serialize(
   - キーのファイル(`{key}.*`)は、キーごとにそのキーのロックを待たずに取り、取れたキーのファイルだけを消す。生成中(ロックを持たれている)のキーは飛ばすため、生成中のロックと一時ファイルは消えない。ロックのファイルは、ロックを持ったまま手放す前に消す(異常終了で残ったロックのファイルも消える)。
   - `n`は正の整数で、n日は`redirectMaxAge`秒より長くなければならない(違えば、何も消さずに`WP_CLI::error()`で`Error:`を出し、終了コード1で終わる)。ブラウザ等にキャッシュされた302が、消したファイルを指さないためである。
   - 静的なURLへの直接のアクセス(`tms_thumb()`が静的なURLを返した後の表示や、ページキャッシュのHTML)は、Apacheが返すため更新日時を変えない。消したファイルは、次の`tms_thumb()`がRESTのURLを返して作り直す。ページキャッシュのHTMLに残った静的なURLは、ページキャッシュが切れるまで404になるため、`--days`はページキャッシュの寿命より長くする。
-  - 自動cronは持たない(DECISION: 運用判断。必要ならapp側で `wp_schedule_event` からCLI相当処理を呼ぶレシピをrules/に記載)。
+  - 自動cron(WP-Cronの予約)は持たない(DECISION: 運用判断)。定期的な削除は、サーバーのcron等で`wp tmswp thumb clear --days=<n>`を実行する(レシピ`packages/thumbnail/rules/thumbnail.md`)。
 
 ## 1.4 クラス仕様
 
@@ -1096,7 +1096,7 @@ FormDefinition::create('contact')
 
 ## 共通
 
-- [ ] 3パッケージとも `composer.json` が共通規約(php>=8.3、tmswp/core ^1.0、PSR-4)に従い、固有依存(ext-gd/ext-mbstring)が正しいパッケージにのみ存在する
+- [ ] 3パッケージとも `composer.json` が共通規約(php>=8.3、tmswp/core ^0.2、PSR-4)に従い、固有依存(ext-gd/ext-mbstring)が正しいパッケージにのみ存在する
 - [ ] 全クラスが `declare(strict_types=1)`・PSR-12・final優先・全シグネチャ型宣言・マジックメソッド不使用・`extract()` 不使用
 - [ ] 3パッケージとも、1つのインスタンス(`SettingsPages`・`Thumbnail`・`JaToolkit`)を2つのKernelの`KernelConfig`の`extensions`に渡すと、2つ目のKernelのbootが`LogicException`になる(debugに関係なく。ユニットテスト)
 - [ ] 同じ種類の拡張を、2つのKernelにそれぞれ別のインスタンスで登録すると、settings-pageとja-toolkitはどちらのKernelでも有効になり、thumbnailは2つ目のKernelのbootが`LogicException`になる(D-50。debugに関係なく。ユニットテスト)

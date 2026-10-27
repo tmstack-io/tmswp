@@ -1,11 +1,11 @@
 # フォームを実装する
 
 フォームの定義は`app/Form/`、テンプレートの前処理(フォームの駆動とPRGのリダイレクト)は`app/Page/`、画面はWordPress標準のページテンプレートに置く。CSRF・確認画面の値の保持・二重送信の防止・値の検証・ページキャッシュからの除外はFWに任せる。
-例はテーマのもので、名前空間はテーマのスターター既定の`App\`。プラグイン(スターターの既定は`PluginApp\`)等では、対象のプロジェクトのcomposer.jsonのPSR-4の設定(`app/`に割り当てた名前空間)に合わせて読み替える。
+例はテーマのもの。コード例の名前空間`App\`は、自分のプロジェクトの名前空間(composer.jsonの`autoload.psr-4`で`app/`に割り当て、`tmswp-kernel.php`の`appNamespace`に書いたもの。スターターから作ったプロジェクトでは、setup.phpがスラッグから作った名前。例: `my-theme`なら`MyTheme\`)に読み替える。
 
 - 例のテキストドメイン`my-theme`は、テーマのstyle.css(プラグインはプラグインヘッダ)の`Text Domain`に置き換える。アプリの文言は、ソースを英語にしてアプリのテキストドメインで`__()`に渡し、日本語は翻訳ファイルで用意する。`tmswp`ドメインはFWの文言専用で、アプリの文言には使わない。
 - 対象は入力・確認・完了の3画面まで。4画面以上のウィザード形式はFWの対象外。フォームを分けて作る。
-- 項目名に、WordPressの公開のクエリ変数(`name`・`s`・`p`・`page`・`year`・`author`等と、登録した投稿タイプ・タクソノミーの`query_var`)を使わない。WordPressがPOSTの値をクエリ変数として読み、送信が404になるため、フロントでは`handle()`・`open()`が`FormConfigException`にする。お名前は`full_name`等にする。
+- 項目名に、WordPressの公開のクエリ変数(`name`・`s`・`p`・`page`・`year`・`author`等と、登録した投稿タイプ・タクソノミーの`query_var`、`query_vars`フィルタで足したもの)を使わない。WordPressがPOSTの値をクエリ変数として読み、送信が別のページの表示や404になるため、フロント(管理画面以外)では`handle()`・`open()`が、debugに関係なく`FormConfigException`にする。ファイルの項目は、POSTで送る`{name}__token`の名前で確かめる。お名前は`name`ではなく`full_name`等にする。
 
 ## 手順
 
@@ -131,10 +131,10 @@ final class ContactForm
 ```
 
 - `Form`は継承しない。構成済みの`Form`を返す`create()`を持つ`final`クラスにする。
-- 規則は書いた順に実行し、最初の違反で止まる(1項目のエラーは1件)。`Required`(条件付きなら`RequiredIf`)を先頭に書く。
+- 規則は書いた順に実行し、最初の違反で止まる(1項目のエラーは1件)。`Required`(条件付きなら`RequiredIf`)を先頭に書く。`RequiredIf`は`RequiredIf::filled('contact_method')`(ほかの項目が入力されたら必須)か`RequiredIf::equals('contact_method', 'phone')`(ほかの項目が指定の値なら必須)で作る。
 - 空の値は`Required`・`RequiredIf`以外の規則を通過する。任意の項目(`company`等)は`Required`を書かないだけで「入力されたら形式を確かめる」になる。
 - 選択肢のある項目(select・radios・checkboxes)と単一のチェックボックスは、選択肢に無い値をFWが自動で拒否する。`Choice`を書かなくてよい。選択肢のキー`''`はプレースホルダで、`Required`で未選択を検出する。
-- 規則のメッセージは`{label}`等のプレースホルダを使う。FWの既定のメッセージ(英語のソース)は、FW同梱の翻訳で日本語になる。サイト全体で変えるときは`tmswp/form/rule_message`フィルタを使う。
+- 規則のメッセージは`{label}`等のプレースホルダを使う。FWの既定のメッセージ(英語のソース)は、FW同梱の翻訳で日本語になる。サイト全体で変えるときは`tmswp/form/rule_message`フィルタを使う。このフィルタが効くのは規則(Rule)のメッセージだけで、フォーム全体のエラー(`formErrors`)と、複合フィールドの`incompleteMessage()`・`invalidPartsMessage()`には効かない。
 - 確認用のメールアドレスは`Retype`で一致を確かめ、`hideOnConfirm()`で確認画面に出さない。
 - 単一のチェックボックスは、確認画面に出す文言を`checkedLabel`(5番目の引数)で渡す。
 - 完了処理は`onComplete()`に閉じ込める。ファイルの項目の値は`StoredFile`か`''`で渡る(「ファイルを受け取る」)。
@@ -358,9 +358,9 @@ get_header();
 get_footer();
 ```
 
-- `$form->open()`は`<form method="post">`と必須のhidden(`_form_id`・`_nonce`、確認画面では`_confirm_token`)を出す。ファイルの項目があれば`enctype="multipart/form-data"`も付く。入力画面では、登録したスパム対策のHTMLも続けて出す。`method`・`enctype`は指定できない。
+- `$form->open()`は`<form method="post">`と必須のhidden(`_form_id`・`_nonce`と、確認画面の無いフォームでは`_submit_token`、確認画面では`_confirm_token`)を出す。ファイルの項目があれば`enctype="multipart/form-data"`も付く。入力画面では、登録したスパム対策のHTMLも続けて出す。`method`・`enctype`は指定できない。
 - 送信ボタンは`name="_step"`にし、入力画面は`value="confirm"`、確認画面は`value="back"`と`value="submit"`にする。`_step`の無いPOSTは、検証されずに入力画面へ戻る。
-- `FieldView`の各メソッドはエスケープ済みのHTMLを返す。そのまま`echo`する。`value()`は生の値を返すため、出力するときはエスケープする。
+- `FieldView`のHTMLを返すメソッド(`input()`・`labelTag()`・`errors()`・`label()`・`display()`等)はエスケープ済みの値を返す。そのまま`echo`する。`value()`・`errorList()`(エラーの文言のlist)・`id()`・`name()`は生の値を返すため、出力するときは`esc_html()`・`esc_attr()`でエスケープする。
 - HTMLの構造とクラスはテンプレートが決める。`radios()`・`checkboxes()`は選択肢をまとめて出し、細かく組みたいときは`options()`を回す(`OptionView::$label`は生の値のため、自分で出すときは`esc_html()`する)。
 - 入力部品の`id`を変えたときは、同じ値を`labelTag(['for' => ...])`にも渡す。
 
@@ -378,7 +378,9 @@ get_footer();
 | 確認画面で「Send」を押す | `submit` | `Complete`(失敗なら`Input`) | 完了画面へリダイレクト |
 
 - 確認画面の値は、署名付きの確認トークン(`_confirm_token`)がクライアントとの間を運ぶ。セッションは使わない。確認の後の改ざんは検出され、入力画面に戻る。
-- 送信は使い捨てのトークンで1回に限られる。リロード・二重クリック・ブラウザの戻るの後の再送は「This form has already been submitted.」で入力画面に戻り、完了処理は動かない。
+- 確認トークンの有効期限は1800秒(30分)で、`FormDefinition::confirmTtl(秒)`で変えられる。期限を過ぎてから送信すると、「The confirmation screen has expired. Please review your entries and continue again.」で入力画面に戻る(入力した値は残る)。
+- 送信は、確認トークンごとに1回に限られる。同じ確認画面からの送信のやり直し(二重クリック、送信のPOSTの再送、完了の後に同じ確認画面のページから送り直す)は「This form has already been submitted.」で入力画面に戻り、完了処理は動かない。
+- 確認ボタンのPOSTを送り直すと(入力画面に戻って「Confirm」を押し直す、ブラウザの戻るで確認画面のPOSTを再送する等)、新しい確認トークンが発行され、その確認画面からはもう一度送信できる。これは新しい送信として扱われる。同じ内容の重複を防ぐ必要がある完了処理(申し込みの受け付け等)は、`onComplete`の中でアプリが重複を確かめる。
 - `onComplete`が例外を投げたときは、debugでは例外がそのまま出る。本番ではKernelのロガーに`error`で記録され、入力画面に「The form could not be sent. Please try again.」が出る。送信のトークンは消費されないため、利用者は確認からやり直して送れる(ブラウザの再送信で同じトークンを送っても受け付ける)。`onComplete`の中の処理が一部だけ済んでから例外になった場合、再送でその処理が重複する。重複させたくない処理は冪等にするか、失敗しうる処理の後に置く(メールの順序はrules/form-mail.md)。
 
 ## 確認画面の書き方
@@ -521,7 +523,7 @@ get_header();
 get_footer();
 ```
 
-- パスワードの項目は、確認画面なしのフォームにだけ置ける。値は`onComplete`の`$values`で受け取る。再描画・hiddenには出ない。
+- パスワードの項目は、確認画面なしのフォームにだけ置ける。値は`onComplete`の`$values`で受け取る。再描画では空になる。パスワードの項目の`hidden()`・`display()`は`FormConfigException`になる。
 - 送信トークンの有効期限は1日。期限切れ・改ざんは「Your session has expired. Please submit the form again.」で入力画面に戻る。
 
 ## ファイルを受け取る
@@ -529,7 +531,7 @@ get_footer();
 - ファイルの項目は`file()`で1項目1ファイル。複数のファイルは項目を分ける。規則は`FileExtension`(拡張子と、ファイルの実体のMIMEの整合)と`MaxFileSize`を使う。
 - アップロードの失敗(サイズの超過・部分的なアップロード等)は、規則を書かなくても項目のエラーになる。
 - 確認画面の有無に関係なく、ファイルは値の検証を通った後に一時保管され、`onComplete`には`StoredFile`(未選択なら`''`)が渡る。
-- `onComplete`でファイルを消費する。`moveTo($directory, $fileName)`で保管場所へ移すか、`toAttachment($parentPostId)`でメディアライブラリの添付ファイルにする(フロントのリクエストでも呼べる)。メールに添付するだけなら消費しなくてよい(rules/form-mail.md)。
+- `onComplete`でファイルを消費する。`moveTo($directory, $fileName)`で保管場所へ移す(戻り値は移した先の絶対パス。`$fileName`を省くと利用者のファイル名`clientName`になるため、省かずにアプリが決めた名前を渡す。同じ名前があれば`wp_unique_filename()`で別の名前になる)か、`toAttachment($parentPostId)`でメディアライブラリの添付ファイルにする(フロントのリクエストでも呼べる)。メールに添付するだけなら消費しなくてよい(rules/form-mail.md)。
 - 消費しなかった一時ファイルは、完了の後にFWが消す。`handle()`が返した後の`StoredFile`は使えない。ファイルを扱う処理は`onComplete`の中に書く。
 - `onComplete`が例外を投げたときは、一時ファイルは消えない。確認画面ありは同じ確認トークンで、確認画面なしは入力画面の`$form->field('resume')->hidden()`(`{name}__token`)で、選び直さずに送り直せる。ファイルを消費してから例外になると送り直せないため、消費は`onComplete`の最後に行う。
 - 確認画面での離脱等で使われなかった一時ファイルは、WP-Cronが期限(24時間)を過ぎてから消す。WP-Cronを無効にしたサイトでは、システムのcronで`wp cron event run --due-now`を実行する。
@@ -769,6 +771,8 @@ $birthday = $args['form']->field('birthday');
 </fieldset>
 ```
 
+- 複合フィールドのビュー(`part()`なし)で使えるのは、`label()`(複合フィールドのラベル)・`display()`・`value()`・`errors()`・`hasError()`・`errorList()`である。`labelTag()`・`id()`・`name()`・入力部品(`select()`・`input()`等)・`hidden()`は、`part('year')`で部品のビューにしてから呼ぶ。通さずに呼ぶと`FormConfigException`になる。
+
 ## スパム対策(honeypot・Turnstile)を差し込む
 
 スパム対策は`SpamGuardInterface`を実装したクラスをapp側に置き、`FormDefinition::spamGuard()`で登録する。複数を登録でき、登録の順に検査する。
@@ -914,7 +918,7 @@ final class InquiryForm
 - パスワードの項目を確認画面ありのフォームに置かない。
 - 全ページに出るサイドバー・フッター等にフォームを置かない。サイト全体がページキャッシュから外れる。
 - 一時保管のディレクトリをWebから見える状態にしない(nginxでは設定が要る)。
-- 利用者のファイル名を保存先のパスに使わない。`moveTo()`の保存名はアプリが決める。
+- 利用者のファイル名を保存先のパスに使わない。`moveTo()`の第2引数(保存名)を省かずにアプリが決め、保存先は戻り値のパスを使う。
 - アプリの文言に`tmswp`ドメインを使わない。日本語のソースを`__()`に渡さない。
 
 ## 確認方法
@@ -923,6 +927,14 @@ final class InquiryForm
 2. 空のまま「Confirm」を押すと、必須の項目にエラーが出ること。
 3. 入力→確認→送信で`/contact/thanks/`へリダイレクトされ、メールが届くこと(rules/form-mail.md)。
 4. 確認画面の「Back」で、入力と添付ファイルが残っていること。
-5. 完了の後にブラウザの戻るで確認画面に戻って送信すると、「This form has already been submitted.」になり、メールが届かないこと。
+5. 確認画面の「Send」を素早く2回押しても、メールが1通だけ届くこと(2回目の送信は「This form has already been submitted.」で拒否される)。
 6. フォームのページのレスポンスに`Cache-Control: no-cache, must-revalidate, max-age=0, no-store, private`が付いていること。
 7. nginxでは、一時保管の場所のURLが403になること。
+
+## 発展
+
+- 完了処理のメール送信: rules/form-mail.md
+- テンプレートの前処理クラスの書き方: rules/page.md
+- フリガナの項目(カタカナ・ひらがなの正規化と検証): vendor/tmswp/ja-toolkit/rules/ja-toolkit.md(導入はrules/extensions.md)
+- 管理画面の設定ページのフォーム: vendor/tmswp/settings-page/rules/settings-page.md
+- フォームの仕様: TMSWPの設計文書 docs/05-form.md

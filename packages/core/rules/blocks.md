@@ -1,7 +1,7 @@
 # 独自ブロックを追加する
 
 React(`@wordpress/scripts`)で作る独自ブロックは、ビルドの出力を置くだけでKernelが登録する。`register_block_type()`は直接呼ばない。
-名前空間はスターター既定の`App\`。変更している場合は読み替える。
+コード例の名前空間`App\`は、自分のプロジェクトの名前空間(composer.jsonの`autoload.psr-4`で`app/`に割り当て、`tmswp-kernel.php`の`appNamespace`に書いたもの。スターターから作ったプロジェクトでは、setup.phpがスラッグから作った名前。例: `my-theme`なら`MyTheme\`)に読み替える。
 
 ## 対象外
 
@@ -101,7 +101,7 @@ return KernelConfig::theme(
 );
 ```
 
-- `BlockCategory`は、スラッグ・見出し・Dashiconsの名前(`dashicons-`を除く。省略できる)を受け取る。カテゴリは、ブロックの挿入画面でWordPressの既定のカテゴリの後に並ぶ。
+- `BlockCategory`は、スラッグ・見出し・Dashiconsの名前(`dashicons-`を除く。省略できる)を受け取る。カテゴリは、ブロックの挿入画面でWordPressの既定のカテゴリの後に並ぶ。スラッグが英小文字・数字・`-`でない場合と、見出しが空の場合は`KernelException`になる。
 - 見出しに`__()`は使えない(`tmswp-kernel.php`はWordPressなしでも読まれる)。
 - 既定のカテゴリと同じスラッグ、同じ`tmswp-kernel.php`の中で重複したスラッグは、`KernelException`になる。
 
@@ -220,3 +220,10 @@ final class CardBlockHook extends Hook
 1. `npm run build`の後、`wp tmswp discover --check`が成功すること(`composer qa`に含まれる)。
 2. ブロックエディタの挿入画面に、ブロックとカテゴリが表示されること。
 3. 本番で表示されない場合は、`build/blocks/`がデプロイされているかと、`wp tmswp discover --check`で探索結果ファイルが最新かを確かめる。
+
+## 発展
+
+- ブロックを使う投稿タイプ: rules/post-type.md
+- ブロックの描画を変えるフック: rules/hooks.md
+- ブロックテーマ・ACF Blocksは対象外(上の「対象外」)
+- 探索・ブロックの登録の仕様: TMSWPの設計文書 docs/02-kernel.md §4・§7

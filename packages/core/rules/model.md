@@ -1,7 +1,7 @@
 # 独自DBテーブルを作る
 
 独自テーブルは`Model`と`TableDefinition`で宣言し、`wp tmswp migrate`で適用する。読み書きは`Model`の静的メソッドと`QueryBuilder`で行い、値はすべて`wpdb::prepare()`を通る。SQL文字列の組み立てと`$wpdb`の直書きは禁止。
-例はテーマのもので、名前空間はテーマのスターター既定の`App\`。プラグイン(スターターの既定は`PluginApp\`)等では、composer.jsonのPSR-4の設定(`app/`に割り当てた名前空間)に合わせて読み替える。
+例はテーマのもの。コード例の名前空間`App\`は、自分のプロジェクトの名前空間(composer.jsonの`autoload.psr-4`で`app/`に割り当て、`tmswp-kernel.php`の`appNamespace`に書いたもの。スターターから作ったプロジェクトでは、setup.phpがスラッグから作った名前。例: `my-theme`なら`MyTheme\`)に読み替える。
 
 ## 手順
 
@@ -280,7 +280,7 @@ wp tmswp migrate
 
 declare(strict_types=1);
 
-use PluginApp\Model\CatalogItemModel;
+use App\Model\CatalogItemModel;
 use TMSWP\Core\Model\Connection;
 use TMSWP\Core\Model\Migrator;
 
@@ -456,8 +456,90 @@ final class CatalogDetailHook extends Hook
 
 ## テスト
 
-- WordPressなしのユニットテストでは、`Model::useConnection(new Connection($wpdb))`でwpdbの代役を渡し、`tearDown()`で`Model::useConnection(null)`を呼んで解除する。wpdbの代役の`prepare()`は、実際の`wpdb::prepare()`と同じSQLを返すものにする(`%`はエスケープの文字列に置き換わり、`remove_placeholder_escape()`で戻る)。
-- dbDeltaの適用・既定値・照合順序・実際のSQLの結果は、wp-envの統合テストで確かめる。
+PHPUnitの設定・`tests/bootstrap.php`・Brain Monkeyの使い方は`vendor/tmswp/testing/rules/testing.md`にある。この節はModelのテストに要ることだけを書く。
+
+- WordPressなしのユニットテストでは、tmswp/testing(`composer require --dev tmswp/testing`)の`WpdbTestDouble`をwpdbの代役にし、`Model::useConnection(new Connection(WpdbTestDouble::create()))`で接続を渡す。`tearDown()`で`Model::useConnection(null)`を呼んで解除する。Kernelのbootは要らない。
+- `WpdbTestDouble`の`prepare()`は、実際の`wpdb::prepare()`と同じSQLを返す。実行したSQLは`queries()`、`insert()`・`update()`・`delete()`の呼び出しは`insertCalls()`・`updateCalls()`・`deleteCalls()`で確かめる。読み取りの結果は、実行の前に`queueResultSet()`(行のlist)・`queueRow()`(1行)・`queueVar()`(1つの値)で入れておく。
+- 行を読む呼び出し(`find()`・`first()`・`get()`・`value()`・`pluck()`)は、wpdbの定数`ARRAY_A`を使う。テストでは`WpdbTestDouble::defineOutputConstants()`で定義し、定数がほかのテストに漏れないよう、そのテストを`#[RunInSeparateProcess]`・`#[PreserveGlobalState(false)]`で別のプロセスにする。
+- `DateTimeImmutable`の列をDTOにするときは`wp_timezone()`を呼ぶため、Brain Monkeyで差し替える。
+- dbDeltaの適用・既定値・照合順序・実際のSQLの結果は、WordPressの上(wp-envの統合テスト等)で確かめる。
+
+`tests/Unit/Model/CatalogItemModelTest.php`(`app/Model/CatalogItemModel.php`のテスト):
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Unit\Model;
+
+use App\Model\CatalogItemModel;
+use App\Model\CatalogItemRow;
+use App\Model\CatalogStatus;
+use Brain\Monkey\Functions;
+use DateTimeZone;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use TMSWP\Core\Model\Connection;
+use TMSWP\Core\Model\Model;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
+
+final class CatalogItemModelTest extends UnitTestCase
+{
+    protected function tearDown(): void
+    {
+        Model::useConnection(null);
+        parent::tearDown();
+    }
+
+    public function testInsertStoresTheEnumValue(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        Model::useConnection(new Connection($wpdb));
+
+        CatalogItemModel::insert([
+            'sku' => 'A-100',
+            'name' => 'Thermometer',
+            'status' => CatalogStatus::Published,
+            'price' => 1200,
+            'spec' => '{}',
+        ]);
+
+        $insert = $wpdb->insertCalls()[0];
+        self::assertSame('wp_catalog_items', $insert['table']);
+        self::assertSame('published', $insert['data']['status']);
+    }
+
+    // 行を読む呼び出しはwpdbの定数ARRAY_Aを使うため、定数を別のプロセスの中でだけ定義する
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testFindBySkuReturnsTheRowAsDto(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        Functions\when('wp_timezone')->justReturn(new DateTimeZone('Asia/Tokyo'));
+        $wpdb = WpdbTestDouble::create();
+        Model::useConnection(new Connection($wpdb));
+        $wpdb->queueResultSet([[
+            'id' => '1',
+            'sku' => 'A-100',
+            'name' => 'Thermometer',
+            'status' => 'published',
+            'price' => '1200',
+            'spec' => '{"range":"-20..50"}',
+            'published_at' => '2026-10-01 09:00:00',
+            'created_at' => '2026-10-01 09:00:00',
+        ]]);
+
+        $item = CatalogItemModel::findBySku('A-100');
+
+        self::assertInstanceOf(CatalogItemRow::class, $item);
+        self::assertSame(CatalogStatus::Published, $item->status);
+        self::assertSame(['range' => '-20..50'], $item->spec);
+        self::assertSame("SELECT * FROM wp_catalog_items WHERE sku = 'A-100' LIMIT 1", $wpdb->queries()[0]);
+    }
+}
+```
 
 ## してはいけないこと
 
@@ -474,3 +556,10 @@ final class CatalogDetailHook extends Hook
 1. `composer qa`が通ること。
 2. `wp tmswp migrate --dry-run`が対象のテーブルを`changed`と出し、`wp tmswp migrate`が成功し、もう一度の`--dry-run`で`up-to-date`と出ること。
 3. `insert()`した行を`find()`で読めること。
+
+## 発展
+
+- 行の有無で404にするフック: rules/hooks.md
+- テーブルの値をテンプレートで使う前処理: rules/page.md
+- テストの書き方の全体(PHPUnitの設定・Brain Monkey): vendor/tmswp/testing/rules/testing.md
+- Model・QueryBuilder・Migratorの仕様: TMSWPの設計文書 docs/06-model.md

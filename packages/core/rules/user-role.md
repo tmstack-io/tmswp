@@ -1,14 +1,15 @@
 # ユーザーロールを追加する
 
 ロール1つにつきクラス1つを`app/User/`に置く。`add_role()`・`add_cap()`は直接呼ばない。
-名前空間はスターター既定の`App\`。変更している場合は読み替える。
+コード例の名前空間`App\`は、自分のプロジェクトの名前空間(composer.jsonの`autoload.psr-4`で`app/`に割り当て、`tmswp-kernel.php`の`appNamespace`に書いたもの。スターターから作ったプロジェクトでは、setup.phpがスラッグから作った名前。例: `my-theme`なら`MyTheme\`)に読み替える。
 
 ## 手順
 
-1. `app/User/<Name>Role.php`を作る。
-2. `#[AsUserRole]`を付け、`TMSWP\Core\User\UserRole`を継承する。
-3. `definition()`で`UserRoleDefinition`を返す。
-4. `composer qa`を通す。
+1. `app/User/<Name>Role.php`を作る(例: `MemberRole`)。
+2. `#[AsUserRole]`を付け、`TMSWP\Core\User\UserRole`を継承した`final class`にする。
+3. `public static function definition(): UserRoleDefinition`で、`UserRoleDefinition::create('<ロール名>')`の定義を返す。
+4. WordPressの環境で`wp tmswp discover`(スターターから作ったプロジェクトでは`composer discover`)を実行し、探索結果ファイル`tmswp-discovery.php`を作り直してコミットする。
+5. `composer qa`を通す。
 
 ## 完全な実装例
 
@@ -223,7 +224,21 @@ foreach ($page as $member) {
 }
 ```
 
-- `query()`が返す`UserQuery`は、比較演算子・キャスト型・並び順を`PostQuery`と同じenum(`Compare`・`CastType`・`SortOrder`)で受け取る。件数を指定しない`get()`は全件を返し、`idIn()`を空で呼ぶと0件になる。`limit()`・`offset()`・`paginate()`の併用の規則は投稿と同じ(rules/post-type.mdの「クエリの書き方」)。
+ロールのクラスの静的メソッド(`$user`は`WP_User|int`):
+
+| メソッド | 動き |
+|---|---|
+| `query()` | このロールのユーザーの`UserQuery` |
+| `get($user)` | このロールを持つユーザーなら`WP_User`、持たない・無ければnull |
+| `findByEmail($email)`・`findByLogin($login)` | メールアドレス・ログイン名で1人。このロールでなければnull |
+| `current()` | ログイン中のユーザーがこのロールなら`WP_User`、そうでなければnull |
+| `is($user = null)` | このロールを持つか。引数を省くとログイン中のユーザーを判定する |
+| `meta($user)` | メタの`MetaBag`(rules/meta.md)。このロールを持たないユーザーは`InvalidArgumentException` |
+| `authorUrl($user)` | 投稿者のアーカイブのURL。無ければnull |
+| `create($login, $password, $userdata)` | このロールのユーザーを作り、IDを返す。失敗は`EntityPersistenceException` |
+| `role()` | ロール名 |
+
+- `query()`が返す`UserQuery`は、比較演算子・キャスト型・並び順を`PostQuery`と同じenum(`Compare`・`CastType`・`SortOrder`)で受け取る。件数を指定しない`get()`は全件を返し、`idIn()`を空で呼ぶと0件になる。`limit()`・`offset()`と`paginate()`は併用できず、`limit()`の無い`offset()`も`InvalidQueryException`になる。`paginate()`が返す`PageResult`の全体の件数は`$page->total`で、`count($page)`はそのページの件数である。
 - `search()`はキーワードに`*`が無ければ前後に`*`を付けて部分一致にする。検索する列は`TMSWP\Core\Query\UserSearchColumn`のケース(`Id`・`UserLogin`・`UserEmail`・`UserUrl`・`UserNicename`・`DisplayName`)で渡す(例: `MemberRole::query()->search('tanaka', UserSearchColumn::UserLogin, UserSearchColumn::DisplayName)`)。列を渡さなければ、WordPressがキーワードの形から列を選ぶ。
 - `MemberRole::is()`は、引数を省くとログイン中のユーザーを判定する。`MemberRole::current()`はログイン中のユーザーがこのロールなら`WP_User`、そうでなければnullを返す。
 
@@ -241,3 +256,9 @@ foreach ($page as $member) {
 1. `composer qa`が通ること。
 2. 管理画面のユーザーの編集でロールを選べ、`wp cap list member`で宣言したcapが付いていること。
 3. 宣言を変えた後に、Kernelのロガーにロールのwarningが記録されていないこと。
+
+## 発展
+
+- ユーザーのメタ: rules/meta.md
+- 会員登録のフォーム: rules/form.md
+- ロールの定義・ユーザーのクエリの仕様: TMSWPの設計文書 docs/03-entities.md

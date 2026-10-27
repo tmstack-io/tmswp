@@ -24,8 +24,8 @@ ACFは、CIと同じwp.orgの無料版(6.8.10)で動く型(number・group・text
 
 ## 必要なもの
 
-- PHP 8.3以上と、Composer 2
-- Node.js(monorepoのルートと同じもの)と、Docker(wp-envが使う)
+- PHP 8.3〜8.5と、Composer 2
+- Node.js 22.13以上(monorepoのルートと同じ。`@wordpress/env` 12.0.0の要件)と、Docker(wp-envが使う)
 
 ## 起動の手順
 
@@ -90,3 +90,7 @@ composer wp:setup     # テーマを有効にし、dev/seed.phpで固定ペー�
 - `composer.lock`はコミットしません(`.gitignore`の対象)。pathリポジトリのパッケージのlockは`packages/*`の内容を記録するため、`packages/*`を変えるたびに古くなるからです。手元では`composer install`でlockを作り、`packages/*`の依存(composer.json)を変えたときは`composer update 'tmswp/*'`で作り直します。lockが無い状態でも`composer validate`は通ります。
 - pathリポジトリは`../../packages/*`を`symlink: true`で入れます(`vendor/tmswp/*`は`packages/*`へのシンボリックリンクになる)。`packages/*/src`の変更が、`composer install`をやり直さずにそのまま反映されます。wp-envのコンテナの中でもリンクの先が見えるよう、`.wp-env.json`が`packages/`を`wp-content/packages`にマウントしています(リンクは`vendor/tmswp/`からの相対パス`../../../../packages/*`で、テーマの位置`wp-content/themes/sample-site`から同じ場所を指す)。
 - pathリポジトリの`versions`は、`tmswp/core`の`Kernel::VERSION`(0.2.0)に合わせます。Kernelは起動時に、入っている`tmswp/core`の版(`vendor/composer/installed.php`)と`Kernel::VERSION`を照合し、食い違えば起動しません。`Kernel::VERSION`を上げたときは、`versions`と`require`の制約(`^0.2`)も合わせて変えます。
+
+## 開発規約
+
+このテーマでコードを書くときの規約・禁止事項・必須コマンドは、[AGENTS.md](./AGENTS.md)にあります。機能ごとのレシピは`vendor/tmswp/*/rules/*.md`にあります(どれを読むかは、AGENTS.mdの「最初に読むもの」に書いています)。

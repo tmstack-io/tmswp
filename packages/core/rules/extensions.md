@@ -1,22 +1,29 @@
-# 公式拡張を導入する
+# 拡張パッケージを導入する
 
-コアに含まれない機能は公式拡張パッケージを使う。vendor配下をコピーして改変しない。
-この文書は登録の仕方と主な使い方の手引きである。各拡張の詳しい仕様は、TMSWPの設計文書のdocs/08-extensions.md(thumbnail・settings-page・ja-toolkit)とdocs/09(acf-bridge)にある。
+coreに含まれない機能は、公式の拡張パッケージを`composer require`し、テーマ・プラグインのルートの`tmswp-kernel.php`で`KernelConfig`の`extensions`に入口のクラスを渡して有効にする。このレシピは導入(インストールと登録)だけを扱う。各拡張の使い方は、拡張に同梱のレシピ(下の表の「詳しいレシピ」)を読む。
+コード例の名前空間`App\`は、自分のプロジェクトの名前空間(composer.jsonの`autoload.psr-4`で`app/`に割り当て、`tmswp-kernel.php`の`appNamespace`に書いたもの。スターターから作ったプロジェクトでは、setup.phpがスラッグから作った名前。例: `my-theme`なら`MyTheme\`)に読み替える。
 
-| パッケージ | 機能 | 導入 | 入口のクラス |
+| パッケージ | 機能 | 入口のクラス | 詳しいレシピ |
 |---|---|---|---|
-| `tmswp/thumbnail` | 署名付きサムネイルURL | `composer require tmswp/thumbnail` | `TMSWP\Thumbnail\Thumbnail` |
-| `tmswp/settings-page` | 管理画面設定ページ | `composer require tmswp/settings-page` | `TMSWP\SettingsPage\SettingsPages` |
-| `tmswp/acf-bridge` | ACF連携 | `composer require tmswp/acf-bridge` | `TMSWP\AcfBridge\AcfBridge` |
-| `tmswp/ja-toolkit` | 日本語サイト対応 | `composer require tmswp/ja-toolkit` | `TMSWP\JaToolkit\JaToolkit` |
+| `tmswp/acf-bridge` | acf-jsonからの型付きアクセサの生成と照合、メタの保存先をACFにする`AcfMetaStorage` | `TMSWP\AcfBridge\AcfBridge` | rules/acf.md(coreのレシピ)、`vendor/tmswp/acf-bridge/rules/sync-check.md` |
+| `tmswp/settings-page` | 管理画面の設定ページ(coreのFormとオプショングループを使う) | `TMSWP\SettingsPage\SettingsPages` | `vendor/tmswp/settings-page/rules/settings-page.md` |
+| `tmswp/thumbnail` | 署名付きのURLで作るサムネイル(`tms_thumb()`)。`ext-gd`が要る | `TMSWP\Thumbnail\Thumbnail` | `vendor/tmswp/thumbnail/rules/thumbnail.md` |
+| `tmswp/ja-toolkit` | 日本語サイト向けのモジュール(日本語スラッグ・全角スペースの検索の正規化・wptexturizeの無効化)とフリガナの項目 | `TMSWP\JaToolkit\JaToolkit` | `vendor/tmswp/ja-toolkit/rules/ja-toolkit.md` |
+| `tmswp/testing` | ユニットテストの基底クラスと、メタ・オプションの保存先のメモリの実装 | なし(Kernelに登録しない) | `vendor/tmswp/testing/rules/testing.md` |
 
-## 登録の仕方
+## 手順
 
-拡張は、`composer require`しただけでは何もしない。使う拡張だけを、テーマ・プラグインのルートの`tmswp-kernel.php`で、`KernelConfig::theme()` / `KernelConfig::plugin()`の`extensions`に入口のクラスのインスタンスとして渡す。拡張は、渡したKernelでだけ有効になる。Kernelは、bootの中で`extensions`の各インスタンスの`register()`を、渡した順に1回ずつ呼ぶ。
+1. 使う拡張だけを`composer require tmswp/<パッケージ>`で入れる。`tmswp/testing`は開発用の依存なので`composer require --dev tmswp/testing`にする。
+2. テーマ・プラグインのルートの`tmswp-kernel.php`で、`KernelConfig::theme()`・`KernelConfig::plugin()`の`extensions`に、入口のクラスのインスタンスを渡す(下の「完全な実装例」)。`tmswp/testing`は渡さない。
+3. `functions.php`(プラグインは本体ファイル)は変えない。`tmswp-kernel.php`の構成で`Kernel::boot()`するだけにする。
+4. 拡張のレシピ(上の表)に従って、拡張を使うクラス(`#[AsSettingsPage]`のクラス等)を`app/`に置く。属性を付けたクラスを足したら、WordPressの環境で`wp tmswp discover`(スターターから作ったプロジェクトでは`composer discover`)を実行し、探索結果ファイル`tmswp-discovery.php`を作り直してコミットする。
+5. `composer qa`を通す。
 
-`tmswp-kernel.php`は、WordPressを起動しない`tms-acf`(acf-bridge)も読む。このファイルの中と、拡張・設定のクラス(`ThumbnailConfig`・`BridgeConfig`・ja-toolkitのモジュール等)のコンストラクタでは、WordPressの関数(`__()`・`get_option()`等)を呼ばない。
+拡張は、`composer require`しただけでは何もしない。`extensions`に渡したKernelでだけ有効になる。Kernelは、bootの中で`extensions`の各インスタンスの`register()`を、渡した順に1回ずつ呼ぶ。`Kernel::boot()`の後に拡張を登録するAPIは無い。
 
-テーマの`tmswp-kernel.php`:
+## 完全な実装例
+
+テーマの`tmswp-kernel.php`(4つの拡張をすべて使う場合):
 
 ```php
 <?php
@@ -32,9 +39,11 @@ use TMSWP\SettingsPage\SettingsPages;
 use TMSWP\Thumbnail\Thumbnail;
 use TMSWP\Thumbnail\ThumbnailConfig;
 
+// functions.phpのbootと、WordPressを起動しないtms-acf(tmswp/acf-bridge)が読む。
+// このファイルと、拡張・設定のクラスのコンストラクタでは、WordPressの関数を呼ばない
 return KernelConfig::theme(
-    __DIR__ . '/app',
-    'App',
+    appDir: __DIR__ . '/app',
+    appNamespace: 'App',
     extensions: [
         new AcfBridge(),
         new SettingsPages(),
@@ -44,7 +53,10 @@ return KernelConfig::theme(
 );
 ```
 
-テーマの`functions.php`(プラグインは本体ファイル)は、このファイルの`KernelConfig`でbootするだけにする。`Kernel::boot()`の後に拡張を登録するAPIは無い。
+- 引数の無い`new AcfBridge()`・`new SettingsPages()`・`new Thumbnail()`・`new JaToolkit()`は、それぞれ既定の設定で動く。設定の引数(`BridgeConfig`・`ThumbnailConfig`の各値、ja-toolkitのモジュール、`SettingsPages`に渡すクラス)の意味は、各拡張のレシピにある。
+- ja-toolkitは、コンストラクタに渡したモジュールだけを有効にする。モジュールを渡さない`new JaToolkit()`は、フリガナの項目(`KanaTextField`)の訳だけを読み込む。
+
+テーマの`functions.php`(拡張を使っても変わらない):
 
 ```php
 <?php
@@ -54,10 +66,14 @@ declare(strict_types=1);
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
 
+require_once __DIR__ . '/vendor/autoload.php';
+
 Kernel::boot(KernelConfig::load(__DIR__ . '/tmswp-kernel.php'));
 ```
 
-テーマとプラグインの両方で拡張を使うときは、それぞれの`tmswp-kernel.php`で別のインスタンスを`new`して渡す。拡張はKernelごとに別々に動く。ただしthumbnailは、どちらか1つのKernelにだけ登録する(下の「制約」)。
+テーマとプラグインの両方で拡張を使うときは、それぞれの`tmswp-kernel.php`で別のインスタンスを`new`して渡す。拡張はKernelごとに別々に動く。ただしthumbnailは、どちらか1つのKernelにだけ登録する(下の「登録の制約」)。
+
+プラグインの`tmswp-kernel.php`:
 
 ```php
 <?php
@@ -68,147 +84,68 @@ use TMSWP\AcfBridge\AcfBridge;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\JaToolkit\JaToolkit;
 
-// プラグインのtmswp-kernel.php。本体ファイルのパスはこのファイルの位置から決める。
+// 本体ファイルのパスはこのファイルの位置から決める。
 // thumbnailはテーマのKernelに登録済みなので、ここには渡さない
 return KernelConfig::plugin(
-    __DIR__ . '/my-plugin.php',
-    __DIR__ . '/app',
-    'Vendor\Plugin',
+    file: __DIR__ . '/my-plugin.php',
+    appDir: __DIR__ . '/app',
+    appNamespace: 'MyPlugin',
     extensions: [new AcfBridge(), new JaToolkit()],
 );
 ```
 
-## 制約
+## 拡張ごとの導入の要点
 
-- 1つのインスタンスは、1つのKernelにだけ登録できる。同じインスタンスを2つのKernelに渡すと、2つ目のKernelの`register()`が例外を投げる。同じクラスの拡張を同じKernelに2つ渡すと、`KernelConfig`が`KernelException`を投げる。どちらも設定の誤りとして、debugに関係なく起動を止める。
-- thumbnailを登録できるKernelは、サイトに1つだけである。2つ目のKernelの`register()`は`LogicException`になる。`tms_thumb()`・RESTのルート・`wp tmswp thumb`は、登録したKernelのdebug・ロガーと、そのKernelに渡した`ThumbnailConfig`に従う。thumbnailを登録したKernelが無い状態で`tms_thumb()`を呼ぶと`LogicException`になる。
-- thumbnailは、訪問者(ログインしていないユーザー)からREST APIのルート`tmswp/v1/thumb`が使えることを前提にする。uploadsはローカルのファイルシステムに置く。
-- ja-toolkitのKanaTextFieldの日本語訳(検証メッセージ)は、`JaToolkit`をKernelに登録したときに読み込まれる。モジュールを使わずKanaTextFieldだけを使う場合も、モジュールを渡さない`new JaToolkit()`を登録する。
-- settings-pageの設定ページでは、確認画面を使えない。`createForm()`が確認画面の有効なフォームを返すと、`LogicException`になる。
-- settings-pageのslugは、起動したすべてのKernelの設定ページの中で一意にする。重複すると`LogicException`になる。
+### tmswp/acf-bridge
 
-## サムネイルURL例
+- 登録に加えて、composer.jsonの`scripts`に`"acf:sync": "tms-acf sync"`と`"acf:check": "tms-acf check"`を足す(スターターには含まれない)。
+- フィールドグループの作り方・生成アクセサの使い方・`MetaBag`との使い分けはrules/acf.md、sync・checkの報告の対処と`BridgeConfig`による生成の調整は`vendor/tmswp/acf-bridge/rules/sync-check.md`を読む。
 
-`tms_thumb(int|string $src, ?int $width = null, ?int $height = null, array $options = []): ?string`で、署名付きのサムネイルのURLを得る。`$src`は添付ファイルのIDか、uploads配下の画像のURLである。
+### tmswp/settings-page
 
-- `$options`のキーは、`crop`(bool。既定は`ThumbnailConfig`の`defaultCrop`で`true`)と`quality`(1〜100の整数。既定は`defaultQuality`)だけを使う。ほかのキー・型の違う値は、debugに関係なく`InvalidThumbOptionException`になる。
-- 画像が無いとき(アイキャッチの未設定で`$src`が`0`、添付ファイルやその実体が無い)は`null`を返す。テンプレートでは`null`を分岐し、`<img>`を出さない。
+- `app/`に置いた`#[AsSettingsPage]`のクラスは、`SettingsPages`を登録したKernelが探索で見つける。設定ページの作り方は`vendor/tmswp/settings-page/rules/settings-page.md`を読む。
+- 設定ページの値は、オプショングループ(rules/options.md)に保存する。
 
-```php
-<?php
+### tmswp/thumbnail
 
-declare(strict_types=1);
+- REST APIのルート`tmswp/v1/thumb`を、ログインしていない訪問者が使えることを前提にする。uploadsはローカルのファイルシステムに置く。
+- `tms_thumb()`の使い方とキャッシュの削除は`vendor/tmswp/thumbnail/rules/thumbnail.md`を読む。
 
-// get_post_thumbnail_id()は投稿が無いとfalseを返すので、0(画像が無い)にしてから渡す。
-// アイキャッチが無いとnullを返すので、imgを出さない
-$thumb = tms_thumb((int) get_post_thumbnail_id(), 480, 320, ['crop' => true, 'quality' => 70]);
-?>
-<?php if ($thumb !== null) : ?>
-<img src="<?php echo esc_url($thumb); ?>" alt="">
-<?php endif; ?>
-```
+### tmswp/ja-toolkit
 
-## 設定ページ例
+- 必要なモジュールだけを`JaToolkit`のコンストラクタに渡す。各モジュールの効果とフリガナの項目は`vendor/tmswp/ja-toolkit/rules/ja-toolkit.md`を読む。
 
-`app/SettingsPage/SiteSettingsPage.php`では`#[AsSettingsPage]`と`SettingsPage`を使い、
-保存時は`OptionFormBridge::persist()`で`#[AsOptionGroup]`のオプションへ反映する。
-`app/`に置いた`#[AsSettingsPage]`のクラスは、`SettingsPages`を登録したKernelが属性探索で見つける。`app/`の外のクラスは、`new SettingsPages([OtherPage::class])`のようにコンストラクタに渡す。
-`createForm()`は確認画面の無いフォームを返す(上の「制約」)。
+### tmswp/testing
 
-```php
-<?php
+- `tmswp-kernel.php`には登録しない。テストの中でKernelをbootするときだけ、`TMSWP\Testing\StorageExtension`をそのテストの`KernelConfig`の`extensions`に渡す。
+- PHPUnitの設定・テストの基底クラス・Brain Monkeyの使い方は`vendor/tmswp/testing/rules/testing.md`、メタ・オプションのテストはrules/meta.md・rules/options.mdの「テスト」を読む。
 
-declare(strict_types=1);
+## 登録の制約
 
-namespace App\SettingsPage;
+次はどれも設定の誤りとして、debugに関係なく例外で起動を止める。
 
-use App\Option\SiteOption;
-use TMSWP\Core\Form\Form;
-use TMSWP\Core\Form\FormDefinition;
-use TMSWP\Core\Form\FormResult;
-use TMSWP\SettingsPage\Attribute\AsSettingsPage;
-use TMSWP\SettingsPage\OptionFormBridge;
-use TMSWP\SettingsPage\SettingsPage;
-use TMSWP\SettingsPage\SettingsPageDefinition;
-
-#[AsSettingsPage]
-final class SiteSettingsPage extends SettingsPage
-{
-    public static function definition(): SettingsPageDefinition
-    {
-        return new SettingsPageDefinition(slug: 'site-settings', pageTitle: 'サイト設定');
-    }
-
-    protected function createForm(): Form
-    {
-        $form = new Form(FormDefinition::create('site_settings')->text('contact_email', '通知先'));
-        OptionFormBridge::applyDefaults($form, SiteOption::class);
-
-        return $form;
-    }
-
-    protected function onSubmit(FormResult $result): void
-    {
-        OptionFormBridge::persist($result, SiteOption::class);
-    }
-
-    protected function render(?Form $form): void
-    {
-        // 管理画面のHTMLを出力する。
-    }
-}
-```
-
-## 日本語サイト対応例
-
-ja-toolkitは、`JaToolkit`のコンストラクタに渡したモジュールだけを有効にする(上の「登録の仕方」の例)。モジュールは`TMSWP\JaToolkit\Module\`の`JapaneseSlug`(日本語スラッグの変換)・`FullwidthSearchNormalizer`(全角スペースの検索の正規化)・`DisableTexturize`(wptexturizeの無効化)で、どれもインスタンスで渡す。
-
-カナの入力項目は、`KanaTextField::create()`で作る。フォーム定義の`add()`に渡す。正規化(半角カナの全角化、ひらがなとカタカナの変換)と文字種の検証が付く。
-
-```php
-<?php
-
-declare(strict_types=1);
-
-namespace App\Form;
-
-use TMSWP\Core\Form\Form;
-use TMSWP\Core\Form\FormDefinition;
-use TMSWP\Core\Form\Rule\Required;
-use TMSWP\JaToolkit\Form\KanaTextField;
-use TMSWP\JaToolkit\Form\KanaType;
-
-final class ProfileForm
-{
-    public static function create(): Form
-    {
-        return new Form(
-            FormDefinition::create('profile')
-                ->text('full_name', __('Name', 'my-theme'), [new Required()])
-                ->add(KanaTextField::create('name_kana', __('Name (katakana)', 'my-theme'), KanaType::Katakana, [new Required()], maxLength: 50))
-        );
-    }
-}
-```
-
-## ACF連携例
-
-`acf-json/`を置いたうえで`composer acf:sync`(`vendor/bin/tms-acf sync`)を実行し、生成された`App\Acf\*`クラスを使う。
-テーマとプラグインの両方でacf-bridgeを使うときは、それぞれの`tmswp-kernel.php`の`extensions`に`new AcfBridge()`を渡し(上の「登録の仕方」の例)、それぞれのルートで`tms-acf sync`を実行してKernelごとに生成する。プラグインのacf-jsonはプラグインのディレクトリの`acf-json/`、生成先は`app/Acf/`である。生成の調整が要るときは、`new AcfBridge(new BridgeConfig(...))`のように`BridgeConfig`を渡す(vendor/tmswp/acf-bridge/rules/sync-check.md)。
-
-ACFのフィールドグループで管理するキーを`#[MetaSchema]`で宣言するエンティティには、`#[UseMetaStorage(AcfMetaStorage::class)]`を付ける(rules/meta.mdの「ACFのフィールドグループで管理するキー」)。
+- 同じクラスの拡張を同じKernelに2つ渡すと、`KernelConfig`が`KernelException`を投げる。
+- 1つのインスタンスは、1つのKernelにだけ登録できる。同じインスタンスを2つのKernelに渡すと、2つ目のKernelでの`register()`が例外を投げる。
+- thumbnailを登録できるKernelは、サイトに1つだけである。2つ目のKernelの`register()`は`LogicException`になる。`tms_thumb()`・RESTのルート・`wp tmswp thumb`は、thumbnailを登録したKernelのdebug・ロガーと、そのKernelに渡した`ThumbnailConfig`に従う。
+- 拡張のdebugの判定は、登録したKernelの`KernelConfig`の`debug`に従う(`WP_DEBUG`を直接見ない)。
 
 ## してはいけないこと
 
-- 拡張が提供する機能をコピーして自作しない。
-- 拡張を`tmswp-kernel.php`の`extensions`以外の場所(`functions.php`の`Kernel::boot()`の後等)で登録しようとしない。
+- 拡張が提供する機能を、vendor配下からコピーしたり、自作したりしない。
+- 拡張を`tmswp-kernel.php`の`extensions`以外の場所(`functions.php`の`Kernel::boot()`の後、フックの中等)で登録しようとしない。
 - 1つのインスタンスを複数のKernelに渡さない。thumbnailを2つ以上のKernelに登録しない。
-- `tmswp-kernel.php`と拡張・設定のクラスのコンストラクタで、WordPressの関数を呼ばない。
-- `tms_thumb()`に`crop`・`quality`以外のキーを渡さない。戻り値を`null`の分岐なしに出力しない。
-- ja-toolkit の全モジュールを無条件に有効化しない。
-- ACFの値取得を `get_field()` 直書きで済ませない。`rules/acf.md` を使う。
+- `tmswp-kernel.php`と、拡張・設定のクラスのコンストラクタで、WordPressの関数(`__()`・`get_option()`等)を呼ばない。`tmswp-kernel.php`は、WordPressを起動しない`tms-acf`(acf-bridge)も読む。
+- `tmswp/testing`を`require`(本番の依存)に入れたり、`tmswp-kernel.php`に登録したりしない。
+- ja-toolkitのモジュールを、要件を確かめずにすべて有効にしない。
+- ACFの値を`get_field()`で直接読まない(rules/acf.md)。
 
 ## 確認方法
 
-1. `composer require` 後に `composer qa` が通ること。
-2. 各拡張のREADMEにある最短利用例が動くこと。
+1. `composer require`の後に`composer qa`が通ること。
+2. 登録した拡張の機能が、WordPressで動くこと(例: settings-pageなら管理画面のメニューに設定ページが出る、thumbnailなら`tms_thumb()`のURLで画像が表示される)。手順は各拡張のレシピの「確認方法」にある。
+3. テーマとプラグインの両方に登録した場合は、どちらのKernelでも拡張が動き、起動時に例外が出ないこと。
+
+## 発展
+
+- 各拡張の使い方: 上の表の「詳しいレシピ」
+- Kernelごとの拡張の登録の仕様: docs/02-kernel.md §3.10、各拡張の設計: docs/08-extensions.md(settings-page・thumbnail・ja-toolkit)、docs/09-acf-bridge.md

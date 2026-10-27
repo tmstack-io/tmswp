@@ -2,7 +2,7 @@
 
 ACFのフィールドグループは`acf-json/`のJSONで管理し、tmswp/acf-bridgeの`composer acf:sync`(`vendor/bin/tms-acf sync`)で型付きアクセサを生成して読み書きする。
 アプリのコードで`get_field()`等のACFの関数を直接呼ばない。
-例はテーマのもので、名前空間はテーマのスターター既定の`App\`。プラグイン等では、対象のプロジェクトのcomposer.jsonのPSR-4の設定(`app/`に割り当てた名前空間)に合わせて読み替える。
+例はテーマのもの。コード例の名前空間`App\`は、自分のプロジェクトの名前空間(composer.jsonの`autoload.psr-4`で`app/`に割り当て、`tmswp-kernel.php`の`appNamespace`に書いたもの。スターターから作ったプロジェクトでは、setup.phpがスラッグから作った名前。例: `my-theme`なら`MyTheme\`)に読み替える。
 
 ## 使い分け
 
@@ -326,7 +326,7 @@ GitHub Actionsのステップ:
 - フィールドグループを`acf_add_local_field_group()`でPHPから登録しない。生成はacf-jsonだけを読むため、アクセサが生成されない。
 - ACFのオプションページで管理する値を、オプショングループのenumの`#[OptionSchema]`でも宣言しない。保存先が2つになり、どちらの値が使われるか分からなくなる。この重複は起動時にも`check`でも検出されない。システム設定はオプショングループとsettings-page、コンテンツ設定はACFのオプションページのどちらか1つに決める(上の「使い分け」)。
 - ACFのフィールドグループのlocationに`block`(ACF Blocks)を使わない。acf-bridgeはACF Blocksのアクセサを生成せず、syncとcheckがW006を出す。独自ブロックは、フレームワークの独自ブロックの方式で作る。
-- ACFのフィールドグループで管理するキーを、`#[UseMetaStorage(AcfMetaStorage::class)]`の無いエンティティの`#[MetaSchema]`で宣言しない。起動時に`DuplicateMetaKeyException`になり、`wp tmswp acf check`もE101で失敗する。
+- ACFのフィールドグループで管理するキーを、`#[UseMetaStorage(AcfMetaStorage::class)]`の無いエンティティの`#[MetaSchema]`で宣言しない。`init`(priority 6)の時点で`DuplicateMetaKeyException`になり、`wp tmswp acf check`もE101で失敗する。
 - 単純な値の型でないACFのフィールド(gallery・relationship・group・repeater等)のキーを、`#[MetaSchema]`で宣言しない。`AcfMetaStorage`での書き込みが`AcfBridgeRuntimeException`になる。生成アクセサで読み書きする。
 - 同じキーを、`MetaBag`と生成アクセサの両方から読み書きしない。`#[MetaSchema]`で宣言したキーは`MetaBag`だけで扱う。
 - `value()`・`rawValue()`の戻り値を、型を確かめずに使わない。

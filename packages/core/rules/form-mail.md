@@ -1,7 +1,7 @@
 # フォームの完了処理でメールを送る
 
 フォームの完了処理(`onComplete`)から`wp_mail()`でメールを送る。送信のクラスは`app/Mail/`に置き、フォームの定義からは呼ぶだけにする。
-例はテーマのもので、名前空間はテーマのスターター既定の`App\`。プラグイン(スターターの既定は`PluginApp\`)等では、対象のプロジェクトのcomposer.jsonのPSR-4の設定(`app/`に割り当てた名前空間)に合わせて読み替える。
+例はテーマのもの。コード例の名前空間`App\`は、自分のプロジェクトの名前空間(composer.jsonの`autoload.psr-4`で`app/`に割り当て、`tmswp-kernel.php`の`appNamespace`に書いたもの。スターターから作ったプロジェクトでは、setup.phpがスラッグから作った名前。例: `my-theme`なら`MyTheme\`)に読み替える。
 
 - 例は、rules/form.mdのお問い合わせフォーム(`App\Form\ContactForm`)の管理者への通知と自動返信である。項目のラベルと選択肢の表示は`ContactForm`から読む。
 - 例のテキストドメイン`my-theme`は、テーマのstyle.css(プラグインはプラグインヘッダ)の`Text Domain`に置き換える。メールの文言もソースを英語にし、日本語は翻訳ファイルで用意する。
@@ -298,7 +298,7 @@ final class ContactMailer
 ## 自動返信
 
 - 宛先は利用者が入力したアドレスである。他人のアドレスを入れて送信されると、そのアドレスにサイトからメールが届く。自動返信の本文に利用者が自由に書いた文言(氏名・お問い合わせ内容)を入れない。入れると、任意の文面を第三者へ送る踏み台に使われる。
-- 同じ理由で、自動返信を送るフォームにはスパム対策(rules/form.mdの「スパム対策」)を入れる。
+- 同じ理由で、自動返信を送るフォームにはスパム対策(rules/form.mdの「スパム対策(honeypot・Turnstile)を差し込む」)を入れる。
 - 送信元(From)は変えない。利用者のアドレスをFromにすると、送信ドメイン認証(SPF・DMARC)に失敗して届かない。利用者への返信は管理者への通知のReply-Toで行う。サイトの送信元を変える場合は、`wp_mail_from`・`wp_mail_from_name`フィルタでサイトのドメインのアドレスにする(rules/hooks.md)。
 
 ## 送信の失敗と再送
@@ -325,3 +325,9 @@ final class ContactMailer
 2. フォームを送信し、管理者への通知(Reply-Toが利用者のアドレス、添付ファイル付き)と自動返信が届くこと。開発環境ではメールを捕まえるツール(MailHog等)で確かめる。
 3. 氏名に改行を含む値をPOSTしても、件名が1行のままで、ヘッダが増えないこと。
 4. 送信に失敗させる(`pre_wp_mail`フィルタで`false`を返す等)と、入力画面に「The form could not be sent. Please try again.」が出て、Kernelのロガーに`mail`スコープの`error`が記録され、そのまま送り直せること。
+
+## 発展
+
+- フォームの定義・確認画面・完了処理: rules/form.md
+- メールの送信元を変えるフィルタ(`wp_mail_from`)を置く場所: rules/hooks.md
+- ログのチャネルの設定(`logChannels`): TMSWPの設計文書 docs/07-support.md

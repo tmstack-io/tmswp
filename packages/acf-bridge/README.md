@@ -4,7 +4,8 @@ Advanced Custom Fields(ACF)をTMStack WordPress Frameworkで使うための拡�
 
 ## 動作環境
 
-- PHP 8.3〜8.5、WordPress 7.0以上、tmswp/core
+- PHP 8.3〜8.5、WordPress 7.0以上
+- tmswp/core `^0.2`(composer.jsonの`require`)
 - ACF 6.2以上(無料版・Pro)。ACFはWordPressのプラグインとして入れます(Composerの依存にはしません)。repeater・flexible_content・gallery・clone・オプションページはACF Proの機能です。
 
 ## 提供するもの
@@ -13,7 +14,7 @@ Advanced Custom Fields(ACF)をTMStack WordPress Frameworkで使うための拡�
 |---|---|
 | `AcfBridge` | `KernelConfig`の`extensions`に渡す拡張。acf-jsonの読み込み先・保存先をACFに設定し、ACFで管理するメタのキーをKernelに申告します |
 | `vendor/bin/tms-acf sync\|check` | WordPressを起動せずに、acf-jsonから`app/Acf/`のクラスを生成・照合します |
-| `wp tmswp acf sync\|check` | `tms-acf`と同じ生成・照合を、WP-CLIで行います。`check`は`#[MetaSchema]`との重複(E101)も検査します |
+| `wp tmswp acf sync\|check` | `tms-acf`と同じ生成・照合を、WP-CLIで行います。`#[MetaSchema]`との重複(E101)も検査します |
 | 生成アクセサ(`app/Acf/*Fields.php`・`*Options.php`) | フィールドごとのgetter・setter・`has*()`・`delete*()`を持つクラス |
 | `AcfMetaStorage` | `#[UseMetaStorage(AcfMetaStorage::class)]`を付けたエンティティの`MetaBag`の保存先を、ACFのフィールドの保存先にします |
 
@@ -40,7 +41,7 @@ return KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App', extens
 }
 ```
 
-既定では、ルートの`acf-json/`を読み、`app/Acf/`に名前空間`{appNamespace}\Acf`でクラスを生成します。読み込むディレクトリ・クラス名・メソッド名を変えるときは、`new AcfBridge(new BridgeConfig(...))`で構成を渡します(`rules/sync-check.md`)。
+既定では、ルートの`acf-json/`を読み、`app/Acf/`に名前空間`{appNamespace}\Acf`でクラスを生成します。読み込むディレクトリ・クラス名・メソッド名・オプションページのpost_idを変えるときは、`new AcfBridge(new BridgeConfig(...))`で構成を渡します(`vendor/tmswp/acf-bridge/rules/sync-check.md`の「完全な実装例」)。
 
 ## 生成と照合
 
@@ -74,3 +75,9 @@ return KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App', extens
 
 - ACFでフィールドを管理する(導入・使い分け・テンプレートでの読み方・flexible_content・`value()`・禁止事項): `vendor/tmswp/core/rules/acf.md`
 - sync・checkの報告(E*・W*・I002・差分)への対処と`BridgeConfig`: `vendor/tmswp/acf-bridge/rules/sync-check.md`
+
+設計の正本は、TMSWPのmonorepo([tmstack-io/tmswp](https://github.com/tmstack-io/tmswp))の`docs/09-acf-bridge.md`です。
+
+## ライセンス
+
+GPL-2.0-or-later(`LICENSE`)

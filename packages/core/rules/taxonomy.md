@@ -1,14 +1,17 @@
 # カスタムタクソノミーを追加する
 
 タクソノミー1つにつきクラス1つを `app/Tax/` に置く。`register_taxonomy()` は直接呼ばない。
-名前空間はスターター既定の `App\`。変更している場合は読み替える。
+コード例の名前空間`App\`は、自分のプロジェクトの名前空間(composer.jsonの`autoload.psr-4`で`app/`に割り当て、`tmswp-kernel.php`の`appNamespace`に書いたもの。スターターから作ったプロジェクトでは、setup.phpがスラッグから作った名前。例: `my-theme`なら`MyTheme\`)に読み替える。
 
 ## 手順
 
-1. 紐付け先の投稿タイプクラスを用意する。
-2. `app/Tax/<Name>Tax.php` を作る。
-3. `#[AsTaxonomy]` を付け、`TMSWP\Core\Tax\Taxonomy` を継承する。
-4. `composer qa` を通す。
+1. 紐付け先の投稿タイプのクラスを用意する(rules/post-type.md。既存の投稿タイプは、その投稿タイプのbuiltinのアダプタ)。
+2. `app/Tax/<Name>Tax.php`を作る(例: `NewsCategoryTax`)。
+3. `#[AsTaxonomy]`を付け、`TMSWP\Core\Tax\Taxonomy`を継承した`final class`にする。
+4. `public static function definition(): TaxonomyDefinition`で、`TaxonomyDefinition::create('<スラッグ>')`の定義を返す。紐付け先は`objectType()`に投稿タイプのクラスを渡す。
+5. WordPressの環境で`wp tmswp discover`(スターターから作ったプロジェクトでは`composer discover`)を実行し、探索結果ファイル`tmswp-discovery.php`を作り直してコミットする。
+6. `composer qa`を通す。
+7. 有効化済みのテーマ・プラグインに足したときは、管理画面の「設定 → パーマリンク」を開いて保存し、リライトのルールを作り直す(タームのアーカイブのURLが404になるのを防ぐ)。テーマ・プラグインの有効化のときは、FWがリライトのルールを作り直させる。
 
 ## 完全な実装例
 
@@ -58,6 +61,21 @@ final class NewsCategoryTax extends Taxonomy
     </a>
 <?php endforeach; ?>
 ```
+
+タクソノミーのクラスの静的メソッド(`$term`は`WP_Term|int`):
+
+| メソッド | 動き |
+|---|---|
+| `query()` | このタクソノミーの`TermQuery`(下の「クエリの書き方」) |
+| `all($hideEmpty = false)` | すべてのターム |
+| `get($term)` | このタクソノミーのタームなら`WP_Term`、違えば・無ければnull |
+| `findBySlug($slug)`・`findByName($name)` | スラッグ・名前で1件。無ければnull |
+| `is($term)` | このタクソノミーのタームか(nullも受け取る) |
+| `url($term)` | タームのアーカイブのURL(`$term`にはスラッグの文字列も渡せる)。無ければnull |
+| `parents($term, $includeSelf)` | 親のタームのlist(階層のあるタクソノミー) |
+| `meta($term)` | メタの`MetaBag`(rules/meta.md)。このタクソノミーのタームでなければ`InvalidArgumentException` |
+| `create($name, $args)` | タームを作り、IDを返す。値はslashしない元の値を渡す。失敗(同じ名前のターム等)は`EntityPersistenceException` |
+| `slug()`・`taxonomyObject()` | スラッグ・`WP_Taxonomy` |
 
 ## クエリの書き方
 
@@ -135,3 +153,10 @@ final class CategoryTax extends Taxonomy
 
 1. `composer qa` が通ること。
 2. 投稿編集画面にタクソノミーUIが出ること。
+
+## 発展
+
+- 紐付け先の投稿タイプを作る: rules/post-type.md
+- タームにメタを持たせる: rules/meta.md
+- タームの一覧をテンプレートの前処理クラスで用意する: rules/page.md
+- タクソノミーの定義・クエリの仕様: TMSWPの設計文書 docs/03-entities.md

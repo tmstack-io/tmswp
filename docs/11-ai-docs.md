@@ -53,7 +53,7 @@ PHPクラスの新規定義は行わない。本文書が参照するFWのAPIは
 - 理由2: AIエージェントにとってvendor配下のMarkdownを読むコストはゼロであり、コピーの利点がない。
 - 理由3: 旧iwf2bの最大の失敗は「規約がどこにも文書化されず15案件が定型コードをコピペで増殖させた」ことであり、コピー方式はこの失敗の再演になる。
 
-スターターの `AGENTS.md` はタスク種別→レシピファイルの対応表を持ち、AIを該当レシピへ誘導する(§5)。拡張パッケージ固有の詳細(acf-bridgeの内部仕様等)は各拡張パッケージのREADMEが持つが、利用者AIが最初に読むべき導入手順はコアの `rules/acf.md` / `rules/extensions.md` に集約する(コアのrules/だけ見れば次の一手が必ず分かる状態を保証する)。
+スターターの `AGENTS.md` はタスク種別→レシピファイルの対応表を持ち、AIを該当レシピへ誘導する(§5)。拡張パッケージの使い方のレシピはその拡張パッケージの`rules/`に置き、拡張パッケージ固有の詳細(acf-bridgeの内部仕様等)は各拡張パッケージのREADMEが持つ。利用者AIが最初に読むべき導入手順はコアの`rules/acf.md`・`rules/extensions.md`に集約する(拡張を入れる前でも、コアのrules/だけ見れば次の一手が必ず分かる状態を保証する)。
 
 ### 1.3 レシピの完結性要件
 
@@ -69,33 +69,42 @@ PHPクラスの新規定義は行わない。本文書が参照するFWのAPIは
 
 ```
 tmswp/ (monorepo)
-├── AGENTS.md                       … §4 全文(コントリビュータ向け)
+├── AGENTS.md                       … §4 全文(コントリビュータ向け。monorepoの開発ルールの正本を含む)
 ├── packages/
-│   └── core/
-│       └── rules/                  … §6 レシピ13本(パッケージに同梱して配布。本文はこのディレクトリが正本)
-│           ├── post-type.md
-│           ├── taxonomy.md
-│           ├── user-role.md
-│           ├── meta.md
-│           ├── acf.md
-│           ├── form.md
-│           ├── form-mail.md
-│           ├── page.md
-│           ├── model.md
-│           ├── options.md
-│           ├── hooks.md
-│           ├── view.md
-│           └── extensions.md
-└── starters/
-    ├── theme/                      … §8 tmswp/starter-theme
-    │   ├── AGENTS.md               … §5 全文(利用者向け・theme版)
-    │   └── (ツリーは§8参照)
-    └── plugin/                     … §9 tmswp/starter-plugin
-        ├── AGENTS.md               … §5 差分(plugin版)
-        └── (ツリーは§9参照)
+│   ├── core/
+│   │   └── rules/                  … §6 レシピ14本(パッケージに同梱して配布。本文はこのディレクトリが正本)
+│   │       ├── post-type.md
+│   │       ├── taxonomy.md
+│   │       ├── user-role.md
+│   │       ├── meta.md
+│   │       ├── acf.md
+│   │       ├── form.md
+│   │       ├── form-mail.md
+│   │       ├── page.md
+│   │       ├── model.md
+│   │       ├── options.md
+│   │       ├── hooks.md
+│   │       ├── view.md
+│   │       ├── blocks.md
+│   │       └── extensions.md
+│   ├── acf-bridge/rules/sync-check.md        … §6 拡張のレシピ(各パッケージに同梱)
+│   ├── settings-page/rules/settings-page.md
+│   ├── thumbnail/rules/thumbnail.md
+│   ├── ja-toolkit/rules/ja-toolkit.md
+│   └── testing/rules/testing.md
+├── starters/
+│   ├── theme/                      … §8 tmswp/starter-theme
+│   │   ├── AGENTS.md               … §5 全文(利用者向け・theme版)
+│   │   └── (ツリーは§8参照)
+│   └── plugin/                     … §9 tmswp/starter-plugin
+│       ├── AGENTS.md               … §5 差分(plugin版)
+│       └── (ツリーは§9参照)
+└── examples/
+    └── sample-site/
+        └── AGENTS.md               … スターターのtheme版を元に、名前空間SampleSite\・wp-env・例の場所を足したもの
 ```
 
-`CLAUDE.md` 等のエージェント固有の規約ファイルは置かない。規約は monorepo・スターターとも `AGENTS.md` だけに置く(二重管理を避けるため)。
+`CLAUDE.md` 等のエージェント固有の規約ファイルは置かない。規約はmonorepo・スターター・examples/sample-siteとも`AGENTS.md`だけに置く(二重管理を避けるため。12-implementation-plan.md §1.18)。monorepoのルートの`AGENTS.md`は、冒頭にmonorepoの開発ルール(エージェントが常に従う規約)を置き、続けて§4のコントリビュータ向けの節を置く。
 
 ---
 
@@ -112,19 +121,23 @@ tmswp/ (monorepo)
 | `composer test:coverage` | ユニット・統合テストの合算カバレッジの計測と閾値判定(wp-env/Docker必要。`composer wp:start:coverage` で起動) |
 | `composer test:integration` | PHPUnit(統合層、wp-env必須) |
 | `composer test` | `test:unit` → `test:integration` の合成(wp-env/Docker必要) |
-| `composer qa:fast` | lint + analyse + test:unit(Docker不要。**AIの実装中の反復ループはこれ**) |
-| `composer qa` | lint + analyse + test を直列実行(コミット前必須ゲート。統合テストを含むためDocker必要) |
+| `composer qa:fast` | lint + analyse + test:unit(monorepoのみ。Docker不要。**AIの実装中の反復ループはこれ**) |
+| `composer discover:build` | fixtureのテーマ・プラグインの探索結果ファイルの生成(`wp tmswp discover --kernels=2`。wp-env/Docker必要) |
+| `composer discover:check` | fixtureの探索結果ファイルが最新かの照合(`wp tmswp discover --check --kernels=2`。wp-env/Docker必要) |
+| `composer acf:check:fixtures` | fixtureのacf-bridgeの生成物の照合(`tms-acf check --strict`。Docker不要) |
+| `composer qa` | lint → analyse → acf:check:fixtures → discover:check → test を直列実行(コミット前必須ゲート。統合テストを含むためDocker必要) |
 
-利用側プロジェクト(スターター)にも同名のcomposer scriptsを定義し、**人間・CI・AIが同一コマンドを叩く**(DR-12)。ただしスターターは統合テストを既定で持たないため、スターター側の `composer test` はユニット層のみを指す(範囲差は§5のAGENTS.mdに注記する)。コマンド意味論の正準は10-quality.md §1であり、本文書内の全コマンド表記はこれとgrep突合で一致させる。
+利用側プロジェクト(スターター)には、このうち`lint`・`fix`・`analyse`・`test`・`discover:check`・`qa`を同名のcomposer scriptsとして定義し(ほかに探索結果ファイルを作る`discover`を持つ。§8.2)、**人間・CI・AIが同一コマンドを叩く**(DR-12。10-quality.md §7の項目1)。`test:unit`・`test:integration`・`test:coverage`・`qa:fast`・`discover:build`・`acf:check:fixtures`はmonorepoだけのscriptsで、スターターには無い(スターターのAGENTS.mdにも書かない)。ただしスターターは統合テストを既定で持たないため、スターター側の `composer test` はユニット層のみを指す(範囲差は§5のAGENTS.mdに注記する)。スターター側の`composer qa`はlint → analyse → discover:check → testで、`discover`・`discover:check`は`wp tmswp discover`(`--check`)をそのまま呼ぶ(§8.2)。コマンド意味論の正準は10-quality.md §1であり、本文書内の全コマンド表記はこれとgrep突合で一致させる。
 
 WP-CLIコマンド名も各担当文書の正準名に固定する。本文書のAGENTS.md・全レシピはこの表の表記のみを使う。
 
 | WP-CLIコマンド | 内容 | 正準定義 |
 |---|---|---|
-| `wp tmswp discover` | 探索結果ファイル(`tmswp-discovery.php`)の生成。`--check` はファイルが最新かの照合(古ければexit 1) | 02-kernel |
+| `wp tmswp discover` | 起動中のすべてのKernelの探索結果ファイル(`tmswp-discovery.php`)の生成。`--check`はファイルが最新かの照合(古ければ非0)、`--kernels=<n>`は起動中のKernelの数の確認(違えば走査せずに非0) | 02-kernel |
 | `wp tmswp migrate` | Model(独自テーブル)のマイグレーション実行 | 06-model |
 | `wp tmswp acf sync` | acf-jsonから型付きアクセサクラスを再生成 | 09-acf-bridge |
 | `wp tmswp acf check` | acf-jsonと生成クラスのドリフト検査(差分があればexit 1) | 09-acf-bridge |
+| `wp tmswp thumb clear` | thumbnailのキャッシュのファイルの削除(`--days`より古いもの) | 08-extensions |
 
 acf-bridgeは、WordPressを起動せずにテーマ・プラグインのルートの`tmswp-kernel.php`の構成で同じ生成・照合を行う`vendor/bin/tms-acf sync|check`も持つ(09-acf-bridge §5.1。E101だけは検査しない)。スターターはacf-bridgeに依存しないため、`acf:sync`・`acf:check`のscriptsを持たない。acf-bridgeを入れるときに足す(§8.2)。
 
@@ -132,105 +145,141 @@ acf-bridgeは、WordPressを起動せずにテーマ・プラグインのルー�
 
 ## 4. コアmonorepo直下 AGENTS.md(全文案)
 
-読者は「FW本体を開発・修正するAI(コントリビュータ)」。monorepoルートに配置する。以下のフェンス内が全文。
+読者は「FW本体を開発・修正するAI(コントリビュータ)」。monorepoルートに配置する。以下のフェンス内が全文で、monorepoルートの`AGENTS.md`の実物と同じ内容である。冒頭の「TMSWP 開発ルール」の箇条は、このmonorepoの開発ルールの正本(エージェントが常に従う規約)で、続く節が対応範囲・パッケージ構成・必須コマンド・CI・コーディング規約・変更の手順・新しいパッケージを足す手順・禁止事項・リリースを示す。
 
 ````markdown
-# TMStack WordPress Framework — Contributor Guide
+# TMSWP 開発ルール
 
-このリポジトリは TMStack WordPress Framework の monorepo である。
-あなた(AIエージェント)がここで行うのは **フレームワーク本体の開発** である。
-利用側プロジェクト(テーマ/プラグイン)の開発規約は starters/*/AGENTS.md と packages/core/rules/ にある。混同しないこと。
+このリポジトリは TMStack WordPress Framework 本体の開発用 monorepo です。実装は `docs/12-implementation-plan.md` のロードマップに従い、版とタスクの順に進めます。
 
-## アーキテクチャ要約
+- 対応範囲は PHP 8.3〜8.5、WordPress 7.0 以上とする。
+- `tmswp/core` の runtime 依存は `psr/log` と `psr/container` のみに限定する。
+- 旧 iwf2b 互換のシム、別名、移行用 API は追加しない。
+- すべての PHP ファイルに `declare(strict_types=1)` を置き、公開 API は型宣言を必須とする。
+- 品質確認は `composer lint` / `composer analyse` / `composer test:unit` / `composer test:integration` / `composer qa` を使う。
+- fixture の app/ を変えたら、探索結果ファイル(`tmswp-discovery.php`)を `composer discover:build` で作り直してコミットする。照合は `composer discover:check`(`composer qa` に含まれ、wp-env が必要)。
+- wp-env は `npm ci` で入れたローカルの `@wordpress/env`(package.json で版を固定)を `composer wp:start` / `wp:stop` / `test:integration` 経由で使う。直接呼ぶときは `node node_modules/@wordpress/env/bin/wp-env` とパスで指定する。`npx` や npm の `exec` / `run` でコマンド名 `wp-env` を解決する呼び出しは、第三者のパッケージやグローバルの同名コマンドを実行しうるので使わない。
+- 版のすべてのタスクを終えたら、その版の受け入れ条件の確認結果を `docs/acceptance/v0.x.y.md` に記録する。
 
-- 対象: PHP 8.3〜8.5 / WordPress 7.0以上。コアのruntime依存は psr/log ^3 と psr/container ^2 のみ。
-- 思想: 「app/ にクラスを置くだけ」の規約ベース自動探索(PHP8 Attribute + クラスマップ + ビルド時に生成する探索結果ファイル)。
-  ビューはWordPress標準のテンプレート階層を一切壊さない(絶対原則)。
-  外部プラグイン(ACF/CF7等)依存コードはコアに置かない(ACFは packages/acf-bridge のみ)。
-- 配布: monorepo開発 + Packagistへread-only split。SemVer。
+## このファイルの読者
+
+このファイルは、フレームワーク本体を開発・修正するAIエージェントと人(コントリビュータ)が読む。
+利用側のプロジェクト(テーマ・プラグイン)の開発規約は`starters/*/AGENTS.md`と`packages/*/rules/`にある。混同しない。
+規約はAGENTS.mdだけに置き、`CLAUDE.md`等のエージェント固有の規約ファイルは置かない(docs/12 §1.18)。
+
+## アーキテクチャの要約
+
+- 対応範囲とコアのruntimeの依存は、上の開発ルールのとおり(`psr/log` ^3・`psr/container` ^2)。
+- 規約による自動の探索: 利用側の`app/`にPHP 8のAttributeを付けたクラス(投稿タイプ・タクソノミー・ロール・オプショングループ・Model・フック)を置くだけで、Kernelが探索して登録する。独自ブロックは`build/blocks/`以下の`block.json`を探索して登録する。フォームは探索の対象ではなく、利用側が`FormDefinition`で定義し、前処理クラス等で明示的に作って使う。探索の結果は、探索コマンド(`wp tmswp discover`)が探索結果ファイルに書き、コミットする。本番(debugが偽)は探索結果ファイルだけを読み、debugのときだけ`app/`と`build/blocks/`を毎回走査する。
+- ビューはWordPress標準のテンプレート階層を壊さない(絶対原則)。テンプレートの前処理は、テンプレートの先頭で前処理クラスを明示的に呼ぶ。
+- 外部プラグイン(ACF・CF7等)に依存するコードはコアに置かない(ACFは`packages/acf-bridge`だけ)。拡張は利用側の`KernelConfig`の`extensions`で、Kernelごとに登録する。
+- 配布: このmonorepoで開発し、`.github/workflows/split.yml`がmainとタグを8つの読み取り専用リポジトリ(`tmstack-io/tmswp-*`)へ同期し、Packagistに`tmswp/*`の名前で登録する。全パッケージを同じ版で出す(lockstep。SemVer、0.xの間はマイナーで破壊的変更を許す)。Packagistへの公開はv0.9.0で行う予定で、まだ行っていない。
 
 ## パッケージ構成
 
-| パス | composer名 | 名前空間 | 役割 |
+| パス | composerの名前 | 名前空間 | 役割 |
 |---|---|---|---|
-| packages/core | tmswp/core | TMSWP\Core\ | Kernel/Container/エンティティ定義/meta/option/Form/Model/Log/View/Support |
-| packages/thumbnail | tmswp/thumbnail | TMSWP\Thumbnail\ | 署名付きサムネイルURL(WP_Image_Editor) |
-| packages/settings-page | tmswp/settings-page | TMSWP\SettingsPage\ | 管理画面設定ページ(Form層ベース) |
-| packages/acf-bridge | tmswp/acf-bridge | TMSWP\AcfBridge\ | acf-json→型付きアクセサ生成・AcfMetaStorage |
-| packages/ja-toolkit | tmswp/ja-toolkit | TMSWP\JaToolkit\ | 日本語サイト対応(全モジュールオプトイン) |
-| starters/theme | tmswp/starter-theme | TmswpStarterTheme\(create-projectでスラッグから生成した名前空間に書き換える) | create-project用テーマ雛形 |
-| starters/plugin | tmswp/starter-plugin | TmswpStarterPlugin\(同上) | create-project用プラグイン雛形 |
+| packages/core | tmswp/core | `TMSWP\Core\` | Kernel・Container・エンティティの定義・メタ・オプション・Form・Model・Log・View・Support・ブロックの登録 |
+| packages/thumbnail | tmswp/thumbnail | `TMSWP\Thumbnail\` | 署名付きのURLのサムネイル(WP_Image_Editor) |
+| packages/settings-page | tmswp/settings-page | `TMSWP\SettingsPage\` | 管理画面の設定ページ(Formの層を使う) |
+| packages/acf-bridge | tmswp/acf-bridge | `TMSWP\AcfBridge\` | acf-jsonからの型付きアクセサの生成・`AcfMetaStorage`・`tms-acf` |
+| packages/ja-toolkit | tmswp/ja-toolkit | `TMSWP\JaToolkit\` | 日本語サイト向けの機能(すべてのモジュールがオプトイン) |
+| packages/testing | tmswp/testing | `TMSWP\Testing\` | テストの支援コード(`UnitTestCase`・`IntegrationTestCase`・テストダブル。利用側はrequire-devで使う) |
+| starters/theme | tmswp/starter-theme | `TmswpStarterTheme\`(create-projectで、スラッグから作った名前空間に書き換える) | create-projectで使うテーマの雛形 |
+| starters/plugin | tmswp/starter-plugin | `TmswpStarterPlugin\`(同上) | create-projectで使うプラグインの雛形 |
 
-コアのモジュールマップ(TMSWP\Core\ 配下の正準名)は docs/ 配下の設計書群を一次資料とする。
-設計書に定義のないpublic APIを新設する場合は、必ず設計書の更新を同一PRに含めること。
+上の8つが読み取り専用リポジトリへの同期の対象である。`examples/sample-site`(テーマのスターターから作ったサンプルのテーマ。同期しない)は、主な機能を実物のWordPressで動かす例で、専用のwp-env(ポート8882)と`composer qa`を持つ。
 
-## 必須コマンド(コミット前ゲート)
+設計の正本は`docs/00〜11`である(用語は`00-overview.md` §7、設計判断はDRとして同§4)。`docs/`に定義の無い公開APIを作る場合は、同じ変更で設計書を改訂する。
+
+## 必須コマンド
 
 ```bash
-composer qa                 # lint + analyse + test。これが通らない変更はコミット禁止(統合テストを含むため wp-env/Docker が必要)
-composer qa:fast            # lint + analyse + test:unit。Docker不要の高速ループ(実装中の反復はこちらを使う)
-composer test               # ユニット+統合テスト(test:unit → test:integration。wp-env起動が必要: composer wp:start)
-composer test:unit          # ユニットテスト(WP非依存・Brain Monkey。Docker不要)
-composer test:coverage      # ユニット・統合テストの合算カバレッジの計測と閾値判定(wp-env起動が必要: composer wp:start:coverage)
-composer test:integration   # 統合テスト(wp-env起動が必要: composer wp:start)
-composer analyse            # PHPStan level max(baseline禁止)
-composer lint               # コードスタイル検査(php-cs-fixer dry-run)
-composer fix                # コードスタイル自動修正
+composer qa                 # lint → analyse → acf:check:fixtures → discover:check → test。これが通らない変更はコミットしない(wp-env・Dockerが必要)
+composer qa:fast            # lint → analyse → test:unit。Docker不要。実装中の反復はこちら
+composer test               # test:unit → test:integration(wp-envが必要: composer wp:start)
+composer test:unit          # ユニットテスト(PHPUnit 11・Brain Monkey。WordPress非依存。Docker不要)
+composer test:integration   # 統合テスト(wp-envのcliコンテナのPHPUnit 9.6。wp-envが必要: composer wp:start)
+composer test:coverage      # ユニット・統合の合算カバレッジの計測と閾値の判定(wp-envをcomposer wp:start:coverageで起動しておく)
+composer analyse            # PHPStan level max(baselineなし)
+composer lint               # コードスタイルの検査(php-cs-fixerのdry-run)
+composer fix                # コードスタイルの自動修正
+composer discover:build     # fixtureのテーマ・プラグインの探索結果ファイルを作る(wp tmswp discover --kernels=2。wp-envが必要)
+composer discover:check     # fixtureの探索結果ファイルが最新かを照合する(wp tmswp discover --check --kernels=2)
+composer acf:check:fixtures # fixtureのacf-bridgeの生成物を、WordPressを起動しないtms-acf check --strictで照合する
+composer i18n:build         # 翻訳ファイル(packages/*/languages/)をソースから作り直す(wp-envが必要)
+composer monorepo:validate  # パッケージ間の版の制約の整合を検査する
+composer wp:start           # wp-envを起動する(http://localhost:8888)。止めるのはcomposer wp:stop
+php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages/*/rules/のコード例の抽出と検査
 ```
 
-- wp-env は `npm ci` で入れたローカルの `@wordpress/env`(package.jsonで版を固定)を `composer wp:start` / `wp:stop` / `test:integration` 経由で使う。直接呼ぶときは `node node_modules/@wordpress/env/bin/wp-env` とパスで指定し、コマンド名 `wp-env` を名前解決する呼び出しは使わない。
-- PHPStanは **level max・baselineなし** で運用する。エラーを baseline や @phpstan-ignore で握りつぶす変更は拒否される。
-  ignoreが本当に必要な場合(WP関数のstub不備等)は理由コメントを併記し、PRで明示すること。
-- テストはユニット層(tests/Unit, WP非依存)と統合層(tests/Integration, wp-env + WordPress のテストライブラリ(WP_TESTS_DIR))の2層。
-  新規クラスにはユニットテストを必ず追加する。WP関数に触れるロジックは薄い境界クラスに寄せ、境界より内側をユニットテスト可能に保つ。
+- PHPStanは**level max・baselineなし**で運用する。エラーをbaselineや`@phpstan-ignore`で握りつぶす変更は受け入れない。ignoreがどうしても要る場合(WordPressの関数のstubの不備等)は、理由のコメントを付け、変更の説明に書く。
+- テストは2層である。ユニット層(`packages/*/tests/Unit/`。WordPress非依存)と統合層(`packages/*/tests/Integration/`。wp-envとWordPressのテストライブラリ)。ルートの`tests/Unit/`はtools・bin・スターターのsetup.php等を、`tests/Integration/`はスターターから作ったテーマ・プラグインの同時起動を確かめる。テストは`src/`の構成をミラーした場所に置く。
+- 新しいクラスにはユニットテストを足す。WordPressの関数に触れる処理は薄い境界のクラスに寄せ、その内側をユニットテストできるようにする。WordPressに依存するクラスは、モックを多用したユニットテストではなく、統合テストで確かめる。
+- カバレッジは、ユニットと統合を合算した行カバレッジで判定する。全体の閾値は版ごと(`docs/12-implementation-plan.md` §0.7)、パッケージ別の閾値は6パッケージ(core・acf-bridge・settings-page・thumbnail・ja-toolkit・testing)とも80%で、どちらも`composer.json`の`test:coverage:check`の引数の1か所で定義する。
+- `packages/*/rules/`を変えたら、上のrulesの抽出と検査を通す。
+- サンプルサイトは`cd examples/sample-site && composer wp:start && composer wp:setup && composer qa`で確かめる(手順は`examples/sample-site/README.md`)。スターターから作ったプロジェクトは、`tools/ci/create-starter-project.sh`(CIのStarter Projectsのジョブと同じ手順)で作って確かめる。
+
+## CI
+
+`.github/workflows/qa.yml`は、すべてのプルリクエストとmainへのpushで次のジョブを実行する。外部アクションはSHAで固定し、runnerは`ubuntu-24.04`に固定する(`ubuntu-latest`を使わない)。
+
+| ジョブ | 内容 |
+|---|---|
+| Coding Standards | PHPStanのbaselineのファイルが無いことの確認と`composer lint`(PHP 8.3) |
+| Static Analysis | `composer analyse`と`composer acf:check:fixtures` |
+| Monorepo Validate | `composer monorepo:validate` |
+| Rules Code Examples | `packages/*/rules/`のコード例の抽出と検査(`tools/extract-rules-code.php`・`tools/verify-rules-code.php`) |
+| Unit | `composer test:unit`(PHP 8.3と8.5) |
+| Integration | `composer test:integration`(PHP 8.3と8.5 × WordPress 7.0と最新版の4セル) |
+| Coverage | 翻訳ファイルと探索結果ファイルの照合、合算カバレッジの閾値の判定(PHP 8.3・WordPress最新版) |
+| Sample Site QA | `examples/sample-site`の`composer qa`(専用のwp-env) |
+| Starter Projects | スターターからcreate-projectで作ったテーマ・プラグインの`composer qa`と、テーマのスターターのブロックのビルドと探索結果ファイルの照合 |
 
 ## コーディング規約
 
-- `declare(strict_types=1);` 全ファイル必須。PER-CS 2.0 + php-cs-fixer設定(.php-cs-fixer.dist.php)に従う。
-- クラスは原則 `final`。継承を許す基底(PostType/Taxonomy/UserRole/Form/Model/Hook)のみ非final
-  (オプショングループはbacked enumであり基底クラスを持たない。04-meta-options.md参照)。
-- 全プロパティ・引数・戻り値に型宣言。`mixed` の使用は境界(WP API・$_POST等)に限定し、内側で即座に絞り込む。
-- **禁止**: `__call` / `__callStatic` / `__get` / `__set` 等のマジックメソッド、`extract()`、`eval()`、
-  グローバル変数の新設、`exit`/`die`(00-overview.md 原則1の例外=PRGと設定ページ保存後の `wp_safe_redirect()` 直後を除く)、WP標準テンプレート階層への介入(template_includeの差し替え)。
-- 例外は `TMSWP\Core\Exception\` 配下に定義し、`\RuntimeException` 等の素の例外をthrowしない。
-- WP関数の直接呼び出しは各パッケージの境界クラス(例: Meta\WpMetaStorage, Model\Connection)に閉じ込める。
-- 名前空間: コアは `TMSWP\Core\`。コア名前空間はDiscoveryの走査対象外である前提を崩さない。
-- i18n: テキストドメインは `tmswp`。翻訳対象文字列は必ず `__( '...', 'tmswp' )` 形式。
-- コメント・docblockは日本語可。識別子は英語。
+- `declare(strict_types=1);`はすべてのPHPファイルに置く(上の開発ルール)。コードスタイルはPER Coding Style 2.0と`.php-cs-fixer.dist.php`の規則に従う。
+- クラスは`final`にする。継承させる拡張点(`PostType`・`Taxonomy`・`UserRole`・`Model`・`Hook`の各基底)は`abstract`で宣言する。オプショングループはbacked enumで、基底クラスを持たない。`Form`は`final`で、利用側は`FormDefinition`で定義して`new Form(...)`で作る(継承しない)。
+- プロパティ・引数・戻り値のすべてに型を宣言する。`mixed`は境界(WordPressのAPI・`$_POST`等)に限り、内側ですぐに絞り込む。
+- **禁止**: `__call`・`__callStatic`・`__get`・`__set`等のマジックメソッド、`extract()`、`eval()`、グローバル変数の新設、`exit`・`die`(`00-overview.md`の原則1の例外である、PRGのリダイレクトと設定ページの保存の後の`wp_safe_redirect()`の直後を除く)、WordPress標準のテンプレート階層への介入(`template_include`での差し替え)。
+- 例外はFWの基底(`TMSWP\Core\Exception\`の`LogicException`・`RuntimeException`・`InvalidArgumentException`)を継承し、マーカーのinterface`TmswpExceptionInterface`を実装する(`tests/Unit/ExceptionHierarchyTest.php`が確かめる)。素の`\RuntimeException`等をthrowしない。エラーの扱いは`00-overview.md` §5.6(設定の誤りは起動時に常に例外、実行時のデータの取得の失敗はdebugなら例外・本番ならKernelのロガーに記録して既定値)に従う。
+- WordPressの関数の直接の呼び出しは、各パッケージの境界のクラス(例: `Meta\WpMetaStorage`・`Model\Connection`)に閉じ込める。
+- コアの名前空間は`TMSWP\Core\`。コアの名前空間がDiscoveryの走査の対象外である前提を崩さない。
+- i18n: テキストドメインは`tmswp`。ソースの文言(gettextのソースの文字列)は英語で書き、`__('...', 'tmswp')`の形で渡す。
+- コメント・docblockは日本語でよい。識別子は英語にする。
 
-## 変更時の手順
+## 変更の手順
 
-1. 該当パッケージの設計書(docs/)を読み、API契約を確認する。
-2. テストを先に書くか、最低でも変更と同一PRでテストを追加する。
-3. `composer qa` を通す。
-4. 破壊的変更(public APIのシグネチャ変更・削除)はCHANGELOG.mdの Unreleased > Breaking に必ず記録する。
+1. 該当するパッケージの設計書(`docs/`)を読み、APIの契約を確かめる。ロードマップのタスクとして行う場合は、`docs/12-implementation-plan.md`のそのタスクの「対象ファイル領域」と完了条件に従う。
+2. テストを先に書くか、少なくとも変更と同じ変更でテストを足す。
+3. `composer qa`を通す。
+4. 利用者に見える変更は、`CHANGELOG.md`の先頭の節(見出しはUnreleased)の小見出し(追加・変更・削除・修正・開発)に書く。公開APIのシグネチャの変更・削除等の破壊的変更は、変更・削除に、利用側で直すことと一緒に書く。
+5. 公開APIを変えたら、`packages/*/rules/`・`starters/`・`examples/sample-site/`の規約とコード例を追従させる(`grep -rn <旧API> packages/*/rules starters examples/sample-site --exclude-dir=vendor --exclude-dir=node_modules`で追従の漏れを確かめる)。
 
-## 新規パッケージの追加手順
+## 新しいパッケージを足す手順
 
-1. `packages/<name>/` を作成し、最低限のファイルを置く:
-   - `composer.json`(name=tmswp/<name>, type=library, PSR-4: `TMSWP\<PascalName>\` => `src/`,
-     require に `"tmswp/core": "^X.0"` と PHP/拡張要件。コアに要件を足さないこと)
-   - `src/` `tests/Unit/` `README.md` `rules/`(利用者向けレシピが必要な場合はコアの rules/extensions.md にも導入手順を追記)
-2. `composer monorepo:merge` を実行し、ルート `composer.json` の autoload(-dev) / `replace` へ新パッケージを反映する
-   (monorepo内のパッケージ相互解決に path リポジトリは使わない。正準手順は品質設計書(10)§6.2)。
-3. ルートの `phpstan.neon.dist` の paths と `phpunit.unit.xml.dist` / `phpunit.integration.xml.dist` の testsuite に新パッケージを追加する。
-4. `.github/workflows/` のテストマトリクスと split.yml の matrix(read-only split対象リポジトリ)に追加する。
-5. Packagist登録はメンテナが行う。PRには split 先リポジトリ名の提案を含める。
-6. 拡張パッケージは **コアのAPIのみに依存** する。拡張同士の依存は原則禁止(必要ならPRで合意を取る)。
+正本は`docs/10-quality.md` §6.2である。
+
+1. `packages/<name>/`に、`composer.json`(nameは`tmswp/<name>`、PSR-4は`TMSWP\<PascalName>\` → `src/`、license、requireの`"tmswp/core": "^X.Y"`とPHP・拡張の要件、require-devの`"tmswp/testing": "^X.Y"`、`scripts.test`、`extra.branch-alias`)、`LICENSE`(ルートと同じGPL-2.0-or-later)、`README.md`、`phpunit.xml.dist`、`.gitattributes`(`export-ignore`で`/tests`・`/phpunit.xml.dist`・`/.gitattributes`・`.DS_Store`を外す)と、`src/`・`tests/Unit/`を置く。利用者向けのレシピが要る場合は`rules/`に置き、コアの`rules/extensions.md`にも導入手順を足す。コアに要件を足さない。
+2. ルートの`composer.json`の`replace`・`autoload`・`autoload-dev`に手で足す(`monorepo-builder merge`は使わない)。
+3. ルートの`phpstan.neon.dist`の`paths`、`phpunit.unit.xml.dist`・`phpunit.integration.xml.dist`のtestsuite、ルートの`composer.json`の`test:coverage:check`の`--package`、`.github/workflows/split.yml`の`matrix`に足す。
+4. `docs/01-architecture.md`・`docs/10-quality.md`・`docs/RELEASING.md`・このファイルのパッケージの一覧と数を改める。
+5. パッケージをsplit相当で取り出して`composer install && composer test`が通ること(`docs/RELEASING.md`の「split相当の確認」)と、`composer monorepo:validate`で確かめる。
+6. 拡張のパッケージは**コアのAPIだけに依存する**。拡張どうしの依存は原則として作らない(要る場合は変更の説明で合意を取る)。Packagistへの登録はメンテナが行う。
 
 ## 禁止事項(コントリビュータ向け)
 
-- コアに外部プラグイン(ACF/CF7/Yoast等)の関数・クラス参照を追加すること。
-- コアのruntime依存(psr/log, psr/container以外)を追加すること。
-- `register_post_type` 等のWP登録系を `init` 等の正規フック外で即時実行すること。
-- packages/* 間でソースをコピーすること(共有したいコードはcoreのSupportへ昇格を検討)。
-- starters/ 配下とrules/ 配下の規約・コード例を、コアのAPI変更に追従させずに放置すること
-  (public API変更時は `grep -r <旧API> packages/*/rules starters` で追従漏れを確認する)。
+- コアに外部プラグイン(ACF・CF7・Yoast等)の関数・クラスの参照を足すこと。
+- コアのruntimeの依存(`psr/log`・`psr/container`以外)を足すこと。
+- `register_post_type`等のWordPressの登録の関数を、`init`等の正規のフックの外で即時に実行すること。
+- `packages/*`の間でソースをコピーすること(共有したいコードは、coreのSupportへの昇格を検討する)。
+- `starters/`・`packages/*/rules/`・`examples/sample-site/`の規約とコード例を、コアのAPIの変更に追従させずに放置すること。
+- `CLAUDE.md`等のエージェント固有の規約ファイルを置くこと。
 
 ## リリース
 
-- SemVer。タグ `vX.Y.Z` をmonorepoに打つと、CIが各パッケージへsplitしタグを伝播する。
-- リリース手順の詳細は docs/RELEASING.md を参照。
+- 手順の正本は`docs/RELEASING.md`である。`vendor/bin/monorepo-builder release vX.Y.Z`が、mainへのpushとタグのpushを自ら行い、`split.yml`が各読み取り専用リポジトリへ同期する。
+- mainへのpushとタグ付けは、毎回ユーザーに確認してから行う。
 ````
 
 ---
@@ -239,155 +288,205 @@ composer fix                # コードスタイル自動修正
 
 読者は「このテーマ/プラグインを実装するAI(FW利用者)」。starter-theme・starter-pluginの直下に配置し、create-projectでそのままプロジェクトに残る。theme版を全文、plugin版を差分で示す。
 
-文案の名前空間`App\`は、プロジェクトの名前空間を表す。実物のAGENTS.mdには、スターターの名前空間(`TmswpStarterTheme\`・`TmswpStarterPlugin\`)を書き、create-projectのsetup.phpがスラッグから生成した名前空間に書き換える(§10)。実物のAGENTS.mdは、レシピ(`vendor/tmswp/core/rules/`)のコード例の`App\`を、その名前空間に読み替える旨も示す。
+実物のAGENTS.mdには、スターターの名前空間(`TmswpStarterTheme\`・`TmswpStarterPlugin\`)を書き、create-projectのsetup.phpがスラッグから生成した名前空間に書き換える(§10)。実物のAGENTS.mdは、レシピ(`vendor/tmswp/*/rules/`)のコード例の名前空間`App\`を、その名前空間に読み替える旨を示す。テキストドメイン(`{{project_slug}}`)とブロック名の名前空間(`tmswp-starter/`)も、setup.phpがスラッグに書き換える。そのため、AGENTS.mdにはこの3つを、書き換えた後もそのまま読める形でだけ書き、ほかの`{{`(setup.phpが置き換えないプレースホルダ)を書かない(`tests/Unit/StarterSetupTest.php`が、作ったプロジェクトに`{{`とスターターの名前空間が残らないことを確かめる)。
+
+AGENTS.mdは次の節を持つ。タスク→レシピの対応表(coreの14本と拡張の5本)、プロジェクト構成、ロジックの置き場(配置決定木)、クラス追加の基本手順、必須コマンド、コーディング規約、禁止事項、デバッグ(ログ・探索の不調・探索結果ファイルとキャッシュ・起動時のエラー)、完了条件。
 
 ### 5.1 theme版全文(starters/theme/AGENTS.md)
+
+以下のフェンス内が全文で、`starters/theme/AGENTS.md`の実物と同じ内容である。
 
 ````markdown
 # このテーマの開発規約(TMSWP)
 
-このプロジェクトは TMStack WordPress Framework を使うWordPressテーマである。
+このプロジェクトはTMStack WordPress Framework(TMSWP)を使うWordPressテーマである。
 あなた(AIエージェント)はこのファイルの規約に従って実装する。
-**フレームワーク本体(vendor/)はここでは開発しない。**
+フレームワーク本体(`vendor/`)はここでは開発しない。
 
 ## 最初に読むもの
 
-タスクに応じて、下表の該当レシピを **必ず読んでから** 実装を始めること。
-レシピはインストール済みフレームワークに同梱されており、このプロジェクトのFWバージョンと常に一致している。
+タスクに応じて、下表の該当レシピを必ず読んでから実装を始める。
+レシピはフレームワークの各パッケージに同梱されており、このプロジェクトに入っている版と一致する。
+
+このテーマの名前空間は`TmswpStarterTheme\`である(composer.jsonの`autoload`の`psr-4`で`app/`に割り当てたもの。create-projectのときにスラッグから作った)。
+レシピのコード例の名前空間`App\`は、`TmswpStarterTheme\`に読み替える。
 
 | やりたいこと | 読むファイル |
 |---|---|
-| カスタム投稿タイプを追加する | vendor/tmswp/core/rules/post-type.md |
-| カスタムタクソノミーを追加する | vendor/tmswp/core/rules/taxonomy.md |
-| ユーザーロールを追加する | vendor/tmswp/core/rules/user-role.md |
-| 投稿/ターム/ユーザーにカスタムフィールド(非ACF)を持たせる | vendor/tmswp/core/rules/meta.md |
-| ACFでフィールドを管理する(acf-json運用) | vendor/tmswp/core/rules/acf.md |
-| フォーム(問い合わせ・申込み等)を実装する | vendor/tmswp/core/rules/form.md |
-| フォームの完了処理でメールを送る | vendor/tmswp/core/rules/form-mail.md |
-| テンプレートの前処理(データ取得・フォーム駆動)を書く | vendor/tmswp/core/rules/page.md |
-| 独自DBテーブルを作って読み書きする | vendor/tmswp/core/rules/model.md |
-| サイト設定値(オプション)を定義する | vendor/tmswp/core/rules/options.md |
-| add_action/add_filter をまとめて登録する | vendor/tmswp/core/rules/hooks.md |
-| テンプレートパーツの読み込み・ロジック分離 | vendor/tmswp/core/rules/view.md |
-| 独自ブロックを追加する | vendor/tmswp/core/rules/blocks.md |
-| サムネイル/設定ページ/日本語対応の追加 | vendor/tmswp/core/rules/extensions.md |
+| カスタム投稿タイプを追加する | `vendor/tmswp/core/rules/post-type.md` |
+| カスタムタクソノミーを追加する | `vendor/tmswp/core/rules/taxonomy.md` |
+| ユーザーロールを追加する | `vendor/tmswp/core/rules/user-role.md` |
+| 投稿・ターム・ユーザーにカスタムフィールド(非ACF)を持たせる | `vendor/tmswp/core/rules/meta.md` |
+| ACFでフィールドを管理する(acf-json) | `vendor/tmswp/core/rules/acf.md` |
+| フォーム(問い合わせ・申し込み等)を実装する | `vendor/tmswp/core/rules/form.md` |
+| フォームの完了処理でメールを送る | `vendor/tmswp/core/rules/form-mail.md` |
+| テンプレートの前処理(値の用意・フォームの駆動)を書く | `vendor/tmswp/core/rules/page.md` |
+| 独自DBテーブルを作って読み書きする | `vendor/tmswp/core/rules/model.md` |
+| サイト設定値(オプション)を定義する | `vendor/tmswp/core/rules/options.md` |
+| add_action・add_filterをまとめて登録する | `vendor/tmswp/core/rules/hooks.md` |
+| テンプレートパーツを読み込む | `vendor/tmswp/core/rules/view.md` |
+| 独自ブロックを追加する | `vendor/tmswp/core/rules/blocks.md` |
+| 公式の拡張(acf-bridge・settings-page・thumbnail・ja-toolkit・testing)を導入する | `vendor/tmswp/core/rules/extensions.md` |
+| ACFの生成アクセサを生成・照合する(tmswp/acf-bridge) | `vendor/tmswp/acf-bridge/rules/sync-check.md` |
+| 管理画面に設定ページを作る(tmswp/settings-page) | `vendor/tmswp/settings-page/rules/settings-page.md` |
+| 署名付きのURLでサムネイルを出す(tmswp/thumbnail) | `vendor/tmswp/thumbnail/rules/thumbnail.md` |
+| 日本語サイト向けの機能を使う(tmswp/ja-toolkit) | `vendor/tmswp/ja-toolkit/rules/ja-toolkit.md` |
+| テストの基底クラス・テストダブルを使う(tmswp/testing。スターターには入っていないため、先に`composer require --dev tmswp/testing`で入れる) | `vendor/tmswp/testing/rules/testing.md` |
+
+拡張のレシピ(`vendor/tmswp/core/`以外)は、その拡張を`composer require`で入れると`vendor/`に入る。入っていなければ、先に`vendor/tmswp/core/rules/extensions.md`の手順で拡張を入れる。
 
 ## プロジェクト構成
 
 ```
 .
-├── style.css            # テーマヘッダ
-├── functions.php        # FWブートのみ。ロジックを書かない
-├── tmswp-kernel.php     # Kernelの構成(KernelConfig)を返す。拡張はここに書く。WordPressの関数を呼ばない
-├── tmswp-discovery.php  # 探索結果ファイル(wp tmswp discoverの生成物。コミットする)
-├── index.php ほか       # WordPress標準のテンプレート階層(通常のWPテーマと完全に同じ)
-├── parts/               # テンプレートパーツ(Template::part()/get_template_part()の読込先)
-├── blocks/              # 独自ブロックのソース(rules/blocks.md)
-├── build/blocks/        # ブロックのビルドの出力(npm run build。コミットする)
-├── app/                 # PHPクラスはすべてここ(名前空間 App\、PSR-4)
-│   ├── Post/            # 投稿タイプ定義(App\Post\*Post)
-│   ├── Tax/             # タクソノミー定義(App\Tax\*Tax)
-│   ├── User/            # ロール定義(App\User\*User)
-│   ├── Form/            # フォーム定義(App\Form\*Form)
-│   ├── Model/           # 独自テーブル(App\Model\*Model)
-│   ├── Option/          # オプション定義(App\Option\*Option。backed enum)
-│   ├── Page/            # テンプレートの前処理クラス(App\Page\*Page)
-│   └── Hook/            # フック集約(App\Hook\*Hook)
-├── tests/               # ユニットテスト
+├── style.css               # テーマヘッダ(Theme Name・Text Domain等)
+├── functions.php           # FWのブートだけ。ロジックを書かない
+├── tmswp-kernel.php        # Kernelの構成(KernelConfig::theme())を返す。拡張・ログ・ブロックカテゴリはここに書く。WordPressの関数を呼ばない
+├── tmswp-discovery.php     # 探索結果ファイル(wp tmswp discoverの生成物。コミットする)
+├── index.php ほか          # WordPress標準のテンプレート階層(header.php・footer.php・page-{slug}.php等。通常のテーマと同じ)
+├── parts/                  # テンプレートパーツ(Template::part()・get_template_part()の読み込み先)
+├── assets/css/main.css     # app/Hook/ThemeSetupHook.phpが読み込むCSS
+├── blocks/                 # 独自ブロックのソース(1ブロック1ディレクトリ。blocks.md)
+├── build/blocks/           # ブロックのビルドの出力(npm run build。Kernelが登録する。コミットする)
+├── languages/              # このテーマの翻訳ファイル(<locale>.mo・<locale>.l10n.php。例: ja.mo)
+├── app/                    # PHPのクラス(名前空間 TmswpStarterTheme\、PSR-4)
+│   ├── Hook/               # フック(*Hook。#[AsHook])
+│   ├── Post/               # 投稿タイプ(*Post。#[AsPostType])
+│   ├── Tax/                # タクソノミー(*Tax。#[AsTaxonomy])
+│   ├── User/               # ユーザーロール(*Role。#[AsUserRole])
+│   ├── Form/               # フォーム(*Form)
+│   ├── Model/              # 独自テーブル(*Model。#[AsModel])
+│   ├── Option/             # サイト設定値(*Option。#[AsOptionGroup]のbacked enum)
+│   └── Page/               # テンプレートの前処理クラス(*Page。使うときに作る)
+├── tests/Unit/             # ユニットテスト(composer test)
 ├── composer.json
-├── package.json         # ブロックのビルド(npm run build)
+├── package.json            # ブロックのビルド(npm run build)
 ├── phpstan.neon
+├── phpunit.xml.dist
 └── .php-cs-fixer.dist.php
 ```
 
+`languages/`の翻訳ファイルは、WordPressがテーマのヘッダの`Text Domain`から自動で読み込む(読み込みのコードは要らない)。名前は`<locale>.mo`・`<locale>.l10n.php`(例: `ja.mo`)にする(テキストドメインを付けた名前では読まれない)。`WP_LANG_DIR`(`wp-content/languages/themes/`)に同じテキストドメインの翻訳ファイル(`<テキストドメイン>-<locale>.mo`)があれば、そちらが優先される。
+`app/`の下には、レシピが示すほかの置き場(メールの`Mail/`等)も作ってよい。PSR-4のとおり、クラス名とファイルのパスを一致させる。
+
 ## ロジックの置き場(配置決定木)
 
-書こうとしているコードがどこに属するかは、次の1問で決まる。
+書こうとしているコードの置き場は、次の順に当てはめて最初に当たったもので決める。
 
-- **特定のページテンプレートの「表示前」処理**(そのテンプレートでだけ必要なデータ取得・整形・フォーム送信処理)なら
-  → `app/Page/<Name>Page.php` の前処理クラス。テンプレートの先頭(`get_header()` の前)で `$vm = <Name>Page::handle();` と1回だけ呼び、
-  返された値(`public readonly` のプロパティ)をテンプレートで読む(rules/page.md)。
-- **それ以外のロジック**(投稿タイプ・タクソノミー・メタ・フォーム定義・独自テーブル・オプション・WPフック)は
-  すべて `app/` 配下の `final class`(下表)。リクエスト種別を問わず動くフック処理は `app/Hook/`(rules/hooks.md)。
+1. **特定のテンプレートの表示前の処理**(そのテンプレートでだけ要る値の用意・整形・フォームの送信の処理・PRGのリダイレクト)
+   → `app/Page/<Name>Page.php`の前処理クラス。テンプレートの先頭(`get_header()`より前)で`$vm = <Name>Page::handle();`を1回だけ呼び、返された値(`public readonly`のプロパティ)をテンプレートで読む(page.md)。
+2. **投稿タイプ・タクソノミー・ユーザーロール**の定義 → `app/Post/`・`app/Tax/`・`app/User/`(post-type.md・taxonomy.md・user-role.md)。
+3. **投稿・ターム・ユーザーのメタ** → そのエンティティのクラスの`#[MetaSchema]`付きの定数と、明示のアクセサ(meta.md。ACFの画面で編集する値はacf.md)。
+4. **サイト設定値** → `app/Option/`のbacked enum(options.md)。
+5. **フォームの定義** → `app/Form/`(form.md)。完了処理のメールは`app/Mail/`(form-mail.md)。
+6. **独自テーブル** → `app/Model/`(model.md)。
+7. **独自ブロック** → `blocks/<slug>/`のソースをビルドする(blocks.md)。ブロック専用のフックは`app/Hook/`。
+8. **それ以外のWordPressのフックの処理**(リクエストの種類を問わず動くもの) → `app/Hook/`の`#[AsHook]`クラス(hooks.md)。
 
-前処理クラスはAttributeも継承も不要な `final class` で、テンプレートが使う値を型付きのプロパティで返す。出力(echo)・`$wp_query->set_404()` の直呼びはしない(rules/page.md)。全テンプレート共通の前処理は持たない。共通ロジックは `app/Hook/` か、パーツ内でモデルのアクセサを直接読む形にする。
+前処理クラスはAttributeも継承も要らない`final class`で、テンプレートが使う値を型付きのプロパティで返す。出力(`echo`)はしない。全テンプレートに共通の前処理は持たない。共通の処理は`app/Hook/`に置くか、パーツの中でエンティティのアクセサを直接読む。
 
 ## クラス追加の基本手順(全機能共通)
 
-1. `app/` 配下の該当ディレクトリに `final class` を1ファイル1クラスで作る(PSR-4: `App\Post\NewsPost` → `app/Post/NewsPost.php`)。
-2. クラスに対応するAttribute(`#[AsPostType]` 等)を付け、FWの基底クラスを継承する。
-3. **登録コードは書かない。** app/ に置くだけでKernelが探索・登録する(functions.phpへの追記は不要)。
-4. `wp tmswp discover` で探索結果ファイル(テーマ/プラグインのルート直下の `tmswp-discovery.php`)を
-   作り直し、クラスと一緒にコミットする。開発環境(Kernel の debug = true)は毎回 app/ を走査するため
-   作り直す前でも反映されるが、本番は探索結果ファイルだけを読む。
-5. `composer qa` を実行して通す。
-6. 反映確認はWP上で行う(各レシピの「確認方法」参照)。
+1. `app/`の該当するディレクトリに、1ファイル1クラスで`final class`を作る(PSR-4: `TmswpStarterTheme\Post\NewsPost` → `app/Post/NewsPost.php`)。
+2. 投稿タイプ・タクソノミー・ロール・独自テーブル・フックは、機能に対応するAttribute(`#[AsPostType]`等)を付けてFWの基底クラスを継承し、サイト設定値は`#[AsOptionGroup]`のbacked enumにする(レシピのとおりにする)。フォーム(`FormDefinition`で定義して`Form`を返すクラス)と前処理クラスは、Attributeも基底クラスも無い`final class`で、使う場所から明示的に呼ぶ(form.md・page.md)。
+3. **登録のコードは書かない。** Attributeを付けたクラスは、`app/`に置けばKernelが探索して登録する(functions.phpへの追記は要らない)。独自ブロックは、`build/blocks/`の`block.json`から登録される(blocks.md)。
+4. `composer discover`(ブロックを変えた場合は`npm run build`)で探索結果ファイル(テーマのルートの`tmswp-discovery.php`)を作り直し、クラスと一緒にコミットする。開発環境(Kernelのdebugが真。省略すると`WP_DEBUG`の値)は起動のたびに`app/`と`build/blocks/`を走査するため、作り直す前でも反映される。本番は探索結果ファイルだけを読む。
+5. `composer qa`を通す。
+6. WordPress上で動作を確かめる(各レシピの「確認方法」)。
 
 ## 必須コマンド
 
 ```bash
-composer qa        # lint + analyse + test。タスク完了前に必ず通すこと
-composer analyse   # PHPStan level max(app/ が対象)
-composer fix       # コードスタイル自動修正
-composer test      # ユニットテスト
+composer qa         # lint → analyse → discover:check → test。タスクを終える前に必ず通す
+composer lint       # コードスタイルの検査(php-cs-fixerのdry-run)
+composer fix        # コードスタイルの自動修正
+composer analyse    # PHPStan level max(app/が対象)
+composer test       # ユニットテスト(tests/Unit/)
+composer discover   # 探索結果ファイルを作り直す(wp tmswp discover)
+npm run build       # blocks/をbuild/blocks/にビルドし、続けて探索結果ファイルを作り直す
 ```
 
-※ コアmonorepoでは `composer test` がユニット+統合テスト(Docker必要)を指すが、
-本プロジェクト(スターター)は統合テストを既定で持たないため `test` = ユニットテストである。
+- このプロジェクトの`composer test`はユニットテストだけを指す(統合テストは既定で持たない)。
+- スターターのユニットテストはBrain Monkey(`brain/monkey`)だけで書く構成で、`tmswp/testing`は入っていない。Kernelをbootするテスト(メタ・オプションのメモリのストレージ等を使うもの)を書くときは、`composer require --dev tmswp/testing`で入れ、`vendor/tmswp/testing/rules/testing.md`を読む。
+- `composer qa`は探索結果ファイルの照合(`wp tmswp discover --check`)を含む。`composer discover`・`npm run build`とともに、WP-CLIの`wp`がこのテーマを有効にしたサイトに届く場所で実行する。
+- `npm run build`の前に一度`npm ci`でビルドの道具を入れる。
 
 ## コーディング規約
 
-- `declare(strict_types=1);` 全PHPファイル必須(テンプレートファイル含む)。
-- app/ のクラスは `final`、全シグネチャに型宣言。マジックメソッド(`__call`/`__callStatic`等)と `extract()` は禁止。
-- メタキーは必ず `#[MetaSchema]` 付きのクラス定数、オプションキーは必ず `#[OptionSchema]` 付きのenumケースで宣言し、文字列リテラルを直書きしない。
-- 頻出するメタ値アクセスは、定義クラスに明示アクセサメソッド(例: `ProductPost::price($post): int`)を書く。
-- テンプレート内では `use` 文が使えないため、FQCN静的呼び出し(`\App\Post\NewsPost::...`)を使ってよい。
-- 出力は必ずエスケープする: `esc_html()` / `esc_attr()` / `esc_url()`。FWのフォームレンダラ(`$form->field()->input()`)はエスケープ済みHTMLを返すのでそのままechoしてよい。
-- テキストドメインはこのテーマ自身のもの(style.cssのText Domain)を使う。`tmswp` ドメインを使わない。
+- すべてのPHPファイル(テンプレートを含む)に`declare(strict_types=1);`を置く。
+- `app/`のクラスは`final`にし、プロパティ・引数・戻り値のすべてに型を宣言する。マジックメソッド(`__call`・`__callStatic`・`__get`・`__set`)と`extract()`・`eval()`は使わない。
+- メタのキーは`#[MetaSchema]`付きのクラス定数で、オプションのキーは`#[OptionSchema]`付きのenumのケースで宣言し、キーの文字列リテラルをコードに直接書かない。
+- 頻繁に読むメタ・設定の値は、定義のクラスに明示のアクセサ(例: `ProductPost::price($post): int`)を書く。
+- テンプレートでは、ファイルの先頭の`use`文でクラスを読み込んでよい。
+- 出力は`esc_html()`・`esc_attr()`・`esc_url()`でエスケープする。FWのフォームの描画(`$form->open()`、`$form->field('name')`の`input()`・`label()`・`errors()`・`display()`等のHTMLを返すメソッド)はエスケープ済みなので、そのまま`echo`してよい。`value()`は生の値なので、出力するときはエスケープする。
+- テキストドメインはこのテーマのもの(`{{project_slug}}`。style.cssの`Text Domain`)を使い、FWのドメイン`tmswp`を使わない。
+- ブロックの名前は`tmswp-starter/<名前>`の形にする(`blocks/example/block.json`の`name`と同じ名前空間)。
+- コードスタイルは`.php-cs-fixer.dist.php`(TMSWPのmonorepoと同じ規則)に従う。テンプレート(テンプレート階層のファイル・`parts/`・ブロックの`render.php`)はlintの対象外だが、`declare(strict_types=1);`とエスケープの規約は守る。
 
-## 禁止事項(違反はレビューで差し戻し)
+## 禁止事項(違反はレビューで差し戻す)
 
-1. **vendor/ 配下の編集**。FWの挙動を変えたい場合はフック/設定/継承で行い、それでも不可能ならFW本体への課題として報告する。
-2. **FWコアの改変・コピー**。vendor/tmswp/* のクラスをapp/へコピーして改変しない。
-3. **WordPress標準テンプレート階層の迂回**。`template_include` でテンプレートを乗っ取らない。`exit` でWPのテンプレートローダを止めない(フォームPOST処理後の `wp_safe_redirect()` + `exit` のみ例外)。ページの出し分けはWP標準のテンプレート階層(page-{slug}.php等)とConditional Tagsで行う。
-4. **登録系WP関数の直接呼び出し**。`register_post_type` / `register_taxonomy` / `register_post_meta` / `add_role` をapp/やfunctions.phpで直接呼ばない。必ずFWの定義クラスを使う(該当レシピ参照)。
-5. **$wpdb の直接利用**。独自テーブルはModel経由(rules/model.md)。WP標準テーブルへのクエリはWP_Query/get_posts等の標準APIを使う。
-6. **functions.php へのロジック追加**。functions.phpはFWブートのみ。フックは app/Hook/(rules/hooks.md)へ。
-7. **探索結果ファイルの手動編集**。`tmswp-discovery.php` は `wp tmswp discover` の生成物である。
-   手で編集せず、app/ を変えたら作り直してコミットする。本番はこのファイルが無いと起動時に例外になり、
-   古いと追加・変更したクラスが反映されない。
+1. **`vendor/`の編集。** FWの挙動を変えたいときは、フック・`tmswp-kernel.php`の構成・基底クラスの継承で行う。それでもできなければ、FW本体への課題として報告する。
+2. **FWのコードのコピーと改変。** `vendor/tmswp/*`のクラスを`app/`へ写して変えない。
+3. **WordPress標準のテンプレート階層の迂回。** `template_include`でテンプレートを差し替えない。`exit`でWordPressのテンプレートの読み込みを止めない(フォームのPOSTの処理の後の`wp_safe_redirect()`の直後だけは例外)。ページの出し分けは、テンプレート階層(`page-{slug}.php`等)と条件分岐タグで行う。
+4. **登録系のWordPressの関数の直接の呼び出し。** `register_post_type`・`register_taxonomy`・`register_post_meta`・`add_role`・`register_block_type`を`app/`やfunctions.phpで直接呼ばない。FWの定義のクラスを使う(該当のレシピ)。
+5. **`$wpdb`の直接の利用。** 独自テーブルはModel(model.md)を使う。WordPress標準のテーブルは`WP_Query`等の標準のAPIで読む。
+6. **functions.phpへのロジックの追加。** functions.phpはFWのブートだけにする。フックは`app/Hook/`(hooks.md)へ書く。
+7. **生成物の手での編集。** `tmswp-discovery.php`は`wp tmswp discover`の、`build/blocks/`は`npm run build`の生成物である。手で編集せず、`app/`・`blocks/`を変えたら作り直してコミットする。本番は探索結果ファイルが無いと起動時にエラーになり、古いと追加・変更したクラスとブロックが反映されない。
 
 ## デバッグ
 
-- ログ: `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`(チャンネル分割は `Log::channel('mail')->error(...)`)。
-  出力先・閾値は`tmswp-kernel.php`のKernelの構成で構成済み。`var_dump`/`print_r`をコミットに残さない。
-- 探索まわりの不調(クラスを置いたのに有効化されない)は、まずクラス名とファイルパスのPSR-4整合、次にAttribute付け忘れ、最後に `wp tmswp discover --check` で探索結果ファイルが最新か(古ければ `wp tmswp discover` で作り直す)の順で確認する。
+- **開発環境は`WP_DEBUG`を有効にする。** Kernelのdebug(`tmswp-kernel.php`の`KernelConfig`の`debug`。省略すると`WP_DEBUG`の値)が真なら、設定の誤りと実行時のデータの取得の失敗が例外になり、起動のたびに`app/`と`build/blocks/`を走査する。debugが偽(本番)では、実行時の失敗をKernelのロガーに`error`で記録して既定値で続ける。
+- **ログ:** `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`で書く(処理の種類を示すときは`Log::scope('mail')->error(...)`)。どのチャンネル(出力先)に書くかは、`tmswp-kernel.php`の`logChannels`の各`LogChannel`の`levels`・`scopes`で決める。宣言したチャンネルへ直接書くときは`Log::channel('<名前>')`を使う(宣言していない名前は例外になる)。スターターの`SimpleLogger`は既定で`wp-content/tmswp-logs/`に書く。`var_dump`・`print_r`をコミットに残さない。
+- **クラスを置いたのに有効にならない:** 次の順に確かめる。
+  1. クラス名とファイルのパスがPSR-4で一致しているか(`app/Post/NewsPost.php`なら`TmswpStarterTheme\Post\NewsPost`)。
+  2. Attribute(`#[AsPostType]`等)を付け忘れていないか。
+  3. `wp tmswp discover --check`で探索結果ファイルが最新か。古ければ`composer discover`で作り直す。
+- **探索結果ファイルとキャッシュ:** FWは探索の結果をtransient・オブジェクトキャッシュに持たず、探索結果ファイルだけを使う。そのため、消すべきFWのキャッシュは無く、反映されないときは探索結果ファイルを作り直す。`wp tmswp discover`は、そのサイトで起動したすべてのKernel(このテーマと、TMSWPを使うプラグイン)の探索結果ファイルを作り直し、書いたファイルのOPcacheを無効にする。FTPで上げた探索結果ファイルが本番で反映されない場合は、サーバーのOPcacheが更新を検知しない設定(`opcache.validate_timestamps`が0等)になっていないかを確かめ、OPcacheを空にする。ページキャッシュのプラグインを使うサイトでは、デプロイの後にページキャッシュも消す。
+- **起動時のエラー:** 同じサイトのTMSWPの版が食い違う場合(別のテーマ・プラグインが別の版の`tmswp/core`を入れている等)と、他のプラグインが互換の無い`psr/log`・`psr/container`を先に読み込んだ場合は、Kernelが起動時に明示のエラーにする。メッセージに従って版をそろえる。
+
+## 完了条件
+
+実装の後は`composer qa`を通し、WordPress上で表示・保存・CLIの実行を確かめる(各レシピの「確認方法」)。
 ````
 
 ### 5.2 plugin版(starters/plugin/AGENTS.md)— theme版との差分
 
-plugin版はtheme版と同一の章立て・文面とし、次の箇所のみ差し替える。
+plugin版はtheme版と同一の章立て・文面とし、次の箇所だけを差し替える。
 
-1. 冒頭文: 「WordPressテーマである」→「WordPressプラグインである」。
-2. 「プロジェクト構成」のツリーを次に差し替え:
+1. 冒頭文・見出し・本文の「テーマ」を「プラグイン」に、名前空間`TmswpStarterTheme\`を`TmswpStarterPlugin\`にする。
+2. 「最初に読むもの」: 対応表から「テンプレートの前処理」の行(page.md)を除き、表の後の拡張のレシピの段落に続けて「プラグインはトップレベルのテンプレートを持たないため、テンプレートの前処理クラス(`vendor/tmswp/core/rules/page.md`)は使わない」を置く。
+3. 「プロジェクト構成」のツリーを次に差し替え、ツリーの後の`languages/`の段落をプラグインの決まり(本体ファイルのヘッダの`Domain Path: /languages`で読み込まれ、名前は`<テキストドメイン>-<locale>.mo`・`.l10n.php`、`WP_LANG_DIR`は`wp-content/languages/plugins/`)にし、「プラグインのスターターはブロックのビルドの設定(`blocks/`・`package.json`)を持たない。ブロックを置くときは、blocks.mdの手順で足す」を置く。
 
 ```
 .
-├── my-plugin.php        # プラグイン本体ヘッダ+FWブートのみ(create-projectで実名にリネームされる)
-├── tmswp-kernel.php     # Kernelの構成(KernelConfig)を返す。拡張はここに書く。WordPressの関数を呼ばない
-├── tmswp-discovery.php  # 探索結果ファイル(wp tmswp discoverの生成物。コミットする)
-├── app/                 # (theme版と同一)
-├── templates/           # プラグイン同梱テンプレート(Template::part()のフォールバック先)
-├── tests/
+├── {{project_slug}}.php     # プラグインの本体ファイル(プラグインヘッダとFWのブートだけ。ロジックを書かない)
+├── tmswp-kernel.php        # Kernelの構成(KernelConfig::plugin())を返す。拡張・ログ・ブロックカテゴリはここに書く。WordPressの関数を呼ばない
+├── tmswp-discovery.php     # 探索結果ファイル(wp tmswp discoverの生成物。コミットする)
+├── templates/              # プラグイン同梱のテンプレート(Template::part()の読み込み先。テーマに同じ名前のファイルがあればテーマが優先される)
+├── languages/              # このプラグインの翻訳ファイル(<テキストドメイン>-<locale>.mo・.l10n.php。例: {{project_slug}}-ja.mo)
+├── app/                    # PHPのクラス(名前空間 TmswpStarterPlugin\、PSR-4)
+│   ├── Hook/               # フック(*Hook。#[AsHook])
+│   ├── Post/               # 投稿タイプ(*Post。#[AsPostType])
+│   ├── Tax/                # タクソノミー(*Tax。#[AsTaxonomy])
+│   ├── User/               # ユーザーロール(*Role。#[AsUserRole])
+│   ├── Form/               # フォーム(*Form)
+│   ├── Model/              # 独自テーブル(*Model。#[AsModel])
+│   ├── Option/             # サイト設定値(*Option。#[AsOptionGroup]のbacked enum)
+│   └── SettingsPage/       # 設定ページ(tmswp/settings-pageを入れたとき)
+├── tests/Unit/             # ユニットテスト(composer test)
 ├── composer.json
 ├── phpstan.neon
+├── phpunit.xml.dist
 └── .php-cs-fixer.dist.php
 ```
 
-3. 「テンプレートパーツ」関連の記述: テーマの `parts/` ではなく「`templates/` がプラグイン同梱フォールバック。テーマ側に同名ファイルがあればテーマが優先される(rules/view.md参照)」と差し替え。
-4. 「禁止事項」3項のテンプレート階層の説明は維持(プラグインでも `template_include` 乗っ取り禁止)。加えて「Modelのテーブル定義は`wp tmswp migrate`で適用する(有効化では適用しない)。独自マイグレーション用に`register_activation_hook`を直接書かない(rules/model.md参照)」を追記。
-5. **テンプレートの前処理クラスはプラグインでは使わない**。プラグインはトップレベルのテンプレートを供給しないため、タスク対応表の「テンプレートの前処理」行・「ロジックの置き場(配置決定木)」節の前処理クラスの項・プロジェクト構成ツリーの `Page/` を削除する。テンプレートの外で前処理が必要なら `app/Hook/` の `#[AsHook]` クラス(rules/hooks.md)で行う。
-6. テキストドメイン: 「プラグイン本体ヘッダのText Domainを使う」。
+4. 「ロジックの置き場(配置決定木)」: theme版の1(前処理クラス)と、決定木の後の前処理クラスの段落を除く。最後の項を「**それ以外のWordPressのフックの処理**(ショートコード、テンプレートの外で要る前処理を含む) → `app/Hook/`の`#[AsHook]`クラス(hooks.md。ショートコードのフォームの駆動はform.md)」にする。
+5. 「クラス追加の基本手順」: 手順2の前処理クラスの記述を除いてフォームを呼ぶ場所を「フックのクラス等」にし(page.mdの参照も除く)、手順3の「functions.phpへの追記」を「本体ファイルへの追記」にし、手順4の探索結果ファイルの作り直しは`composer discover`だけにする(`npm run build`の記述を除く)。
+6. 「必須コマンド」: `npm run build`の行と、`npm ci`の注記を除く。
+7. 「コーディング規約」: テキストドメインを「本体ファイルのヘッダの`Text Domain`」にし、ブロックの名前の項を除き、lintの対象外を`templates/`にする。
+8. 「禁止事項」: テンプレート階層の迂回の項は「プラグインでも`template_include`でテンプレートを差し替えない」とし、ページの出し分けの文を除く。「独自のマイグレーション」(独自テーブルの定義は`wp tmswp migrate`で適用し、プラグインの有効化では適用しない。マイグレーションのために`register_activation_hook`を直接書かない)を足す。functions.phpの項は本体ファイルの項にし、生成物の項から`build/blocks/`を除く。
+9. 「デバッグ」: 探索結果ファイルとキャッシュの項のKernelの例示を「このプラグインと、TMSWPを使うテーマ・ほかのプラグイン」に、起動時のエラーの項の例示を「テーマ・ほかのプラグインが別の版の`tmswp/core`を入れている等」にし、起動時のエラーに「同じサイトの別のプラグインと名前空間が同じ場合も、Kernelが起動時のエラーにする」を足す。
+10. 「完了条件」: 「表示・保存」を「有効化・保存」にする。
 
 ---
 
@@ -395,7 +494,7 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所のみ差
 
 ### 6.1 構成
 
-`packages/core/rules/` に以下13ファイルを置く。tmswp/coreパッケージの配布物に含める(composer.jsonのarchive excludeに入れない)。
+`packages/core/rules/`に以下14ファイルを置く。tmswp/coreパッケージの配布物に含める(composer.jsonのarchive excludeに入れない)。
 
 | ファイル | 対象タスク | 主依存文書 |
 |---|---|---|
@@ -411,7 +510,18 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所のみ差
 | options.md | サイト設定値 | 04-meta-options |
 | hooks.md | WPフック登録の置き場 | 02-kernel |
 | view.md | テンプレートパーツ運用 | 07-support |
-| extensions.md | 拡張パッケージ導入 | 08-extensions |
+| blocks.md | 独自ブロック(置き場・npmのビルドと探索コマンドの連結・対象外) | 02-kernel・03-entities |
+| extensions.md | 拡張パッケージ導入(拡張のレシピへの入口) | 08-extensions |
+
+拡張パッケージの使い方のレシピは、その拡張パッケージの`rules/`に同じ共通フォーマット(§6.2)で置き、そのパッケージの配布物に含める。
+
+| ファイル | 対象タスク | 主依存文書 |
+|---|---|---|
+| packages/acf-bridge/rules/sync-check.md | acf-bridgeの生成アクセサの生成と照合(`tms-acf sync`・`tms-acf check`) | 09-acf-bridge |
+| packages/settings-page/rules/settings-page.md | 管理画面の設定ページ | 08-extensions |
+| packages/thumbnail/rules/thumbnail.md | 署名付きのURLのサムネイル | 08-extensions |
+| packages/ja-toolkit/rules/ja-toolkit.md | 日本語サイト向けの機能 | 08-extensions |
+| packages/testing/rules/testing.md | テストの支援コード(テストの基底クラスとテストダブル) | 10-quality |
 
 ### 6.2 各レシピの共通フォーマット(厳守)
 
@@ -438,7 +548,7 @@ rules/*.md内のコード例とFWのAPIの乖離(ドリフト)は、10-quality.m
 2. **検証**: `tools/verify-rules-code.php`が、抽出したすべてのPHPファイルの構文を`php -l`で確かめる。クラス定義例(`var/rules-code/app/`)は`var/rules-analysis/app/`へ写し、専用の設定(level max、szepeviktor/phpstan-wordpressとtmswp/coreのPHPStan拡張、ACF Proのスタブ)のPHPStanで解析する。テンプレートの断片はPHPStanの対象外(§8.6の方針と同一)。どちらかの失敗でジョブを失敗させる。
 3. **実行契機**: QAワークフローの対象(すべてのPRとmainへのpush)。
 
-これにより「コアのpublic API変更にrules/のコード例が追従していない」状態をマージ前に継続検出する(§12.2・§12.5の検収項目に対応)。このジョブはスターターを展開せず、スターター自身の`composer lint`・`composer analyse`も実行しない。starters/のPHPは、monorepoの`composer lint`(starters/のPHPのうち、.php-cs-fixer.dist.php等のドットファイルを除くもの)と`composer analyse`(starters/theme/app・starters/plugin/app)の対象であり、API変更時の追従は禁止事項(§4)のgrepでも確かめる。
+これにより「コアのpublic API変更にrules/のコード例が追従していない」状態をマージ前に継続検出する(§12.2・§12.5の検収項目に対応)。このジョブはスターターを展開せず、スターター自身の`composer lint`・`composer analyse`も実行しない。starters/のPHPは、monorepoの`composer lint`(各スターターの`app/`・`tests/`と、テンプレートでないルートのPHP(テーマの`functions.php`・`tmswp-kernel.php`、プラグインの`plugin.php`・`tmswp-kernel.php`)と`bin/setup.php`。テンプレートとビルドの出力(`build/`)は含めない。ルートの`.php-cs-fixer.dist.php`のFinder)と`composer analyse`(`starters/theme/app`・`starters/plugin/app`・`starters/theme/bin/setup.php`)の対象であり、API変更時の追従は禁止事項(§4)のgrepでも確かめる。
 
 ---
 
@@ -450,6 +560,8 @@ rules/*.md内のコード例とFWのAPIの乖離(ドリフト)は、10-quality.m
 
 ## 8. starter-theme(tmswp/starter-theme)
 
+本節と§9の全文は、`starters/theme`・`starters/plugin`の実物と同じ内容である。
+
 ### 8.1 ファイルツリー
 
 ```
@@ -457,20 +569,38 @@ starters/theme/
 ├── AGENTS.md                 # §5.1 全文
 ├── README.md                 # §8.7 全文(人間向け導入文書)
 ├── composer.json             # §8.2
+├── package.json              # §8.8(ブロックのビルドと探索コマンドの連結)
+├── package-lock.json         # package.jsonのlock(npm ci)
 ├── style.css                 # §8.3(プレースホルダ入り)
 ├── functions.php             # §8.4(FWブートのみ)
 ├── tmswp-kernel.php          # §8.4(Kernelの構成)
+├── tmswp-discovery.php       # スターターのまま`wp tmswp discover`で作った探索結果ファイル(setup.phpが削除する)
 ├── index.php                 # §8.5(最小のWP標準ループ)
-├── header.php                # 最小(<!DOCTYPE html>〜wp_head〜<body>)
-├── footer.php                # 最小(wp_footer〜</html>)
+├── header.php                # 最小(<!doctype html>〜wp_head〜<body>とサイト名)
+├── footer.php                # 最小(サイト名〜wp_footer〜</html>)
 ├── parts/
 │   └── .gitkeep
 ├── assets/
 │   └── css/
-│       └── main.css          # 空(ThemeSetupHookがenqueueする実在ファイル)
+│       └── main.css          # 最小のCSS(ThemeSetupHookがenqueueする実在ファイル)
+├── blocks/
+│   └── example/              # §8.8(サンプルの動的ブロックのソース)
+│       ├── block.json
+│       ├── index.js
+│       └── render.php
+├── build/
+│   └── blocks/
+│       └── example/          # blocks/exampleのビルドの出力(npm run build。コミットする)
+│           ├── block.json
+│           ├── index.asset.php
+│           ├── index.js
+│           └── render.php
+├── languages/
+│   └── .gitkeep
 ├── app/
+│   ├── .gitkeep
 │   ├── Hook/
-│   │   └── ThemeSetupHook.php   # rules/hooks.md の実装例と同一内容(動くサンプル兼雛形)
+│   │   └── ThemeSetupHook.php   # §8.9(動くサンプル兼雛形)
 │   ├── Post/.gitkeep
 │   ├── Tax/.gitkeep
 │   ├── User/.gitkeep
@@ -478,17 +608,18 @@ starters/theme/
 │   ├── Model/.gitkeep
 │   └── Option/.gitkeep
 ├── tests/
-│   ├── bootstrap.php         # require vendor/autoload のみ
+│   ├── bootstrap.php         # §8.6(require vendor/autoload のみ)
 │   └── Unit/.gitkeep
 ├── bin/
 │   └── setup.php             # §10.2(post-create-project-cmd。実行後に自己削除)
 ├── phpunit.xml.dist          # §8.6
 ├── phpstan.neon              # §8.6
 ├── .php-cs-fixer.dist.php    # §8.6
-└── .gitignore                # §8.6
+├── .gitignore                # §8.7
+└── .gitattributes            # §8.7
 ```
 
-方針: スケルトンの `app/` は **動くサンプル1つ(ThemeSetupHook)+空ディレクトリ構造** とする。サンプルCPT等は置かない(消す手間と「消し忘れた雛形CPTが本番に出る」事故を避ける。AIはrules/のコード例から生成する)。
+方針: スケルトンの `app/` は **動くサンプル1つ(ThemeSetupHook)+空ディレクトリ構造** とする。サンプルCPT等は置かない(消す手間と「消し忘れた雛形CPTが本番に出る」事故を避ける。AIはrules/のコード例から生成する)。ブロックは、ビルドと探索の流れを示すサンプル1つ(`blocks/example`)とそのビルドの出力を置く。テンプレートの前処理クラスの`app/Page/`は、使うときに作る(AGENTS.mdのツリーに示す)。
 
 ### 8.2 composer.json(全文)
 
@@ -497,14 +628,14 @@ starters/theme/
   "name": "tmswp/starter-theme",
   "description": "Starter theme for TMStack WordPress Framework.",
   "type": "project",
-  "license": "proprietary",
+  "license": "GPL-2.0-or-later",
   "require": {
     "php": ">=8.3",
-    "tmswp/core": "^0.1"
+    "tmswp/core": "^0.2"
   },
   "require-dev": {
     "brain/monkey": "^2.6",
-    "friendsofphp/php-cs-fixer": "^3.64",
+    "friendsofphp/php-cs-fixer": "^3.88",
     "phpstan/extension-installer": "^1.4",
     "phpstan/phpstan": "^2.1",
     "phpunit/phpunit": "^11.5",
@@ -512,25 +643,31 @@ starters/theme/
   },
   "autoload": {
     "psr-4": {
-      "App\\": "app/"
+      "TmswpStarterTheme\\": "app/"
     }
   },
   "autoload-dev": {
     "psr-4": {
-      "App\\Tests\\": "tests/"
+      "TmswpStarterTheme\\Tests\\": "tests/"
     }
   },
   "scripts": {
     "lint": "php-cs-fixer fix --dry-run --diff",
     "fix": "php-cs-fixer fix",
     "analyse": "phpstan analyse --memory-limit=1G",
+    "discover": "wp tmswp discover",
+    "discover:check": "wp tmswp discover --check",
     "test": "phpunit",
     "qa": [
       "@lint",
       "@analyse",
+      "@discover:check",
       "@test"
     ],
-    "post-create-project-cmd": "@php bin/setup.php"
+    "post-create-project-cmd": [
+      "@php bin/setup.php",
+      "@composer dump-autoload"
+    ]
   },
   "config": {
     "allow-plugins": {
@@ -542,9 +679,12 @@ starters/theme/
 }
 ```
 
-- `name` はPackagist登録名のまま配布し、create-project後に `bin/setup.php` が `local/<slug>` へ書き換える(§10)。
+- `name` はPackagist登録名のまま配布し、create-project後に `bin/setup.php` が `local/<slug>` へ書き換える(§10)。licenseは、スターター自身はGPL-2.0-or-laterで、setup.phpが作ったプロジェクトでは`proprietary`にする。
+- `autoload`・`autoload-dev`の名前空間`TmswpStarterTheme\`は、setup.phpがスラッグから作った名前空間に書き換える(§10)。
 - `phpstan/extension-installer` がPHPStan拡張(szepeviktor/phpstan-wordpress と tmswp/core 同梱拡張)を自動登録する(10-quality.md §7 項目2)。`allow-plugins` を事前記載しているため、create-project後の `composer install` は承認プロンプトなしで完了する。
-- バージョン制約(`^0.1` 等)はリリース時の実バージョンに合わせて更新する。
+- `tmswp/core`の制約は、リリースのときに`monorepo-builder release`がその版の`^X.Y`に同期する(10-quality.md §6.2)。
+- `qa`は`lint` → `analyse` → `discover:check` → `test`の順で、`discover:check`(`wp tmswp discover --check`)は探索結果ファイルの照合である。`discover`・`discover:check`は、WP-CLIの`wp`がこのテーマを有効にしたサイトに届く場所で実行する(10-quality.md §7の項目5)。
+- `post-create-project-cmd`は、`bin/setup.php`と、書き換えた名前空間でオートローダを作り直す`composer dump-autoload`の2つである(§10.1)。
 - 統合テスト(`test:integration`)はスターターには含めない(利用側プロジェクトのテストはユニット層のみを既定とする。必要なプロジェクトはコアのwp-env構成を参考に追加する)。したがってスターターの `test` はユニット層のみを指す(コアmonorepoとの範囲差はAGENTS.mdに注記済み。§2参照)。
 - スターターはtmswp/acf-bridgeに依存しないため、`acf:sync`・`acf:check`のscriptsを持たない(依存の無い`tms-acf`を呼ぶscriptsがあると、既定のまま「command not found」になるため)。ACFを使うプロジェクトは、テーマ・プラグイン(§9.2のとおりプラグインも同じ)で次の3つを行う。
   1. `composer require tmswp/acf-bridge`を実行する。
@@ -575,7 +715,7 @@ Text Domain: {{project_slug}}
 
 ### 8.4 tmswp-kernel.php・functions.php(全文)
 
-Kernelの構成はテーマのルートの`tmswp-kernel.php`が返し、functions.phpは`KernelConfig::load()`で読んだその構成でbootする(02-kernel利用例)。WordPressを起動しない`tms-acf`(09-acf-bridge §5.1)も`tmswp-kernel.php`を読むため、このファイルではWordPressの関数を呼ばない(拡張のコンストラクタも同じ)。
+Kernelの構成はテーマのルートの`tmswp-kernel.php`が返し、functions.phpは`KernelConfig::load()`で読んだその構成でbootする(02-kernel利用例)。WordPressを起動しない`tms-acf`(09-acf-bridge §5.1)も`tmswp-kernel.php`を読むため、このファイルではWordPressの関数を呼ばない(拡張のコンストラクタも同じ)。`appNamespace`はsetup.phpがスラッグから作った名前空間に書き換え、`labelLanguage`はスターターのラベル言語の既定(日本語)を指定する。
 
 `tmswp-kernel.php`:
 
@@ -585,16 +725,18 @@ Kernelの構成はテーマのルートの`tmswp-kernel.php`が返し、function
 declare(strict_types=1);
 
 // テーマのKernelの構成。functions.phpのブートと、WordPressを起動しないtms-acf(tmswp/acf-bridge)が読む。
-// WordPressの関数はここで呼ばない(拡張のコンストラクタも同じ)
+// WordPressの関数はここで呼ばない(拡張のコンストラクタも同じ)。
+// 名前空間(appNamespace)は、create-projectのときにbin/setup.phpがスラッグから決める
 return TMSWP\Core\Kernel\KernelConfig::theme(
     appDir: __DIR__ . '/app',
-    appNamespace: 'App',
-    // @PSR12(starter)とPER-CS(monorepo)のどちらでも同じ整形になるよう、アロー関数でなく無名関数で書く
+    appNamespace: 'TmswpStarterTheme',
     logChannels: static function (): array {
         return [
             'default' => new TMSWP\Core\Log\LogChannel(new TMSWP\Core\Log\SimpleLogger()),
         ];
     },
+    // labelLanguage()を指定しない投稿タイプ・タクソノミーの定義のラベルを、日本語で作る
+    labelLanguage: TMSWP\Core\Label\LabelLanguage::Ja,
 );
 ```
 
@@ -661,29 +803,74 @@ parameters:
 
 declare(strict_types=1);
 
-$finder = (new PhpCsFixer\Finder())
+use PhpCsFixer\Config;
+use PhpCsFixer\Finder;
+
+/*
+ * TMSWPのmonorepoと同じ規則(PER Coding Style 2.0と、final_class・strict_comparison等の厳密性の規則)で検査する。
+ * 対象はapp/・tests/と、テンプレートでないテーマのルートのPHP(functions.php・tmswp-kernel.php)である。
+ * テーマのテンプレート(header.php・footer.php・index.php等のテンプレート階層のファイル、parts/、ブロックの
+ * render.php)は、WordPress標準のテーマの書き方を保つため対象に含めない。
+ */
+$finder = (new Finder())
     ->in([__DIR__ . '/app', __DIR__ . '/tests'])
     ->append([
         __FILE__,
-        __DIR__ . '/footer.php',
         __DIR__ . '/functions.php',
-        __DIR__ . '/header.php',
-        __DIR__ . '/index.php',
         __DIR__ . '/tmswp-kernel.php',
     ]);
 
-return (new PhpCsFixer\Config())
+return (new Config())
     ->setRiskyAllowed(true)
+    ->setFinder($finder)
     ->setRules([
-        '@PSR12' => true,
+        '@PER-CS2x0' => true,
+        '@PER-CS2x0:risky' => true,
         'declare_strict_types' => true,
-        'no_unused_imports' => true,
-        'ordered_imports' => ['imports_order' => ['class', 'function', 'const']],
-        'single_line_empty_body' => true,
+        'strict_comparison' => true,
         'strict_param' => true,
-    ])
-    ->setFinder($finder);
+        'void_return' => true,
+        'final_class' => true,
+        'nullable_type_declaration_for_default_null_value' => true,
+        'global_namespace_import' => [
+            'import_classes' => true,
+            'import_constants' => false,
+            'import_functions' => false,
+        ],
+        'fully_qualified_strict_types' => true,
+        'no_unused_imports' => true,
+        'ordered_imports' => [
+            'imports_order' => ['class', 'function', 'const'],
+            'sort_algorithm' => 'alpha',
+        ],
+        'native_function_invocation' => [
+            'include' => ['@compiler_optimized'],
+            'scope' => 'namespaced',
+        ],
+        'array_syntax' => ['syntax' => 'short'],
+        'list_syntax' => ['syntax' => 'short'],
+        'modernize_strpos' => true,
+        'modernize_types_casting' => true,
+        'get_class_to_class_keyword' => true,
+        'no_useless_else' => true,
+        'no_useless_return' => true,
+        'single_quote' => true,
+        'binary_operator_spaces' => true,
+        'blank_line_before_statement' => ['statements' => ['return', 'throw', 'try']],
+        'class_attributes_separation' => ['elements' => ['method' => 'one']],
+        'no_superfluous_phpdoc_tags' => ['allow_mixed' => true],
+        'phpdoc_align' => ['align' => 'left'],
+        'phpdoc_order' => true,
+        'phpdoc_separation' => true,
+        'php_unit_method_casing' => ['case' => 'camel_case'],
+        'php_unit_data_provider_static' => true,
+        'php_unit_data_provider_return_type' => true,
+        'php_unit_test_case_static_method_calls' => ['call_type' => 'self'],
+    ]);
 ```
+
+- 規則はmonorepoの`.php-cs-fixer.dist.php`と同じ(10-quality.md §3.1の`setRules()`。`native_function_invocation`の`exclude`だけはFWのKernelの事情のため持たない。10-quality.md §3.2)。
+- 対象は`app/`・`tests/`と、テンプレートでないルートのPHP(`functions.php`・`tmswp-kernel.php`)である。テンプレート(テンプレート階層のファイル・`parts/`・ブロックの`render.php`)とビルドの出力(`build/`)は対象に含めない。
 
 `phpunit.xml.dist`:
 
@@ -713,53 +900,200 @@ require __DIR__ . '/../vendor/autoload.php';
 
 ### 8.7 README.md(全文)
 
-人間の開発者向けの導入文書として必須で同梱する。規約の真実源はAGENTS.mdであり、READMEは導線に徹する(規約本文を転載して二重管理しない)。以下のフェンス内が全文。
+人間の開発者向けの導入文書として必須で同梱する。規約の真実源はAGENTS.mdであり、READMEは導線に徹する(規約本文を転載して二重管理しない)。以下のフェンス内が全文で、`starters/theme/README.md`の実物と同じ内容である。
 
 ````markdown
 # {{project_name}}
 
 TMStack WordPress Framework を使用したWordPressテーマ。
 
-## セットアップ
+<!-- tmswp-starter-setup -->
+## 新規プロジェクトの作成
 
-```bash
-composer install
-composer qa
-```
-
-`composer create-project --no-scripts` で作成した場合は、先にセットアップを実行する。
-
-```bash
-php bin/setup.php
-```
-
-新規プロジェクトはこの雛形から作成する。
+新規プロジェクトはこの雛形から作成する。作成の直後に`bin/setup.php`が、スラッグから名前空間(例: `my-shop` → `MyShop\`)を作り、composer.json・`tmswp-kernel.php`・`app/`・AGENTS.md・ブロックの名前を書き換えて、自身を削除する。
 
 ```bash
 composer create-project tmswp/starter-theme my-theme
 ```
 
+スラッグ(英小文字・数字で、英字で始まり、語を1つの`-`か`_`でつなぐ)と表示名は、端末では対話で尋ねる。端末の無い環境(CI等)では、環境変数で渡す。渡さなければエラーで止まる。
+
+```bash
+TMSWP_SETUP_SLUG=my-theme TMSWP_SETUP_NAME="My Project" composer create-project --no-interaction tmswp/starter-theme my-theme
+```
+
+`composer create-project --no-scripts`で作成した場合と、セットアップがエラーで止まった場合は、`bin/setup.php`を手で実行し、書き換えた名前空間でオートローダを作り直す(create-projectは、この2つを続けて実行する)。
+
+```bash
+php bin/setup.php --slug=my-theme --name="My Project"
+composer dump-autoload
+```
+
+<!-- /tmswp-starter-setup -->
+
+## セットアップの後
+
+`WP_DEBUG`を有効にしたWordPressのサイト(開発環境)でこのテーマを有効にし、WP-CLIがそのサイトに届く場所で次を実行する。探索結果ファイル(`tmswp-discovery.php`)を作り、コミットする。探索結果ファイルを作るまでは、`WP_DEBUG`が無効のサイトでは起動時にエラーになる(debugのときだけ`app/`を毎回走査する)。
+
+```bash
+composer install
+npm ci
+npm run build    # ブロックのビルドと、探索結果ファイルの作成(wp tmswp discover)
+composer qa
+```
+
 ## 開発規約
 
 - 開発規約・禁止事項・必須コマンド: [AGENTS.md](./AGENTS.md)
-- タスク別レシピ: `vendor/tmswp/core/rules/*.md`
+- タスク別レシピ: `vendor/tmswp/core/rules/*.md`(どのレシピを読むかはAGENTS.mdの「最初に読むもの」)
+- 拡張のレシピ: 拡張を入れると`vendor/tmswp/<拡張>/rules/*.md`に入る
 ````
 
-- `{{project_name}}` はsetup.phpの置換対象(§10.2の置換対象に `README.md` を含める)。
-- plugin版は「WordPressテーマ」を「WordPressプラグイン」、`starter-theme` / `my-theme` を `starter-plugin` / `my-plugin` に差し替えた同一構成とする。
+- `{{project_name}}`はsetup.phpの置換対象(§10.1)。
+- `<!-- tmswp-starter-setup -->`から`<!-- /tmswp-starter-setup -->`までの節(スターターからの作り方と`bin/setup.php`の手順)は、setup.phpが消す(§10.1)。作ったプロジェクトのREADME.mdは、見出しと1文の後に「セットアップの後」の節が続く。この目印の2行は、setup.phpが探す文字列なので変えない。
+- plugin版は、「WordPressテーマ」を「WordPressプラグイン」、`starter-theme`・`my-theme`を`starter-plugin`・`my-plugin`に差し替え、setup.phpが書き換えるものの列挙を「composer.json・本体ファイルの名前(`plugin.php`→`<スラッグ>.php`)・`tmswp-kernel.php`・`app/`・AGENTS.md」にし、「セットアップの後」のコマンドの`npm ci`・`npm run build`の2行を`composer discover    # 探索結果ファイルの作成(wp tmswp discover)`の1行にした同一構成とする。
 
 `.gitignore`:
 
 ```
 /vendor/
+/node_modules/
 /composer.lock
 /.php-cs-fixer.cache
 /.phpunit.result.cache
 /.phpunit.cache/
 ```
 
-- 探索結果ファイル `tmswp-discovery.php`(テーマのルート直下。02-kernel.md §6)はコミットしてデプロイする
-  生成物のため、.gitignore で除外しない。
+- 探索結果ファイル`tmswp-discovery.php`(テーマのルート直下。02-kernel.md §6)と`build/blocks/`はコミットしてデプロイする生成物のため、.gitignoreで除外しない。
+- plugin版は`/node_modules/`の行を持たない(プラグインのスターターにはpackage.jsonが無い)。
+
+`.gitattributes`:
+
+```
+# create-projectの配布物(読み取り専用リポジトリのzipと、Composerのpathリポジトリの写し)から、ビルドの道具とOSのファイルを外す。
+# build/blocks/と探索結果ファイル(tmswp-discovery.php)は、作ったプロジェクトがそのまま動くために要るので外さない
+/node_modules export-ignore
+.DS_Store export-ignore
+```
+
+- plugin版のコメントは1行目だけで、末尾の「。」と、2行目(`build/blocks/`と探索結果ファイルを外さない理由)が無い。作ったプロジェクトが使う`tests/`・`build/blocks/`・探索結果ファイルは外さない(10-quality.md §6.2)。
+
+### 8.8 ブロックのサンプルとpackage.json(全文)
+
+ブロックのソースは`blocks/<slug>/`、ビルドの出力は`build/blocks/<slug>/`に置く(rules/blocks.md)。`npm run build`は、`@wordpress/scripts`でビルドし、続けて探索コマンド(`wp tmswp discover`)で探索結果ファイルを作り直す。ブロック名の名前空間`tmswp-starter/`とテキストドメインの`{{project_slug}}`は、setup.phpがスラッグから書き換える(blocks/とbuild/blocks/のblock.json・ビルドの出力のJavaScript・render.php。§10.1)。
+
+`package.json`:
+
+```json
+{
+  "private": true,
+  "scripts": {
+    "start": "wp-scripts start --source-path=blocks --output-path=build/blocks",
+    "build": "wp-scripts build --source-path=blocks --output-path=build/blocks && npm run discover",
+    "discover": "wp tmswp discover"
+  },
+  "devDependencies": {
+    "@wordpress/scripts": "36.1.0"
+  },
+  "allowScripts": {
+    "@parcel/watcher": false,
+    "core-js": false,
+    "core-js-pure": false,
+    "fsevents": false,
+    "unrs-resolver": false
+  }
+}
+```
+
+`blocks/example/block.json`:
+
+```json
+{
+  "$schema": "https://schemas.wp.org/trunk/block.json",
+  "apiVersion": 3,
+  "name": "tmswp-starter/example",
+  "title": "Example",
+  "category": "widgets",
+  "description": "An example dynamic block rendered by render.php.",
+  "textdomain": "{{project_slug}}",
+  "editorScript": "file:./index.js",
+  "render": "file:./render.php"
+}
+```
+
+`blocks/example/index.js`:
+
+```js
+import { registerBlockType } from '@wordpress/blocks';
+import { useBlockProps } from '@wordpress/block-editor';
+import metadata from './block.json';
+
+// 表示はrender.php(サーバー)が作るため、エディタでは目印だけを出し、保存する内容は持たない
+registerBlockType(metadata.name, {
+    edit: () => <p {...useBlockProps()}>{metadata.title}</p>,
+    save: () => null,
+});
+```
+
+`blocks/example/render.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+/*
+ * サンプルのブロックの動的描画。WordPressがblock.jsonのrenderから読み込み、$attributes・$content・$blockを渡す。
+ */
+?>
+<p <?php echo get_block_wrapper_attributes(); ?>><?php echo esc_html__('This is an example block.', '{{project_slug}}'); ?></p>
+```
+
+- `build/blocks/example/`は`npm run build`の出力をそのままコミットする(`block.json`・`render.php`はソースの写し、`index.js`・`index.asset.php`はビルドの生成物)。CIのStarter Projectsのジョブが、ビルドの出力と探索結果ファイルがコミット済みのものと同じかを確かめる。
+
+### 8.9 app/Hook/ThemeSetupHook.php(全文)
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace TmswpStarterTheme\Hook;
+
+use TMSWP\Core\Attribute\Action;
+use TMSWP\Core\Attribute\AsHook;
+use TMSWP\Core\Attribute\Filter;
+use TMSWP\Core\Hook\Hook;
+
+#[AsHook]
+final class ThemeSetupHook extends Hook
+{
+    #[Action('after_setup_theme')]
+    public function setupTheme(): void
+    {
+        add_theme_support('post-thumbnails');
+        add_theme_support('title-tag');
+        add_theme_support('html5', ['search-form', 'gallery', 'caption']);
+    }
+
+    #[Action('wp_enqueue_scripts')]
+    public function enqueueAssets(): void
+    {
+        wp_enqueue_style(
+            'app-main',
+            get_theme_file_uri('assets/css/main.css'),
+            [],
+            (string) wp_get_theme()->get('Version'),
+        );
+    }
+
+    #[Filter('excerpt_more')]
+    public function excerptMore(string $more): string
+    {
+        return '...';
+    }
+}
+```
 
 ---
 
@@ -770,13 +1104,17 @@ composer create-project tmswp/starter-theme my-theme
 ```
 starters/plugin/
 ├── AGENTS.md                 # §5.2(theme版との差分適用済み全文)
-├── README.md                 # §8.7と同一構成(「テーマ」→「プラグイン」、starter-theme→starter-pluginに差し替え)
+├── README.md                 # §8.7のplugin版
 ├── composer.json             # §9.2(theme版との差分のみ記載)
 ├── plugin.php                # §9.3(プラグイン本体。setup.phpが <slug>.php にリネームする)
-├── tmswp-kernel.php          # §9.3(Kernelの構成。setup.phpが本体ファイル名のプレースホルダを置換する)
+├── tmswp-kernel.php          # §9.3(Kernelの構成。setup.phpが本体ファイルのパスを書き換える)
+├── tmswp-discovery.php       # スターターのまま`wp tmswp discover`で作った探索結果ファイル(setup.phpが削除する)
 ├── templates/
 │   └── .gitkeep              # プラグイン同梱テンプレート(Template::part のフォールバック先)
+├── languages/
+│   └── .gitkeep
 ├── app/
+│   ├── .gitkeep
 │   ├── Hook/
 │   │   └── PluginSetupHook.php  # §9.4(動くサンプル兼雛形)
 │   ├── Post/.gitkeep
@@ -784,7 +1122,8 @@ starters/plugin/
 │   ├── User/.gitkeep
 │   ├── Form/.gitkeep
 │   ├── Model/.gitkeep
-│   └── Option/.gitkeep
+│   ├── Option/.gitkeep
+│   └── SettingsPage/.gitkeep
 ├── tests/
 │   ├── bootstrap.php         # theme版と同一
 │   └── Unit/.gitkeep
@@ -792,20 +1131,22 @@ starters/plugin/
 │   └── setup.php             # theme版と同一スクリプト(§10.2)
 ├── phpunit.xml.dist          # theme版と同一
 ├── phpstan.neon              # theme版と同一
-├── .php-cs-fixer.dist.php    # §9.5(差分あり)
-└── .gitignore                # theme版と同一
+├── .php-cs-fixer.dist.php    # §9.5
+├── .gitignore                # §8.7(plugin版)
+└── .gitattributes            # §8.7(plugin版)
 ```
+
+プラグインのスターターは、ブロックのサンプルとビルドの設定(`blocks/`・`build/`・`package.json`)を持たない。プラグインにブロックを置く場合は、rules/blocks.mdの手順で足す(探索とKernelの登録は、テーマと同じくプラグインのルートの`build/blocks/`を対象にする)。
 
 ### 9.2 composer.json(theme版との差分)
 
 - `"name": "tmswp/starter-plugin"`、`"description": "Starter plugin for TMStack WordPress Framework."`
-- scripts: `qa` はtheme版と同じく `["@lint", "@analyse", "@test"]` とする。
-- autoloadは `PluginApp\` / `PluginApp\Tests\` を `app/` / `tests/` へ割り当てる。テーマスターターの `App\` とは分け、同一WordPress上でテーマとプラグインを併用できるようにする。
-- それ以外(require / config)はtheme版(§8.2)と同一。
+- autoloadは`TmswpStarterPlugin\`・`TmswpStarterPlugin\Tests\`を`app/`・`tests/`へ割り当てる。setup.phpがスラッグから作った名前空間に書き換えるため、同じサイトでテーマと複数のプラグインを併用できる(§10)。
+- それ以外(license・require・require-dev・scripts・config)はtheme版(§8.2)と同一。
 
 ### 9.3 tmswp-kernel.php・plugin.php(全文)
 
-プラグイン本体のパス(`file:`)は`tmswp-kernel.php`の位置から決める(`__FILE__`は使わない)。プラグインのbootとtms-acfのどちらから読んでも同じ値になる。本体ファイル名は`{{project_slug}}.php`とし、setup.phpが本体のリネームと同じスラッグで置換する(§10)。
+プラグイン本体のパス(`file:`)は`tmswp-kernel.php`の位置から決める(`__FILE__`は使わない)。プラグインのbootとtms-acfのどちらから読んでも同じ値になる。本体ファイルのパスはスターターの名前のまま`'/plugin.php'`と書き、setup.phpが本体を`<slug>.php`にリネームするときに、同じスラッグで`'/<slug>.php'`に書き換える(§10)。
 
 `tmswp-kernel.php`:
 
@@ -816,17 +1157,19 @@ declare(strict_types=1);
 
 // プラグインのKernelの構成。本体ファイルのブートと、WordPressを起動しないtms-acf(tmswp/acf-bridge)が読む。
 // 本体ファイルのパスはこのファイルの位置から決めるため、どちらの経路でも同じ値になる。
-// WordPressの関数はここで呼ばない(拡張のコンストラクタも同じ)
+// WordPressの関数はここで呼ばない(拡張のコンストラクタも同じ)。
+// 本体ファイルの名前と名前空間(appNamespace)は、create-projectのときにbin/setup.phpがスラッグから決める
 return TMSWP\Core\Kernel\KernelConfig::plugin(
-    file: __DIR__ . '/{{project_slug}}.php',
+    file: __DIR__ . '/plugin.php',
     appDir: __DIR__ . '/app',
-    appNamespace: 'PluginApp',
-    // @PSR12(starter)とPER-CS(monorepo)のどちらでも同じ整形になるよう、アロー関数でなく無名関数で書く
+    appNamespace: 'TmswpStarterPlugin',
     logChannels: static function (): array {
         return [
             'default' => new TMSWP\Core\Log\LogChannel(new TMSWP\Core\Log\SimpleLogger()),
         ];
     },
+    // labelLanguage()を指定しない投稿タイプ・タクソノミーの定義のラベルを、日本語で作る
+    labelLanguage: TMSWP\Core\Label\LabelLanguage::Ja,
 );
 ```
 
@@ -840,6 +1183,7 @@ return TMSWP\Core\Kernel\KernelConfig::plugin(
  * Requires at least: 7.0
  * Requires PHP: 8.3
  * Text Domain: {{project_slug}}
+ * Domain Path: /languages
  */
 
 declare(strict_types=1);
@@ -856,7 +1200,7 @@ TMSWP\Core\Kernel\Kernel::boot(TMSWP\Core\Kernel\KernelConfig::load(__DIR__ . '/
 
 declare(strict_types=1);
 
-namespace PluginApp\Hook;
+namespace TmswpStarterPlugin\Hook;
 
 use TMSWP\Core\Attribute\AsHook;
 use TMSWP\Core\Hook\Hook;
@@ -868,9 +1212,80 @@ final class PluginSetupHook extends Hook
 }
 ```
 
-### 9.5 .php-cs-fixer.dist.php(theme版との差分)
+### 9.5 .php-cs-fixer.dist.php(全文)
 
-- `->append()`の`footer.php`・`functions.php`・`header.php`・`index.php`を`plugin.php`に置き換える(`__FILE__`と`tmswp-kernel.php`はtheme版と同じ)。`->in()`の対象はそのまま(`app`, `tests`)。
+theme版(§8.6)との違いは、先頭のコメントと`->append()`の対象(`functions.php`の代わりに本体ファイル`plugin.php`)である。`'/plugin.php'`はsetup.phpが`'/<slug>.php'`に書き換えるため、setup.phpの実行の前と後のどちらでも、実在するファイルだけを参照する。
+
+```php
+<?php
+
+declare(strict_types=1);
+
+use PhpCsFixer\Config;
+use PhpCsFixer\Finder;
+
+/*
+ * TMSWPのmonorepoと同じ規則(PER Coding Style 2.0と、final_class・strict_comparison等の厳密性の規則)で検査する。
+ * 対象はapp/・tests/と、プラグインの本体ファイル・tmswp-kernel.phpである。templates/のテンプレートは、
+ * WordPress標準の書き方を保つため対象に含めない。
+ * 本体ファイルの名前(plugin.php)は、bin/setup.phpがファイルの名前とともに<スラッグ>.phpに書き換える。
+ */
+$finder = (new Finder())
+    ->in([__DIR__ . '/app', __DIR__ . '/tests'])
+    ->append([
+        __FILE__,
+        __DIR__ . '/plugin.php',
+        __DIR__ . '/tmswp-kernel.php',
+    ]);
+
+return (new Config())
+    ->setRiskyAllowed(true)
+    ->setFinder($finder)
+    ->setRules([
+        '@PER-CS2x0' => true,
+        '@PER-CS2x0:risky' => true,
+        'declare_strict_types' => true,
+        'strict_comparison' => true,
+        'strict_param' => true,
+        'void_return' => true,
+        'final_class' => true,
+        'nullable_type_declaration_for_default_null_value' => true,
+        'global_namespace_import' => [
+            'import_classes' => true,
+            'import_constants' => false,
+            'import_functions' => false,
+        ],
+        'fully_qualified_strict_types' => true,
+        'no_unused_imports' => true,
+        'ordered_imports' => [
+            'imports_order' => ['class', 'function', 'const'],
+            'sort_algorithm' => 'alpha',
+        ],
+        'native_function_invocation' => [
+            'include' => ['@compiler_optimized'],
+            'scope' => 'namespaced',
+        ],
+        'array_syntax' => ['syntax' => 'short'],
+        'list_syntax' => ['syntax' => 'short'],
+        'modernize_strpos' => true,
+        'modernize_types_casting' => true,
+        'get_class_to_class_keyword' => true,
+        'no_useless_else' => true,
+        'no_useless_return' => true,
+        'single_quote' => true,
+        'binary_operator_spaces' => true,
+        'blank_line_before_statement' => ['statements' => ['return', 'throw', 'try']],
+        'class_attributes_separation' => ['elements' => ['method' => 'one']],
+        'no_superfluous_phpdoc_tags' => ['allow_mixed' => true],
+        'phpdoc_align' => ['align' => 'left'],
+        'phpdoc_order' => true,
+        'phpdoc_separation' => true,
+        'php_unit_method_casing' => ['case' => 'camel_case'],
+        'php_unit_data_provider_static' => true,
+        'php_unit_data_provider_return_type' => true,
+        'php_unit_test_case_static_method_calls' => ['call_type' => 'self'],
+    ]);
+```
 
 ---
 
@@ -1514,12 +1929,12 @@ function writeTextFile(string $file, string $contents): void
 
 ### 12.1 成果物の存在と形式
 
-- [ ] monorepoルートに `AGENTS.md`(§4の内容)が存在し、`CLAUDE.md` はmonorepo・スターターのどこにも存在しない。
-- [ ] `packages/core/rules/` に13ファイル(post-type/taxonomy/user-role/meta/acf/form/form-mail/page/model/options/hooks/view/extensions)が存在し、composer配布物に含まれる(`composer archive` の内容で確認)。
+- [ ] monorepoルートに`AGENTS.md`(§4の全文。冒頭にmonorepoの開発ルールを含む)が存在し、`CLAUDE.md`はmonorepo・スターター・examples/sample-siteのどこにも存在しない(`git ls-files | grep -i 'claude.md'`が0件)。
+- [ ] `packages/core/rules/`に14ファイル(post-type/taxonomy/user-role/meta/acf/form/form-mail/page/model/options/hooks/view/blocks/extensions)が存在し、拡張パッケージの`rules/`に§6.1の5ファイルが存在し、composer配布物に含まれる(`composer archive`の内容で確認)。
 - [ ] 各レシピが共通フォーマット(§6.2: 手順/完全な実装例/してはいけないこと/確認方法)を満たす。
 - [ ] `starters/theme` / `starters/plugin` が§8/§9のツリーどおりに存在する。
 - [ ] スターター直下に `README.md`(§8.7)が存在し、セットアップ手順・create-project例・AGENTS.md/rules/への導線を含む(規約本文の転載はないこと)。
-- [ ] スターターのAGENTS.mdのタスク対応表のパス(`vendor/tmswp/core/rules/*.md`)が実在ファイルと一致する。
+- [ ] スターターのAGENTS.mdのタスク対応表のパス(`vendor/tmswp/<パッケージ>/rules/*.md`)が、`packages/<パッケージ>/rules/`の実在ファイルと一致する。
 
 ### 12.2 コード例の正しさ
 
