@@ -7,7 +7,7 @@ namespace TMSWP\Core\Tests\Fixtures\Option;
 use TMSWP\Core\Attribute\AsOptionGroup;
 use TMSWP\Core\Attribute\OptionSchema;
 use TMSWP\Core\Meta\MetaValueType;
-use TMSWP\Core\Tests\Unit\ArrayOptionStorage;
+use TMSWP\Core\Tests\Unit\Option\ArrayOptionStorage;
 
 /*
  * enum ケース以外に付いた #[OptionSchema] の確認用。属性のターゲット(クラス定数)に反するため、
