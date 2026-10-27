@@ -2,22 +2,28 @@
 
 declare(strict_types=1);
 
-namespace App\Option;
+namespace SampleSite\Option;
 
 use TMSWP\Core\Attribute\AsOptionGroup;
 use TMSWP\Core\Attribute\OptionSchema;
 use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Option\OptionAccess;
 
-#[AsOptionGroup(prefix: 'sample_')]
+/**
+ * サイトの設定値。管理画面の「サイト設定」(SiteSettingsPage)で編集する。
+ * オプション名には接頭辞が付く(例: sample_site_contact_email)。
+ */
+#[AsOptionGroup(prefix: 'sample_site_')]
 enum SiteOption: string
 {
     use OptionAccess;
 
-    #[OptionSchema(type: MetaValueType::String, default: 'sample@example.com')]
+    /** お問い合わせの通知の宛先。空ならサイトの管理者のメールアドレスに送る */
+    #[OptionSchema(type: MetaValueType::String, default: '')]
     case ContactEmail = 'contact_email';
 
-    #[OptionSchema(type: MetaValueType::String, default: '公式パッケージを使ったサンプルサイトです。')]
+    /** トップページの見出しの下に出す文 */
+    #[OptionSchema(type: MetaValueType::String, default: '')]
     case LeadText = 'lead_text';
 
     public static function contactEmail(): string

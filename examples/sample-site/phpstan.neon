@@ -1,5 +1,18 @@
 parameters:
   level: max
+  # テンプレートパーツ(parts/)とブロックの描画(blocks/*/render.php)は、読み込む側が渡す変数($args・$attributes)を
+  # 使うため解析しない。テンプレートの値は、解析するapp/Page/の前処理クラスで用意する
   paths:
     - app
+    - dev
+    - tests
+    - functions.php
+    - tmswp-kernel.php
+    - header.php
+    - footer.php
+    - index.php
+    - front-page.php
+    - page.php
+    - page-contact.php
+    - single-product.php
   treatPhpDocTypesAsCertain: false

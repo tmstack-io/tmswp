@@ -2,35 +2,34 @@
 
 declare(strict_types=1);
 
-use App\Option\SiteOption;
-use App\Post\ProductPost;
+use SampleSite\Page\FrontPage;
+use SampleSite\Post\ProductPost;
 use TMSWP\Core\View\Template;
 
-$products = ProductPost::query()->status('publish')->orderByDesc('date')->limit(6)->get();
+// 出力の前(get_header()より前)に1回だけ呼ぶ
+$vm = FrontPage::handle();
 
 get_header();
 ?>
-<main class="site-main">
+<main>
     <section class="hero">
-        <p class="hero__eyebrow">TMStack WordPress Framework</p>
-        <h1>Sample Site</h1>
-        <p><?php echo esc_html(SiteOption::leadText()); ?></p>
-        <a class="button" href="<?php echo esc_url((string) ProductPost::archiveUrl()); ?>">製品を見る</a>
+        <h1><?php echo esc_html(get_bloginfo('name')); ?></h1>
+        <?php if ($vm->leadText !== '') : ?>
+            <p><?php echo esc_html($vm->leadText); ?></p>
+        <?php endif; ?>
     </section>
 
-    <section class="section">
-        <div class="section__header">
-            <h2>製品一覧</h2>
-            <a href="<?php echo esc_url((string) ProductPost::archiveUrl()); ?>">すべて見る</a>
-        </div>
-        <?php if ($products !== []) : ?>
+    <section>
+        <h2><?php esc_html_e('New products', 'sample-site'); ?></h2>
+        <?php if ($vm->products !== []) : ?>
             <div class="product-grid">
-                <?php foreach ($products as $product) : ?>
+                <?php foreach ($vm->products as $product) : ?>
                     <?php Template::part('parts/product-card', ['post' => $product]); ?>
                 <?php endforeach; ?>
             </div>
+            <p><a href="<?php echo esc_url((string) ProductPost::archiveUrl()); ?>"><?php esc_html_e('All products', 'sample-site'); ?></a></p>
         <?php else : ?>
-            <p>製品がありません。</p>
+            <p><?php esc_html_e('No products yet.', 'sample-site'); ?></p>
         <?php endif; ?>
     </section>
 </main>

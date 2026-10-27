@@ -1,15 +1,15 @@
 {
   "name": "local/sample-site",
-  "description": "Sample site for TMStack WordPress Framework.",
+  "description": "Sample theme that runs the main features of TMStack WordPress Framework on WordPress.",
   "type": "project",
   "license": "proprietary",
   "require": {
     "php": ">=8.3",
-    "tmswp/acf-bridge": "^0.1",
-    "tmswp/core": "^0.1",
-    "tmswp/ja-toolkit": "^0.1",
-    "tmswp/settings-page": "^0.1",
-    "tmswp/thumbnail": "^0.1"
+    "tmswp/acf-bridge": "^0.2",
+    "tmswp/core": "^0.2",
+    "tmswp/ja-toolkit": "^0.2",
+    "tmswp/settings-page": "^0.2",
+    "tmswp/thumbnail": "^0.2"
   },
   "require-dev": {
     "brain/monkey": "^2.6",
@@ -17,88 +17,65 @@
     "phpstan/extension-installer": "^1.4",
     "phpstan/phpstan": "^2.1",
     "phpunit/phpunit": "^11.5",
-    "szepeviktor/phpstan-wordpress": "^2.0"
+    "szepeviktor/phpstan-wordpress": "^2.0",
+    "tmswp/testing": "^0.2"
   },
+  "repositories": [
+    {
+      "type": "path",
+      "url": "../../packages/*",
+      "options": {
+        "symlink": true,
+        "versions": {
+          "tmswp/acf-bridge": "0.2.0",
+          "tmswp/core": "0.2.0",
+          "tmswp/ja-toolkit": "0.2.0",
+          "tmswp/settings-page": "0.2.0",
+          "tmswp/testing": "0.2.0",
+          "tmswp/thumbnail": "0.2.0"
+        }
+      }
+    }
+  ],
   "autoload": {
     "psr-4": {
-      "App\\": "app/"
+      "SampleSite\\": "app/"
     }
   },
   "autoload-dev": {
     "psr-4": {
-      "App\\Tests\\": "tests/"
+      "SampleSite\\Tests\\": "tests/"
     }
   },
   "scripts": {
     "lint": "php-cs-fixer fix --dry-run --diff",
     "fix": "php-cs-fixer fix",
     "analyse": "phpstan analyse --memory-limit=1G",
+    "acf:check": "tms-acf check",
+    "acf:sync": "tms-acf sync",
+    "discover": "node ../../node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/themes/sample-site wp tmswp discover",
+    "discover:check": "node ../../node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/themes/sample-site wp tmswp discover --check",
     "test": "phpunit",
     "qa": [
       "@lint",
       "@analyse",
+      "@acf:check --strict",
+      "@discover:check",
       "@test"
     ],
-    "acf:check": "wp tmswp acf check",
-    "acf:sync": "wp tmswp acf sync"
+    "wp:start": "node ../../node_modules/@wordpress/env/bin/wp-env start",
+    "wp:stop": "node ../../node_modules/@wordpress/env/bin/wp-env stop",
+    "wp:setup": [
+      "node ../../node_modules/@wordpress/env/bin/wp-env run cli wp theme activate sample-site",
+      "node ../../node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/themes/sample-site wp eval \"require 'dev/seed.php';\""
+    ]
   },
-  "repositories": [
-    {
-      "type": "path",
-      "url": "../../packages/core",
-      "options": {
-        "symlink": false,
-        "versions": {
-          "tmswp/core": "0.1.0"
-        }
-      }
-    },
-    {
-      "type": "path",
-      "url": "../../packages/acf-bridge",
-      "options": {
-        "symlink": false,
-        "versions": {
-          "tmswp/acf-bridge": "0.1.0"
-        }
-      }
-    },
-    {
-      "type": "path",
-      "url": "../../packages/ja-toolkit",
-      "options": {
-        "symlink": false,
-        "versions": {
-          "tmswp/ja-toolkit": "0.1.0"
-        }
-      }
-    },
-    {
-      "type": "path",
-      "url": "../../packages/settings-page",
-      "options": {
-        "symlink": false,
-        "versions": {
-          "tmswp/settings-page": "0.1.0"
-        }
-      }
-    },
-    {
-      "type": "path",
-      "url": "../../packages/thumbnail",
-      "options": {
-        "symlink": false,
-        "versions": {
-          "tmswp/thumbnail": "0.1.0"
-        }
-      }
-    }
-  ],
   "config": {
     "allow-plugins": {
       "phpstan/extension-installer": true
     },
     "optimize-autoloader": true,
-    "sort-packages": true
+    "sort-packages": true,
+    "autoloader-suffix": "SampleSite"
   }
 }
