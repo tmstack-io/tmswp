@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "scripts": {
+    "start": "wp-scripts start --source-path=blocks --output-path=build/blocks",
+    "build": "wp-scripts build --source-path=blocks --output-path=build/blocks && npm run discover",
+    "discover": "wp tmswp discover"
+  },
+  "devDependencies": {
+    "@wordpress/scripts": "36.1.0"
+  }
+}

@@ -209,7 +209,10 @@ final readonly class KernelConfig
             throw new KernelException("invalid app namespace: {$appNamespace}");
         }
 
-        if ($namespace === 'TMSWP' || str_starts_with($namespace, 'TMSWP\\')) {
+        // PHPの名前空間は大文字と小文字を区別しないため、Tmswp・tmswp\App等もTMSWPの名前空間として拒む
+        $lower = strtolower($namespace);
+
+        if ($lower === 'tmswp' || str_starts_with($lower, 'tmswp\\')) {
             throw new KernelException("app namespace is reserved by TMSWP core: {$namespace}");
         }
 

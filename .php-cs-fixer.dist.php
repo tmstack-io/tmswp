@@ -19,6 +19,9 @@ $finder = (new Finder())
     ->notPath('#^core/tests/fixtures/#')
     // packages/*/languages/ の .l10n.php は `wp i18n make-php` の生成物で、出力をそのままコミットする
     ->notPath('#^[^/]+/languages/#')
+    // スターターのbuild/は@wordpress/scriptsのビルドの生成物(index.asset.php等)で、出力をそのままコミットする。
+    // node_modules/はビルドのために入れるnpmの依存
+    ->notPath('#^[^/]+/(build|node_modules)/#')
     ->append([__FILE__, __DIR__ . '/monorepo-builder.php', __DIR__ . '/packages/acf-bridge/bin/tms-acf']);
 
 return (new Config())

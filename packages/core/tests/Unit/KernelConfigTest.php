@@ -174,6 +174,28 @@ final class KernelConfigTest extends UnitTestCase
         KernelConfig::theme($this->createTempDirectory('reserved'), 'TMSWP\\App');
     }
 
+    /**
+     * PHPの名前空間は大文字と小文字を区別しないため、大文字と小文字だけが違うTMSWPの名前空間も拒む。
+     */
+    #[DataProvider('reservedNamespacesInOtherCases')]
+    public function testItRejectsReservedNamespaceInOtherCases(string $appNamespace): void
+    {
+        $this->expectException(KernelException::class);
+        $this->expectExceptionMessage("app namespace is reserved by TMSWP core: {$appNamespace}");
+
+        KernelConfig::theme($this->createTempDirectory('reserved-case'), $appNamespace);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function reservedNamespacesInOtherCases(): iterable
+    {
+        yield 'Tmswp' => ['Tmswp'];
+        yield 'tmswp\App' => ['tmswp\App'];
+        yield 'TmSwP\Core\Sub' => ['TmSwP\Core\Sub'];
+    }
+
     public function testItRejectsMissingAppDirectory(): void
     {
         $appDir = sys_get_temp_dir() . '/tmswp-missing-app-dir';

@@ -381,15 +381,21 @@ final class Kernel
     private static function assertCanBoot(KernelConfig $config): void
     {
         $namespace = $config->appNamespace;
+        // PHPの名前空間は大文字と小文字を区別しないため(MyShopとMyshopのクラスは同じクラスになる)、比べるときは小文字にする
+        $lower = strtolower($namespace);
 
-        if (\array_key_exists($namespace, self::$kernels)) {
-            throw new KernelException("TMSWP kernel for namespace '{$namespace}' is already booted");
+        foreach (array_keys(self::$kernels) as $bootedNamespace) {
+            if (strtolower($bootedNamespace) === $lower) {
+                throw new KernelException("TMSWP kernel for namespace '{$namespace}' is already booted");
+            }
         }
 
         foreach (self::$kernels as $bootedNamespace => $kernel) {
+            $bootedLower = strtolower($bootedNamespace);
+
             if (
-                str_starts_with($namespace . '\\', $bootedNamespace . '\\')
-                || str_starts_with($bootedNamespace . '\\', $namespace . '\\')
+                str_starts_with($lower . '\\', $bootedLower . '\\')
+                || str_starts_with($bootedLower . '\\', $lower . '\\')
             ) {
                 throw new KernelException("nested app namespaces are forbidden: {$namespace}, {$bootedNamespace}");
             }

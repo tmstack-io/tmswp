@@ -28,12 +28,15 @@ parameters:
     - packages/ja-toolkit/tests
     - starters/theme/app
     - starters/plugin/app
+    - starters/theme/bin/setup.php
     - bin
     - tools
     - tests/Unit
+    - tests/Integration
 
   excludePaths:
     - packages/core/tests/fixtures/*
+    - tests/Integration/fixtures/*
 
   scanDirectories:
     - vendor-bin/wp-tests/vendor/yoast/phpunit-polyfills/src

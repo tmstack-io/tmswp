@@ -290,16 +290,22 @@ parameters:
         - packages/ja-toolkit/tests
         - starters/theme/app
         - starters/plugin/app
+        # スターターのbin/setup.php(starters/plugin/bin/setup.phpは同じ内容)
+        - starters/theme/bin/setup.php
         - bin
         # 開発用スクリプト(rules/ のコード例の抽出・検査等)
         - tools
         # bin/・tools/ のユニットテスト
         - tests/Unit
+        # スターターの統合テスト(4.6)
+        - tests/Integration
 
     excludePaths:
         # テスト用フィクスチャ(意図的な型違反・生成コードのサンプルを含む)
         - packages/*/tests/fixtures/*
         - packages/*/tests/*/fixtures/*
+        # スターターの統合テストが別のプロセスで読み込むWP-CLIの--requireとルーター(4.6)
+        - tests/Integration/fixtures/*
 
     scanDirectories:
         # 統合テストが参照する Yoast PHPUnit Polyfills の実体
@@ -381,6 +387,9 @@ $finder = (new Finder())
     ->notPath('#tests/(.+/)?fixtures/#')
     // packages/*/languages/ の .l10n.php は `wp i18n make-php` の生成物で、出力をそのままコミットする
     ->notPath('#^[^/]+/languages/#')
+    // スターターのbuild/は@wordpress/scriptsのビルドの生成物(index.asset.php等)で、出力をそのままコミットする。
+    // node_modules/はビルドのために入れるnpmの依存
+    ->notPath('#^[^/]+/(build|node_modules)/#')
     ->append([__FILE__, __DIR__ . '/monorepo-builder.php', __DIR__ . '/packages/acf-bridge/bin/tms-acf']);
 
 return (new Config())
@@ -500,7 +509,9 @@ packages/core/
 tests/
 ├── bootstrap-integration.php
 ├── wp-tests-config.php
-├── Unit/                                  # bin/・tools/ のユニットテスト(testsuite tools。名前空間 TMSWP\Tests\Unit\)
+├── Unit/                                  # bin/・tools/とスターターのbin/setup.phpのユニットテスト(testsuite tools。名前空間TMSWP\Tests\Unit\)
+├── Integration/                           # スターターの統合テスト(testsuite starters。名前空間TMSWP\Tests\Integration\。4.6)
+│   └── fixtures/starter-site/             # スターターから作ったテーマ・プラグインを別のプロセスで有効にする(site.php・wp-cli.php・router.php)
 └── fixtures/
     ├── _activate.php                      # fixture と無料版 ACF を有効にするフィルタ(_boot.php と _wp-cli.php が共有)
     ├── _boot.php                          # 統合テストで fixture と無料版 ACF を有効化する
@@ -510,11 +521,13 @@ tests/
     │   ├── tmswp-discovery.php            # 探索結果ファイル(composer discover:build で生成してコミット)
     │   ├── index.php                      # テーマのテンプレート
     │   ├── parts/                         # Template の確認用
+    │   ├── blocks/                        # 独自ブロックのソース(card・layout/notice。探索の対象外)
+    │   ├── build/blocks/                  # ブロックのビルドの出力(探索・登録の対象。Nodeのビルドを使わずに手で置いたもの)
     │   └── app/                           # Hook・Post・Tax・User・Option・Model・Acf 等
     └── plugins/tmswp-fixture-plugin/      # Kernel 名前空間 TmswpFixturePlugin
         ├── tmswp-fixture-plugin.php       # 本体ファイルの直下で Kernel::boot()
         ├── tmswp-discovery.php            # 探索結果ファイル(composer discover:build で生成してコミット)
-        ├── app/                           # Hook
+        ├── app/                           # Hook・Post(allowedBlocksの確認用)・Model・Option・Acf
         └── templates/                     # プラグインのテンプレートのフォールバック確認用
 ```
 
@@ -665,7 +678,8 @@ abstract class UnitTestCase extends TestCase
          colors="true"
          convertDeprecationsToExceptions="true"
          failOnWarning="true"
-         beStrictAboutTestsThatDoNotTestAnything="true">
+         beStrictAboutTestsThatDoNotTestAnything="true"
+         testdox="true">
     <testsuites>
         <testsuite name="core">
             <directory>packages/core/tests/Integration</directory>
@@ -681,6 +695,9 @@ abstract class UnitTestCase extends TestCase
         </testsuite>
         <testsuite name="ja-toolkit">
             <directory>packages/ja-toolkit/tests/Integration</directory>
+        </testsuite>
+        <testsuite name="starters">
+            <directory>tests/Integration</directory>
         </testsuite>
     </testsuites>
     <!-- ACF Pro専用のテストは、ACF Proを載せた隔離環境(composer test:integration:acf-pro)だけで走らせる -->
@@ -700,6 +717,8 @@ abstract class UnitTestCase extends TestCase
     </coverage>
 </phpunit>
 ```
+
+testsuite `starters`(`tests/Integration/`)は、スターターから作ったテーマとプラグインを開発用サイトで動かす統合テストである(4.6の「スターターの統合テスト」)。
 
 `<groups>`の除外により、ACF Pro専用のテスト(グループ`acf-pro`)は`composer test:integration`・カバレッジの計測・CIでは走らない(4.9)。
 
@@ -791,6 +810,20 @@ fixture のテーマとプラグインの探索結果ファイル(`tmswp-discove
 - ルートの Composer のオートローダは、実際のテーマ・プラグインと同じくプラグインの読み込み時(`muplugins_loaded`)に登録する。WP-CLI の phar は `--require` の後に自身の依存(古い psr/container を含む)のオートローダを先頭に登録するため、`--require` の時点で登録すると psr/container が phar 側から読まれ、`Container` の宣言と合わずに止まる。
 - fixture の app/ を変えるタスクは `composer discover:build` で探索結果ファイルを作り直してコミットする。`composer qa` と CI の `coverage` ジョブは `discover:check` で照合し、古ければ失敗する(§5)。統合テスト(`KernelBootIntegrationTest`)も、コミット済みの探索結果ファイルが走査結果と一致することを確かめる。
 
+#### スターターの統合テスト
+
+`tests/Integration/StarterProjectsIntegrationTest.php`(testsuite `starters`)は、スターター(`starters/theme`・`starters/plugin`)を開発用サイトで動かして、次を確かめる。
+
+- コミット済みのスターターの探索結果ファイル(`starters/*/tmswp-discovery.php`)が、スターターの`app/`と`build/blocks/`から`wp tmswp discover`で作るものと一致する。食い違う場合は、作り直したファイルを`var/starter-site/tmswp-discovery.<theme|plugin>.php`に残し、スターターへ写すよう失敗のメッセージで示す。
+- create-projectと同じ順(依存を入れてオートローダを作った後で、`composer run-script post-create-project-cmd`で`bin/setup.php`と`composer dump-autoload`を実行する)で作ったテーマ1つとプラグイン2本(スラッグ`client-theme`・`shop-tools`・`member_area`)が、Composerが作り直したオートローダで新しい名前空間を持ち、`composer validate`が通り、同じサイトで別々の名前空間(`ClientTheme`・`ShopTools`・`MemberArea`)のKernelとして起動する。`wp tmswp discover`で3つの探索結果ファイルを作れて、`--check`が通る。フロント(トップページ)が200を返し、テーマの出力とテーマのブロックの登録があり、PHPのエラー・警告・非推奨の表示が無い。
+
+fixtureとの共存は次のとおり。
+
+- スターターの写しは、リポジトリの`var/starter-site/`の下に作る。リポジトリ全体が`wp-content/plugins/tmswp`にマウントされているため(4.7)、写しのプラグインはWordPressのプラグインの置き場の中にあり、マウントを足さなくてよい。写しはテストごとに消す。
+- WordPressは別のプロセスで動かす。WP-CLI(`wp --require=tests/Integration/fixtures/starter-site/wp-cli.php`)と、PHPの組み込みサーバ(`php -S`。ルーターは`router.php`)である。どちらも`site.php`が、そのプロセスの中だけ写しのテーマとプラグインを有効にする(fixtureの`_activate.php`と同じく、オプションの読み出しの上書きで、DBには書かない)。テーマの置き場は`template_root`・`stylesheet_root`の読み出しも上書きして決め、プロセスの終わりに`theme_roots`のサイトのtransientを消す(ほかのプロセスが自分のテーマの置き場で作り直すようにする)。
+- このテストのプロセス(fixtureのテーマとプラグインが起動済みで、テーブルは`wptests_`)では、写しのKernelをbootしない。別のプロセスは開発用サイト(`wp_`)を読む。組み込みサーバのルーターは、正規のURLへのリダイレクトとWP-Cronの起動を止める。
+- 写しの依存は、cliコンテナのComposerで写しの`vendor/`に入れる。ネットワークに依存しないよう、写しのcomposer.jsonに限って、Packagistを使わず、tmswp/coreを`packages/core`から、psr/log・psr/containerをリポジトリの`vendor/`から入れ(pathリポジトリ)、require-devを外す。
+
 #### IntegrationTestCase
 
 全パッケージの統合テストは `TMSWP\Core\Tests\Support\IntegrationTestCase`(`WP_UnitTestCase` を継承する抽象クラス)を継承し、テストの中で `Kernel::boot()` を呼ばない。例外は `KernelBootIntegrationTest` の本番相当(debug=false)の起動の確認だけで、一時ディレクトリに作ったプラグイン形態の Kernel を、fixture と重ならない名前空間で boot する(テーマ形態にしないのは、他のテストが発火させるテーマ切替のフックにその Kernel を登録しないため)。`init` の後の boot になるため、遅延 boot のログは Log の出力先を一時的に差し替えて捕まえる。
@@ -855,6 +888,7 @@ define('WP_DEBUG', true);
 - `testsEnvironment: false` により、wp-env は開発用の環境(`wordpress` / `cli` / `mysql`)だけを作る。@wordpress/env 11 では development と tests の 2 環境を同時に作る既定の動作が非推奨のため、統合テストはこの環境の `cli` コンテナで実行し、テーブル接頭辞 `wptests_` で開発用サイトのテーブルと分ける。
 - `plugins` に wordpress.org の無料版 ACF(本家 WP Engine の `advanced-custom-fields`)を、版を固定した zip で入れる(D-11)。ACF Pro 限定機能のテストは CI では行わず、手元で隔離した環境で走らせる(4.9)。
 - `mappings` により monorepo 全体が `wp-content/plugins/tmswp` にマウントされ、コンテナ内からルートの `vendor/` / `vendor-bin/` / 各設定ファイルにそのままアクセスできる。これが `composer test:integration` の `--env-cwd=wp-content/plugins/tmswp` の前提。
+- スターターから作ったテーマ・プラグインのためのマウントは足さない。スターターの統合テスト(4.6)は、写しを`var/starter-site/`(このマウントの中)に作り、別のプロセスの中だけ有効にするため、開発用サイトの設定とマウントを変えずに済む。
 - `.wp-env.override.json` は `.gitignore` に追加する。
 
 ### 4.8 カバレッジ方針
@@ -1321,7 +1355,7 @@ git push origin main --tags                  # PushTagReleaseWorker が未 push 
 2. `phpstan/extension-installer` により `tmswp/core` 同梱の PHPStan 拡張(2.2 項 4)が**設定なしで自動有効化**されること。スターターの phpstan.neon は `level: max` + `paths: [app]` を既定とする。
 3. アプリの `app/Acf/*Fields.php`(`@generated`、DR-06)は解析対象に**含める**(生成コードも型検査を通す。CI でのドリフト検知は acf-bridge 文書の管轄)。
 4. テーマテンプレート(`*.php` のうち WP テンプレート階層ファイルと `template-parts/`)は php-cs-fixer / PHPStan(型検査)の対象に含めない(要件 3 の絶対原則)。テンプレートの前処理クラス(`app/Page/`)は `app/` の一部として解析対象に含める(§3A)。
-5. スターターの `composer qa` は `lint` → `analyse` → `test` の順とする。
+5. スターターの`composer qa`は`lint` → `analyse` → `discover:check` → `test`の順とする。`discover:check`(`wp tmswp discover --check`)は探索結果ファイルの照合で、WP-CLIがそのテーマ・プラグインを有効にしたサイトに届く場所で実行する。
 
 ---
 

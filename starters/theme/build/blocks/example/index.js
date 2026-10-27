@@ -1,0 +1,1 @@
+(()=>{"use strict";const e=window.wp.blocks,s=window.wp.blockEditor,t=JSON.parse('{"UU":"tmswp-starter/example","DD":"Example"}'),o=window.ReactJSXRuntime;(0,e.registerBlockType)(t.UU,{edit:()=>(0,o.jsx)("p",{...(0,s.useBlockProps)(),children:t.DD}),save:()=>null})})();

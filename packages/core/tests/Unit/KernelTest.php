@@ -341,7 +341,7 @@ PHP);
 
     /**
      * 先に boot する Kernel と後に boot する Kernel の (appNamespace, ルートからの appDir の相対パス)。
-     * 名前空間の {NS} は一意な名前空間に置き換える。
+     * 名前空間の{NS}は一意な名前空間に、{NS_LOWER}はそれを小文字にしたものに置き換える。
      *
      * @return iterable<string, array{array{string, string}, array{string, string}, string}>
      */
@@ -349,6 +349,9 @@ PHP);
     {
         yield '入れ子の名前空間(親が先)' => [['{NS}', 'first/app'], ['{NS}\Sub', 'second/app'], 'nested app namespaces are forbidden: {SECOND_NS}, {FIRST_NS}'];
         yield '入れ子の名前空間(子が先)' => [['{NS}\Sub', 'first/app'], ['{NS}', 'second/app'], 'nested app namespaces are forbidden: {SECOND_NS}, {FIRST_NS}'];
+        // PHPの名前空間は大文字と小文字を区別しないため、大文字と小文字だけが違う名前空間も同じとみなす
+        yield '大文字と小文字だけが違う名前空間' => [['{NS}', 'first/app'], ['{NS_LOWER}', 'second/app'], "TMSWP kernel for namespace '{SECOND_NS}' is already booted"];
+        yield '大文字と小文字だけが違う入れ子の名前空間' => [['{NS}', 'first/app'], ['{NS_LOWER}\Sub', 'second/app'], 'nested app namespaces are forbidden: {SECOND_NS}, {FIRST_NS}'];
         yield '同一の appDir' => [['{NS}A', 'first/app'], ['{NS}B', 'first/app'], 'shared or nested app directories are forbidden: {SECOND_DIR}, {FIRST_DIR}'];
         yield '入れ子の appDir(親が先)' => [['{NS}A', 'first/app'], ['{NS}B', 'first/app/sub'], 'shared or nested app directories are forbidden: {SECOND_DIR}, {FIRST_DIR}'];
         yield '入れ子の appDir(子が先)' => [['{NS}A', 'first/app/sub'], ['{NS}B', 'first/app'], 'shared or nested app directories are forbidden: {SECOND_DIR}, {FIRST_DIR}'];
@@ -367,7 +370,7 @@ PHP);
             [$appNamespace, $appDir] = $kernel;
             $this->writeFile("{$root}/{$appDir}/.keep", '');
 
-            return KernelConfig::theme("{$root}/{$appDir}", str_replace('{NS}', $namespace, $appNamespace), false);
+            return KernelConfig::theme("{$root}/{$appDir}", strtr($appNamespace, ['{NS}' => $namespace, '{NS_LOWER}' => strtolower($namespace)]), false);
         }, [$first, $second]);
         (new DiscoveryFile($firstConfig))->write(new DiscoveryResult([], []));
         $contents = file_get_contents($firstConfig->discoveryFile());

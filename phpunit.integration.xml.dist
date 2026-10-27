@@ -24,6 +24,9 @@
         <testsuite name="ja-toolkit">
             <directory>packages/ja-toolkit/tests/Integration</directory>
         </testsuite>
+        <testsuite name="starters">
+            <directory>tests/Integration</directory>
+        </testsuite>
     </testsuites>
     <!-- ACF Pro専用のテストは、ACF Proを載せた隔離環境(composer test:integration:acf-pro)だけで走らせる -->
     <groups>

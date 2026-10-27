@@ -215,7 +215,7 @@ final readonly class KernelConfig
 
 `theme()` / `plugin()` は以下を順に行い、失敗時は `TMSWP\Core\Exception\KernelException` を投げる(探索失敗の黙殺禁止はここから始まる)。
 
-1. `$appNamespace` を `trim($appNamespace, '\\')` で正規化し、`/^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*(\\\\[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)*$/` に一致しなければ例外。`TMSWP` または `TMSWP\` で始まる名前空間は予約済みとして例外(コア名前空間の走査を構成段階で遮断する)。
+1. `$appNamespace`を`trim($appNamespace, '\\')`で正規化し、`/^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*(\\\\[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)*$/`に一致しなければ例外。`TMSWP`または`TMSWP\`で始まる名前空間は予約済みとして例外(コア名前空間の走査を構成段階で遮断する)。PHPの名前空間は大文字と小文字を区別しないため、この判定も大文字と小文字を区別しない(`Tmswp`・`tmswp\App`も例外)。
 2. `realpath($appDir)` が `false`、またはディレクトリでない、または読取不可なら例外。メッセージには渡されたパスをそのまま含める(例: `app directory not found: {path}`)。
 3. `plugin()` のみ: `realpath($file)` が `false` またはファイルでないなら例外。さらに `$appDir` が `$file` の属するディレクトリ配下にあることは要求しない(シンボリックリンク構成を許容)。
 4. 探索結果ファイルの置き場は `discoveryFile()` が返す `dirname(appDir) . '/tmswp-discovery.php'` に固定し、引数では変えない(テーマなら `<theme>/tmswp-discovery.php`、プラグインなら `<plugin>/tmswp-discovery.php`)。コードと一緒にコミット・デプロイされる場所に置くためである(§6)。探索結果ファイルは Kernel ごとに1つで、同じ親ディレクトリに複数の appDir を置く構成(`<root>/app-a` と `<root>/app-b`)は同じファイルを共有してしまうため、2つ目の boot が `KernelException` になる(§3 手順2-c)。
@@ -363,10 +363,11 @@ boot(config):
      PsrInterfaceCheck::assertCompatible()     // §3.8。PSR の interface を実装するクラスより先に行う
      InstalledVersionCheck::assertInstalledVersions(Kernel::VERSION)   // §3.9
   1. ns = config.appNamespace
-     if self::$kernels に ns が存在
+     if self::$kernelsにnsと大文字・小文字だけが違うものを含めて同じ名前空間が存在
         → throw KernelException("TMSWP kernel for namespace '{ns}' is already booted")
+     (PHPの名前空間は大文字と小文字を区別せず、MyShopとMyshopのクラスは同じクラスになるため)
   2. 衝突検査: 既存の各Kernel k について
-        a. ns と k.ns が前方一致関係(片方+'\\' がもう一方の接頭辞)
+        a. nsとk.nsが前方一致関係(片方+'\\'がもう一方の接頭辞。大文字と小文字を区別しない)
            → throw KernelException(入れ子名前空間の禁止)
         b. config.appDir と k.config.appDir が同一、または一方が他方の配下
            → throw KernelException(appDirの共有・入れ子の禁止)

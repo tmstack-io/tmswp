@@ -2,7 +2,7 @@
   "name": "tmswp/starter-theme",
   "description": "Starter theme for TMStack WordPress Framework.",
   "type": "project",
-  "license": "proprietary",
+  "license": "GPL-2.0-or-later",
   "require": {
     "php": ">=8.3",
     "tmswp/core": "^0.1"
@@ -17,25 +17,31 @@
   },
   "autoload": {
     "psr-4": {
-      "App\\": "app/"
+      "TmswpStarterTheme\\": "app/"
     }
   },
   "autoload-dev": {
     "psr-4": {
-      "App\\Tests\\": "tests/"
+      "TmswpStarterTheme\\Tests\\": "tests/"
     }
   },
   "scripts": {
     "lint": "php-cs-fixer fix --dry-run --diff",
     "fix": "php-cs-fixer fix",
     "analyse": "phpstan analyse --memory-limit=1G",
+    "discover": "wp tmswp discover",
+    "discover:check": "wp tmswp discover --check",
     "test": "phpunit",
     "qa": [
       "@lint",
       "@analyse",
+      "@discover:check",
       "@test"
     ],
-    "post-create-project-cmd": "@php bin/setup.php"
+    "post-create-project-cmd": [
+      "@php bin/setup.php",
+      "@composer dump-autoload"
+    ]
   },
   "config": {
     "allow-plugins": {
