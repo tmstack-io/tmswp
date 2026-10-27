@@ -61,7 +61,7 @@ return KernelConfig::theme(
 );
 ```
 
-入口のクラスは、各パッケージの節に書く(settings-pageは§2.2の`SettingsPages`)。
+入口のクラスは、各パッケージの節に書く(thumbnailは§1.4の`Thumbnail`、settings-pageは§2.2の`SettingsPages`)。
 
 - Kernelは、bootの中で`extensions`の各インスタンスの`register(Kernel $kernel)`を、渡した順に1回ずつ呼ぶ。
 - 同じクラスの拡張を同じKernelに2つ渡すと、`KernelConfig`が`TMSWP\Core\Exception\KernelException`を投げる。1つのインスタンスを2つのKernelに渡すと、2つ目のKernelの`register()`が例外を投げる(1つのインスタンスは1つのKernelにだけ登録できる)。どちらも設定の誤りなので、debugに関係なく起動を止める。冪等な握り潰しはしない。設定差異の取り違えを早期に検出するためである。
@@ -96,7 +96,20 @@ return KernelConfig::theme(
 2. **全パラメータをHMAC署名で固定**。署名のないURL・改ざんされたURLは画像を生成しない。
 3. **サイズ上限を強制**。署名検証後であっても上限超過は拒否(多層防御)。
 4. 画像処理は `wp_get_image_editor()`(WP_Image_Editor)に委譲し、GD/Imagickの差異をWPに任せる。
-5. 生成物は `uploads/tmswp-thumb/` にキャッシュし、2回目以降は静的ファイルとして配信する(PHPを通さない)。
+5. 生成物は `uploads/tmswp-thumb/` にキャッシュし、生成の後は静的ファイルとして配信する(PHPを通さない)。
+6. 同じ要求で再生成を繰り返さない。元画像より大きい要求は元画像の寸法で頭打ちにし、画像エディタが扱えない元画像はネガティブキャッシュに記録する(§1.2の手順)。
+
+### 利用条件と制約
+
+- **REST APIが使えること**(D-37)。未生成のサムネイルのURLは、RESTのルート`/wp-json/tmswp/v1/thumb`(パーマリンクの設定が基本なら`/?rest_route=/tmswp/v1/thumb`)を指す。REST以外の経路は無い。訪問者(ログインしていないユーザー)からこのルートが使えないと、未生成のサムネイルは表示されない。
+  - 起動の後、管理画面の表示(`admin_notices`)ごとに、`RestRouteCheck`が訪問者としてルートが使えるかを確かめ、使えなければ`manage_options`の権限のユーザーに通知する(§1.4)。検出するのは、`rest_authentication_errors`のフィルタが訪問者の要求をエラーにする場合(REST APIを無効化するプラグインの多く)と、ルートのコールバックまで届かない場合(`rest_endpoints`のフィルタによるルートの削除、`rest_pre_dispatch`での遮断等)である。Webサーバーの設定による`/wp-json/`の遮断は、PHPに届かないため検出しない。
+- **thumbnailを登録できるKernelは、サイトに1つ**(D-50)。2つ目のKernelの`register()`は`TMSWP\Core\Exception\LogicException`になる(設定の誤り。debugに関係なく起動を止める)。RESTのルートの名前空間とキャッシュのディレクトリはサイトに1つであり、複数のKernelが登録すると、どの設定と鍵が効くかが決まらないためである。
+  - `tms_thumb()`・RESTのルート・`wp tmswp thumb`は、登録したKernelのdebug・ロガーと、そのKernelに渡した`Thumbnail`の設定に従う。thumbnailを登録したKernelが無い状態で`tms_thumb()`を呼ぶと`LogicException`になる。
+- **uploadsはローカルのファイルシステムにあること**(D-19)。外部ストレージ(オブジェクトストレージへのオフロード等)には対応しない。元画像の読み込みとキャッシュの書き込みは`wp_upload_dir()['basedir']`のローカルのパスに対して行い、キャッシュの静的なURLは`baseurl`から作る。
+- キャッシュの書き込みは、同じディレクトリの中の`rename()`と`flock()`に頼る(ApacheとLinuxのローカルのファイルシステムを想定する。D-19)。
+- 未生成のサムネイルの初回の表示は、RESTを経由する(WordPressが起動する)。生成の後は、静的なファイルを直接返す。
+- ページキャッシュ(WP Super Cache等)のHTMLに残る静的なURLへのアクセスは、GCの判定に使われない(§1.3)。`--days`はページキャッシュの寿命より長くする。
+- `srcset`や`width`・`height`の属性を出すヘルパは持たない(必要なら案件で作る)。
 
 ## 1.2 URL形式とエンドポイント
 
@@ -114,6 +127,8 @@ GET /wp-json/tmswp/v1/thumb?src=<src>&w=<int>&h=<int>&o=<opts>&s=<signature>
 | `o` | string | オプションの正規化文字列(後述)。オプションなしは空文字 |
 | `s` | string | HMAC-SHA256署名(hex 64文字) |
 
+URLの生成では、各値を`rawurlencode()`でエンコードしてから`add_query_arg()`に渡す(`add_query_arg()`は値をエンコードしない)。受け取った側の`$_GET`で1回デコードされ、署名した値に戻る。`o`の`&`・`=`と、`src`の`%`(uploadsのURLの中のエンコード済みの文字)も、この方法で署名と一致する。
+
 ### オプション正規化文字列(`o`)
 
 許可キーは `crop`(bool) と `quality`(int 1〜100)の2つのみ。正規化手順:
@@ -125,13 +140,16 @@ GET /wp-json/tmswp/v1/thumb?src=<src>&w=<int>&h=<int>&o=<opts>&s=<signature>
 ### 署名
 
 ```
-payload   = "{src}|{w}|{h}|{o}"
-signature = hash_hmac('sha256', payload, wp_salt('auth'))
+key       = hash_hkdf('sha256', wp_salt('auth'), 32, 'tmswp/thumbnail/url-signature')
+payload   = serialize([src, w, h, o])   // 4つとも文字列
+signature = hash_hmac('sha256', payload, key)
 ```
 
-検証は `hash_equals()` で行う。`wp_salt('auth')` を鍵とするため、サイト間でURLは流用できず、salt変更で全URLが無効化される(キャッシュ済みファイルの配信は影響を受けない)。
+- 値を区切りの文字で連結しない。`serialize()`は各値の長さを含むため、値の中に`|`等があっても、別の値の組み合わせと同じpayloadにならない。
+- 鍵は`wp_salt('auth')`をそのまま使わず、HKDF(SHA-256)で用途の文字列を入れて導出する(`UrlSigner::deriveKey()`)。認証のcookie等と同じ鍵をこのHMACに使わないためである。saltがサイトごとに違うため、サイト間でURLは流用できない。saltを変えると全URLが無効になる(キャッシュ済みファイルの配信は影響を受けない)。
+- 検証は`hash_equals()`で行う。
 
-検証時のpayloadは**受信した生のクエリ文字列値**(`src`/`w`/`h`/`o`)をそのまま連結して組み立てる(intキャスト・trim・再正規化を一切行わない。§UrlSigner参照)。URL生成側は整数を10進最短表記で埋め込むため、`w=050` のような異表記は生成時payloadと一致せず署名不一致(403)になる。
+検証時のpayloadは**受信した生のクエリ文字列値**(`src`/`w`/`h`/`o`)をそのまま並べて組み立てる(intキャスト・trim・再正規化を一切行わない。§UrlSigner参照)。URL生成側は整数を10進最短表記で埋め込むため、`w=050` のような異表記は生成時payloadと一致せず署名不一致(403)になる。
 
 ### エンドポイントの処理手順(確定アルゴリズム)
 
@@ -148,64 +166,117 @@ signature = hash_hmac('sha256', payload, wp_salt('auth'))
      o の再正規化・再署名は行わない(署名が通った o をそのままパースするのみ。
      非正規形の o は手順2の生文字列照合の時点で署名不一致になる)
 3. w,h の検証: intキャスト後、両方0、負数、いずれかが maxDimension 超過 → 400
-4. SourceResolver::resolve(src)  → null なら 404
-5. キャッシュファイルが存在       → 302リダイレクト(Location: キャッシュURL,
-                                    Cache-Control: public, max-age=31536000, immutable)
-6. 生成: wp_get_image_editor(絶対パス) → resize(w?:null, h?:null, crop)
-         → set_quality(quality) → save(キャッシュ絶対パス)
-   ※ crop/quality は手順2.5のパース結果を使う(他の出所を持たない)。
-     w または h が 0 の場合は null を渡しアスペクト比維持
-7. 生成失敗(WP_Error)            → Log::error() 後、元画像URLへ302リダイレクト(劣化運転)
-8. 生成成功                       → 5と同じ302リダイレクト
+4. SourceResolver::resolve(src)がnull、またはInvalidThumbSourceException → 404
+5. key = ThumbCache::key(uploadsからの相対パス, filemtime, w, h, crop, quality)
+   ※ 4の後に元画像が消えた(5までの読み取りの失敗の後に、ファイルが無い)ら → 404
+6. キャッシュのファイル({key}.{ext})がある
+   → 更新日時を今にして(touch)、302(Location: キャッシュの静的URL、
+     Cache-Control: public, max-age={redirectMaxAge})
+7. 失敗の印({key}.failed)がある → 元画像URLへ302(Cache-Control: no-store)。生成も記録もしない
+8. キャッシュのディレクトリとshardを作り、キーのロック({key}.lockへのflock(LOCK_EX|LOCK_NB))を取る。
+   flockの後に、開いたファイルとパスの今のファイルが同じ(inodeとデバイスが一致)かを確かめ、違えば開き直す(3回まで)。
+   取れない(別のプロセスが同じキーを生成中) → 待たずに元画像URLへ302(no-store)
+9. ロックの中で6・7を確かめ直してから生成する:
+   wp_get_image_editor(絶対パス) → 寸法の頭打ち(§1.4 ThumbGenerator)→ 必要ならresize
+   → set_quality(quality) → save(一時ファイル{key}.tmp-{乱数}.{元画像の拡張子})
+   → save()が返したpathのファイルをrename()で{key}.{そのpathの拡張子}に置き換える
+   → ロックを持ったままロックのファイルを消し、ロックを手放す → 6と同じ302
+   ※ crop/quality は手順2.5のパース結果を使う(他の出所を持たない)
+10. 画像エディタが元画像を読めない・リサイズできない(恒久的な失敗。UnprocessableImageException)
+   → 一時ファイルを消し、失敗の印を書いてから11へ
+11. 失敗(10と、4〜9の実行時の失敗。元画像の情報の読み取り・ディレクトリ・ロック・保存・rename等。RuntimeException)
+   → 元画像が消えていたら、5の※のとおり404
+   → 登録したKernelがdebugなら、例外をそのまま投げる
+   → 本番なら、Kernelのロガーにerrorで記録し、元画像URLへ302(no-store)(劣化運転)。
+     元画像のURLを決める前の失敗なら、500(WP_Error 'tmswp_thumb_failed')
 ```
 
-エラー応答(403/400/404)はJSON(`WP_Error` 標準形式)。画像を返さないことでクローラのキャッシュ汚染を防ぐ。
+- 6で更新日時を変えられないときは、本番ならKernelのロガーにerrorで記録して、キャッシュのファイルへの302を返す(debugは例外)。
+- ログの文脈は、例外のクラス(`exceptionClass`)・投げられた場所のファイル:行(`exceptionAt`)・previousのクラス(`previousClasses`)だけである。元画像のパス等の要求に由来する値と、例外のオブジェクト・メッセージ・トレースは入れない(v0.4.0のFormと同じ。パスや入力値を本番のログに残さない)。
+- 設定の誤りや`TypeError`等(`TMSWP\Core\Exception\RuntimeException`でない例外)は、11で扱わずにそのまま伝わる。
+- エラー応答(403/400/404)はJSON(`WP_Error` 標準形式)。画像を返さないことでクローラのキャッシュ汚染を防ぐ。
 
 ## 1.3 キャッシュ規則
 
-- 配置: `wp_upload_dir()['basedir'] . '/tmswp-thumb/{shard}/{cacheKey}.{ext}'`
-  - `shard` = cacheKey先頭2文字(1ディレクトリ肥大防止)
-  - 初回生成時にディレクトリを `0755` で作成し、`tmswp-thumb/` 直下に空の `index.html` を設置する(旧FWの`0777`作成を廃止)
+- 配置: `wp_upload_dir()['basedir'] . '/{cacheDirName}/{shard}/'`(`cacheDirName`の既定は`tmswp-thumb`。`shard` = cacheKey先頭2文字)
+  - `{key}.{ext}`: 生成したサムネイル
+  - `{key}.failed`: 恒久的な失敗の印(空のファイル)
+  - `{key}.lock`: 生成中のロック(ロックを持ったまま、手放す前に消す。消した後に別のプロセスが古いファイルのロックを取っても、手順8のinodeの確認で取り直すため、同じキーのロックを2つのプロセスが同時に持つことは無い)
+  - `{key}.tmp-{乱数}.{ext}`: 生成中の一時ファイル(rename()で`{key}.{ext}`に置き換える。途中で止まったものはGCで消える)
+  - 生成の前に、キャッシュのディレクトリとshardのディレクトリを`wp_mkdir_p()`で作り、それぞれに空の`index.html`を置く。作れなければ`TMSWP\Core\Exception\RuntimeException`(手順11)。
+  - キャッシュのディレクトリには、印のファイル`.tmswp-thumb-cache`(`ThumbCache::MARKER`)を置く。キャッシュのディレクトリを作ったとき(既にあって空のときを含む)に置く。既にあって印が無く、空でなければ、`TMSWP\Core\Exception\RuntimeException`にする(`cacheDirName`がuploadsの既存のディレクトリ(年のディレクトリ等)と重なったとき、そのディレクトリをキャッシュとして使い始めない)。例外のメッセージで、`cacheDirName`が既存のディレクトリと重なっている可能性を案内する。
+  - shardのディレクトリは、キャッシュのディレクトリの直下の実在のディレクトリでなければならない(実パスが`{キャッシュのディレクトリの実パス}/{shard}`)。シンボリックリンク等で外を指していれば、作成・取得・ロック・GC・集計の前に`TMSWP\Core\Exception\RuntimeException`にする(外にindex.html・失敗の印・生成物を書かず、外のファイルを返さない)。
 - キャッシュキー(確定式):
 
 ```
-cacheKey = hash('sha256',
-    "{uploadsからの相対パス}|{filemtime}|{w}|{h}|{o正規化文字列}"
-)  // hex 64文字のうち先頭40文字を使用
-ext      = 元画像の拡張子(小文字化。jpeg→jpg に正規化)
+cacheKey = substr(hash('sha256', serialize(
+    [uploadsからの相対パス, filemtime, w, h, crop, quality]
+)), 0, 40)
 ```
 
+- `crop`・`quality`は、`o`を既定値で補った値である。`ThumbnailConfig`の既定値を変えると、オプションを省いたURL(`o`が空)も別のキーになる。
 - `filemtime` をキーに含めるため、元画像が差し替わると自動的に別キャッシュへ切り替わる(明示的な無効化処理が不要)。旧ファイルはGCで回収する。
-- 許可拡張子: `jpg, png, gif, webp, avif`。それ以外のsrcは `SourceResolver` が拒否する。
-- GC: WP-CLI `wp tmswp thumb clear [--days=<n>]`(後述)。自動cronは持たない(DECISION: 運用判断。必要ならapp側で `wp_schedule_event` からCLI相当処理を呼ぶレシピをrules/に記載)。
+- 拡張子(`ext`)は、画像エディタが実際に書いたファイルの拡張子である(元画像と同じ形式。`image_editor_output_format`のフィルタが出力形式を変えると、その形式)。キャッシュの有無は`jpg`・`png`・`gif`・`webp`・`avif`の順で確かめる。
+- 許可拡張子(元画像): `jpg, jpeg, png, gif, webp, avif`。それ以外のsrcは `SourceResolver` が拒否する。
+- ネガティブキャッシュ: 失敗の印は、キーが変わる(元画像の差し替え・指定・既定値の変更)か、GCで消えるまで有効である。消えた後の最初の要求で1回だけ生成を試し直す。
+- 302のキャッシュ: 生成済みのファイルへの302は`Cache-Control: public, max-age={redirectMaxAge}`(既定3600秒)。長期のキャッシュは、生成済みの静的なファイル(Webサーバーが返す。ヘッダはWebサーバーの設定による)の側で行う。元画像への302(失敗・劣化・ロックの競合)は`no-store`。
+- GC(D-51): WP-CLI `wp tmswp thumb clear [--days=<n>]`。
+  - RESTのルートが既存のキャッシュのファイルを返すたびに、そのファイルの更新日時を今にする(手順6)。ファイルの更新日時は、最後にREST経由で返した(または生成した)日時になる。
+  - `--days=<n>`を指定すると、更新日時がn日より前のファイル(サムネイル・失敗の印・残った一時ファイル)だけを消す。指定しなければすべて消す。どちらも`index.html`は消さない。
+  - GCと`status`は、キャッシュのディレクトリが無ければ0件である。あるのに印が無ければ、何も消さずに`TMSWP\Core\Exception\RuntimeException`にする(D-29。`cacheDirName`の誤りを知らせる)。印のファイルは、GCと`status`の対象にしない。
+  - GCと`status`が扱うのは、キャッシュ自身が作ったファイルだけである。shardのディレクトリの直下にあり、名前が40桁の16進のキーで始まり、そのキーの先頭2文字がshardのディレクトリ名と同じ、シンボリックリンクでない通常のファイルに限る。それ以外のファイル・ディレクトリ(キャッシュのディレクトリの直下のファイル、`cacheDirName`がuploadsの既存のディレクトリと同じ名前のときの元画像等)には触れない。
+  - キーのファイル(`{key}.*`)は、キーごとにそのキーのロックを待たずに取り、取れたキーのファイルだけを消す。生成中(ロックを持たれている)のキーは飛ばすため、生成中のロックと一時ファイルは消えない。ロックのファイルは、ロックを持ったまま手放す前に消す(異常終了で残ったロックのファイルも消える)。
+  - `n`は正の整数で、n日は`redirectMaxAge`秒より長くなければならない(違えば`TMSWP\Core\Exception\InvalidArgumentException`)。ブラウザ等にキャッシュされた302が、消したファイルを指さないためである。
+  - 静的なURLへの直接のアクセス(`tms_thumb()`が静的なURLを返した後の表示や、ページキャッシュのHTML)は、Apacheが返すため更新日時を変えない。消したファイルは、次の`tms_thumb()`がRESTのURLを返して作り直す。ページキャッシュのHTMLに残った静的なURLは、ページキャッシュが切れるまで404になるため、`--days`はページキャッシュの寿命より長くする。
+  - 自動cronは持たない(DECISION: 運用判断。必要ならapp側で `wp_schedule_event` からCLI相当処理を呼ぶレシピをrules/に記載)。
 
 ## 1.4 クラス仕様
 
-### `TMSWP\Thumbnail\Thumbnail`
-
-パッケージのエントリポイント兼URL生成ファサード。
+### `TMSWP\Thumbnail\Thumbnail`(パッケージの入口)
 
 ```php
-final class Thumbnail
+final class Thumbnail implements \TMSWP\Core\Kernel\ExtensionInterface
 {
-    private static ?ThumbnailConfig $config = null;
+    public function __construct(ThumbnailConfig $config = new ThumbnailConfig());
 
-    public static function register(?ThumbnailConfig $config = null): void;
-    public static function url(int|string $src, ?int $width = null, ?int $height = null, array $options = []): string;
-    public static function config(): ThumbnailConfig;   // 未registerならLogicException
-    public static function isRegistered(): bool;
-    public static function reset(): void;               // テスト用。設定を破棄する
+    public function register(\TMSWP\Core\Kernel\Kernel $kernel): void;
+
+    /** サイトでthumbnailを登録したインスタンス。無ければLogicException */
+    public static function current(): self;
+
+    /** @return string|null 画像が無いときはnull */
+    public function url(int|string $src, ?int $width = null, ?int $height = null, array $options = []): ?string;
+
+    public function config(): ThumbnailConfig;
+
+    /** 登録したKernel。未登録ならLogicException */
+    public function kernel(): \TMSWP\Core\Kernel\Kernel;
 }
 ```
 
-- `register()`: 設定を保持し、`rest_api_init` で `RestController` を登録、WP-CLI環境なら `ThumbCommand` を登録する。二重呼び出しは `LogicException`。
-- `url()`: 振る舞い(確定手順)
-  1. `$src` がintなら `"id:{$src}"` へ正規化。stringならuploadsベースURL配下かを検証(外なら `InvalidThumbSourceException`)。
-  2. `$width`/`$height` がともにnull/0なら `InvalidThumbSourceException`。上限超過も同様(URL生成時点で開発者ミスを検出)。
-  3. オプションを正規化(1.2参照)。
-  4. `SourceResolver::resolve()` でローカルパス解決を試み、解決できてキャッシュファイルが既に存在すれば**キャッシュファイルの静的URLを返す**(エンドポイントを経由させない)。
-  5. それ以外は署名付きRESTエンドポイントURLを返す。
-- 例外はテンプレート描画境界では隔離する。本番(`WP_DEBUG` 無効)では `url()` 内で `Log::warning()` を記録して空文字 `''` を返す。`WP_DEBUG` 有効時は記録したうえで捕捉した例外をそのまま送出し、開発者の不正なサイズ指定・src指定を即時検出する。
+`KernelConfig`の`extensions`に`new Thumbnail()`を渡したKernelで、thumbnailが有効になる(共通規約「登録API」。サイトに1つのKernelだけ。§1.1)。コンストラクタは、WordPressの関数を呼ばない。
+
+`register()`の振る舞い(登録したKernelのbootの中で1回):
+
+1. このインスタンスを登録済みなら`TMSWP\Core\Exception\LogicException`。起動したほかのKernelにthumbnailを登録済みなら`LogicException`(D-50)。
+2. 訳の読み込み(`init` priority 1。`load_textdomain('tmswp', <thumbnail>/languages/tmswp-{$locale}.mo)`)、RESTのルートの登録(`rest_api_init` priority 10)、RESTのルートの確認と通知(`admin_notices` priority 10。`RestRouteCheck`)を、`$kernel->defer()`で予約する。
+3. WP-CLIの環境なら、`WP_CLI::add_command('tmswp thumb', new ThumbCommand($this))`で登録する。
+
+`url()`の振る舞い(確定手順):
+
+1. `$src`が`0`か空文字なら`null`(画像が無い。アイキャッチの未設定は`get_post_thumbnail_id()`が`0`を返す)。負の整数は`InvalidThumbSourceException`。intなら`"id:{$src}"`へ正規化する。
+2. `$width`/`$height` がともにnull/0、負、上限超過なら `InvalidThumbSourceException`(URL生成時点で開発者ミスを検出)。
+3. オプションを正規化する(§1.2)。誤りは`InvalidThumbOptionException`。
+4. `SourceResolver::resolve()` でローカルパスに解決する。`null`(添付ファイルが無い・実体が無い)なら`null`を返す。uploadsの外・許可されない拡張子は`InvalidThumbSourceException`。
+5. キャッシュファイルが既に存在すれば**キャッシュファイルの静的URLを返す**(エンドポイントを経由させない)。
+6. それ以外は署名付きRESTエンドポイントURLを返す(値はURLエンコードする。§1.2)。
+
+エラー方針(00-overview.md §5.6。D-29):
+
+- 画像が無いこと(1と4の`null`)はエラーにしない。debugでも例外にせず、記録もしない。
+- 引数とオプションの誤り(`InvalidThumbSourceException`・`InvalidThumbOptionException`)は、debugに関係なく例外のまま投げる。
+- 実行時の失敗(元画像の更新日時が読めない、`wp_upload_dir()`の異常等。`TMSWP\Core\Exception\RuntimeException`)は、登録したKernelがdebugなら例外のまま投げ、本番ならKernelのロガーにerrorで記録して`null`を返す。文脈は例外のクラス・場所・previousのクラスだけ(§1.2)。ただし、4で解決した元画像がその後に消えていたら、画像が無いとして`null`を返す。
+- debugの判定は、登録したKernelの`config()->debug`である。`WP_DEBUG`を直接見ない(D-33)。
 
 ### `TMSWP\Thumbnail\ThumbnailConfig`
 
@@ -213,21 +284,26 @@ final class Thumbnail
 final readonly class ThumbnailConfig
 {
     public function __construct(
-        public int $maxDimension = 2560,          // WPのbig_image閾値に合わせる
-        public int $defaultQuality = 82,
+        public int $maxDimension = 2560,          // WPのbig_image閾値に合わせる。1以上
+        public int $defaultQuality = 82,          // 1〜100
         public bool $defaultCrop = true,
         public string $cacheDirName = 'tmswp-thumb',
+        public int $redirectMaxAge = 3600,        // 生成済みのファイルへの302をキャッシュさせる秒数。1以上
     ) {}
 }
 ```
+
+- コンストラクタで値を確かめ、範囲・形の外なら`TMSWP\Core\Exception\InvalidArgumentException`(設定の誤り。D-29)。`cacheDirName`は、英数字で始まり英数字・`.`・`_`・`-`だけの1つの名前(`/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/`。空・`.`・`..`・パスの区切り・`../victim`・末尾の改行等を拒む)。
+- キャッシュのディレクトリは`{uploadsの実パス}/{cacheDirName}`である。`Thumbnail`は、キャッシュを操作する前に、そのディレクトリが既にあるならその実パスが同じ(シンボリックリンク等でuploadsの外を指していない)ことを確かめ、違えば`TMSWP\Core\Exception\RuntimeException`にする。
 
 ### `TMSWP\Thumbnail\UrlSigner`
 
 ```php
 final class UrlSigner
 {
-    public function __construct(private readonly string $secret) {}  // wp_salt('auth')を注入
+    public function __construct(private readonly string $key) {}  // deriveKey(wp_salt('auth'))を注入
 
+    public static function deriveKey(string $secret): string;    // HKDF(SHA-256)、info 'tmswp/thumbnail/url-signature'
     public function sign(string $src, int $width, int $height, string $options): string;
     public function verify(string $src, string $width, string $height, string $options, string $signature): bool;
 }
@@ -237,18 +313,18 @@ final class UrlSigner
 
 ```
 verify(src, width, height, options, signature):
-  payload = "{src}|{width}|{height}|{options}"   // 受信文字列そのまま。キャスト・trim・再正規化は行わない
-  return hash_equals(hash_hmac('sha256', payload, secret), signature)
+  payload = serialize([src, width, height, options])   // 受信文字列そのまま。キャスト・trim・再正規化は行わない
+  return hash_equals(hash_hmac('sha256', payload, key), signature)
 ```
 
-`sign()`(URL生成側)は整数を10進最短表記で埋め込むため、`w=050`・`h=+1` 等の異表記や `o` のキー並べ替え・余分キー混入は生成時payloadと一致せず、署名不一致として確実に弾かれる。タイミング攻撃対策のため `===` 比較は禁止。
+`sign()`(URL生成側)は整数を10進最短表記の文字列にして埋め込むため、`w=050`・`h=+1` 等の異表記や `o` のキー並べ替え・余分キー混入は生成時payloadと一致せず、署名不一致として確実に弾かれる。タイミング攻撃対策のため `===` 比較は禁止。
 
 ### `TMSWP\Thumbnail\SourceResolver`
 
 ```php
 final class SourceResolver
 {
-    /** @return non-empty-string|null 解決済み絶対パス(uploads配下保証)。不正・不在はnull */
+    /** @return non-empty-string|null 解決済み絶対パス(uploads配下保証)。ファイルが無いときはnull */
     public function resolve(string $src): ?string;
 }
 ```
@@ -257,17 +333,27 @@ final class SourceResolver
 
 ```
 1. パス取得(いずれかの経路):
-   a. "id:{n}" 形式 → get_attached_file(n)。falseならnull
-   b. URL形式 → wp_upload_dir()['baseurl'] に '/' を付与した文字列で
-      前方一致しなければnull。一致したら相対パス部を basedir に連結
-2. 拡張子が許可リスト外ならnull。file_exists() しなければnull
+   a. "id:{n}"形式 → get_attached_file(n)。falseならnull(添付ファイルが無い)
+   b. URL形式 → rtrim(wp_upload_dir()['baseurl'], '/')に'/'を付与した文字列(接頭辞)で前方一致しなければ
+      InvalidThumbSourceException。baseurlの末尾が'/'のサイトでは、wp_get_attachment_url()が
+      baseurl . "/$file"でURLを作り'//'になるため、そのときだけ接頭辞の直後の'/'を1つ余分に受け入れる。
+      一致したら相対パス部をrawurldecodeしてbasedirに連結
+      (空・NULを含む・先頭が'/'(エンコードした'/'と、それ以上の重なり)→ InvalidThumbSourceException)
+1.5. パスの文字列での封じ込め(ファイルの有無を見る前。経路a/bの両方):
+   basedir + DIRECTORY_SEPARATORで始まらない、またはその後(直後の区切りの重なりを除いた残り)に
+   空の区間(//)・'.'・'..'の区間・NULを含むならInvalidThumbSourceException
+   (uploadsの外を指すsrcは、相手のファイルの有無に関係なく例外。直後の重なりを許すのは、get_attached_file()が
+   basedir . "/$file"でパスを作るため、basedirの末尾が'/'のサイトでは'//'になるからである)
+2. 拡張子が許可リスト外ならInvalidThumbSourceException。is_file()でなければnull(実体が無い)
 3. realpath封じ込め(最終ゲート。経路a/bの両方に必ず適用する):
-   base = realpath(basedir)。false なら null
-   real = realpath(取得パス)。false なら null
-   str_starts_with(real, base . DIRECTORY_SEPARATOR) でなければ null
-   合格したら real を返す
+   base = realpath(basedir)、real = realpath(取得パス)
+   どちらかがfalse、またはstr_starts_with(real, base . DIRECTORY_SEPARATOR)でなければ
+   InvalidThumbSourceException
+   realの拡張子も許可リストで確かめる(シンボリックリンクの名前だけで判定しない)。外ならInvalidThumbSourceException
+   合格したらrealを返す
 ```
 
+- `null`は「画像が無い」(データが無い)、`InvalidThumbSourceException`は「srcの誤り」である。`url()`は前者を`null`、後者を例外にし、エンドポイントはどちらも404にする。
 - 手順3は `realpath(basedir)` に**末尾ディレクトリ区切り `DIRECTORY_SEPARATOR` を付与した文字列**で `str_starts_with()` 判定を行い、prefix一致の境界をディレクトリ単位に限定する。`basedir` が `/var/www/uploads` のとき `/var/www/uploads-evil/x.jpg` のような「同prefix別ディレクトリ」の誤通過を遮断する(旧 `Filesystem::is_child_path` のstrpos前方一致バグの再発防止)。`../` 混入・シンボリックリンク脱出も同時に遮断される。
 - 経路a(`id:{n}`)で得た `get_attached_file()` の結果も手順3を必ず通す。添付ファイルメタ(`_wp_attached_file`)が改変された環境ではuploads外を指しうるため、DB由来のパスを信頼しない。
 
@@ -278,14 +364,42 @@ final class ThumbCache
 {
     public function __construct(private readonly string $baseDir, private readonly string $baseUrl) {}
 
-    public function key(string $relativePath, int $mtime, int $width, int $height, string $options): string;
-    public function path(string $key, string $ext): string;   // 絶対パス
-    public function url(string $key, string $ext): string;
-    public function exists(string $key, string $ext): bool;
+    public function key(string $relativePath, int $mtime, int $width, int $height, bool $crop, int $quality): string;
+    public function find(string $key): ?string;              // 生成済みのファイルの絶対パス。無ければnull
+    public function url(string $path): string;               // キャッシュのファイルの静的URL
+    public function touch(string $path): void;               // 更新日時を今にする
+    public function hasFailed(string $key): bool;
+    public function markFailed(string $key): void;
+    public function ensureDirectory(string $key): void;      // ディレクトリ・印・index.html。印の無い空でない既存のディレクトリと失敗はRuntimeException
+    public function lock(string $key): ?ThumbLock;           // 待たずに取り、inodeを確かめる。競合ならnull
+    public function temporaryPath(string $key, string $extension): string;
+    public function commit(string $writtenPath, string $key): string;   // rename()で置き換え、キャッシュのパスを返す
+    public function discard(string $path): void;
     /** @return int 削除ファイル数 */
-    public function clear(?int $olderThanDays = null): int;
+    public function clear(?int $olderThanDays = null): int;  // キーごとにロックを取って消す。1未満はInvalidArgumentException
+    /** @return array{files: int, bytes: int, failed: int} */
+    public function status(): array;                         // index.html・ロック・一時ファイルは数えない
 }
 ```
+
+- `lock()`は、`flock(LOCK_EX|LOCK_NB)`を取った後に、開いたファイル(`fstat()`)とパスの今のファイル(`clearstatcache()`の後の`stat()`)のinodeとデバイスが一致するかを確かめる。一致しない(パスが消えた、または別のファイルに替わった)なら、手放して開き直す(3回まで。取れなければ競合としてnull)。調べる間に別のholderがパスを消すのは予想どおりの競合なので、`stat()`の失敗の警告を外に出さずに受け、パスが無くなっていれば不一致として扱う。パスがあるのに`stat()`が失敗したときは`TMSWP\Core\Exception\RuntimeException`にする。
+- `ThumbLock::release()`は、ロックを持ったままロックのファイルを消してから、ロックを手放す。消す前に別のプロセスが古いファイルを開いていて、手放した後にそのflockを取っても、`lock()`の確認で取り直すため、同じキーのロックを2つのプロセスが同時に持つことは無い。GCも、キーのロックを持ったままロックのファイルを消す。
+
+### `TMSWP\Thumbnail\ThumbGenerator`
+
+```php
+final class ThumbGenerator
+{
+    /** @return string save()が返したpath(出力形式のフィルタで$targetと拡張子が違いうる) */
+    public function generate(string $source, string $target, int $width, int $height, bool $crop, int $quality): string;
+
+    /** @return array{0: int, 1: int}|null リサイズに渡す幅・高さ。元画像の寸法のままでよければnull */
+    public static function fit(int $width, int $height, int $sourceWidth, int $sourceHeight, bool $crop): ?array;
+}
+```
+
+- 元画像の寸法を超える要求は、元画像の寸法で頭打ちにする(拡大しない)。幅と高さの両方を指定した切り抜きは、指定の縦横比のまま元画像に収まる大きさに縮める。それ以外(切り抜かない、または片方が0)は、指定の枠に収まるよう元画像の縦横比で縮める。縮めた結果が元画像と1px以内なら、リサイズせずに元画像の寸法で保存する(WordPressの画像エディタは、拡大と同じ寸法へのリサイズをエラーにするため)。
+- 画像エディタが読めない・リサイズできないときは`Exception\UnprocessableImageException`。品質の設定・保存の失敗は`TMSWP\Core\Exception\RuntimeException`。
 
 ### `TMSWP\Thumbnail\RestController`
 
@@ -296,7 +410,9 @@ final class RestController
         private readonly UrlSigner $signer,
         private readonly SourceResolver $resolver,
         private readonly ThumbCache $cache,
+        private readonly ThumbGenerator $generator,
         private readonly ThumbnailConfig $config,
+        private readonly \TMSWP\Core\Kernel\Kernel $kernel,   // 登録したKernel(debug・ロガー)
     ) {}
 
     public function registerRoutes(): void;  // register_rest_route('tmswp/v1', '/thumb', ...)
@@ -304,53 +420,82 @@ final class RestController
 }
 ```
 
-`permission_callback` は `'__return_true'`(認可は署名検証が担う)。処理手順は1.2の確定アルゴリズムに従う。
+`permission_callback`は`'__return_true'`(認可は署名検証が担う)。処理手順は1.2の確定アルゴリズムに従う。
+
+### `TMSWP\Thumbnail\RestRouteCheck`
+
+```php
+final class RestRouteCheck
+{
+    public function notice(): void;      // admin_notices。manage_optionsのユーザーで、isAvailable()がfalseなら通知
+    public function isAvailable(): bool; // 訪問者として、認証のフィルタを通り、ルートのコールバックまで届くか
+}
+```
+
+`isAvailable()`は、確かめる間だけ現在のユーザーを未ログイン(`wp_set_current_user(0)`)にし、要求のnonce(`$_GET`・`$_POST`・`$_REQUEST`の`_wpnonce`と、`$_SERVER['HTTP_X_WP_NONCE']`の4つ)を無い状態にして、次の両方を確かめる。訪問者の要求にはnonceが無い。WordPressのcookieの認証の検査(`rest_cookie_check_errors`)は、未ログインでもnonceがあれば照合してエラーを返すため、管理画面の要求のnonceを残すと誤って「使えない」と判定する。フィルタは外さないので、コールバックの順序は変わらない。状態を変える前からtry/finallyで囲み、例外のときも含めて、ユーザーを戻す。nonceは、元にあったキーを元の値(nullを含む)に戻し、元に無かったキー(確かめる間に足されたもの)を消す。
+
+1. `apply_filters('rest_authentication_errors', null)`が`WP_Error`でない。
+2. `rest_do_request()`で署名の無い`GET /tmswp/v1/thumb`を送ると、ルートのコールバックが返す`tmswp_thumb_unsigned`になる。
 
 ### `TMSWP\Thumbnail\Cli\ThumbCommand`
 
 ```php
 final class ThumbCommand
 {
-    /** wp tmswp thumb clear [--days=<n>] : キャッシュ削除(--days指定時はn日より古いもののみ) */
+    public function __construct(Thumbnail $thumbnail);
+    /** wp tmswp thumb clear [--days=<days>] : キャッシュ削除(--days指定時は更新日時がn日より前のもののみ) */
     public function clear(array $args, array $assocArgs): void;
-    /** wp tmswp thumb status : キャッシュ件数・合計サイズを表示 */
+    /** wp tmswp thumb status : サムネイルの件数・合計サイズと、失敗の印の件数を表示 */
     public function status(array $args, array $assocArgs): void;
 }
 ```
 
-`Thumbnail::register()` 内で `WP_CLI::add_command('tmswp thumb', ...)` 登録。
+- 各メソッドは、WP-CLIのsynopsisのdocblock(`## OPTIONS`・`## EXAMPLES`)を持つ。
+- `--days`は正の整数で、n日が`redirectMaxAge`秒より長くなければ`TMSWP\Core\Exception\InvalidArgumentException`(§1.3)。
+- WP-CLIのAPIは`WP_CLI::success()`等で直接呼ぶ(`['WP_CLI', ...]`のcallableを組み立てない)。
+- `Thumbnail::register()`が、WP-CLIの環境で`WP_CLI::add_command('tmswp thumb', ...)`で登録する。
 
 ### グローバルヘルパ `tms_thumb()`
 
-パッケージの `composer.json` の `autoload.files` で定義(`function_exists` ガード付き)。
+パッケージの`composer.json`の`autoload.files`で定義する。`function_exists`のガードで囲まない。同じ名前の関数が先に定義されていると、PHPの関数の再宣言のエラーで止まる(別の実装を黙って使わない)。
 
 ```php
-function tms_thumb(int|string $src, ?int $width = null, ?int $height = null, array $options = []): string
+function tms_thumb(int|string $src, ?int $width = null, ?int $height = null, array $options = []): ?string
 {
-    return \TMSWP\Thumbnail\Thumbnail::url($src, $width, $height, $options);
+    return \TMSWP\Thumbnail\Thumbnail::current()->url($src, $width, $height, $options);
 }
 ```
 
-旧 `iwf_thumb()`(5プロジェクト44箇所で利用)と同じ書き味を `tms_` 接頭辞で踏襲する。
+旧 `iwf_thumb()`(5プロジェクト44箇所で利用)と同じ書き味を `tms_` 接頭辞で踏襲する。thumbnailを登録したKernelが無ければ`LogicException`(D-50)。
 
 ## 1.5 利用例(app側)
 
 ```php
-// functions.php
-\TMSWP\Thumbnail\Thumbnail::register(new \TMSWP\Thumbnail\ThumbnailConfig());
+// tmswp-kernel.php
+use TMSWP\Core\Kernel\KernelConfig;
+use TMSWP\Thumbnail\Thumbnail;
+use TMSWP\Thumbnail\ThumbnailConfig;
+
+return KernelConfig::theme(
+    __DIR__ . '/app',
+    'App',
+    extensions: [new Thumbnail(new ThumbnailConfig(defaultQuality: 80))],
+);
 ```
 
 ```php
-<?php /* template-parts/card.php — WP標準テンプレートにechoするだけ */ ?>
-<img src="<?php echo esc_url(tms_thumb(get_post_thumbnail_id(), 400, 300)); ?>" alt="">
-<img src="<?php echo esc_url(tms_thumb($url, 1200, 0, ['crop' => false, 'quality' => 90])); ?>" alt="">
+<?php /* template-parts/card.php — 画像が無い(null)ときはimgを出さない */ ?>
+<?php $thumb = tms_thumb(get_post_thumbnail_id(), 400, 300); ?>
+<?php if ($thumb !== null) : ?>
+<img src="<?php echo esc_url($thumb); ?>" alt="">
+<?php endif; ?>
 ```
 
 ## 1.6 旧iwf2bからの設計根拠
 
 - `Thumb` + `TimthumbDriver` は無署名クエリURL生成のみで、timthumb本体(2011年RCEの代名詞・メンテ終了)を各案件が配置する前提だった → 署名付きURL+WP_Image_Editorで全面置換。
 - `composer.json` の `ext-gd` はtimthumb前提の幻の依存だった → 本パッケージのrequireへ移設(DR-14)。
-- staticシングルトン+`set_driver` の不整合状態(例外時にdriverのみ設定済み)→ `register()` 一発の不可分な初期化へ。
+- staticシングルトン+`set_driver` の不整合状態(例外時にdriverのみ設定済み)→ `KernelConfig`の`extensions`に渡したインスタンスの`register()`で初期化し、静的な設定を持たない。
 - `AbstractPost::get_thumbnail()` の本文`<img>`抽出+`@getimagesize`(リモート同期I/O)はコアの責務外 → コアには `tmswp/post/thumbnail_fallback` フィルタポイントのみ残し、本文画像抽出は app 側レシピ(`rules/post-type.md`)で実装する(DR-15)。
 
 ---
@@ -920,14 +1065,31 @@ FormDefinition::create('contact')
 
 - [ ] 無署名・署名不一致リクエストが403になる(統合テスト)
 - [ ] `w=050` 等、URL生成時と異なる表記のパラメータが署名不一致403になる(生文字列payload照合のテスト)
+- [ ] 値の中の`|`で別の値の組み合わせと同じ署名にならず、鍵が`wp_salt('auth')`そのものでなく用途を入れて導出したものである(ユニットテスト)
 - [ ] `maxDimension` 超過の `w`/`h` が400になる(署名済みでも拒否=多層防御のテスト)
 - [ ] 署名済みURLでも `o` の `quality` 範囲外(0・101等)・許可外キー混入が400になる(手順2.5のテスト)
-- [ ] `src` に `../` やuploads外URL・リモートURLを与えると `SourceResolver` がnullを返しエンドポイントが404を返す
-- [ ] `basedir` と同prefixの別ディレクトリ(例: `uploads-evil/x.jpg`)・uploads外を指す添付メタ(`id:n`)が `SourceResolver` でnullになる(realpath最終ゲートのテスト)
-- [ ] 初回リクエストで `uploads/tmswp-thumb/{shard}/{key}.{ext}` が生成され302が返り、`tms_thumb()` の2回目以降の呼び出しがキャッシュ静的URLを直接返す
-- [ ] 元画像の `filemtime` 変更でキャッシュキーが変わる
-- [ ] `tms_thumb()` が不正入力時に、WP_DEBUG 無効では例外を投げず空文字を返し `Log::warning` し、WP_DEBUG 有効では記録のうえ例外を送出する
-- [ ] `wp tmswp thumb clear --days=30` が対象ファイルのみ削除する
+- [ ] `src` に `../` やuploads外URL・リモートURLを与えると、エンドポイントが404を返す
+- [ ] `basedir` と同prefixの別ディレクトリ(例: `uploads-evil/x.jpg`)・uploads外を指す添付メタ(`id:n`)が `SourceResolver` で拒否される(realpath最終ゲートのテスト)
+- [ ] `..`の区間・エンコードした絶対パス等でuploadsの外を指すsrcが、相手のファイルの有無に関係なく`InvalidThumbSourceException`になる。basedirの末尾が`/`のサイトの添付ファイルは解決される。uploadsの外の画像を指すシンボリックリンクと、実体が許可されない拡張子のシンボリックリンクは拒む(ユニットテスト)
+- [ ] 既定値以外のオプション(`crop=0&quality=90`)と`%`を含むsrcのURLが403にならず、生成される(統合テスト)
+- [ ] 初回リクエストで `uploads/tmswp-thumb/{shard}/{key}.{ext}` が実画像として生成され、`Cache-Control: public, max-age={redirectMaxAge}`の302が返り、`tms_thumb()` の2回目以降の呼び出しがキャッシュ静的URLを直接返す。RESTが既存のファイルを返すと、ファイルの更新日時が今になる(統合テスト)
+- [ ] 生成が一時ファイル+`rename()`とキー単位のロックで行われ、一時ファイルとロックのファイルが残らない。ロックの競合では、元画像へ`no-store`の302を返す(統合テスト)
+- [ ] 手放すときに消したロックのファイルを、消す前に開いていたプロセスが後からflockしても、新しいロックのファイルを持つプロセスと同時にロックを持たない(実OSのflockと複数のプロセスによるユニットテスト)
+- [ ] GCが、ロックを持たれている(生成中の)キーのロックと一時ファイルを消さず、残ったロックのファイルは消す。ロックのファイルを調べる間に消されても、警告を出さずに取り直す(ユニットテスト)
+- [ ] GCと`status`が、キャッシュ自身が作ったファイルだけを扱い、キャッシュの形でないファイル(shardの中のシンボリックリンク、16進でない2文字のディレクトリの中のファイルを含む)を消さない。shardのディレクトリが外を指すシンボリックリンクなら、読み書きの前に例外になる(ユニットテスト)
+- [ ] キャッシュのディレクトリの初回の作成で印のファイルができ、印の無い既存のディレクトリ(年と月のディレクトリにキーの形の名前のファイルがある等)では、`clear`・`status`・`ensureDirectory`が例外になって何も消さない(ユニットテスト)
+- [ ] baseurl・basedirの末尾が`/`のサイトでも、WordPressと同じ結合で作ったURL・添付ファイルのパスを解決する(ユニットテスト)
+- [ ] 元画像より大きい要求が元画像の寸法で頭打ちになり、2回目の要求で再生成しない(統合テスト)
+- [ ] 画像エディタが扱えない元画像は、本番では元画像へ`no-store`の302を返してKernelのロガーにerrorで記録し(文脈は例外のクラス・場所・previousのクラスだけ)、同じ要求で再生成も再記録もしない。debugのKernelでは例外になる(統合テスト)
+- [ ] 解決の後に元画像が消えた要求は、debugでも本番でも404になる。本番で、元画像のURLを決める前の準備に失敗したら、Kernelのロガーに記録して500を返す(統合テスト)
+- [ ] `ThumbnailConfig`が、範囲外の`maxDimension`・`defaultQuality`・`redirectMaxAge`と、1つの安全な名前でない`cacheDirName`(`../victim`等)を例外にし、uploadsの外を指すキャッシュのディレクトリを操作の前に例外にする(ユニットテスト)
+- [ ] 出力形式を変えるフィルタ(`image_editor_output_format`)が効くと、`save()`が書いたファイルの拡張子でキャッシュし、2回目は再生成しない(統合テスト)
+- [ ] 元画像の `filemtime` の変更と、`ThumbnailConfig`の既定のcrop・qualityの変更で、キャッシュキーが変わる
+- [ ] `tms_thumb()`が、アイキャッチ未設定・添付ファイルの実体が無いときはdebugでも例外を投げずに`null`を返す。引数・オプションの誤りはdebugに関係なく例外。実行時の失敗は、登録したKernelがdebugなら例外、本番ならKernelのロガーにerrorで記録して`null`を返す(文脈に例外のオブジェクト・メッセージ・トレースが無い)。`WP_DEBUG`を見ない
+- [ ] thumbnailを2つ目のKernelに登録すると`LogicException`になり、登録が無い状態の`tms_thumb()`も`LogicException`になる
+- [ ] RESTのルートが訪問者から使えない(ルートの削除・訪問者への認証のエラー)ことを検出して、管理画面で`manage_options`のユーザーに通知し、使えるときと権限の無いユーザーには通知しない。管理画面の要求のnonce(GET・POST・REQUEST・X-WP-Nonce)で誤って通知せず、確かめた後(例外のときを含む)にユーザー・nonceのキーの有無と値・認証のフィルタの順序が元のままである(統合テスト)
+- [ ] `wp tmswp thumb clear --days=30` が、更新日時が30日より前のファイルだけを削除し、`index.html`を残す。`--days`の0・負・整数でない値・`redirectMaxAge`以下の日数が例外になる。`wp tmswp thumb status`が`index.html`・ロック・一時ファイルを数えない
+- [ ] `tms_thumb()`が`function_exists`のガードで囲まれていない(コードレビュー)
 - [ ] 検証: `wp-env` 上で `curl -i "$(wp eval 'echo tms_thumb(123, 100, 100);')"` → 302 → 画像取得
 
 ## tmswp/settings-page
