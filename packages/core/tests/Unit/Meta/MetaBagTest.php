@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Unit\Meta;
 
+use Closure;
+use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Attribute\MetaSchema;
 use TMSWP\Core\Exception\InvalidArgumentException;
 use TMSWP\Core\Exception\InvalidSchemaException;
@@ -16,13 +18,70 @@ use TMSWP\Core\Meta\MetaValueType;
 use TMSWP\Core\Meta\ObjectType;
 use TMSWP\Testing\UnitTestCase;
 
+/**
+ * MetaBagの型付きアクセサの値の決め方と、書き込みの検査(docs/04。docs/10 §8.2のMetaBag)。
+ */
 final class MetaBagTest extends UnitTestCase
 {
     /**
      * すべての getter が、ストレージの値 → 引数の default → スキーマの default → ゼロ値(get() は null)の順に値を決める。
      * 型付きの getter はストレージの値とスキーマの default を自分の型にキャストし、引数の default はそのまま返す。
+     * 各行は、読み取り・ストレージに置く値(キー・値・複数行か。無ければnull)・期待値。
+     *
+     * @return iterable<string, array{Closure(MetaBag<MetaBagFixtureEntity>): mixed, array{string, mixed, bool}|null, mixed}>
      */
-    public function testEveryGetterResolvesStorageThenArgumentDefaultThenSchemaDefaultThenZeroValue(): void
+    public static function getterResolutions(): iterable
+    {
+        // 4. ストレージにも引数にもスキーマにも値が無い: 型付きの getter はその型のゼロ値、get() は null
+        yield 'zero value: int' => [static fn(MetaBag $bag): mixed => $bag->int('plain'), null, 0];
+        yield 'zero value: float' => [static fn(MetaBag $bag): mixed => $bag->float('plain'), null, 0.0];
+        yield 'zero value: bool' => [static fn(MetaBag $bag): mixed => $bag->bool('plain'), null, false];
+        yield 'zero value: string' => [static fn(MetaBag $bag): mixed => $bag->string('plain'), null, ''];
+        yield 'zero value: list' => [static fn(MetaBag $bag): mixed => $bag->list('plain'), null, []];
+        yield 'zero value: list of rows' => [static fn(MetaBag $bag): mixed => $bag->list('rows'), null, []];
+        yield 'zero value: json' => [static fn(MetaBag $bag): mixed => $bag->json('plain'), null, []];
+        yield 'zero value: get' => [static fn(MetaBag $bag): mixed => $bag->get('plain'), null, null];
+        yield 'zero value: get of rows' => [static fn(MetaBag $bag): mixed => $bag->get('rows'), null, null];
+
+        // 3. スキーマの default(getter の型にキャストする)
+        yield 'schema default: int' => [static fn(MetaBag $bag): mixed => $bag->int('int'), null, 100];
+        yield 'schema default: float' => [static fn(MetaBag $bag): mixed => $bag->float('float'), null, 1.5];
+        yield 'schema default: bool' => [static fn(MetaBag $bag): mixed => $bag->bool('bool'), null, true];
+        yield 'schema default: string' => [static fn(MetaBag $bag): mixed => $bag->string('string'), null, 'schema'];
+        yield 'schema default: list' => [static fn(MetaBag $bag): mixed => $bag->list('array'), null, ['schema']];
+        yield 'schema default: json' => [static fn(MetaBag $bag): mixed => $bag->json('object'), null, ['from' => 'schema']];
+        yield 'schema default: get' => [static fn(MetaBag $bag): mixed => $bag->get('int'), null, 100];
+        yield 'schema default: string of a float' => [static fn(MetaBag $bag): mixed => $bag->string('float'), null, '1.5'];
+
+        // 2. 引数の default はスキーマの default より優先し、キャストしない
+        yield 'argument default: int' => [static fn(MetaBag $bag): mixed => $bag->int('int', 7), null, 7];
+        yield 'argument default: float' => [static fn(MetaBag $bag): mixed => $bag->float('float', 9.5), null, 9.5];
+        yield 'argument default: bool' => [static fn(MetaBag $bag): mixed => $bag->bool('bool', false), null, false];
+        yield 'argument default: string' => [static fn(MetaBag $bag): mixed => $bag->string('string', 'argument'), null, 'argument'];
+        yield 'argument default: list' => [static fn(MetaBag $bag): mixed => $bag->list('array', ['argument']), null, ['argument']];
+        yield 'argument default: list of rows' => [static fn(MetaBag $bag): mixed => $bag->list('rows', [3]), null, [3]];
+        yield 'argument default: json' => [static fn(MetaBag $bag): mixed => $bag->json('object', ['from' => 'argument']), null, ['from' => 'argument']];
+        yield 'argument default: get' => [static fn(MetaBag $bag): mixed => $bag->get('string', 'argument'), null, 'argument'];
+        yield 'argument default: get of rows' => [static fn(MetaBag $bag): mixed => $bag->get('rows', [3]), null, [3]];
+
+        // 1. ストレージの値は引数の default・スキーマの default より優先し、getter の型にキャストする
+        yield 'storage: int' => [static fn(MetaBag $bag): mixed => $bag->int('int', 7), ['int', '42', false], 42];
+        yield 'storage: float' => [static fn(MetaBag $bag): mixed => $bag->float('float', 9.5), ['float', '2.25', false], 2.25];
+        yield 'storage: bool' => [static fn(MetaBag $bag): mixed => $bag->bool('bool', true), ['bool', '0', false], false];
+        yield 'storage: string' => [static fn(MetaBag $bag): mixed => $bag->string('string', 'argument'), ['string', 42, false], '42'];
+        yield 'storage: list' => [static fn(MetaBag $bag): mixed => $bag->list('array', ['argument']), ['array', 'stored', false], ['stored']];
+        yield 'storage: list of rows' => [static fn(MetaBag $bag): mixed => $bag->list('rows', [3]), ['rows', [1, 2], true], [1, 2]];
+        yield 'storage: json' => [static fn(MetaBag $bag): mixed => $bag->json('object', ['from' => 'argument']), ['object', '{"from":"storage"}', false], ['from' => 'storage']];
+        yield 'storage: get' => [static fn(MetaBag $bag): mixed => $bag->get('string', 'argument'), ['string', 42, false], 42];
+        yield 'storage: get of rows' => [static fn(MetaBag $bag): mixed => $bag->get('rows', [3]), ['rows', [1, 2], true], [1, 2]];
+    }
+
+    /**
+     * @param Closure(MetaBag<MetaBagFixtureEntity>): mixed $read
+     * @param array{string, mixed, bool}|null $stored
+     */
+    #[DataProvider('getterResolutions')]
+    public function testEveryGetterResolvesStorageThenArgumentDefaultThenSchemaDefaultThenZeroValue(Closure $read, ?array $stored, mixed $expected): void
     {
         $storage = new ArrayMetaStorage();
         $schema = static fn(string $key, MetaValueType $type, mixed $default, bool $single = true): MetaSchemaDefinition => new MetaSchemaDefinition(MetaBagFixtureEntity::class, 'META_' . strtoupper($key), $key, $type, $default, $single, false, '', null);
@@ -44,56 +103,18 @@ final class MetaBagTest extends UnitTestCase
             static fn(): bool => true,
         );
 
-        // 4. ストレージにも引数にもスキーマにも値が無い: 型付きの getter はその型のゼロ値、get() は null
-        self::assertSame(0, $bag->int('plain'));
-        self::assertSame(0.0, $bag->float('plain'));
-        self::assertFalse($bag->bool('plain'));
-        self::assertSame('', $bag->string('plain'));
-        self::assertSame([], $bag->list('plain'));
-        self::assertSame([], $bag->list('rows'));
-        self::assertSame([], $bag->json('plain'));
-        self::assertNull($bag->get('plain'));
-        self::assertNull($bag->get('rows'));
+        if ($stored !== null) {
+            [$key, $value, $rows] = $stored;
 
-        // 3. スキーマの default(getter の型にキャストする)
-        self::assertSame(100, $bag->int('int'));
-        self::assertSame(1.5, $bag->float('float'));
-        self::assertTrue($bag->bool('bool'));
-        self::assertSame('schema', $bag->string('string'));
-        self::assertSame(['schema'], $bag->list('array'));
-        self::assertSame(['from' => 'schema'], $bag->json('object'));
-        self::assertSame(100, $bag->get('int'));
-        self::assertSame('1.5', $bag->string('float'));
+            if ($rows) {
+                self::assertIsArray($value);
+                $storage->setAll(ObjectType::Post, 10, $key, array_values($value));
+            } else {
+                $storage->set(ObjectType::Post, 10, $key, $value);
+            }
+        }
 
-        // 2. 引数の default はスキーマの default より優先し、キャストしない
-        self::assertSame(7, $bag->int('int', 7));
-        self::assertSame(9.5, $bag->float('float', 9.5));
-        self::assertFalse($bag->bool('bool', false));
-        self::assertSame('argument', $bag->string('string', 'argument'));
-        self::assertSame(['argument'], $bag->list('array', ['argument']));
-        self::assertSame([3], $bag->list('rows', [3]));
-        self::assertSame(['from' => 'argument'], $bag->json('object', ['from' => 'argument']));
-        self::assertSame('argument', $bag->get('string', 'argument'));
-        self::assertSame([3], $bag->get('rows', [3]));
-
-        // 1. ストレージの値は引数の default・スキーマの default より優先し、getter の型にキャストする
-        $storage->set(ObjectType::Post, 10, 'int', '42');
-        $storage->set(ObjectType::Post, 10, 'float', '2.25');
-        $storage->set(ObjectType::Post, 10, 'bool', '0');
-        $storage->set(ObjectType::Post, 10, 'string', 42);
-        $storage->set(ObjectType::Post, 10, 'array', 'stored');
-        $storage->set(ObjectType::Post, 10, 'object', '{"from":"storage"}');
-        $storage->setAll(ObjectType::Post, 10, 'rows', [1, 2]);
-
-        self::assertSame(42, $bag->int('int', 7));
-        self::assertSame(2.25, $bag->float('float', 9.5));
-        self::assertFalse($bag->bool('bool', true));
-        self::assertSame('42', $bag->string('string', 'argument'));
-        self::assertSame(['stored'], $bag->list('array', ['argument']));
-        self::assertSame([1, 2], $bag->list('rows', [3]));
-        self::assertSame(['from' => 'storage'], $bag->json('object', ['from' => 'argument']));
-        self::assertSame(42, $bag->get('string', 'argument'));
-        self::assertSame([1, 2], $bag->get('rows', [3]));
+        self::assertSame($expected, $read($bag));
     }
 
     public function testSingleFalseUsesAllRowsAndRequiresListOnSet(): void
@@ -134,33 +155,60 @@ final class MetaBagTest extends UnitTestCase
         self::assertSame($bag->get('related_id'), $bag->all()['related_id']);
     }
 
-    public function testSetRejectsNullForDeclaredAndUndeclaredKeys(): void
+    /** @return iterable<string, array{string}> */
+    public static function keysSetToNull(): iterable
     {
-        $storage = new ArrayMetaStorage();
-        $bag = $this->bag($storage);
-
-        foreach (['code', 'undeclared'] as $key) {
-            try {
-                $bag->set($key, null);
-                self::fail("null を set できてしまいました: {$key}");
-            } catch (InvalidArgumentException $exception) {
-                self::assertStringContainsString("meta '{$key}' cannot be set to null; use delete()", $exception->getMessage());
-            }
-
-            self::assertFalse($bag->has($key));
-        }
+        yield 'declared key' => ['code'];
+        yield 'undeclared key' => ['undeclared'];
     }
 
-    public function testSetRejectsValuesThatDoNotMatchTheSchemaType(): void
+    #[DataProvider('keysSetToNull')]
+    public function testSetRejectsNullForDeclaredAndUndeclaredKeys(string $key): void
     {
-        $storage = new ArrayMetaStorage();
-        $bag = $this->bag($storage);
+        $bag = $this->bag(new ArrayMetaStorage());
 
-        $this->assertRejectedWrite($bag, 'price', '1200', "meta 'price' expects integer, got string");
-        $this->assertRejectedWrite($bag, 'code', ['A-001'], "meta 'code' expects string, got array");
-        $this->assertRejectedWrite($bag, 'related_id', [12, '34'], "meta 'related_id' expects integer, got string");
+        try {
+            $bag->set($key, null);
+            self::fail("null を set できてしまいました: {$key}");
+        } catch (InvalidArgumentException $exception) {
+            self::assertStringContainsString("meta '{$key}' cannot be set to null; use delete()", $exception->getMessage());
+        }
 
-        // 未宣言のキーは型を問わない(WP 組み込みのメタや他プラグインのキーを書く経路)
+        self::assertFalse($bag->has($key));
+    }
+
+    /**
+     * スキーマの型に合わない値は書けない(複数行のキーは要素ごとに確かめる)。
+     *
+     * @return iterable<string, array{string, mixed, string}>
+     */
+    public static function valuesNotMatchingTheSchemaType(): iterable
+    {
+        yield 'string for an integer' => ['price', '1200', "meta 'price' expects integer, got string"];
+        yield 'array for a string' => ['code', ['A-001'], "meta 'code' expects string, got array"];
+        yield 'string element for integer rows' => ['related_id', [12, '34'], "meta 'related_id' expects integer, got string"];
+    }
+
+    #[DataProvider('valuesNotMatchingTheSchemaType')]
+    public function testSetRejectsValuesThatDoNotMatchTheSchemaType(string $key, mixed $value, string $message): void
+    {
+        $bag = $this->bag(new ArrayMetaStorage());
+
+        try {
+            $bag->set($key, $value);
+            self::fail("スキーマの型に合わない値を set できてしまいました: {$key}");
+        } catch (InvalidArgumentException $exception) {
+            self::assertSame($message, $exception->getMessage());
+        }
+
+        self::assertFalse($bag->has($key));
+    }
+
+    /** 未宣言のキーは型を問わない(WP組み込みのメタや他プラグインのキーを書く経路) */
+    public function testSetAcceptsAnyTypeForUndeclaredKeys(): void
+    {
+        $bag = $this->bag(new ArrayMetaStorage());
+
         self::assertTrue($bag->set('undeclared', ['any' => 'shape']));
         self::assertSame(['any' => 'shape'], $bag->get('undeclared'));
     }
@@ -219,19 +267,6 @@ final class MetaBagTest extends UnitTestCase
             'price',
             new MetaSchema(type: MetaValueType::Integer, default: 'invalid'),
         );
-    }
-
-    /** @param MetaBag<MetaBagFixtureEntity> $bag */
-    private function assertRejectedWrite(MetaBag $bag, string $key, mixed $value, string $message): void
-    {
-        try {
-            $bag->set($key, $value);
-            self::fail("スキーマの型に合わない値を set できてしまいました: {$key}");
-        } catch (InvalidArgumentException $exception) {
-            self::assertSame($message, $exception->getMessage());
-        }
-
-        self::assertFalse($bag->has($key));
     }
 
     /** @return MetaBag<MetaBagFixtureEntity> */

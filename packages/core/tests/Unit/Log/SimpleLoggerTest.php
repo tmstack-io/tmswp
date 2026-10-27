@@ -10,96 +10,18 @@ use org\bovigo\vfs\vfsStream;
 use org\bovigo\vfs\vfsStreamDirectory;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
-use Psr\Log\InvalidArgumentException as PsrInvalidArgumentException;
-use Psr\Log\LoggerInterface;
-use Psr\Log\LoggerTrait;
-use Psr\Log\LogLevel;
 use RuntimeException;
 use stdClass;
-use Stringable;
 use TMSWP\Core\Exception\InvalidArgumentException;
-use TMSWP\Core\Exception\UnknownLogChannelException;
-use TMSWP\Core\Log\LogChannel;
-use TMSWP\Core\Log\LoggerRegistry;
 use TMSWP\Core\Log\SimpleLogger;
 use TMSWP\Testing\UnitTestCase;
 
+/**
+ * SimpleLoggerのファイルへの書き込み・ローテーション・失敗時の扱い(docs/07 §5.5)。旧iwf2bのSimpleLoggerTestの移植先
+ * (docs/10 §8.1の20)。
+ */
 final class SimpleLoggerTest extends UnitTestCase
 {
-    public function testRegistryDispatchesByLevelAndScopeWithoutScopeLeak(): void
-    {
-        $default = new ArrayLogger();
-        $mail = new ArrayLogger();
-        $errors = new ArrayLogger();
-        $registry = new LoggerRegistry([
-            'default' => new LogChannel($default),
-            'mail' => new LogChannel($mail, scopes: ['mail']),
-            'errors' => new LogChannel($errors, levels: [LogLevel::ERROR]),
-        ]);
-
-        $registry->info('plain');
-        $registry->scope('mail')->error('failed', ['id' => 10]);
-        $registry->info('plain again');
-
-        self::assertCount(3, $default->records);
-        self::assertCount(1, $mail->records);
-        self::assertCount(1, $errors->records);
-        self::assertSame('mail', $mail->records[0]['context']['_scope']);
-        self::assertArrayNotHasKey('_scope', $default->records[2]['context']);
-    }
-
-    public function testRegistryWithDeclaredChannelsNeverCreatesDefaultChannel(): void
-    {
-        $logger = new ArrayLogger();
-        $registry = new LoggerRegistry(['errors' => new LogChannel($logger, levels: [LogLevel::ERROR])]);
-
-        // 宣言したチャネルが受け付けない記録は、どこにも出ない(default チャネルを作らない)
-        $registry->info('ignored');
-
-        self::assertSame([], $logger->records);
-        self::assertFalse($registry->has('default'));
-    }
-
-    public function testRegistryRejectsEmptyChannelName(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('log channel must not be empty');
-
-        new LoggerRegistry(['' => new LogChannel(new ArrayLogger())]);
-    }
-
-    public function testLogChannelRejectsUnknownLevel(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('unknown log level: fatal');
-
-        new LogChannel(new ArrayLogger(), levels: ['fatal']);
-    }
-
-    public function testLogChannelRejectsEmptyScope(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('log scope must not be empty');
-
-        new LogChannel(new ArrayLogger(), scopes: ['']);
-    }
-
-    public function testRegistryRejectsUnknownLevelAndChannel(): void
-    {
-        $registry = new LoggerRegistry();
-
-        $this->expectException(UnknownLogChannelException::class);
-        $registry->channel('missing');
-    }
-
-    public function testRegistryRejectsUnknownLevel(): void
-    {
-        $registry = new LoggerRegistry();
-
-        $this->expectException(PsrInvalidArgumentException::class);
-        $registry->log('unknown', 'message');
-    }
-
     public function testSimpleLoggerWritesOneLinePerRecordToUnguessableFileWithProtectionFiles(): void
     {
         $dir = $this->createTempDirectory('simple-logger');
@@ -440,18 +362,4 @@ final class TriggeredErrors
 {
     /** @var list<string> */
     public array $messages = [];
-}
-
-final class ArrayLogger implements LoggerInterface
-{
-    use LoggerTrait;
-
-    /** @var list<array{level: mixed, message: string, context: array<mixed>}> */
-    public array $records = [];
-
-    /** @param array<mixed> $context */
-    public function log($level, string|Stringable $message, array $context = []): void
-    {
-        $this->records[] = ['level' => $level, 'message' => (string) $message, 'context' => $context];
-    }
 }

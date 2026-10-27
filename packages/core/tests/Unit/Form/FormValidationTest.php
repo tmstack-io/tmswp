@@ -8,6 +8,7 @@ use Brain\Monkey\Filters;
 use Brain\Monkey\Functions;
 use Closure;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Exception\Form\FormConfigException;
 use TMSWP\Core\Exception\LogicException;
 use TMSWP\Core\Form\Composite\CompositeField;
@@ -18,19 +19,11 @@ use TMSWP\Core\Form\FormRequest;
 use TMSWP\Core\Form\FormStep;
 use TMSWP\Core\Form\Rule\Callback;
 use TMSWP\Core\Form\Rule\Choice;
-use TMSWP\Core\Form\Rule\Email;
-use TMSWP\Core\Form\Rule\FileExtension;
-use TMSWP\Core\Form\Rule\MaxFileSize;
 use TMSWP\Core\Form\Rule\MaxLength;
-use TMSWP\Core\Form\Rule\MinLength;
-use TMSWP\Core\Form\Rule\Range;
 use TMSWP\Core\Form\Rule\Regex;
 use TMSWP\Core\Form\Rule\Required;
-use TMSWP\Core\Form\Rule\RequiredIf;
 use TMSWP\Core\Form\Rule\Retype;
 use TMSWP\Core\Form\Rule\RuleInterface;
-use TMSWP\Core\Form\Rule\Url;
-use TMSWP\Core\Form\StoredFile;
 use TMSWP\Core\Form\SubmitToken;
 use TMSWP\Core\Form\ValidationContext;
 use TMSWP\Core\Form\Validator;
@@ -38,82 +31,12 @@ use TMSWP\Testing\UnitTestCase;
 use TMSWP\Testing\WpdbTestDouble;
 use WP;
 
+/**
+ * フォームの項目の種類・メッセージのフィルタ・複合フィールドと組み合わせた検証(docs/05 §Validator・§Messages・
+ * §CompositeField)。同梱の規則それぞれの境界はRule/の各規則のテストで確かめる。
+ */
 final class FormValidationTest extends UnitTestCase
 {
-    public function testScalarRulesValidateAndSkipOptionalEmptyValues(): void
-    {
-        $definition = FormDefinition::create('contact')
-            ->text('name', 'Name', [new Required(), new MaxLength(3)])
-            ->text('code', 'Code', [new MinLength(2), new Regex('/\A[A-Z]+\z/u')])
-            ->text('email', 'Email', [new Email()])
-            ->text('url', 'URL', [new Url()])
-            ->text('age', 'Age', [new Range(18, 65)])
-            ->text('kind', 'Type', [new Choice(['a', 'b'])])
-            ->text('note', 'Note', [new Callback(static fn(mixed $value): bool|string => $value === 'ok' ? true : 'Note is not valid.')]);
-
-        $validator = new Validator();
-
-        self::assertSame([], $validator->validate($definition, [
-            'name' => '0',
-            'code' => 'AB',
-            'email' => '',
-            'url' => 'https://example.com',
-            'age' => '20',
-            'kind' => 'a',
-            'note' => 'ok',
-        ]));
-
-        $errors = $validator->validate($definition, [
-            'name' => 'abcd',
-            'code' => 'a',
-            'email' => 'invalid',
-            'url' => 'ftp://example.com',
-            'age' => '80',
-            'kind' => 'x',
-            'note' => 'ng',
-        ]);
-
-        self::assertSame('Name must be 3 characters or fewer.', $errors['name'][0]);
-        self::assertSame('Code must be at least 2 characters.', $errors['code'][0]);
-        self::assertSame('Please enter a valid email address for Email.', $errors['email'][0]);
-        self::assertSame('Please enter a valid URL for URL.', $errors['url'][0]);
-        self::assertSame('Age must be between 18 and 65.', $errors['age'][0]);
-        self::assertSame('Type has an invalid choice.', $errors['kind'][0]);
-        self::assertSame('Note is not valid.', $errors['note'][0]);
-    }
-
-    public function testRequiredIfRetypeAndMultipleChoiceValidation(): void
-    {
-        $definition = FormDefinition::create('account')
-            ->select('type', 'Type', ['personal' => 'Personal', 'company' => 'Company'])
-            ->text('company', 'Company name', [RequiredIf::equals('type', 'company')])
-            ->password('password', 'Password')
-            ->password('password_confirmation', 'Password confirmation', [new Retype('password')])
-            ->checkboxes('topics', 'Topics', ['news' => 'News', 'docs' => 'Docs'], [new Required()]);
-
-        $errors = (new Validator())->validate($definition, [
-            'type' => 'company',
-            'company' => '',
-            'password' => 'secret',
-            'password_confirmation' => 'different',
-            'topics' => ['news', 'bad'],
-        ]);
-
-        self::assertSame('Company name is required.', $errors['company'][0]);
-        self::assertSame('Password confirmation must match Password.', $errors['password_confirmation'][0]);
-        self::assertSame('Topics has an invalid choice.', $errors['topics'][0]);
-    }
-
-    public function testInvalidRegexPatternThrowsConfigException(): void
-    {
-        $this->expectException(FormConfigException::class);
-
-        (new Validator())->validate(
-            FormDefinition::create('search')->text('keyword', 'Keyword', [new Regex('/[/')]),
-            ['keyword' => 'text'],
-        );
-    }
-
     public function testRuleMessagesPassThroughFilterBeforePlaceholderReplacement(): void
     {
         Functions\expect('apply_filters')
@@ -129,178 +52,150 @@ final class FormValidationTest extends UnitTestCase
         self::assertSame('Name: max 3 chars', $errors['name'][0]);
     }
 
-    public function testFileRulesAcceptStoredFileAndRejectItsExtensionAndSize(): void
+    /**
+     * 単一のチェックボックスは、チェックしたときの値だけを受け付ける(Requiredの有無によらない)。
+     *
+     * @return iterable<string, array{string, string, array<string, list<string>>}>
+     */
+    public static function valuesOfSingleCheckboxes(): iterable
     {
-        Functions\expect('size_format')->once()->with(10)->andReturn('10 B');
-        $path = $this->createTempDirectory('stored-file') . '/document.pdf';
-        file_put_contents($path, 'pdf');
-
-        $definition = FormDefinition::create('upload')
-            ->file('file', 'File', [new FileExtension(['pdf'])])
-            ->file('photo', 'Photo', [new MaxFileSize(10)]);
-        $validator = new Validator();
-
-        self::assertSame([], $validator->validate($definition, [
-            'file' => new StoredFile('0123456789abcdef0123456789abcdef', $path, 'document.pdf', 'application/pdf', 3),
-            'photo' => new StoredFile('0123456789abcdef0123456789abcdef', $path, 'document.pdf', 'application/pdf', 10),
-        ]));
-
-        self::assertSame(
-            ['file' => ['Please upload File as one of these file types: pdf.'], 'photo' => ['Photo must be 10 B or smaller.']],
-            $validator->validate($definition, [
-                'file' => new StoredFile('0123456789abcdef0123456789abcdef', $path, 'document.txt', 'text/plain', 3),
-                'photo' => new StoredFile('0123456789abcdef0123456789abcdef', $path, 'document.pdf', 'application/pdf', 11),
-            ]),
-        );
+        yield 'checked values' => ['agree', '1', []];
+        yield 'unchecked optional checkbox' => ['agree', '', []];
+        yield 'values other than the checked values' => [
+            'any string',
+            'agree',
+            ['privacy' => ['Privacy policy has an invalid choice.'], 'newsletter' => ['Newsletter has an invalid choice.']],
+        ];
+        yield 'unchecked required checkbox' => ['', '', ['privacy' => ['Privacy policy is required.']]];
     }
 
-    public function testMaxFileSizeInMegabytesTakesACustomMessageAndFormatsTheSizeWithSizeFormat(): void
-    {
-        Functions\expect('size_format')->twice()->with(2 * 1024 * 1024)->andReturn('2 MB');
-        $file = new StoredFile('0123456789abcdef0123456789abcdef', '/tmp/large.pdf', 'large.pdf', 'application/pdf', 3 * 1024 * 1024);
-        $definition = FormDefinition::create('upload')
-            ->file('default', 'Default', [MaxFileSize::mb(2)])
-            ->file('custom', 'Custom', [MaxFileSize::mb(2, message: '{label} is over {size}.')]);
-
-        self::assertSame(
-            ['default' => ['Default must be 2 MB or smaller.'], 'custom' => ['Custom is over 2 MB.']],
-            (new Validator())->validate($definition, ['default' => $file, 'custom' => $file]),
-        );
-    }
-
-    public function testSingleCheckboxAcceptsOnlyItsCheckedValue(): void
+    /** @param array<string, list<string>> $errors */
+    #[DataProvider('valuesOfSingleCheckboxes')]
+    public function testSingleCheckboxAcceptsOnlyItsCheckedValue(string $privacy, string $newsletter, array $errors): void
     {
         $definition = FormDefinition::create('signup')
             ->checkbox('privacy', 'Privacy policy', 'agree', [new Required()])
             ->checkbox('newsletter', 'Newsletter');
-        $validator = new Validator();
 
-        self::assertSame([], $validator->validate($definition, ['privacy' => 'agree', 'newsletter' => '1']));
-        self::assertSame([], $validator->validate($definition, ['privacy' => 'agree', 'newsletter' => '']));
-        self::assertSame(
-            ['privacy' => ['Privacy policy has an invalid choice.'], 'newsletter' => ['Newsletter has an invalid choice.']],
-            $validator->validate($definition, ['privacy' => 'any string', 'newsletter' => 'agree']),
-        );
-        self::assertSame(['privacy' => ['Privacy policy is required.']], $validator->validate($definition, ['privacy' => '', 'newsletter' => '']));
+        self::assertSame($errors, (new Validator())->validate($definition, ['privacy' => $privacy, 'newsletter' => $newsletter]));
     }
 
-    public function testRequiredIfEqualsMatchesAnElementOfACheckboxesValue(): void
+    /**
+     * 複数選択の項目への配列でない値は、1要素の配列(空値なら空の配列)として検証する。
+     *
+     * @return iterable<string, array{array<string, ?string>, array<string, list<string>>}>
+     */
+    public static function scalarValuesOfMultipleFields(): iterable
     {
-        $definition = FormDefinition::create('inquiry')
-            ->checkboxes('topics', 'Topics', ['product' => 'Product', 'other' => 'Other'])
-            ->text('other_detail', 'Other detail', [RequiredIf::equals('topics', 'other')]);
-        $validator = new Validator();
-
-        self::assertSame(
-            ['other_detail' => ['Other detail is required.']],
-            $validator->validate($definition, ['topics' => ['product', 'other'], 'other_detail' => '']),
-        );
-        self::assertSame([], $validator->validate($definition, ['topics' => ['product'], 'other_detail' => '']));
-        self::assertSame([], $validator->validate($definition, ['topics' => [], 'other_detail' => '']));
-        self::assertSame([], $validator->validate($definition, ['topics' => ['other'], 'other_detail' => 'Details']));
+        yield 'violations' => [['length' => 'long', 'format' => 'a1', 'required' => ''], ['length' => ['long'], 'format' => ['a1'], 'required' => []]];
+        yield 'choices' => [['length' => 'ok', 'format' => 'abc', 'required' => 'a'], ['length' => ['ok'], 'format' => ['abc'], 'required' => ['a']]];
+        yield 'outside the choices and nulls' => [['length' => 'other', 'format' => null, 'required' => null], ['length' => ['other'], 'format' => [], 'required' => []]];
     }
 
-    public function testScalarValueOfAMultipleFieldIsValidatedAsASingleElementArray(): void
+    /**
+     * @param array<string, ?string> $scalars
+     * @param array<string, list<string>> $arrays
+     */
+    #[DataProvider('scalarValuesOfMultipleFields')]
+    public function testScalarValueOfAMultipleFieldIsValidatedAsASingleElementArray(array $scalars, array $arrays): void
     {
-        $definition = FormDefinition::create('inquiry')
-            ->checkboxes('length', 'Length', ['long' => 'Long', 'ok' => 'OK'], [new Required(), new MaxLength(3)])
-            ->checkboxes('format', 'Format', ['abc' => 'ABC', 'a1' => 'A1'], [new Regex('/\A[a-z]+\z/')])
-            ->checkboxes('required', 'Required', ['a' => 'A'], [new Required()]);
+        $definition = self::multipleFieldsDefinition();
         $validator = new Validator();
 
-        foreach ([
-            [['length' => 'long', 'format' => 'a1', 'required' => ''], ['length' => ['long'], 'format' => ['a1'], 'required' => []]],
-            [['length' => 'ok', 'format' => 'abc', 'required' => 'a'], ['length' => ['ok'], 'format' => ['abc'], 'required' => ['a']]],
-            [['length' => 'other', 'format' => null, 'required' => null], ['length' => ['other'], 'format' => [], 'required' => []]],
-        ] as [$scalars, $arrays]) {
-            $expected = $validator->validate($definition, $arrays);
+        self::assertSame($validator->validate($definition, $arrays), $validator->validate($definition, $scalars));
+    }
 
-            self::assertSame($expected, $validator->validate($definition, $scalars), json_encode($scalars, JSON_THROW_ON_ERROR));
-        }
-
+    /** 1要素の配列として検証した結果の、各項目の最初の違反 */
+    public function testScalarValuesOfMultipleFieldsReportTheViolationsOfTheirElements(): void
+    {
         self::assertSame(
             [
                 'length' => ['Length must be 3 characters or fewer.'],
                 'format' => ['Format has an invalid format.'],
                 'required' => ['Required is required.'],
             ],
-            $validator->validate($definition, ['length' => 'long', 'format' => 'a1', 'required' => '']),
+            (new Validator())->validate(self::multipleFieldsDefinition(), ['length' => 'long', 'format' => 'a1', 'required' => '']),
         );
     }
 
     /**
-     * 複数選択の項目への MaxLength は、先頭だけでなく全要素に適用する。先頭は正しく、2番目以降だけが長さの違反になる
-     * 値(どの要素も選択肢の中)で確かめる。
+     * 規則のメッセージは、規則ごとに1回tmswp/form/rule_messageのフィルタを通ってから{label}を置き換える(Callbackの
+     * 既定と戻り値のメッセージ、Retype、暗黙のChoice、個別のメッセージを指定したRequired)。
+     *
+     * @return iterable<string, array{Closure(FormDefinition): FormDefinition, array<string, string>, string, class-string<RuleInterface>, string}>
      */
-    public function testMaxLengthOfAMultipleFieldChecksEveryElementNotOnlyTheFirst(): void
+    public static function rulesWithFilteredMessages(): iterable
     {
-        $definition = FormDefinition::create('inquiry')
-            ->checkboxes('length', 'Length', ['ok' => 'OK', 'yes' => 'Yes', 'long' => 'Long'], [new MaxLength(3)]);
-        $validator = new Validator();
-
-        self::assertSame([], $validator->validate($definition, ['length' => ['ok', 'yes']]));
-        self::assertSame(['length' => ['Length must be 3 characters or fewer.']], $validator->validate($definition, ['length' => ['ok', 'long']]));
-        self::assertSame(['length' => ['Length must be 3 characters or fewer.']], $validator->validate($definition, ['length' => ['ok', 'yes', 'long']]));
+        yield 'Callback returning false' => [
+            static fn(FormDefinition $definition): FormDefinition => $definition->text('nickname', 'Nickname', [new Callback(static fn(mixed $value): bool => false)]),
+            ['nickname' => 'taro'],
+            'nickname',
+            Callback::class,
+            '[Nickname] Nickname is invalid.',
+        ];
+        yield 'Callback returning a message' => [
+            static fn(FormDefinition $definition): FormDefinition => $definition->text('code', 'Code', [new Callback(static fn(mixed $value): string => '{label} is taken.')]),
+            ['code' => 'abc'],
+            'code',
+            Callback::class,
+            '[Code] Code is taken.',
+        ];
+        yield 'Retype' => [
+            static fn(FormDefinition $definition): FormDefinition => $definition->text('email', 'Email')->text('email_confirmation', 'Email confirmation', [new Retype('email')]),
+            ['email' => 'a@example.com', 'email_confirmation' => 'b@example.com'],
+            'email_confirmation',
+            Retype::class,
+            '[Email confirmation] Email confirmation must match Email.',
+        ];
+        yield 'implicit Choice of a select' => [
+            static fn(FormDefinition $definition): FormDefinition => $definition->select('plan', 'Plan', ['free' => 'Free']),
+            ['plan' => 'paid'],
+            'plan',
+            Choice::class,
+            '[Plan] Plan has an invalid choice.',
+        ];
+        yield 'implicit Choice of a checkbox' => [
+            static fn(FormDefinition $definition): FormDefinition => $definition->checkbox('privacy', 'Privacy policy'),
+            ['privacy' => 'yes'],
+            'privacy',
+            Choice::class,
+            '[Privacy policy] Privacy policy has an invalid choice.',
+        ];
+        yield 'Required with a custom message' => [
+            static fn(FormDefinition $definition): FormDefinition => $definition->text('name', 'Name', [new Required(message: '{label} please.')]),
+            ['name' => ''],
+            'name',
+            Required::class,
+            '[Name] Name please.',
+        ];
     }
 
-    public function testCallbackReturningNeitherBoolNorStringThrows(): void
-    {
-        $callback = require __DIR__ . '/../../fixtures/form-validation/callback-returning-null.php';
-        self::assertInstanceOf(Callback::class, $callback);
-        $definition = FormDefinition::create('contact')->text('note', 'Note', [$callback]);
-
-        $this->expectException(FormConfigException::class);
-        $this->expectExceptionMessage('the Callback rule must return bool or string, got null');
-
-        (new Validator())->validate($definition, ['note' => 'text']);
-    }
-
-    public function testEveryRuleMessageIsResolvedThroughTheFilterBeforePlaceholderReplacement(): void
-    {
+    /**
+     * @param Closure(FormDefinition): FormDefinition $define
+     * @param array<string, string> $values
+     * @param class-string<RuleInterface> $ruleClass
+     */
+    #[DataProvider('rulesWithFilteredMessages')]
+    public function testEveryRuleMessageIsResolvedThroughTheFilterBeforePlaceholderReplacement(
+        Closure $define,
+        array $values,
+        string $field,
+        string $ruleClass,
+        string $error,
+    ): void {
         $filtered = [];
         Filters\expectApplied('tmswp/form/rule_message')
-            ->times(6)
+            ->once()
             ->andReturnUsing(static function (string $message, RuleInterface $rule, ValidationContext $context) use (&$filtered): string {
                 $filtered[] = [$context->currentField, $rule::class];
 
                 return "[{label}] {$message}";
             });
 
-        $definition = FormDefinition::create('account')
-            ->text('nickname', 'Nickname', [new Callback(static fn(mixed $value): bool => false)])
-            ->text('code', 'Code', [new Callback(static fn(mixed $value): string => '{label} is taken.')])
-            ->text('email', 'Email')
-            ->text('email_confirmation', 'Email confirmation', [new Retype('email')])
-            ->select('plan', 'Plan', ['free' => 'Free'])
-            ->checkbox('privacy', 'Privacy policy')
-            ->text('name', 'Name', [new Required(message: '{label} please.')]);
+        $errors = (new Validator())->validate($define(FormDefinition::create('account')), $values);
 
-        $errors = (new Validator())->validate($definition, [
-            'nickname' => 'taro',
-            'code' => 'abc',
-            'email' => 'a@example.com',
-            'email_confirmation' => 'b@example.com',
-            'plan' => 'paid',
-            'privacy' => 'yes',
-            'name' => '',
-        ]);
-
-        self::assertSame([
-            'nickname' => ['[Nickname] Nickname is invalid.'],
-            'code' => ['[Code] Code is taken.'],
-            'email_confirmation' => ['[Email confirmation] Email confirmation must match Email.'],
-            'plan' => ['[Plan] Plan has an invalid choice.'],
-            'privacy' => ['[Privacy policy] Privacy policy has an invalid choice.'],
-            'name' => ['[Name] Name please.'],
-        ], $errors);
-        self::assertSame([
-            ['nickname', Callback::class],
-            ['code', Callback::class],
-            ['email_confirmation', Retype::class],
-            ['plan', Choice::class],
-            ['privacy', Choice::class],
-            ['name', Required::class],
-        ], $filtered);
+        self::assertSame([$field => [$error]], $errors);
+        self::assertSame([[$field, $ruleClass]], $filtered);
     }
 
     public function testRuleMessageFilterReturningANonStringThrows(): void
@@ -358,71 +253,122 @@ final class FormValidationTest extends UnitTestCase
     }
 
     /**
-     * app 側の複合フィールド(生年月日)。正準値は compose(decompose($v)) === $v で往復し、部分入力と存在しない日付
-     * (2/30・平年の 2/29)は項目のエラーになる。
+     * app側の複合フィールド(生年月日)。正準値はcompose(decompose($v)) === $vで往復する(うるう年の2/29を含む)。
+     *
+     * @return iterable<string, array{string}>
      */
-    public function testCompositeDateRoundTripsItsCanonicalValueAndRejectsPartialAndNonexistentDates(): void
+    public static function canonicalDates(): iterable
+    {
+        yield 'ordinary date' => ['2026-02-03'];
+        yield 'last day of the max year range' => ['2000-12-31'];
+        yield 'leap day' => ['2024-02-29'];
+    }
+
+    #[DataProvider('canonicalDates')]
+    public function testCompositeDateRoundTripsItsCanonicalValue(string $value): void
     {
         $field = new ValidationTestDateField('birth', 'Birth date', [new Required()], minYear: 2000, maxYear: 2026);
         $definition = FormDefinition::create('profile')->add($field);
-        $validator = new Validator();
 
-        foreach (['2026-02-03', '2000-12-31', '2024-02-29'] as $value) {
-            self::assertSame($value, $field->compose($field->decompose($value)));
-            self::assertSame([], $validator->validate($definition, ['birth' => $field->decompose($value)]), $value);
-        }
-
-        foreach ([['2026', '2', '30'], ['2025', '2', '29']] as [$year, $month, $day]) {
-            self::assertSame(
-                ['birth' => ['Birth date is not a valid date.']],
-                $validator->validate($definition, ['birth' => ['year' => $year, 'month' => $month, 'day' => $day]]),
-            );
-        }
-
-        self::assertSame(
-            ['birth' => ['Please complete all parts of Birth date.']],
-            $validator->validate($definition, ['birth' => ['year' => '2026', 'month' => '', 'day' => '']]),
-        );
+        self::assertSame($value, $field->compose($field->decompose($value)));
+        self::assertSame([], (new Validator())->validate($definition, ['birth' => $field->decompose($value)]));
     }
 
-    public function testCompositePartsAreCheckedAgainstTheirChoices(): void
+    /**
+     * 部分入力と存在しない日付(2/30・平年の2/29)は項目のエラーになる。
+     *
+     * @return iterable<string, array{array{year: string, month: string, day: string}, string}>
+     */
+    public static function invalidCompositeDates(): iterable
+    {
+        yield 'February 30' => [['year' => '2026', 'month' => '2', 'day' => '30'], 'Birth date is not a valid date.'];
+        yield 'February 29 of a common year' => [['year' => '2025', 'month' => '2', 'day' => '29'], 'Birth date is not a valid date.'];
+        yield 'partial input' => [['year' => '2026', 'month' => '', 'day' => ''], 'Please complete all parts of Birth date.'];
+    }
+
+    /** @param array{year: string, month: string, day: string} $parts */
+    #[DataProvider('invalidCompositeDates')]
+    public function testCompositeDateRejectsPartialAndNonexistentDates(array $parts, string $error): void
     {
         $definition = FormDefinition::create('profile')
             ->add(new ValidationTestDateField('birth', 'Birth date', [new Required()], minYear: 2000, maxYear: 2026));
-        $validator = new Validator();
 
-        foreach ([['1999', '1', '1'], ['2027', '1', '1'], ['2020', '13', '1'], ['2020', '1', '0']] as [$year, $month, $day]) {
-            self::assertSame(
-                ['birth' => ['Birth date has an invalid choice.']],
-                $validator->validate($definition, ['birth' => ['year' => $year, 'month' => $month, 'day' => $day]]),
-                "{$year}-{$month}-{$day}",
-            );
-        }
-
-        self::assertSame([], $validator->validate($definition, ['birth' => ['year' => '2000', 'month' => '12', 'day' => '31']]));
+        self::assertSame(['birth' => [$error]], (new Validator())->validate($definition, ['birth' => $parts]));
     }
 
-    public function testCompositePartsRunTheirOwnRulesAfterTheChoiceCheck(): void
+    /**
+     * 複合フィールドの部分は、それぞれの選択肢(年は2000〜2026、月は1〜12、日は1〜31)で確かめる。
+     *
+     * @return iterable<string, array{string, string, string, bool}>
+     */
+    public static function compositeDateParts(): iterable
+    {
+        yield 'year below the range' => ['1999', '1', '1', false];
+        yield 'year above the range' => ['2027', '1', '1', false];
+        yield 'month 13' => ['2020', '13', '1', false];
+        yield 'day 0' => ['2020', '1', '0', false];
+        yield 'every part at the boundary' => ['2000', '12', '31', true];
+    }
+
+    #[DataProvider('compositeDateParts')]
+    public function testCompositePartsAreCheckedAgainstTheirChoices(string $year, string $month, string $day, bool $valid): void
+    {
+        $definition = FormDefinition::create('profile')
+            ->add(new ValidationTestDateField('birth', 'Birth date', [new Required()], minYear: 2000, maxYear: 2026));
+
+        self::assertSame(
+            $valid ? [] : ['birth' => ['Birth date has an invalid choice.']],
+            (new Validator())->validate($definition, ['birth' => ['year' => $year, 'month' => $month, 'day' => $day]]),
+        );
+    }
+
+    /**
+     * 部分の規則は、選択肢の検査の後に実行する。
+     *
+     * @return iterable<string, array{array{area: string, number: string}, list<string>}>
+     */
+    public static function compositeCodeParts(): iterable
+    {
+        yield 'outside the choices' => [['area' => 'x', 'number' => '12'], ['Code has an invalid choice.']];
+        yield 'violating the rule of a part' => [['area' => 'a', 'number' => '1x'], ['Code has an invalid format.']];
+        yield 'valid parts' => [['area' => 'a', 'number' => '12'], []];
+    }
+
+    /**
+     * @param array{area: string, number: string} $parts
+     * @param list<string> $errors
+     */
+    #[DataProvider('compositeCodeParts')]
+    public function testCompositePartsRunTheirOwnRulesAfterTheChoiceCheck(array $parts, array $errors): void
     {
         $definition = FormDefinition::create('profile')->add(new ValidationTestCodeField('code', 'Code'));
-        $validator = new Validator();
 
-        self::assertSame(['code' => ['Code has an invalid choice.']], $validator->validate($definition, ['code' => ['area' => 'x', 'number' => '12']]));
-        self::assertSame(['code' => ['Code has an invalid format.']], $validator->validate($definition, ['code' => ['area' => 'a', 'number' => '1x']]));
-        self::assertSame([], $validator->validate($definition, ['code' => ['area' => 'a', 'number' => '12']]));
+        self::assertSame($errors === [] ? [] : ['code' => $errors], (new Validator())->validate($definition, ['code' => $parts]));
     }
 
-    public function testCompositeFieldNameAndRulesAreCheckedAtDefinition(): void
+    /**
+     * 複合フィールドの名前は、定義の時点で確かめる(大文字・部分の名前と重なる接尾辞・予約の名前)。
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function invalidCompositeFieldNames(): iterable
     {
-        foreach (['Birth', 'birth__token', '_tmswp_form'] as $name) {
-            try {
-                new ValidationTestCodeField($name, 'Code');
-                self::fail("the name {$name} must be rejected");
-            } catch (FormConfigException $e) {
-                self::assertStringContainsString($name, $e->getMessage());
-            }
-        }
+        yield 'upper case' => ['Birth'];
+        yield 'token suffix' => ['birth__token'];
+        yield 'reserved name' => ['_tmswp_form'];
+    }
 
+    #[DataProvider('invalidCompositeFieldNames')]
+    public function testCompositeFieldNameIsCheckedAtDefinition(string $name): void
+    {
+        $this->expectException(FormConfigException::class);
+        $this->expectExceptionMessage($name);
+
+        new ValidationTestCodeField($name, 'Code');
+    }
+
+    public function testCompositeFieldRulesAreCheckedAtDefinition(): void
+    {
         $this->expectException(FormConfigException::class);
         $this->expectExceptionMessage('field rules must implement RuleInterface');
 
@@ -441,6 +387,15 @@ final class FormValidationTest extends UnitTestCase
         $this->expectExceptionMessage('the trim filter of a form field failed: Malformed UTF-8 characters, possibly incorrectly encoded');
 
         $trim(" a\xff ");
+    }
+
+    /** 複数選択の項目に、長さ・形式・必須の規則を1つずつ付けた定義 */
+    private static function multipleFieldsDefinition(): FormDefinition
+    {
+        return FormDefinition::create('inquiry')
+            ->checkboxes('length', 'Length', ['long' => 'Long', 'ok' => 'OK'], [new Required(), new MaxLength(3)])
+            ->checkboxes('format', 'Format', ['abc' => 'ABC', 'a1' => 'A1'], [new Regex('/\A[a-z]+\z/')])
+            ->checkboxes('required', 'Required', ['a' => 'A'], [new Required()]);
     }
 }
 

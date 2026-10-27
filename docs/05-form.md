@@ -2113,13 +2113,15 @@ composer qa        # 上記一括(CI同等)
 
 | 対象 | テストのファイル |
 |---|---|
-| `ConfirmToken`・`SubmitToken`・`TokenSigner` | `ConfirmTokenTest` |
-| `Validator`・`Messages`・`CompositeField` | `FormValidationTest` |
-| 同梱の全13ルールと空値スルー | `FormRuleTest` |
-| `Form` の状態機械の全分岐・`JtiStore`・`TempFileGc` | `FormRuntimeTest` |
-| `Field`・`FormDefinition` | `FormDefinitionTest` |
-| `FieldView`・`OptionView`・`UploadedFile`・`StoredFile`・`TempFileStore` | `FormViewAndFileTest` |
-| `FormHtml` と出力のスナップショット(`<script>` の入力・動的な選択肢) | `FormHtmlTest` |
-| API/構造の受け入れ基準 | `FormStructureTest` |
+| `ConfirmToken`・`SubmitToken`・`TokenSigner` | `Form/ConfirmTokenTest` |
+| `Validator`(空値の判定と空値スルー・検証の手順) | `Form/ValidatorTest` |
+| `Messages`・`CompositeField` | `Form/FormValidationTest` |
+| 同梱の全13ルール | `Form/Rule/<Rule>Test`(規則ごと)・`Form/Rule/ConstructorArgumentsTest` |
+| `Form` の状態機械の全分岐・`JtiStore`・`TempFileGc` | `Form/FormRuntimeTest` |
+| `Field`・`FormDefinition` | `Form/FormDefinitionTest` |
+| `FieldView`・`OptionView` | `Form/FieldViewTest` |
+| `UploadedFile`・`StoredFile`・`TempFileStore` | `Form/TempFileStoreTest` |
+| `FormHtml` と出力のスナップショット(`<script>` の入力・動的な選択肢) | `Form/FormHtmlTest` |
+| API/構造の受け入れ基準 | `Form/FormStructureTest` |
 
 統合テスト(`packages/core/tests/Integration/`)は、`FormIntegrationTest`(nonce の実際の検証・`JtiStore` の実際の DB・nocache のヘッダ)と `FormFileIntegrationTest`(`TempFileStore` の実際の IO・`toAttachment()`・WP-Cron)に置く。

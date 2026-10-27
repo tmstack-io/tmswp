@@ -4,166 +4,171 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Tests\Unit\Support;
 
-use Brain\Monkey\Functions;
 use DateTimeImmutable;
 use Generator;
 use JsonSerializable;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Stringable;
 use TMSWP\Core\Exception\InvalidArgumentException;
-use TMSWP\Core\Support\Arr;
-use TMSWP\Core\Support\Html;
 use TMSWP\Core\Support\Str;
 use TMSWP\Testing\UnitTestCase;
 
+/**
+ * Support\Strの仕様(docs/07 §3)。旧iwf2bのTextTestのうち、新しいAPIにあるものの移植先(docs/10 §8.1の4)。
+ */
 final class StrTest extends UnitTestCase
 {
-    public function testArrDotNotationAndHelpers(): void
+    /**
+     * replace()は{key}を1回の走査で置き換え、置き換えた値の中のプレースホルダは再び置き換えない(§3.2A)。
+     *
+     * @return iterable<string, array{string, array<string, mixed>, string}>
+     */
+    public static function replaceCases(): iterable
     {
-        $array = [
-            'user' => ['address' => ['city' => 'Tokyo'], 'name' => null],
-            10 => 'ten',
-        ];
-
-        self::assertSame('Tokyo', Arr::get($array, 'user.address.city'));
-        self::assertNull(Arr::get($array, 'user.name'));
-        self::assertSame('missing', Arr::get($array, 'user.address.zip', 'missing'));
-        self::assertTrue(Arr::has($array, 'user.name'));
-        self::assertTrue(Arr::has($array, 10));
-
-        Arr::set($array, 'user.address.zip', '100-0001');
-        Arr::set($array, 'user.name.first', 'Taro');
-
-        self::assertSame('100-0001', Arr::get($array, 'user.address.zip'));
-        self::assertSame('Taro', Arr::get($array, 'user.name.first'));
-        self::assertSame(['user' => $array['user']], Arr::only($array, ['user', 'missing']));
-        self::assertSame('ten', Arr::first($array, static fn(mixed $value): bool => $value === 'ten'));
-        self::assertSame([], Arr::wrap(null));
-        self::assertSame(['x'], Arr::wrap('x'));
+        yield 'value containing another placeholder' => ['Hello {name}', ['name' => 'Taro {nested}', 'nested' => 'ignored'], 'Hello Taro {nested}'];
+        yield 'placeholder not in the vars' => ['Hello {name}', [], 'Hello {name}'];
+        yield 'non-string value' => ['{count} items', ['count' => 3], '3 items'];
+        yield 'other delimiters are not placeholders' => ['%name%', ['name' => 'Taro'], '%name%'];
     }
 
-    public function testStrReplaceStringifyAndCaseHelpers(): void
+    /** @param array<string, mixed> $vars */
+    #[DataProvider('replaceCases')]
+    public function testReplaceSubstitutesPlaceholdersInOnePass(string $text, array $vars, string $expected): void
     {
-        self::assertSame('Hello Taro {nested}', Str::replace('Hello {name}', ['name' => 'Taro {nested}', 'nested' => 'ignored']));
-        self::assertSame('あいう…', Str::truncate('あいうえお', 3));
-        self::assertSame("a\nb\nc", Str::convertEol("a\r\nb\rc"));
-        self::assertSame("a\r\nb\r\nc\r\nd", Str::convertEol("a\r\nb\rc\nd", "\r\n"));
-        self::assertSame('a<br>b<br>c', Str::convertEol("a\r\nb\rc", '<br>'));
-        self::assertSame('product_post', Str::snake('ProductPost'));
-        self::assertSame('product-post', Str::kebab('ProductPost'));
-        self::assertSame('ProductPost', Str::pascal('product-post'));
-        self::assertSame('productPost', Str::camel('product_post'));
-
-        self::assertSame('', Str::stringify(null));
-        self::assertSame('true', Str::stringify(true));
-        self::assertSame('draft', Str::stringify(SupportBackedEnum::Draft));
-        self::assertSame('Published', Str::stringify(SupportUnitEnum::Published));
-        self::assertSame('2026-06-13T00:00:00+00:00', Str::stringify(new DateTimeImmutable('2026-06-13 00:00:00 UTC')));
-        self::assertSame('a, b', Str::stringify($this->generator()));
-        self::assertSame('a, b', Str::stringify(['a', ['b']]));
-        self::assertSame('stringable', Str::stringify(new SupportStringable()));
-        self::assertSame('{"key":"value"}', Str::stringify(new SupportJsonSerializable()));
-        self::assertSame('(Closure)', Str::stringify(static fn(): null => null));
+        self::assertSame($expected, Str::replace($text, $vars));
     }
 
-    public function testTruncateRejectsInvalidLength(): void
+    /**
+     * truncate()は文字数で数え、長さちょうどまでは変えず、超えたら省略記号を足す(省略記号は長さに含めない)。
+     *
+     * @return iterable<string, array{string, int, string, string}>
+     */
+    public static function truncateCases(): iterable
+    {
+        yield 'longer than the length' => ['あいうえお', 3, '…', 'あいう…'];
+        yield 'exactly the length' => ['あいう', 3, '…', 'あいう'];
+        yield 'shorter than the length' => ['あい', 3, '…', 'あい'];
+        yield 'custom ellipsis' => ['abcdef', 3, '...', 'abc...'];
+        yield 'length of 1' => ['ab', 1, '…', 'a…'];
+    }
+
+    #[DataProvider('truncateCases')]
+    public function testTruncateCountsCharacters(string $text, int $length, string $ellipsis, string $expected): void
+    {
+        self::assertSame($expected, Str::truncate($text, $length, $ellipsis));
+    }
+
+    /** @return iterable<string, array{int}> */
+    public static function invalidTruncateLengths(): iterable
+    {
+        yield 'zero' => [0];
+        yield 'negative' => [-1];
+    }
+
+    #[DataProvider('invalidTruncateLengths')]
+    public function testTruncateRejectsInvalidLength(int $length): void
     {
         $this->expectException(InvalidArgumentException::class);
 
-        Str::truncate('abc', 0);
+        Str::truncate('abc', $length);
     }
 
-    public function testHtmlAttributesAndClasses(): void
+    /**
+     * convertEol()はCRLFを1つの改行として扱い、置き換えた後の改行を再び置き換えない(§3.5)。
+     *
+     * @return iterable<string, array{string, string, string}>
+     */
+    public static function convertEolCases(): iterable
     {
-        Functions\when('esc_attr')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
-
-        self::assertSame('', Html::attributes([]));
-        self::assertSame(
-            ' class="btn is-active" disabled aria-pressed="false" value="" data-ids="1 2" checked title="&quot;quoted&quot;"',
-            Html::attributes([
-                'class' => ['btn', 'is-active' => true, 'is-hidden' => false],
-                'disabled' => true,
-                'hidden' => false,
-                'aria-pressed' => false,
-                'value' => '',
-                'data-ids' => [1, 2],
-                'checked',
-                'title' => '"quoted"',
-                'nullable' => null,
-            ]),
-        );
-        self::assertSame('btn btn-lg is-active', Html::classes('btn btn-lg', ['btn', 'is-active' => true]));
+        yield 'to LF' => ["a\r\nb\rc", "\n", "a\nb\nc"];
+        yield 'to CRLF' => ["a\r\nb\rc\nd", "\r\n", "a\r\nb\r\nc\r\nd"];
+        yield 'to a tag' => ["a\r\nb\rc", '<br>', 'a<br>b<br>c'];
+        yield 'CRLF followed by LF' => ["a\r\n\nb", "\r\n", "a\r\n\r\nb"];
     }
 
-    public function testHtmlEscapesUrlAttributesWithEscUrl(): void
+    #[DataProvider('convertEolCases')]
+    public function testConvertEolUnifiesLineBreaks(string $text, string $to, string $expected): void
     {
-        $this->stubUrlEscaping();
-
-        self::assertSame(
-            ' href="https://example.com/?a=1&amp;b=2" SRC="/img/a.png" action="" ping="https://a.example/p https://b.example/p" title="javascript:void(0)"',
-            Html::attributes([
-                'href' => 'https://example.com/?a=1&b=2',
-                'SRC' => '/img/a.png',
-                'action' => '',
-                'ping' => ['https://a.example/p', 'https://b.example/p'],
-                'title' => 'javascript:void(0)',
-            ]),
-        );
+        self::assertSame($expected, Str::convertEol($text, $to));
     }
 
-    /** @return iterable<string, array{array<string, mixed>}> */
-    public static function disallowedUrlProvider(): iterable
+    /**
+     * ケース変換(§3.4)。連続する大文字を頭字語として扱わない。
+     *
+     * @return iterable<string, array{'snake'|'kebab'|'pascal'|'camel', string, string}>
+     */
+    public static function caseConversions(): iterable
     {
-        yield 'href' => [['href' => 'javascript:alert(1)']];
-        yield 'uppercase name' => [['FormAction' => 'javascript:alert(1)']];
-        yield 'url in list' => [['ping' => 'https://a.example/p javascript:alert(1)']];
+        yield 'snake from Pascal' => ['snake', 'ProductPost', 'product_post'];
+        yield 'snake from kebab' => ['snake', 'product-post', 'product_post'];
+        yield 'snake of an acronym' => ['snake', 'ABTest', 'a_b_test'];
+        yield 'kebab from Pascal' => ['kebab', 'ProductPost', 'product-post'];
+        yield 'kebab from snake' => ['kebab', 'product_post', 'product-post'];
+        yield 'pascal from kebab' => ['pascal', 'product-post', 'ProductPost'];
+        yield 'pascal from snake' => ['pascal', 'product_post', 'ProductPost'];
+        yield 'camel from snake' => ['camel', 'product_post', 'productPost'];
     }
 
-    /** @param array<string, mixed> $attributes */
-    #[DataProvider('disallowedUrlProvider')]
-    public function testHtmlRejectsUrlWithDisallowedProtocol(array $attributes): void
+    /** @param 'snake'|'kebab'|'pascal'|'camel' $method */
+    #[DataProvider('caseConversions')]
+    public function testCaseConversion(string $method, string $text, string $expected): void
     {
-        $this->stubUrlEscaping();
+        $converted = match ($method) {
+            'snake' => Str::snake($text),
+            'kebab' => Str::kebab($text),
+            'pascal' => Str::pascal($text),
+            'camel' => Str::camel($text),
+        };
 
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('disallowed protocol: javascript:alert(1)');
-
-        Html::attributes($attributes);
+        self::assertSame($expected, $converted);
     }
 
-    public function testHtmlRejectsInvalidAttributeName(): void
+    /**
+     * stringify()の変換規則(§3.3)を1つずつ。
+     *
+     * @return iterable<string, array{mixed, string}>
+     */
+    public static function stringifyCases(): iterable
     {
-        $this->expectException(InvalidArgumentException::class);
-
-        Html::attributes(['bad name' => 'x']);
+        yield 'null' => [null, ''];
+        yield 'true' => [true, 'true'];
+        yield 'false' => [false, 'false'];
+        yield 'int' => [10, '10'];
+        yield 'backed enum' => [StrBackedEnum::Draft, 'draft'];
+        yield 'unit enum' => [StrUnitEnum::Published, 'Published'];
+        yield 'date' => [new DateTimeImmutable('2026-06-13 00:00:00 UTC'), '2026-06-13T00:00:00+00:00'];
+        yield 'traversable' => [self::generator(), 'a, b'];
+        yield 'nested array' => [['a', ['b']], 'a, b'];
+        yield 'stringable' => [new StrStringable(), 'stringable'];
+        yield 'json serializable' => [new StrJsonSerializable(), '{"key":"value"}'];
+        yield 'closure' => [static fn(): null => null, '(Closure)'];
     }
 
-    /** esc_url() の代わり。WordPress と同じく、許可されないプロトコルの URL を空文字にする */
-    private function stubUrlEscaping(): void
+    #[DataProvider('stringifyCases')]
+    public function testStringifyFollowsTheConversionRules(mixed $value, string $expected): void
     {
-        Functions\when('esc_attr')->alias(static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES, 'UTF-8'));
-        Functions\when('esc_url')->alias(static fn(string $url): string => preg_match('/\A\s*javascript:/i', $url) === 1 ? '' : htmlspecialchars($url, ENT_QUOTES, 'UTF-8'));
+        self::assertSame($expected, Str::stringify($value));
     }
 
     /** @return Generator<int, string> */
-    private function generator(): Generator
+    private static function generator(): Generator
     {
         yield 'a';
         yield 'b';
     }
 }
 
-enum SupportBackedEnum: string
+enum StrBackedEnum: string
 {
     case Draft = 'draft';
 }
 
-enum SupportUnitEnum
+enum StrUnitEnum
 {
     case Published;
 }
 
-final class SupportStringable implements Stringable
+final class StrStringable implements Stringable
 {
     public function __toString(): string
     {
@@ -171,7 +176,7 @@ final class SupportStringable implements Stringable
     }
 }
 
-final class SupportJsonSerializable implements JsonSerializable
+final class StrJsonSerializable implements JsonSerializable
 {
     /** @return array<string, string> */
     public function jsonSerialize(): array

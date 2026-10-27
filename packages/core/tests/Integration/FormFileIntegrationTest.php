@@ -5,15 +5,19 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Integration;
 
 use Closure;
+use GdImage;
 use TMSWP\Core\Exception\Form\TempFileException;
 use TMSWP\Core\Form\ConfirmToken;
 use TMSWP\Core\Form\Form;
 use TMSWP\Core\Form\FormDefinition;
 use TMSWP\Core\Form\FormRequest;
 use TMSWP\Core\Form\FormStep;
+use TMSWP\Core\Form\Rule\FileExtension;
 use TMSWP\Core\Form\StoredFile;
 use TMSWP\Core\Form\TempFileGc;
 use TMSWP\Core\Form\TempFileStore;
+use TMSWP\Core\Form\UploadedFile;
+use TMSWP\Core\Form\Validator;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\DiscoveryResult;
 use TMSWP\Core\Kernel\KernelConfig;
@@ -259,6 +263,56 @@ final class FormFileIntegrationTest extends IntegrationTestCase
         }
 
         self::assertFalse(wp_next_scheduled(TempFileGc::HOOK));
+    }
+
+    /**
+     * FileExtensionは、アップロードしたファイルの実体を、WordPressのwp_check_filetype_and_ext()で確かめる。拡張子を.jpgに
+     * 偽装したPHPやテキストは、クライアントが画像のMIMEを申告しても違反になり、実際のJPEGは、クライアントがPHPのMIMEを
+     * 申告しても合格する。WordPressには一時ファイルのパスとクライアントのファイル名を渡す。
+     *
+     * @dataProvider uploadedContents
+     */
+    public function testFileExtensionChecksTheContentOfAnUploadedFileWithWordPress(string $kind, string $clientMime, bool $valid): void
+    {
+        $path = $this->createTempDirectory('file-extension') . '/upload';
+
+        if ($kind === 'jpeg') {
+            $image = imagecreatetruecolor(4, 4);
+            self::assertInstanceOf(GdImage::class, $image);
+            self::assertTrue(imagejpeg($image, $path));
+        } else {
+            self::assertNotFalse(file_put_contents($path, $kind === 'php' ? "<?php echo 'spoofed';\n" : self::CONTENTS));
+        }
+
+        $size = filesize($path);
+        self::assertIsInt($size);
+        $checks = [];
+        $record = static function (array $check, string $file, string $filename) use (&$checks): array {
+            $checks[] = ['file' => $file, 'filename' => $filename, 'ext' => $check['ext']];
+
+            return $check;
+        };
+        add_filter('wp_check_filetype_and_ext', $record, 10, 3);
+
+        try {
+            $errors = (new Validator())->validate(
+                FormDefinition::create('upload')->file('photo', 'Photo', [new FileExtension(['jpg'])]),
+                ['photo' => new UploadedFile($path, 'photo.jpg', $clientMime, $size, UPLOAD_ERR_OK)],
+            );
+        } finally {
+            remove_filter('wp_check_filetype_and_ext', $record, 10);
+        }
+
+        self::assertSame($valid ? [] : ['photo' => ['Please upload Photo as one of these file types: jpg.']], $errors);
+        self::assertSame([['file' => $path, 'filename' => 'photo.jpg', 'ext' => $valid ? 'jpg' : false]], $checks);
+    }
+
+    /** @return iterable<string, array{string, string, bool}> */
+    public static function uploadedContents(): iterable
+    {
+        yield 'JPEG declared as PHP' => ['jpeg', 'text/x-php', true];
+        yield 'PHP disguised as JPEG' => ['php', 'image/jpeg', false];
+        yield 'text disguised as JPEG' => ['text', 'image/jpeg', false];
     }
 
     /** 既定の一時保管の場所(TempFileStore::default() と同じ) */

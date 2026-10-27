@@ -521,15 +521,25 @@ packages/core/
 ├── src/
 └── tests/
     ├── Unit/            # 名前空間 TMSWP\Core\Tests\Unit\ — src/ をミラーする
-    │   ├── Support/ArrTest.php
-    │   └── Form/Rule/EmailRuleTest.php …
+    │   ├── Support/ArrTest.php            # src/Support/Arr.phpのテスト
+    │   ├── Form/Rule/EmailTest.php        # src/Form/Rule/Email.phpのテスト
+    │   ├── Form/FormValidationTest.php    # src/Form/Form.phpの検証の観点のテスト
+    │   ├── PHPStan/MetaKeyOwnershipRuleTest.php   # phpstan/src/MetaKeyOwnershipRule.phpのテスト
+    │   └── EntityQueryTest.php …          # Post・Tax・Userのクエリを同じ観点で確かめるテスト
     ├── Integration/     # 名前空間 TMSWP\Core\Tests\Integration\
     │   └── EntityRegistrationIntegrationTest.php …
-    ├── Support/         # テスト支援クラス(UnitTestCase・IntegrationTestCase 等)
+    ├── Support/         # パッケージ専用のテスト支援クラス(UnitTestCase・IntegrationTestCaseはtmswp/testing)
     └── fixtures/        # ユニット層のフィクスチャ(QA 対象外)
 ```
 
-パッケージの `tests/Unit/` は `src/` のディレクトリ構造をミラーする(旧 iwf2b の `tests/TestCase` 規約を踏襲)。
+パッケージの `tests/Unit/` は `src/` のディレクトリ構造をミラーする(旧 iwf2b の `tests/TestCase` 規約を踏襲)。対象はpackages/の6パッケージ(core・acf-bridge・settings-page・thumbnail・ja-toolkit・testing)。
+
+- `packages/<pkg>/src/<Dir>/<Class>.php`のテストは`packages/<pkg>/tests/Unit/<Dir>/<Class>Test.php`に置き、名前空間を`TMSWP\<Pkg>\Tests\Unit\<Dir>\`にする。
+- 1つのクラスのテストが大きい場合は、同じディレクトリに`<Class><観点>Test.php`として分けてよい(例: `Form/FormRuntimeTest.php`・`Form/FormValidationTest.php`)。
+- 複数のクラスにまたがるテスト(結合寄りのユニットテスト)は、主な対象のクラスの位置に置く(例: `TokenSigner`を使う`ConfirmToken`のテストは`Form/ConfirmTokenTest.php`)。
+- 主な対象のクラスを決められないテスト(複数のクラスを同じ観点で確かめるもの)は、それらのクラスのディレクトリに共通する最も近い親のディレクトリに`<観点>Test.php`として置く(例: 同梱の規則のコンストラクタの検査は`Form/Rule/ConstructorArgumentsTest.php`、Post・Tax・Userのクエリは`tests/Unit/`の直下の`EntityQueryTest.php`)。
+- `src/`の外にあるPSR-4のクラス(coreの`phpstan/src/`の`TMSWP\Core\PHPStan\`、`tests/Support/`の`TMSWP\Core\Tests\Support\`)のテストは、名前空間の`TMSWP\<Pkg>\`より下の部分をミラーする(例: `PHPStan/MetaKeyOwnershipRuleTest.php`・`Tests/Support/IntegrationEnvironmentGuardTest.php`)。
+- 仕様の境界(正常系と異常系の境目)は、データプロバイダに1ケースずつ並べ、1つのテストのメソッドに複数の規則の境界を詰め込まない(例: 同梱の規則は`Form/Rule/<Rule>Test.php`に規則ごとのデータプロバイダを持つ)。
 
 統合層の fixture(テスト用のテーマ・プラグイン)はパッケージごとではなく、リポジトリルートの `tests/fixtures/` に置く。全パッケージの統合テストが同じ fixture を共有する(4.6)。どのパッケージにも属さない `bin/`・`tools/` のユニットテストは、リポジトリルートの `tests/Unit/` に置く(4.3 の testsuite `tools`)。
 
@@ -1463,24 +1473,24 @@ vendor/bin/monorepo-builder release vX.Y.Z             # mainとタグをpushす
 |---|---|---|---|---|
 | 1 | `bootstrap.php` | `tests/bootstrap-integration.php` | — | `tests_add_filter('muplugins_loaded')` でのロード方式のみ踏襲。install-wp-tests.sh 経路は廃止(wp-env の WP_TESTS_DIR へ) |
 | 2 | `test-sample.php` | — | — | 廃棄(scaffold 残骸) |
-| 3 | `TestCase/ArrTest.php` | `packages/core/tests/Unit/SupportTest.php` | Unit | ドット記法 get/set のデータプロバイダ**全件**移植(ネスト配列・配列パス両形式) |
-| 4 | `TestCase/TextTest.php` | `packages/core/tests/Unit/SupportTest.php` | Unit | stringify(__toString / Iterator 対応)・ケース変換のうち、新 `Support\Str` API に存在するものを移植。新 API に対応がない検証は廃棄 |
-| 5 | `TestCase/UtilTest.php` | `packages/core/tests/Unit/FormRuleTest.php` | Unit | `parse_phpdoc_tags` 系は廃棄(Attribute 化で機構ごと消滅)。`is_empty` の境界値(null / '' / [] / false / 空白 / 0 / '0' / Countable)は Form 層の空値判定テスト(`Validator::isEmpty()`)へ仕様移植。新しい空値は null / '' / [] だけで、旧 FW が空とした false・空白だけの文字列・要素数 0 の Countable は空ではない(05 §空値スルーセマンティクス)。`filter` / `namespace_split` は対応 API なしのため廃棄 |
-| 6 | `TestCase/OptionTest.php` | `packages/core/tests/Unit/OptionRepositoryTest.php` + `Integration/OptionIntegrationTest.php` | 両方 | 定数ベースの option 読み書き仕様を移植。ユニット層はフェイク `OptionStorageInterface` 実装で、統合層は実 `wp_options` で検証 |
-| 7 | `TestCase/Field/FieldTest.php` | `packages/core/tests/Unit/FormRuntimeTest.php` | Unit | エラー設定 / クリアの仕様を移植。項目の定義(`Field`)はエラーを持たないため、`handle()` の検証の結果が `FieldView` のエラーに出ることと、次のリクエストの `Form` に前のエラーが残らないことで確かめる。1 項目に記録するエラーは最初の 1 件だけ(05 §Validator)のため、旧 FW の複数のエラーの追加は移植しない |
+| 3 | `TestCase/ArrTest.php` | `packages/core/tests/Unit/Support/ArrTest.php` | Unit | ドット記法 get/set のデータプロバイダ**全件**移植(ネスト配列・配列パス両形式) |
+| 4 | `TestCase/TextTest.php` | `packages/core/tests/Unit/Support/StrTest.php` | Unit | stringify(__toString / Iterator 対応)・ケース変換のうち、新 `Support\Str` API に存在するものを移植。新 API に対応がない検証は廃棄 |
+| 5 | `TestCase/UtilTest.php` | `packages/core/tests/Unit/Form/ValidatorTest.php` | Unit | `parse_phpdoc_tags` 系は廃棄(Attribute 化で機構ごと消滅)。`is_empty` の境界値(null / '' / [] / false / 空白 / 0 / '0' / Countable)は Form 層の空値判定テスト(`Validator::isEmpty()`)へ仕様移植。新しい空値は null / '' / [] だけで、旧 FW が空とした false・空白だけの文字列・要素数 0 の Countable は空ではない(05 §空値スルーセマンティクス)。`filter` / `namespace_split` は対応 API なしのため廃棄 |
+| 6 | `TestCase/OptionTest.php` | `packages/core/tests/Unit/Option/OptionRepositoryTest.php` + `packages/core/tests/Integration/OptionIntegrationTest.php` | 両方 | 定数ベースの option 読み書き仕様を移植。ユニット層はフェイク `OptionStorageInterface` 実装で、統合層は実 `wp_options` で検証 |
+| 7 | `TestCase/Field/FieldTest.php` | `packages/core/tests/Unit/Form/FormRuntimeTest.php` | Unit | エラー設定 / クリアの仕様を移植。項目の定義(`Field`)はエラーを持たないため、`handle()` の検証の結果が `FieldView` のエラーに出ることと、次のリクエストの `Form` に前のエラーが残らないことで確かめる。1 項目に記録するエラーは最初の 1 件だけ(05 §Validator)のため、旧 FW の複数のエラーの追加は移植しない |
 | 8 | `TestCase/Field/FieldSetTest.php` | — | — | 廃棄。FieldSet のシングルトン的インスタンス管理は DR-09(AbstractSingleton 廃止)で機構ごと消滅。フィールド集合の保持は `FormDefinition` のテストとして新規作成 |
-| 9 | `TestCase/Field/Rule/RuleTraitTest.php` | `packages/core/tests/Unit/FormRuleTest.php` | Unit | **空値スルー**(空値は Required 系以外を素通り)の仕様を、Required 系以外の全規則で移植。必須パラメータ欠落 / 型不一致の実行時検査は PHP 8.3 のコンストラクタ型宣言 + named arguments による静的保証に置換(`TypeError` の検証のみ残す)。config 配列の注入・既定メッセージの決め方・`PHPUnit\Framework\Error\Notice` 依存の検証は機構ごと廃棄 |
-| 10 | `TestCase/Field/Rule/ChoiceRuleTest.php` | `packages/core/tests/Unit/FormRuleTest.php` | Unit | 選択肢一致・multiple の全ケース移植。strict の指定は廃止し、常に文字列にして厳密に比べる(05 §同梱ルール一覧)。空白区切りの文字列による選択肢の指定は廃棄 |
-| 11 | `TestCase/Field/Rule/EmailRuleTest.php` | `packages/core/tests/Unit/FormRuleTest.php` | Unit | 正常 / 異常メールアドレスのデータプロバイダ**全件**移植。期待値は `filter_var(FILTER_VALIDATE_EMAIL)` の仕様(05)に従い、旧 FW と結果が違う値(`email@[123.123.123.123]` は合格)はテストのコメントに旧 FW の結果を残す |
-| 12 | `TestCase/Field/Rule/ExactLengthRuleTest.php` | `packages/core/tests/Unit/FormRuleTest.php`(`MinLength` / `MaxLength`) | Unit | ExactLength は同梱しない(05 §同梱ルール一覧)ため、ルールとしては廃棄。文字数の境界値(ASCII とマルチバイトの 9・10・11 文字)は、同じ長さの `MinLength` と `MaxLength` の組のテストへ移植 |
-| 13 | `TestCase/Field/Rule/RequiredIfRuleTest.php` | `packages/core/tests/Unit/FormRuleTest.php` | Unit | 他フィールド参照の条件付き必須の真理値表(`RequiredIf::filled()` / `RequiredIf::equals()`)を移植。FieldSet 経由参照は `ValidationContext` 経由に置換。strict の指定は廃止し、常に文字列として厳密に比べる。未登録の項目の参照は `UnknownFieldException` |
+| 9 | `TestCase/Field/Rule/RuleTraitTest.php` | `packages/core/tests/Unit/Form/ValidatorTest.php`(空値スルー)+ `packages/core/tests/Unit/Form/Rule/ConstructorArgumentsTest.php`(`TypeError`) | Unit | **空値スルー**(空値は Required 系以外を素通り)の仕様を、Required 系以外の全規則で移植。必須パラメータ欠落 / 型不一致の実行時検査は PHP 8.3 のコンストラクタ型宣言 + named arguments による静的保証に置換(`TypeError` の検証のみ残す)。config 配列の注入・既定メッセージの決め方・`PHPUnit\Framework\Error\Notice` 依存の検証は機構ごと廃棄 |
+| 10 | `TestCase/Field/Rule/ChoiceRuleTest.php` | `packages/core/tests/Unit/Form/Rule/ChoiceTest.php` | Unit | 選択肢一致・multiple の全ケース移植。strict の指定は廃止し、常に文字列にして厳密に比べる(05 §同梱ルール一覧)。空白区切りの文字列による選択肢の指定は廃棄 |
+| 11 | `TestCase/Field/Rule/EmailRuleTest.php` | `packages/core/tests/Unit/Form/Rule/EmailTest.php` | Unit | 正常 / 異常メールアドレスのデータプロバイダ**全件**移植。期待値は `filter_var(FILTER_VALIDATE_EMAIL)` の仕様(05)に従い、旧 FW と結果が違う値(`email@[123.123.123.123]` は合格)はテストのコメントに旧 FW の結果を残す |
+| 12 | `TestCase/Field/Rule/ExactLengthRuleTest.php` | `packages/core/tests/Unit/Form/Rule/MinLengthTest.php`・`packages/core/tests/Unit/Form/Rule/MaxLengthTest.php`(それぞれの境界)+ `packages/core/tests/Unit/Form/ValidatorTest.php`(同じ長さの組) | Unit | ExactLength は同梱しない(05 §同梱ルール一覧)ため、ルールとしては廃棄。文字数の境界値(ASCII とマルチバイトの 9・10・11 文字)は、同じ長さの `MinLength` と `MaxLength` の組のテストへ移植 |
+| 13 | `TestCase/Field/Rule/RequiredIfRuleTest.php` | `packages/core/tests/Unit/Form/Rule/RequiredIfTest.php` | Unit | 他フィールド参照の条件付き必須の真理値表(`RequiredIf::filled()` / `RequiredIf::equals()`)を移植。FieldSet 経由参照は `ValidationContext` 経由に置換。strict の指定は廃止し、常に文字列として厳密に比べる。未登録の項目の参照は `UnknownFieldException` |
 | 14 | `TestCase/Field/Rule/RequiredUnlessRuleTest.php` | — | — | 廃棄。RequiredUnless は同梱しない(05 §同梱ルール一覧) |
-| 15 | `TestCase/Field/Rule/RetypeRuleTest.php` | `packages/core/tests/Unit/FormRuleTest.php` | Unit | 再入力一致を `ValidationContext` 経由で移植。strict の指定は廃止し、常に文字列として厳密に比べる。未登録の項目の参照は `UnknownFieldException` |
-| 16 | `TestCase/Field/Rule/UrlRuleTest.php` | `packages/core/tests/Unit/FormRuleTest.php` | Unit | 絶対 / 相対 / カスタムプロトコル URL のデータプロバイダ**全件**移植。期待値は国際化ドメイン名のホスト名を `idn_to_ascii()`(UTS #46)で変換したうえでの `filter_var(FILTER_VALIDATE_URL)` とスキームの仕様(05)に従い、旧 FW と結果が違う値(ホスト名の `_`・スキームの無い相対 URL は不合格、UTS #46 で変換できる記号のホスト名・クエリの未エスケープの文字は合格)はテストのコメントに旧 FW の結果を残す |
-| 17 | `TestCase/Form/FormTest.php` | `packages/core/tests/Unit/FormHtmlTest.php` | Unit | checkbox / radio の value 属性・checked 判定の境界 10 ケース(空 value・同値設定等)を `FormHtml` 純関数と `FieldView` のスナップショット検証として移植。value は常に出力する(旧 FW は空の value を省いた) |
-| 18 | `TestCase/Form/FormChoiceTest.php` | `packages/core/tests/Unit/FormHtmlTest.php` | Unit | 複数選択肢レンダリングの出力仕様を移植(選択肢は「値 => ラベル」。空値の hidden は出さない)。カスタムレンダラ合成(3 層コールバック)の検証は機構廃止(DR-07)により、`FieldView::options()` の `OptionView` を 1 つずつ描画する出力カスタマイズ仕様(05 文書)の検証に置換 |
-| 19 | `TestCase/Log/LogTest.php` | `packages/core/tests/Unit/LogTest.php` | Unit | チャンネル・スコープ・ロガー差し替え・vfsStream への書込検証を移植。シングルトン検証(get_instance)は `LoggerRegistry` の登録 / 解決検証に置換 |
-| 20 | `TestCase/Log/Logger/SimpleLoggerTest.php` | `packages/core/tests/Unit/LogTest.php` | Unit | 日付フォーマット・ファイル名・ディレクトリ分割・全レベル・コンテキスト展開を vfsStream で移植(PSR-3 **v3** シグネチャで書き直し) |
+| 15 | `TestCase/Field/Rule/RetypeRuleTest.php` | `packages/core/tests/Unit/Form/Rule/RetypeTest.php` | Unit | 再入力一致を `ValidationContext` 経由で移植。strict の指定は廃止し、常に文字列として厳密に比べる。未登録の項目の参照は `UnknownFieldException` |
+| 16 | `TestCase/Field/Rule/UrlRuleTest.php` | `packages/core/tests/Unit/Form/Rule/UrlTest.php` | Unit | 絶対 / 相対 / カスタムプロトコル URL のデータプロバイダ**全件**移植。期待値は国際化ドメイン名のホスト名を `idn_to_ascii()`(UTS #46)で変換したうえでの `filter_var(FILTER_VALIDATE_URL)` とスキームの仕様(05)に従い、旧 FW と結果が違う値(ホスト名の `_`・スキームの無い相対 URL は不合格、UTS #46 で変換できる記号のホスト名・クエリの未エスケープの文字は合格)はテストのコメントに旧 FW の結果を残す |
+| 17 | `TestCase/Form/FormTest.php` | `packages/core/tests/Unit/Form/FormHtmlTest.php` | Unit | checkbox / radio の value 属性・checked 判定の境界 10 ケース(空 value・同値設定等)を `FormHtml` 純関数と `FieldView` のスナップショット検証として移植。value は常に出力する(旧 FW は空の value を省いた) |
+| 18 | `TestCase/Form/FormChoiceTest.php` | `packages/core/tests/Unit/Form/FormHtmlTest.php` | Unit | 複数選択肢レンダリングの出力仕様を移植(選択肢は「値 => ラベル」。空値の hidden は出さない)。カスタムレンダラ合成(3 層コールバック)の検証は機構廃止(DR-07)により、`FieldView::options()` の `OptionView` を 1 つずつ描画する出力カスタマイズ仕様(05 文書)の検証に置換 |
+| 19 | `TestCase/Log/LogTest.php` | `packages/core/tests/Unit/Log/LoggerRegistryTest.php`(チャンネル・スコープ・ロガー差し替え)・`packages/core/tests/Unit/Log/LogChannelTest.php`(チャンネルの設定)+ `packages/core/tests/Unit/Log/SimpleLoggerTest.php`(vfsStreamへの書込) | Unit | チャンネル・スコープ・ロガー差し替え・vfsStream への書込検証を移植。シングルトン検証(get_instance)は `LoggerRegistry` の登録 / 解決検証に置換 |
+| 20 | `TestCase/Log/Logger/SimpleLoggerTest.php` | `packages/core/tests/Unit/Log/SimpleLoggerTest.php` | Unit | 日付フォーマット・ファイル名・ディレクトリ分割・全レベル・コンテキスト展開を vfsStream で移植(PSR-3 **v3** シグネチャで書き直し) |
 | 21 | `TestCase/Post/AbstractPostTest.php` | `packages/core/tests/Integration/EntityRegistrationIntegrationTest.php`(登録) + `EntityFacadeIntegrationTest.php`(取得・URL) + `EntityQueryIntegrationTest.php`(クエリ) + `MetaIntegrationTest.php`(メタ) | Integration | CPT 自動登録・`get`/`get_id` 相当(`PostQuery`)・META 定数によるメタ読み書き(`MetaBag` 経由)・permalink / アーカイブリンクを移植。「デフォルト meta 挿入」は `MetaSchema(default:)` の仕様検証へ置換 |
 | 21b | 同上(サムネイル解決) | `packages/core/tests/Integration/EntityFacadeIntegrationTest.php` | Integration | アイキャッチなし / アイキャッチあり / `tmswp/post/thumbnail_fallback` フィルタの 3 経路の解決を移植(GD 画像生成 + WP ファクトリの作法を踏襲。アイキャッチありは GD で作った JPEG を `factory()->attachment->create_upload_object()` で添付し、URL・幅・高さ・alt と中間サイズを確かめる)。ダミー画像は呼び出し側の `?? $dummyUrl` で表すため対象外。本文先頭 img の抽出はコアにも thumbnail 拡張にも持たない(03 文書 §5) |
 | 22 | `TestCase/Tax/AbstractTaxTest.php` | `packages/core/tests/Integration/EntityRegistrationIntegrationTest.php`(登録・object_type の解決) + `EntityFacadeIntegrationTest.php`(term link) + `MetaIntegrationTest.php`(term meta) | Integration | タクソノミー登録(object_type の文字列 / 配列 / PostType クラス名解決)・term meta 定数操作・term link を移植 |
@@ -1492,18 +1502,18 @@ vendor/bin/monorepo-builder release vX.Y.Z             # mainとタグをpushす
 
 旧 FW にテストが存在しない以下は、対応する機能文書の仕様から **TDD で新規作成**する(実装より先にテストを書くこと)。カバレッジ目標(4.8)の対象。
 
-| 対象 | 層 | 最低限の検証項目 |
-|---|---|---|
-| `Model` / `QueryBuilder` / `TableDefinition` / `Migrator` | Unit + Integration | 全クエリが `wpdb->prepare` を通ること(生 SQL 流出の禁止)、dbDelta スキーマ生成、`wp tmswp migrate` によるハッシュ比較のマイグレーションと管理画面の通知 |
-| `Form`(ライフサイクル) | Unit | バインド → 検証 → `FormStep` 遷移、CSRF 自動検証(Brain Monkey で wp_nonce モック) |
-| `ConfirmToken` | Unit | HMAC 署名生成 / 検証、改ざん検知、期限切れ |
-| `UploadedFile` / `TempFileStore` | Unit | トークン発行 / 取出し、**ユーザー入力からのパス再構築が不可能であること**(パストラバーサル試行の拒否) |
-| `Kernel` / `Discovery` / `DiscoveryFile` | Unit + Integration | Attribute 走査、決定的ロード順、循環依存検出エラー、探索結果ファイルの読み込みの検証と照合(`wp tmswp discover --check`) |
-| `Container` | Unit | PSR-11 準拠(has/get、未登録時 `NotFoundExceptionInterface`) |
-| `MetaBag` / `MetaSchemaRegistry` / `WpMetaStorage` | Unit + Integration | 型付きアクセサの変換規則、`has()`/`get()` 分離(DR-18)、`register_*_meta` 自動登録 |
-| `View\Template` | Unit + Integration | パス解決(テーマ → プラグイン fallback)、`extract()` 不使用の変数受け渡し |
-| `Support\Html` | Unit | 属性レンダリングのエスケープ |
-| 各拡張パッケージ | 各文書に従う | thumbnail: 署名付き URL 検証 / settings-page: nonce / acf-bridge: 生成コードのドリフト検知 / ja-toolkit: 各モジュールのオプトイン動作 |
+| 対象 | 層 | 最低限の検証項目 | テスト |
+|---|---|---|---|
+| `Model` / `QueryBuilder` / `TableDefinition` / `Migrator` | Unit + Integration | 全クエリが `wpdb->prepare` を通ること(生 SQL 流出の禁止)、dbDelta スキーマ生成、`wp tmswp migrate` によるハッシュ比較のマイグレーションと管理画面の通知 | `packages/core/tests/Unit/Model/`(`ModelLayerTest.php`・`QueryBuilderAcceptanceTest.php`・`TableDefinitionAcceptanceTest.php`・`TableDefinitionColumnAttributeTest.php`・`TableDefinitionTypeAliasTest.php`・`MigratorTest.php`・`MigrateCommandTest.php`)+ `packages/core/tests/Integration/ModelIntegrationTest.php` |
+| `Form`(ライフサイクル) | Unit | バインド → 検証 → `FormStep` 遷移、CSRF 自動検証(Brain Monkey で wp_nonce モック) | `packages/core/tests/Unit/Form/FormRuntimeTest.php` |
+| `ConfirmToken` | Unit | HMAC 署名生成 / 検証、改ざん検知、期限切れ | `packages/core/tests/Unit/Form/ConfirmTokenTest.php` |
+| `UploadedFile` / `TempFileStore` | Unit | トークン発行 / 取出し、**ユーザー入力からのパス再構築が不可能であること**(パストラバーサル試行の拒否) | `packages/core/tests/Unit/Form/TempFileStoreTest.php` |
+| `Kernel` / `Discovery` / `DiscoveryFile` | Unit + Integration | Attribute 走査、決定的ロード順、循環依存検出エラー、探索結果ファイルの読み込みの検証と照合(`wp tmswp discover --check`) | `packages/core/tests/Unit/Kernel/`(`KernelTest.php`等・`DiscoveryTest.php`・`DiscoveryFileTest.php`・`DiscoverCommandTest.php`)+ `packages/core/tests/Integration/KernelBootIntegrationTest.php` |
+| `Container` | Unit | PSR-11 準拠(has/get、未登録時 `NotFoundExceptionInterface`) | `packages/core/tests/Unit/Container/ContainerTest.php` |
+| `MetaBag` / `MetaSchemaRegistry` / `WpMetaStorage` | Unit + Integration | 型付きアクセサの変換規則、`has()`/`get()` 分離(DR-18)、`register_*_meta` 自動登録 | `packages/core/tests/Unit/Meta/MetaBagTest.php`・`packages/core/tests/Unit/Meta/MetaSchemaRegistryTest.php` + `packages/core/tests/Integration/MetaIntegrationTest.php`・`packages/core/tests/Integration/WpMetaStorageContractTest.php` |
+| `View\Template` | Unit + Integration | パス解決(テーマ → プラグイン fallback)、`extract()` 不使用の変数受け渡し | `packages/core/tests/Unit/View/TemplateTest.php` + `packages/core/tests/Integration/ViewIntegrationTest.php` |
+| `Support\Html` | Unit | 属性レンダリングのエスケープ | `packages/core/tests/Unit/Support/HtmlTest.php` |
+| 各拡張パッケージ | 各文書に従う | thumbnail: 署名付き URL 検証 / settings-page: nonce / acf-bridge: 生成コードのドリフト検知 / ja-toolkit: 各モジュールのオプトイン動作 | thumbnail: `packages/thumbnail/tests/Unit/UrlSignerTest.php` + `packages/thumbnail/tests/Integration/ThumbnailIntegrationTest.php` / settings-page: `packages/settings-page/tests/Integration/SettingsPageIntegrationTest.php` / acf-bridge: `packages/acf-bridge/tests/Unit/Cli/SyncRunnerTest.php`・`packages/acf-bridge/tests/Unit/Cli/AcfCommandTest.php` / ja-toolkit: `packages/ja-toolkit/tests/Unit/JaToolkitTest.php` |
 
 ---
 
@@ -1583,7 +1593,7 @@ namespace TMSWP\Core\Tests\Unit\Form\Rule;
 use Brain\Monkey\Functions;
 use TMSWP\Testing\UnitTestCase;
 
-final class EmailRuleTest extends UnitTestCase
+final class EmailTest extends UnitTestCase
 {
     /** @return iterable<string, array{string}> */
     public static function provideValidEmails(): iterable

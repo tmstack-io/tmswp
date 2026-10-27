@@ -74,36 +74,56 @@ final class OptionRepositoryTest extends UnitTestCase
         self::assertSame([], $repository->deleteAll());
     }
 
-    public function testSetRejectsNullAndKeepsTheStoredValue(): void
+    /**
+     * nullは宣言したキーにも宣言していないキーにもsetできず、保存した値は変わらない(削除はdelete())。
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function keysSetToNull(): iterable
+    {
+        yield 'declared key' => ['contact_email'];
+        yield 'undeclared key' => ['legacy_key'];
+    }
+
+    #[DataProvider('keysSetToNull')]
+    public function testSetRejectsNullAndKeepsTheStoredValue(string $key): void
     {
         $storage = new ArrayOptionStorage();
         $repository = $this->factory($storage)->for(SiteOptionFixture::class);
         $repository->set('contact_email', 'kept@example.com');
 
-        foreach (['contact_email', 'legacy_key'] as $key) {
-            try {
-                $repository->set($key, null);
-                self::fail("null を set できてしまいました: {$key}");
-            } catch (InvalidArgumentException $exception) {
-                self::assertSame("option '{$key}' cannot be set to null; use delete() to remove it", $exception->getMessage());
-            }
+        try {
+            $repository->set($key, null);
+            self::fail("null を set できてしまいました: {$key}");
+        } catch (InvalidArgumentException $exception) {
+            self::assertSame("option '{$key}' cannot be set to null; use delete() to remove it", $exception->getMessage());
         }
 
         self::assertSame(['site_contact_email' => 'kept@example.com'], $storage->values);
     }
 
-    public function testSetRejectsValuesThatDoNotMatchTheSchemaType(): void
+    /**
+     * スキーマの型に合わない値はsetできず、何も保存しない。
+     *
+     * @return iterable<string, array{string, mixed, string, string}>
+     */
+    public static function valuesNotMatchingTheSchemaType(): iterable
+    {
+        yield 'string for a boolean' => ['maintenance_mode', '1', 'boolean', 'string'];
+        yield 'array for a string' => ['contact_email', ['a@example.com'], 'string', 'array'];
+    }
+
+    #[DataProvider('valuesNotMatchingTheSchemaType')]
+    public function testSetRejectsValuesThatDoNotMatchTheSchemaType(string $key, mixed $value, string $expected, string $actual): void
     {
         $storage = new ArrayOptionStorage();
         $repository = $this->factory($storage)->for(SiteOptionFixture::class);
 
-        foreach ([['maintenance_mode', '1', 'boolean', 'string'], ['contact_email', ['a@example.com'], 'string', 'array']] as [$key, $value, $expected, $actual]) {
-            try {
-                $repository->set($key, $value);
-                self::fail("スキーマの型に合わない値を set できてしまいました: {$key}");
-            } catch (InvalidArgumentException $exception) {
-                self::assertSame("option '{$key}' expects {$expected}, got {$actual}", $exception->getMessage());
-            }
+        try {
+            $repository->set($key, $value);
+            self::fail("スキーマの型に合わない値を set できてしまいました: {$key}");
+        } catch (InvalidArgumentException $exception) {
+            self::assertSame("option '{$key}' expects {$expected}, got {$actual}", $exception->getMessage());
         }
 
         self::assertSame([], $storage->values);
