@@ -4,93 +4,71 @@ declare(strict_types=1);
 
 namespace TMSWP\JaToolkit;
 
-use ReflectionClass;
 use TMSWP\Core\Exception\LogicException;
+use TMSWP\Core\Kernel\ExtensionInterface;
+use TMSWP\Core\Kernel\Kernel;
 
-final class JaToolkit
+/**
+ * ja-toolkitの入口。`KernelConfig::theme()` / `plugin()`の`extensions`に渡し、Kernelごとに登録する。
+ *
+ * ```php
+ * return KernelConfig::theme(__DIR__ . '/app', 'App', extensions: [
+ *     new JaToolkit(new JapaneseSlug(), new FullwidthSearchNormalizer(), new DisableTexturize()),
+ * ]);
+ * ```
+ *
+ * 登録したKernelのbootで、ja訳の読み込み(init 1)を予約し、コンストラクタに渡したモジュールだけを有効にする。
+ * KanaTextFieldの訳も、この登録で読み込む(モジュールを1つも渡さない`new JaToolkit()`でよい)。1つのインスタンスは
+ * 1つのKernelにだけ登録できる。
+ */
+final class JaToolkit implements ExtensionInterface
 {
-    /** @var array<class-string<ModuleInterface>, ModuleInterface> */
-    private static array $modules = [];
+    private ?Kernel $kernel = null;
 
-    private static bool $textdomainRegistered = false;
-
-    private function __construct() {}
+    /** @var list<ModuleInterface> */
+    private readonly array $modules;
 
     /**
-     * @param list<class-string<ModuleInterface>|ModuleInterface> $modules
+     * WordPressの関数は呼ばない(tmswp-kernel.phpの中で、WordPressを起動しない経路からも生成されるため)。
+     *
+     * @param ModuleInterface ...$modules 有効にするモジュール。同じクラスは1つまで
      */
-    public static function enable(array $modules): void
+    public function __construct(ModuleInterface ...$modules)
     {
-        if (\function_exists('did_action') && did_action('init') > 0) {
-            throw new LogicException('JaToolkit::enable() must be called before the init hook');
+        $this->modules = array_values($modules);
+    }
+
+    /**
+     * 登録したKernelのboot中に1回呼ばれる。検査をすべて済ませてから、訳の読み込み(init 1)の予約と、各モジュールの
+     * register()を行う。検査で例外になったときは、何も登録しない。
+     *
+     * @throws LogicException このインスタンスを登録済みの場合、同じクラスのモジュールが2つ以上ある場合
+     */
+    public function register(Kernel $kernel): void
+    {
+        if ($this->kernel instanceof Kernel) {
+            throw new LogicException("this JaToolkit instance is already registered to the kernel '{$this->kernel->config()->appNamespace}'; create one JaToolkit per kernel");
         }
 
-        self::registerTextdomainLoader();
+        $classes = [];
 
-        foreach ($modules as $module) {
-            $instance = self::resolveModule($module);
-            $class = $instance::class;
+        foreach ($this->modules as $module) {
+            $class = $module::class;
 
-            if (\array_key_exists($class, self::$modules)) {
-                throw new LogicException("ja-toolkit module is already enabled: {$class}");
+            if (\array_key_exists($class, $classes)) {
+                throw new LogicException("ja-toolkit module {$class} is passed more than once to the JaToolkit of the kernel '{$kernel->config()->appNamespace}'");
             }
 
-            self::$modules[$class] = $instance;
-            $instance->register();
-        }
-    }
-
-    /**
-     * @param class-string<ModuleInterface> $moduleClass
-     */
-    public static function isEnabled(string $moduleClass): bool
-    {
-        return \array_key_exists($moduleClass, self::$modules);
-    }
-
-    /**
-     * @internal
-     */
-    public static function reset(): void
-    {
-        self::$modules = [];
-        self::$textdomainRegistered = false;
-    }
-
-    /**
-     * @param class-string<ModuleInterface>|ModuleInterface $module
-     */
-    private static function resolveModule(string|ModuleInterface $module): ModuleInterface
-    {
-        if ($module instanceof ModuleInterface) {
-            return $module;
+            $classes[$class] = true;
         }
 
-        if (!is_subclass_of($module, ModuleInterface::class)) {
-            throw new LogicException("ja-toolkit module must implement ModuleInterface: {$module}");
+        $this->kernel = $kernel;
+        $kernel->defer('init', 1, static function (): void {
+            load_textdomain('tmswp', \dirname(__DIR__) . '/languages/tmswp-' . determine_locale() . '.mo');
+        });
+
+        foreach ($this->modules as $module) {
+            $module->register();
         }
-
-        $reflection = new ReflectionClass($module);
-        $constructor = $reflection->getConstructor();
-
-        if ($constructor !== null && $constructor->getNumberOfRequiredParameters() > 0) {
-            throw new LogicException("ja-toolkit module '{$module}' requires constructor arguments; pass an instance instead");
-        }
-
-        return new $module();
-    }
-
-    private static function registerTextdomainLoader(): void
-    {
-        if (self::$textdomainRegistered) {
-            return;
-        }
-
-        add_action('init', static function (): void {
-            $locale = determine_locale();
-            load_textdomain('tmswp', \dirname(__DIR__) . "/languages/tmswp-{$locale}.mo");
-        }, 1, 0);
-
-        self::$textdomainRegistered = true;
     }
 }

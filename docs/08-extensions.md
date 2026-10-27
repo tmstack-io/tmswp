@@ -61,7 +61,7 @@ return KernelConfig::theme(
 );
 ```
 
-入口のクラスは、各パッケージの節に書く(thumbnailは§1.4の`Thumbnail`、settings-pageは§2.2の`SettingsPages`)。
+入口のクラスは、各パッケージの節に書く(thumbnailは§1.4の`Thumbnail`、settings-pageは§2.2の`SettingsPages`、ja-toolkitは§3.2の`JaToolkit`)。
 
 - Kernelは、bootの中で`extensions`の各インスタンスの`register(Kernel $kernel)`を、渡した順に1回ずつ呼ぶ。
 - 同じクラスの拡張を同じKernelに2つ渡すと、`KernelConfig`が`TMSWP\Core\Exception\KernelException`を投げる。1つのインスタンスを2つのKernelに渡すと、2つ目のKernelの`register()`が例外を投げる(1つのインスタンスは1つのKernelにだけ登録できる)。どちらも設定の誤りなので、debugに関係なく起動を止める。冪等な握り潰しはしない。設定差異の取り違えを早期に検出するためである。
@@ -848,7 +848,7 @@ $field = $form->field('site_catchphrase');
 
 新設計は**モジュール式の明示オプトイン**(DR-10):
 
-1. 1関心事=1モジュール(final class)。`JaToolkit::enable([...])` に列挙したものだけが有効化される。
+1. 1関心事=1モジュール(final class)。`KernelConfig`の`extensions`に渡した`new JaToolkit(...)`のコンストラクタに列挙したものだけが、そのKernelで有効になる(共通規約「登録API」)。
 2. 収載対象は**日本語サイト固有の課題を解くモジュールとFormプリセットのみ**。管理メニュー・管理バー・ダッシュボード・wp_head 出力等の汎用WPクリーンアップは、削除対象がテーマ毎に異なり一律の既定値が成立しないため**コード収載しない**。app側Hookクラスのレシピ(コアの rules/hooks.md)として提供する(3.6の対応表参照)。
 3. クラシックエディタ(TinyMCE・クラシックメタボックス)専用の挙動調整は、WP 7.0 を下限とする本FWでは収載しない。必要案件はapp側Hookクラスで実装する。
 4. ACF/CF7/Yoast連携・View乗っ取り(`template_include`+exit)・`load_global` は**本パッケージにも収載しない**(完全廃止。3.6の対応表参照)。
@@ -856,34 +856,36 @@ $field = $form->field('site_catchphrase');
 
 ## 3.2 エントリAPI
 
-### `TMSWP\JaToolkit\JaToolkit`
+### `TMSWP\JaToolkit\JaToolkit`(パッケージの入口)
 
 ```php
-final class JaToolkit
+final class JaToolkit implements \TMSWP\Core\Kernel\ExtensionInterface
 {
-    /**
-     * モジュールを有効化する。Kernel::boot()直後(initフック前)に呼ぶこと。
-     * @param list<class-string<ModuleInterface>|ModuleInterface> $modules
-     *        class-string指定は引数なしコンストラクタで生成(必須引数を持つモジュールはインスタンス渡し)
-     */
-    public static function enable(array $modules): void;
+    /** @param ModuleInterface ...$modules 有効にするモジュール。同じクラスは1つまで */
+    public function __construct(ModuleInterface ...$modules);
 
-    /** @param class-string<ModuleInterface> $moduleClass */
-    public static function isEnabled(string $moduleClass): bool;
-    public static function reset(): void;  // テスト用
+    public function register(\TMSWP\Core\Kernel\Kernel $kernel): void;
 }
 ```
 
-- `enable()` は各モジュールの `register()` を即時呼び出す(モジュール側がadd_action/add_filterするだけなので、`init` 前であればタイミング問題はない)。`init` 発火後の呼び出しは `TMSWP\Core\Exception\LogicException`(`did_action('init')` で判定)。
-- 同一モジュールクラスの重複指定・`enable()` 自体の複数回呼び出しのうち既登録クラスを含むものは `LogicException`(別クラスの追加enableは許可)。
-- class-string指定でコンストラクタに必須引数がある場合は `LogicException`(メッセージで「インスタンスを渡せ」と案内)。
+`KernelConfig`の`extensions`に`new JaToolkit(...)`を渡したKernelでだけ、ja-toolkitが有効になる(共通規約「登録API」)。モジュールはインスタンスで渡す(コンストラクタ引数の無いモジュールも`new JapaneseSlug()`のように渡す)。コンストラクタは、WordPressの関数を呼ばない。
+
+`register()`の振る舞い(登録したKernelのbootの中で1回):
+
+1. 検査を、何かを登録するより前にすべて行う。このインスタンスを登録済みなら`TMSWP\Core\Exception\LogicException`(1つのインスタンスは1つのKernelにだけ登録できる)。同じクラスのモジュールが2つ以上あれば`LogicException`。どちらも設定の誤りなので、debugに関係なく起動を止める。例外のときは、訳の読み込みもモジュールのフックも登録しない(登録は原子的)。
+2. 訳の読み込み(`init` priority 1。`load_textdomain('tmswp', <ja-toolkit>/languages/tmswp-{$locale}.mo)`)を`$kernel->defer()`で予約する。モジュールを1つも渡さない`new JaToolkit()`でも予約する。
+3. 渡した順に、各モジュールの`register()`を呼ぶ。
+
+`init`の後のboot(遅延boot)の扱いは、Kernelに従う(文書02 §3.3。debugなら`register()`より前にKernelが例外にし、本番ならKernelが記録してキャッチアップする)。JaToolkitは独自の`did_action('init')`の検査を持たない。
+
+ja-toolkitには、debugで振る舞いを変える処理とログを記録する処理が無く、`WP_DEBUG`も見ない(D-33)。検査の失敗は、どれも設定の誤りとしてdebugに関係なく例外になる。
 
 ### `TMSWP\JaToolkit\ModuleInterface`
 
 ```php
 interface ModuleInterface
 {
-    /** WPフックの登録のみを行う(副作用の即時実行は禁止) */
+    /** WPフックの登録のみを行う(副作用の即時実行は禁止)。JaToolkitを登録したKernelのbootの中で1回呼ばれる */
     public function register(): void;
 }
 ```
@@ -897,25 +899,43 @@ interface ModuleInterface
 ```php
 final class JapaneseSlug implements ModuleInterface
 {
-    /** @param string $format プレースホルダ: {post_type} {post_id} */
-    public function __construct(private readonly string $format = '{post_type}-{post_id}') {}
+    /**
+     * @param string $format プレースホルダ: {post_type} {post_id}
+     * @param list<string>|null $postTypes 対象の投稿タイプ(許可リスト)。nullなら公開の投稿タイプのうちattachment以外
+     */
+    public function __construct(string $format = '{post_type}-{post_id}', ?array $postTypes = null);
 
-    public function register(): void;  // add_filter('wp_unique_post_slug', ..., 10, 4)
+    public function register(): void;  // add_filter('wp_unique_post_slug', ..., 10, 5)
 
-    public function filterSlug(string $slug, int $postId, string $postStatus, string $postType): string;
+    public function filterSlug(string $slug, int $postId, string $postStatus, string $postType, int $postParent): string;
 }
 ```
+
+コンストラクタの検査(設定の誤り。debugに関係なく`TMSWP\Core\Exception\LogicException`):
+
+- `$format`は`{post_id}`を必ず含み、プレースホルダの外は英小文字・数字・`_`・`-`だけ(投稿タイプのキーと同じ文字種)。`{post_id}`が無いと全投稿が同じスラッグの候補になり、`%`等を許すと置き換えたスラッグが再び変換の対象になるためである。`$format`は1回の走査で`{post_type}`・`{post_id}`と固定部分に分け(`preg_split()`でプレースホルダを捕捉する)、固定部分をそれぞれ検査する。プレースホルダを順に消してから検査すると、`{post_{post_type}id}`のような入れ子が、消した後にできる新しい`{post_id}`ごと消えて検査を通るためである。入れ子・閉じていない波括弧・知らないプレースホルダ(`{foo}`等)は、固定部分に波括弧が残るため拒む。下の長さの計算も、同じ解析の結果から行う。
+- 置き換えたスラッグの最悪の場合の長さは200以下でなければならない。最悪の場合の長さは、プレースホルダの外の文字数と、`{post_type}`の出現数×20と、`{post_id}`の出現数×20の合計である(繰り返し現れるプレースホルダも数える)。上限の根拠は、`wp_posts`の`post_name`の列がvarchar(200)であること、投稿タイプのキーの上限が20文字であること、`ID`の列(BIGINT UNSIGNED)の最大値が20桁であることである。`wp_unique_post_slug()`は重ならない候補を200バイトに切り詰めないため、超えるスラッグの公開はデータベースの更新の失敗になり、投稿が下書きのまま残る。短いIDの投稿では収まる場合も、設定の誤りとして拒む。
+- `$postTypes`は空の配列を許さず、各要素は投稿タイプのキーの形(英小文字・数字・`_`・`-`の1〜20文字)。投稿タイプが登録済みかは確かめない(投稿タイプは`init`で登録されるため)。
+
+対象の投稿タイプ(許可リスト):
+
+- `$postTypes`を渡したら、そのキーの投稿タイプだけ。
+- `null`(既定)なら、変換の時点で`get_post_type_object()`の`public`が真の投稿タイプのうち、`attachment`以外(既定ではpost・pageと、公開のカスタム投稿タイプ)。`wp_block`・`wp_template`・`wp_navigation`等の内部の投稿タイプは`public`が偽のため対象にならない。
 
 `filterSlug()` の確定アルゴリズム:
 
 ```
-1. preg_match('/(%[0-9a-f]{2})+/i', $slug) が偽(URLエンコードされた多バイト文字を含まない)
+1. $postId === 0(新規・ID未確定)、$postTypeが対象でない、または
+   preg_match('/(%[0-9a-f]{2})+/i', $slug) が偽(URLエンコードされた多バイト文字を含まない)
    → $slug をそのまま返す
-2. $postId === 0(新規・ID未確定) → $slug をそのまま返す
-   (この場合は保存後の再サニタイズで本フィルタが再度呼ばれた時点で変換される。
-    旧実装と同一の振る舞いであり、挙動を変えない)
-3. $format の {post_type}/{post_id} を置換した文字列を返す(例: 'blog-123')
+   ($postId === 0の場合は、保存後の再サニタイズで本フィルタが再度呼ばれた時点で変換される。旧実装と同一)
+2. $format の {post_type}/{post_id} を置換した文字列を作る(例: 'blog-123')
+3. それをwp_unique_post_slug($converted, $postId, $postStatus, $postType, $postParent)に通した値を返す
 ```
+
+2の置き換えは`strtr()`で行い、置き換えた結果を再び走査しない。2で作った文字列が200バイトを超えたら、`LogicException`にする(コンストラクタの検査により本来起きない)。末尾を切り詰めないのは、必須の`{post_id}`を失うためである。
+
+3はフィルタの戻り値がWordPressの一意性の確認の後の値として使われるため、置き換えたスラッグの一意性をもう一度確かめる(重複していれば`-2`等の接尾辞が付く)。置き換えたスラッグはURLエンコードした文字を含まないため、その中で呼ばれる本フィルタは値を変えない(再帰しない)。
 
 ### 3.3.2 `FullwidthSearchNormalizer` — 全角スペース検索の正規化
 
@@ -931,11 +951,14 @@ final class FullwidthSearchNormalizer implements ModuleInterface
 `normalize()` の確定アルゴリズム:
 
 ```
-1. $query->is_search() でない、または query_var 's' が空文字 → 何もしない
+1. $query->is_search() でない、または query_var 's' が文字列でないか空文字 → 何もしない
 2. $s = mb_convert_kana($s, 's', 'UTF-8')  // 全角スペース→半角
 3. 半角スペースで分割→空要素を除去→半角スペース1つで再結合(連続スペースの圧縮と先頭末尾のtrimを兼ねる)
 4. $query->set('s', $s)
+5. 3の結果が空(全角・半角のスペースだけの検索語)なら、$query->set('post__in', [0])で0件にする
 ```
+
+5は、`s`が空文字の検索にWordPressが検索の条件を付けず、全件を返すためである。空白だけの検索語は「何も探していない」のではなく「該当なし」として扱い、`is_search()`は真のまま残す(検索結果のテンプレートで0件として表示される)。正規化しないで元の検索語のまま検索させる案は、全角スペースを含む投稿(和文では多い)に当たるため採らない。
 
 旧実装の「`init` で `$_GET['s']` を直接書き換える」方式はスーパーグローバル汚染(他プラグインへの副作用)のため廃止し、クエリオブジェクト側で正規化する。メイン/サブクエリを問わず `is_search()` のクエリ全てに適用する。
 
@@ -954,7 +977,7 @@ final class DisableTexturize implements ModuleInterface
 
 ### `TMSWP\JaToolkit\Form\KanaTextField`
 
-カナ入力用の構成済み `Field` を返す静的ファクトリ。WPフックを登録しないため `ModuleInterface` は実装せず、`JaToolkit::enable()` の対象でもない。フォーム定義で直接 `KanaTextField::create()` を呼ぶ。
+カナ入力用の構成済み `Field` を返す静的ファクトリ。WPフックを登録しないため `ModuleInterface`は実装しない。フォーム定義で直接 `KanaTextField::create()` を呼ぶ。
 
 ```php
 namespace TMSWP\JaToolkit\Form;
@@ -982,23 +1005,39 @@ final class KanaTextField
 }
 ```
 
-- filters: `mb_convert_kana()` で表記ゆれを正規化する。Katakana は `'KVC'`、Hiragana は `'KVc'` を使う。
-- rules: 正規化後の文字種を `Regex` で検証し、`MaxLength($maxLength)` を追加する。`$rules` は先頭に展開されるため、`Required` 等の必須条件を呼び出し側で追加できる。
-- メッセージ: ソース文字列は英語で `__('...', 'tmswp')` を通し、日本語訳は ja-toolkit の翻訳ファイルで提供する。
+- filters: 前後の空白(全角スペースを含む)の除去(`Field::text()`の既定)の後に、表記ゆれを正規化する。まず`mb_convert_kana(..., 'KV')`で半角カタカナを全角に、濁点・半濁点を1文字にし、次にKatakanaは`'Cs'`(ひらがな→カタカナ、全角スペース→半角)、Hiraganaは`'cs'`(カタカナ→ひらがな、全角スペース→半角)で変換する。2回に分けるのは、1回の`'KVc'`では半角カタカナがひらがなまで変換されないためである。`mb_convert_kana()`が変換しないゔ・ゕ・ゖとヴ・ヵ・ヶも、項目の文字種に合わせて変換する。
+- rules: `$rules`を先頭に展開し(`Required` 等の必須条件を呼び出し側で追加できる)、続けて正規化後の文字種を検証する`KanaRule($type)`と`MaxLength($maxLength)`を加える。文字数は正規化の後の値で数える。
+- `TMSWP\JaToolkit\Form\KanaRule`(coreの`Rule`を継承するfinal class)は、値が次の文字だけからなることを検証する。改行・タブ等の空白は通さない。
+  - Katakana: 全角カタカナ(ァ(U+30A1)〜ヶ(U+30F6)。ヴ・ヵ・ヶを含む)・長音符(ー)・中黒(・)・半角スペース
+  - Hiragana: ひらがな(ぁ(U+3041)〜ゖ(U+3096)。ゔ・ゕ・ゖを含む)・長音符(ー)・中黒(・)・半角スペース
+- メッセージ: ソース文字列は英語(`Please enter {label} in katakana.` / `Please enter {label} in hiragana.`)で、`KanaRule::defaultMessage()`が検証の時点で`__('...', 'tmswp')`を通す(coreの規則と同じ遅延解決)。フォーム定義を`init`より前(訳の読み込みの前)に作っても、検証の時点で読み込んだ訳が出る。
+- 訳: 日本語訳はja-toolkitの翻訳ファイルで提供し、JaToolkitを`KernelConfig`の`extensions`に登録したときに読み込む(§3.2)。モジュールを使わずKanaTextFieldだけを使う場合も、`new JaToolkit()`(モジュール0個)を登録する。JaToolkitを登録しない場合、訳は保証しない(ほかのKernelがja-toolkitを登録していれば同じ`tmswp`ドメインの訳が出るが、それに頼らない)。
 
 ## 3.5 利用例(app側)
 
 ```php
-// functions.php(Kernel::boot()の直後)
+// tmswp-kernel.php
+use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\JaToolkit\JaToolkit;
-use TMSWP\JaToolkit\Form\KanaTextField;
 use TMSWP\JaToolkit\Module\{JapaneseSlug, FullwidthSearchNormalizer, DisableTexturize};
 
-JaToolkit::enable([
-    JapaneseSlug::class,               // 引数なし=既定値でOK → class-string可
-    FullwidthSearchNormalizer::class,
-    DisableTexturize::class,
-]);
+return KernelConfig::theme(
+    __DIR__ . '/app',
+    'App',
+    extensions: [
+        new JaToolkit(
+            new JapaneseSlug(),                // 既定: '{post_type}-{post_id}'、公開の投稿タイプ(attachment以外)
+            new FullwidthSearchNormalizer(),
+            new DisableTexturize(),
+        ),
+    ],
+);
+```
+
+KanaTextFieldだけを使う場合は、モジュールを渡さずに登録する(訳の読み込みのため)。
+
+```php
+return KernelConfig::theme(__DIR__ . '/app', 'App', extensions: [new JaToolkit()]);
 ```
 
 ```php
@@ -1110,12 +1149,17 @@ FormDefinition::create('contact')
 
 ## tmswp/ja-toolkit
 
-- [ ] `JaToolkit::enable()` 未呼び出し時、本パッケージはWPの挙動を一切変更しない(フック登録ゼロ)
-- [ ] `init` 発火後の `enable()` が `LogicException`
-- [ ] 必須引数モジュールのclass-string指定が `LogicException`
+- [ ] `KernelConfig`の`extensions`にJaToolkitを登録しないKernelでは、本パッケージはWPの挙動を一切変更しない(フック登録ゼロ)。登録の経路は`extensions`だけで、静的な登録APIが無い
+- [ ] `new JaToolkit()`(モジュール0個)の登録は訳の読み込み(`init` priority 1)だけを予約し、モジュールのフックを登録しない。モジュールを渡すと、渡したものだけが有効になる(ユニットテスト)
+- [ ] 1つのJaToolkitを2つのKernelに登録すると`LogicException`になる。同じクラスのモジュールが2つあると`LogicException`になり、前に並んだモジュールのフックも訳の読み込みも登録されない(登録の原子性。ユニットテスト)
+- [ ] `function_exists`でWordPressの関数(`did_action`等)の有無を確かめて検査を飛ばす分岐が無い(grep検証)
 - [ ] 収載モジュールが日本語固有の3つ(`JapaneseSlug` / `FullwidthSearchNormalizer` / `DisableTexturize`)のみで、汎用クリーンアップ系モジュールが存在しない
-- [ ] `KanaTextField` がカタカナ/ひらがなの正規化と検証を行う
-- [ ] 3.6対応表で本パッケージ担当の各モジュールについて、旧AbstractHook相当の挙動が再現される統合テスト(例: JapaneseSlugで日本語タイトル投稿のスラッグが `{post_type}-{id}` になる、FullwidthSearchNormalizerで `?s=東京%E3%80%80タワー`(全角スペース)の検索クエリが半角正規化される、DisableTexturize有効時にタイトル・本文へwptexturizeが適用されない)
+- [ ] モジュール0個のJaToolkitを登録したKernelで、`init`より前に作ったKanaTextFieldの違反のメッセージがja訳になる(統合テスト。メッセージの遅延解決)
+- [ ] `KanaTextField` がカタカナ/ひらがなの正規化(半角カタカナ・全角スペース・ヴ/ゔ等)と検証を行い、改行・タブ・漢字・英字・上限超過を弾く(ユニットテスト)
+- [ ] `JapaneseSlug`のformatが`{post_id}`を含まない・使えない文字を含む場合と、許可リストが空・投稿タイプのキーの形でない場合が`LogicException`(ユニットテスト)
+- [ ] `JapaneseSlug`が、既定では公開の投稿タイプ(attachment以外)だけを、許可リストを渡せばその投稿タイプだけを変換し、attachment・非公開・内部の投稿タイプ(`wp_block`等)を変換しない。置き換えたスラッグが既存の投稿と重なると、接尾辞の付いた一意のスラッグになる(統合テスト)
+- [ ] 全角・半角のスペースだけの検索が、`is_search()`のまま0件になる(全件にならない)。`?s=東京%E3%80%80タワー`(全角スペース)の検索クエリが半角正規化される(統合テスト)
+- [ ] 3.6対応表で本パッケージ担当の各モジュールについて、旧AbstractHook相当の挙動が再現される統合テスト(例: JapaneseSlugで日本語タイトル投稿のスラッグが`{post_type}-{id}`になる、DisableTexturize有効時にタイトル・本文へwptexturizeが適用されない)
 - [ ] CF7/Yoast/ACF関連のフック名(`wpcf7_*`/`wpseo_*`/`acf*`)がパッケージ内に存在しない(grep検証)
 - [ ] `$_GET`/`$_POST`/`$_REQUEST` への書き込みが存在しない(grep検証)
 

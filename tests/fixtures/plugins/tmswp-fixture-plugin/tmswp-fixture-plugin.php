@@ -10,7 +10,6 @@ declare(strict_types=1);
 use Composer\Autoload\ClassLoader;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
-use TMSWP\JaToolkit\JaToolkit;
 
 // 実際のプラグインと同じく、本体ファイルの直下(plugins_loaded より前)で boot する
 (static function (): void {
@@ -19,8 +18,4 @@ use TMSWP\JaToolkit\JaToolkit;
     $loader->register();
 
     Kernel::boot(KernelConfig::load(__DIR__ . '/tmswp-kernel.php'));
-
-    // ja-toolkit の翻訳ローダー(init の priority 1)を、利用側と同じ enable() の経路で登録する。
-    // 統合テストはモジュールの挙動を使わないため、モジュールは列挙しない
-    JaToolkit::enable([]);
 })();

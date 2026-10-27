@@ -15,9 +15,10 @@ use WP_Hook;
 /**
  * FW の同梱訳が、実物の WordPress で日本語を返すことを確かめる。
  *
- * fixture のプラグインが boot した Kernel と enable() した ja-toolkit は、それぞれ init(priority 1)に翻訳ローダーを
- * 登録している。WordPress の読み込み時の init はテストのサイトの既定ロケール(en_US)で走るため、ja に切り替えた後に
- * 登録済みのローダーそのものを実行し、load_textdomain() が packages/<pkg>/languages/ の訳を読むことを確かめる。
+ * fixture のプラグインが boot した Kernel と、そのKernelConfigのextensionsに登録したja-toolkit(JaToolkit)は、
+ * それぞれinit(priority 1)に翻訳ローダーを登録している。WordPress の読み込み時の init はテストのサイトの既定ロケール
+ * (en_US)で走るため、ja に切り替えた後に登録済みのローダーそのものを実行し、load_textdomain() が
+ * packages/<pkg>/languages/ の訳を読むことを確かめる。
  */
 final class TranslationIntegrationTest extends IntegrationTestCase
 {
@@ -50,7 +51,7 @@ final class TranslationIntegrationTest extends IntegrationTestCase
             self::assertSame('{label}を入力してください。', __('{label} is required.', 'tmswp'));
             self::assertSame('{label}を入力してください。', (new Required())->defaultMessage());
             self::assertSame('、', __(', ', 'tmswp'));
-            // ja-toolkit(JaToolkit::enable() が登録するローダー)
+            // ja-toolkit(JaToolkitのregister()が予約するローダー)
             self::assertSame('{label}は全角カタカナで入力してください。', __('Please enter {label} in katakana.', 'tmswp'));
             self::assertSame('{label}はひらがなで入力してください。', __('Please enter {label} in hiragana.', 'tmswp'));
         } finally {

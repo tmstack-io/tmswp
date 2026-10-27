@@ -13,10 +13,10 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 "X-Domain: tmswp\n"
 
-#: Form/KanaTextField.php:29
+#: Form/KanaRule.php:45
 msgid "Please enter {label} in katakana."
 msgstr "{label}は全角カタカナで入力してください。"
 
-#: Form/KanaTextField.php:30
+#: Form/KanaRule.php:46
 msgid "Please enter {label} in hiragana."
 msgstr "{label}はひらがなで入力してください。"
