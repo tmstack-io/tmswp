@@ -5,7 +5,7 @@
 declare(strict_types=1);
 
 return [
-    'schema' => 4,
+    'schema' => 5,
     'appNamespace' => 'TmswpFixtureTheme',
     'appDir' => 'app',
     'components' => [
@@ -102,6 +102,18 @@ return [
             'priority' => 10,
             'acceptedArgs' => 0,
             'kind' => 'action',
+        ],
+    ],
+    'blocks' => [
+        [
+            'name' => 'tmswp-fixture/card',
+            'path' => 'build/blocks/card',
+            'metadataHash' => '3e84d7c7527b08765b415d0ed6d74b60277668bfd0f257ec2de512ed0cf0e783',
+        ],
+        [
+            'name' => 'tmswp-fixture/notice',
+            'path' => 'build/blocks/layout/notice',
+            'metadataHash' => '089caa49c4efad06ebf4ce4443153404384bc884fdc21a35b7a069904f85c5f7',
         ],
     ],
 ];

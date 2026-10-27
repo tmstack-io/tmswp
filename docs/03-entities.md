@@ -447,6 +447,11 @@ final class PostTypeDefinition
     public function restBase(string $base): self;
     /** use_block_editor_for_post_type フィルタで強制する。showInRestは自動変更しない。 */
     public function blockEditor(bool $enabled): self;
+    /**
+     * この投稿タイプのブロックエディタで使えるブロックを、ブロック名(`core/paragraph`・`my-theme/card`等)で限る。
+     * allowed_block_types_allでこの投稿タイプの編集画面にだけ反映する(5.3節)。builtinでは呼べない。
+     */
+    public function allowedBlocks(string ...$blockNames): self;
 
     // ---- 権限 ----
     /** @param string|array{0: string, 1: string} $type */
@@ -483,6 +488,8 @@ final class PostTypeDefinition
     public function slug(): string;
     public function isBuiltin(): bool;
     public function blockEditorPreference(): ?bool;
+    /** @return list<string>|null allowedBlocks()で限ったブロック名。未指定時はnull */
+    public function allowedBlockNames(): ?array;
     /** @return list<string> supports未指定時は [] */
     public function supportsList(): array;
     /**
@@ -503,10 +510,16 @@ final class PostTypeDefinition
 **`builtin(string $slug)`**:
 
 - スラッグ検証は `create()` と同一(ただし長さ上限は適用しない。既存タイプ名をそのまま受ける)。
-- builtinモードで呼び出し可能なメソッドは `supports()` と `blockEditor()` のみ。それ以外のセッターを呼んだ時点で `EntityDefinitionException` をthrow(設定が無視される事故を防ぐ。旧iwf2bはbuiltin時にargsが黙って捨てられていた)。
+- builtinモードで呼び出し可能なメソッドは`supports()`と`blockEditor()`のみ。それ以外のセッターを呼んだ時点で`EntityDefinitionException`をthrow(設定が無視される事故を防ぐ。旧iwf2bはbuiltin時にargsが黙って捨てられていた)。`allowedBlocks()`も呼べない。builtinの投稿タイプは複数のKernelがアダプタを定義できるため、許可するブロックの指定が互いに上書きし合いうるからである。
 - アダプタ先の投稿タイプは、登録(`init` 優先度10)の時点で登録済みでなければならない。無ければ `register()` が `EntityDefinitionException` を投げる(5.3節)。
 
 **各セッター**: snake_caseのWP引数キーへ1:1で書き込む(`excludeFromSearch` → `exclude_from_search` 等)。同一セッターの再呼び出しは上書き。`capabilityType()` は `capability_type` と `map_meta_cap` の2キーを設定する。`args()` は渡した配列のキーを同じ `$args` へキー単位で上書きする。呼び出し順で上書きし合うのは、セッターが `$args` に直接書くキー(`public` 等。`public` の既定値も上書きできる)だけである。`labels`・`label`・`supports`・`taxonomies` は、`label()`/`labels()`・`supports()`・`taxonomies()` が別に持つ値から `toArgs()` が組み立てる(下記の手順2〜4)。そのため、`args()` で渡しても、`labels`・`label` は常に、`supports` は `supports()` を呼んだとき、`taxonomies` は `taxonomies()` で1つ以上指定したとき、`toArgs()` の組み立てた値が優先する(呼び出し順に関係しない)。
+
+**`allowedBlocks(string ...$blockNames)`**:
+
+- ブロック名が1つも無ければ`EntityDefinitionException`(何も使えない指定を誤りとして拒否する。ブロックエディタを使わない投稿タイプは`blockEditor(false)`にする)。
+- 各ブロック名がWordPressの受け付ける形式`/^[a-z0-9-]+\/[a-z0-9-]+$/`でなければ`EntityDefinitionException`(メッセージにスラッグとブロック名を含める)。ブロックが実際に登録されているかは確かめない(コア・ほかのプラグインのブロックは定義の時点で分からないため)。
+- 重複を除き、渡した順に保つ。再び呼べば上書きする。`toArgs()`には含めない(register_post_typeの引数ではない)。
 
 **`toArgs()`** の構築手順(決定的):
 
@@ -615,6 +628,7 @@ abstract class PostType
      - 未登録 → `add_theme_support('post-thumbnails', [$def->slug()])`
    - `register_post_type($def->slug(), $def->toArgs($kernel->config()->labelLanguage))` を実行。戻り値が `WP_Error` なら `EntityDefinitionException`(エラーメッセージを含める)。
 4. `blockEditorPreference()` が非null → `add_filter('use_block_editor_for_post_type', $callback, 10, 2)`。callbackは「`$postType === $def->slug()` なら希望値を返し、それ以外は受け取った値を素通しする」クロージャ。他のプラグインのフィルタがbool以外(null等)を返すことがあるため、callbackの引数は型で縛らない(`mixed`)。対象外の投稿タイプの値は受け取ったまま返し、その扱いはWordPress(戻り値の真偽で判定する)に任せる。
+5. **非builtinの場合のみ**、`allowedBlockNames()`が非null → `add_filter('allowed_block_types_all', $callback, 10, 2)`。callbackは、第2引数が`WP_Block_Editor_Context`で、その`post`が`WP_Post`かつ`post_type === $def->slug()`のときだけ値を変え、それ以外は受け取った値を素通しするクロージャ(引数は手順4と同じく`mixed`)。この投稿タイプでも、先に動いたフィルタ(ほかのプラグイン)の制限は広げない。受け取った値が`true`(すべて許可)なら`allowedBlockNames()`を返し、配列なら`allowedBlockNames()`との共通部分を受け取った配列の順で返し(共通部分が無ければ空の配列)、`false`等のそれ以外の値はそのまま返す。投稿タイプのスラッグはサイトで1つのKernelだけが登録できる(`register()`が登録済みのスラッグを拒否する)ため、テーマとプラグインのKernelがそれぞれの投稿タイプに指定しても、互いの指定を上書きしない。`allowedBlockNames()`がnullの投稿タイプはフィルタを登録せず、WordPressの既定(と、ほかのプラグインのフィルタの値)のままにする。ブロックの自動登録とブロックカテゴリは02-kernel §4・§7。
 
 **`get()`**:
 
@@ -1907,6 +1921,8 @@ $id = ProductPost::create([
 - [ ] `UserRole::register()` が2リクエスト目以降にDB書き込み(`add_role`/`add_cap`)を行わない(`get_role()`/`has_cap()` チェックによる冪等性。統合テストで `update_option` 呼び出し回数を検証)
 - [ ] 既存の非builtinロールの表示名の違いと宣言に無いcapが、渡された Kernel のロガーに `warning` で記録され、DBは書き換えない。初回の `add_role`・宣言どおりのロール・builtinのロールでは記録しない
 - [ ] `blockEditor()` の `use_block_editor_for_post_type` のフィルタが、bool以外(null等)の値を受けても落ちず、対象外の投稿タイプの値を受け取ったまま返す
+- [ ] `allowedBlocks()`が、ブロック名の無い呼び出しと形式の違うブロック名を`EntityDefinitionException`にし、builtinの定義で呼ぶと`EntityDefinitionException`になる。重複を除いて渡した順に保ち、`toArgs()`には含めない(ユニットテスト)
+- [ ] `allowedBlocks()`が`allowed_block_types_all`でその投稿タイプの編集画面にだけ反映される。テーマとプラグインのKernelがそれぞれの投稿タイプに指定しても互いを上書きせず、指定していない投稿タイプはWordPressの既定(`true`)か、ほかのプラグインのフィルタの値のままになる。指定した投稿タイプでも、先に動いたフィルタの値が`true`なら指定、`false`なら`false`、配列なら指定との共通部分(その配列の順。無ければ空)になり、制限を広げない(統合テスト)
 
 **取得系(`?T` 統一)**
 

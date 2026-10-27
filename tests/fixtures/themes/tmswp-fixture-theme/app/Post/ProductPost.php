@@ -20,6 +20,7 @@ final class ProductPost extends PostType
             ->showInRest()
             ->supports('title', 'thumbnail')
             ->taxonomies(ProductTagTaxonomy::class)
-            ->rewriteSlug('tmswp_product');
+            ->rewriteSlug('tmswp_product')
+            ->allowedBlocks('core/paragraph', 'tmswp-fixture/card');
     }
 }

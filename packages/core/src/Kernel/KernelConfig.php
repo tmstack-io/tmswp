@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Core\Kernel;
 
 use Closure;
+use TMSWP\Core\Block\BlockCategory;
 use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Label\LabelLanguage;
 use TMSWP\Core\Log\LogChannel;
@@ -16,6 +17,7 @@ final readonly class KernelConfig
     /**
      * @param list<ExtensionInterface> $extensions
      * @param (Closure(): array<string, LogChannel>)|null $logChannels
+     * @param list<BlockCategory> $blockCategories
      */
     private function __construct(
         public KernelContext $context,
@@ -26,6 +28,7 @@ final readonly class KernelConfig
         public array $extensions,
         public ?Closure $logChannels,
         public LabelLanguage $labelLanguage,
+        public array $blockCategories,
     ) {}
 
     /**
@@ -33,6 +36,8 @@ final readonly class KernelConfig
      * @param (Closure(): array<string, LogChannel>)|null $logChannels ログのチャネル(チャネル名 => 設定)を返すクロージャ。
      *                                                                 boot 中に1回呼ぶ。null なら default チャネル(SimpleLogger)を遅延生成する
      * @param LabelLanguage $labelLanguage labelLanguage() を指定しない PostTypeDefinition・TaxonomyDefinition のラベル言語
+     * @param list<BlockCategory> $blockCategories このKernelが`block_categories_all`で足すブロックカテゴリ。スラッグは
+     *                                             Kernelの中で1つまでで、WordPressの既定のカテゴリと同じスラッグは使えない
      *
      * @throws KernelException 引数が不正な場合
      */
@@ -43,6 +48,7 @@ final readonly class KernelConfig
         array $extensions = [],
         ?Closure $logChannels = null,
         LabelLanguage $labelLanguage = LabelLanguage::En,
+        array $blockCategories = [],
     ): self {
         return new self(
             KernelContext::Theme,
@@ -53,6 +59,7 @@ final readonly class KernelConfig
             self::validateExtensions($extensions),
             $logChannels,
             $labelLanguage,
+            self::validateBlockCategories($blockCategories),
         );
     }
 
@@ -61,6 +68,8 @@ final readonly class KernelConfig
      * @param (Closure(): array<string, LogChannel>)|null $logChannels ログのチャネル(チャネル名 => 設定)を返すクロージャ。
      *                                                                 boot 中に1回呼ぶ。null なら default チャネル(SimpleLogger)を遅延生成する
      * @param LabelLanguage $labelLanguage labelLanguage() を指定しない PostTypeDefinition・TaxonomyDefinition のラベル言語
+     * @param list<BlockCategory> $blockCategories このKernelが`block_categories_all`で足すブロックカテゴリ。スラッグは
+     *                                             Kernelの中で1つまでで、WordPressの既定のカテゴリと同じスラッグは使えない
      *
      * @throws KernelException 引数が不正な場合
      */
@@ -72,6 +81,7 @@ final readonly class KernelConfig
         array $extensions = [],
         ?Closure $logChannels = null,
         LabelLanguage $labelLanguage = LabelLanguage::En,
+        array $blockCategories = [],
     ): self {
         $pluginFile = realpath($file);
 
@@ -88,6 +98,7 @@ final readonly class KernelConfig
             self::validateExtensions($extensions),
             $logChannels,
             $labelLanguage,
+            self::validateBlockCategories($blockCategories),
         );
     }
 
@@ -157,6 +168,33 @@ final readonly class KernelConfig
         }
 
         return $extensions;
+    }
+
+    /**
+     * @param list<BlockCategory> $blockCategories
+     *
+     * @throws KernelException 同じスラッグのカテゴリが2つ以上ある、またはWordPressの既定のカテゴリと同じスラッグの
+     *                         場合(設定の誤り)
+     *
+     * @return list<BlockCategory>
+     */
+    private static function validateBlockCategories(array $blockCategories): array
+    {
+        $slugs = [];
+
+        foreach ($blockCategories as $category) {
+            if (\in_array($category->slug, BlockCategory::CORE_SLUGS, true)) {
+                throw new KernelException("block category '{$category->slug}' is a WordPress core category; use it in block.json without registering it");
+            }
+
+            if (\array_key_exists($category->slug, $slugs)) {
+                throw new KernelException("block category '{$category->slug}' is registered more than once in the same kernel");
+            }
+
+            $slugs[$category->slug] = true;
+        }
+
+        return $blockCategories;
     }
 
     private static function normalizeNamespace(string $appNamespace): string

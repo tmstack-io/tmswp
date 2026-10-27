@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Post;
 
+use TMSWP\Core\Block\BlockName;
 use TMSWP\Core\Entity\EntityReference;
 use TMSWP\Core\Exception\EntityDefinitionException;
 use TMSWP\Core\Label\LabelGenerator;
@@ -83,6 +84,9 @@ final class PostTypeDefinition
     private array $taxonomies = [];
 
     private ?bool $blockEditor = null;
+
+    /** @var list<string>|null nullはallowedBlocks()が呼ばれていないこと(WordPressの既定のまま) */
+    private ?array $allowedBlocks = null;
 
     /** @param lowercase-string&non-empty-string $slug */
     private function __construct(
@@ -210,6 +214,31 @@ final class PostTypeDefinition
         return $this;
     }
 
+    /**
+     * この投稿タイプのブロックエディタで使えるブロックを、ブロック名(`core/paragraph`・`my-theme/card`等)で限る。
+     * `allowed_block_types_all`で、この投稿タイプの編集画面にだけ反映する。
+     *
+     * @throws EntityDefinitionException builtinの定義で呼んだ、ブロック名が無い、または形式の違うブロック名を渡した場合
+     */
+    public function allowedBlocks(string ...$blockNames): self
+    {
+        $this->assertNotBuiltin(__FUNCTION__);
+
+        if ($blockNames === []) {
+            throw new EntityDefinitionException("post type '{$this->slug}' got no block names in allowedBlocks(); pass at least one block name, or use blockEditor(false) to disable the block editor");
+        }
+
+        foreach ($blockNames as $blockName) {
+            if (!BlockName::isValid($blockName)) {
+                throw new EntityDefinitionException("post type '{$this->slug}' got an invalid block name '{$blockName}' in allowedBlocks(); use the form 'namespace/name'");
+            }
+        }
+
+        $this->allowedBlocks = array_values(array_unique($blockNames));
+
+        return $this;
+    }
+
     /** @param string|array{0: string, 1: string} $type */
     public function capabilityType(string|array $type, bool $mapMetaCap = true): self
     {
@@ -306,6 +335,16 @@ final class PostTypeDefinition
     public function blockEditorPreference(): ?bool
     {
         return $this->blockEditor;
+    }
+
+    /**
+     * allowedBlocks()で限ったブロック名。nullは限っていないこと。
+     *
+     * @return list<string>|null
+     */
+    public function allowedBlockNames(): ?array
+    {
+        return $this->allowedBlocks;
     }
 
     /** @return list<string> */

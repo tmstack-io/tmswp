@@ -5,7 +5,7 @@
 declare(strict_types=1);
 
 return [
-    'schema' => 4,
+    'schema' => 5,
     'appNamespace' => 'TmswpFixturePlugin',
     'appDir' => 'app',
     'components' => [
@@ -37,6 +37,11 @@ return [
                 'TMSWP\\Core\\Attribute\\AsOptionGroup',
             ],
         ],
+        [
+            'class' => 'TmswpFixturePlugin\\Post\\PluginNotePost',
+            'attributeClass' => 'TMSWP\\Core\\Attribute\\AsPostType',
+            'attributeArguments' => [],
+        ],
     ],
     'hookMethods' => [
         [
@@ -56,4 +61,5 @@ return [
             'kind' => 'action',
         ],
     ],
+    'blocks' => [],
 ];

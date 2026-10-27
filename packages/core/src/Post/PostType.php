@@ -14,6 +14,7 @@ use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Meta\MetaBag;
 use TMSWP\Core\Meta\MetaSchemaRegistry;
 use TMSWP\Core\Meta\WpMetaStorage;
+use WP_Block_Editor_Context;
 use WP_Error;
 use WP_Post;
 use WP_Post_Type;
@@ -102,6 +103,7 @@ abstract class PostType
         }
 
         self::registerBlockEditorPreference($definition);
+        self::registerAllowedBlocks($definition);
     }
 
     final public static function get(WP_Post|int $post): ?WP_Post
@@ -419,6 +421,45 @@ abstract class PostType
         }
 
         add_theme_support('post-thumbnails', [$slug]);
+    }
+
+    /**
+     * allowedBlocks()で限ったブロックを、この投稿タイプの編集画面にだけ反映する。ほかの投稿タイプ(別のKernelが
+     * 登録したものを含む)の値は受け取ったまま返すため、Kernelどうしで互いの指定を上書きしない。限っていなければ
+     * フィルタを登録せず、WordPressの既定のままにする。
+     *
+     * この投稿タイプでも、先に動いたフィルタの制限は広げない。受け取った値がtrue(すべて許可)なら指定を返し、配列なら
+     * 指定との共通部分を受け取った配列の順で返し、それ以外(false等)はそのまま返す。
+     */
+    private static function registerAllowedBlocks(PostTypeDefinition $definition): void
+    {
+        $allowedBlocks = $definition->allowedBlockNames();
+
+        if ($allowedBlocks === null) {
+            return;
+        }
+
+        // 他のプラグインのフィルタがbool・null等を返すこともあるため、値は型で縛らない
+        add_filter(
+            'allowed_block_types_all',
+            static function (mixed $allowedBlockTypes, mixed $context) use ($definition, $allowedBlocks): mixed {
+                if (!$context instanceof WP_Block_Editor_Context || !$context->post instanceof WP_Post || $context->post->post_type !== $definition->slug()) {
+                    return $allowedBlockTypes;
+                }
+
+                if ($allowedBlockTypes === true) {
+                    return $allowedBlocks;
+                }
+
+                if (\is_array($allowedBlockTypes)) {
+                    return array_values(array_filter($allowedBlockTypes, static fn(mixed $name): bool => \in_array($name, $allowedBlocks, true)));
+                }
+
+                return $allowedBlockTypes;
+            },
+            10,
+            2,
+        );
     }
 
     private static function registerBlockEditorPreference(PostTypeDefinition $definition): void

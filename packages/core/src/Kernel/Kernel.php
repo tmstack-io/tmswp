@@ -8,6 +8,8 @@ use Closure;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use TMSWP\Core\Attribute\ComponentAttributeInterface;
+use TMSWP\Core\Block\BlockRegistrar;
+use TMSWP\Core\Block\DiscoveredBlock;
 use TMSWP\Core\Container\Container;
 use TMSWP\Core\Exception\DiscoveryException;
 use TMSWP\Core\Exception\KernelException;
@@ -63,6 +65,9 @@ final class Kernel
 
     /** @var list<DiscoveredHookMethod> */
     private array $hookMethods = [];
+
+    /** @var list<DiscoveredBlock> */
+    private array $blocks = [];
 
     /**
      * キャッチアップ(§3.3)でこれから実行するグループ((最初に発火した順, priority)の昇順)。bootの中で、フックの登録
@@ -144,6 +149,7 @@ final class Kernel
         $result = $discovery->discover();
         $kernel->components = $result->components;
         $kernel->hookMethods = $result->hookMethods;
+        $kernel->blocks = $result->blocks;
 
         if ($kernel->isPluginActivationSandbox()) {
             $kernel->registerLifecycleHooks();
@@ -297,6 +303,16 @@ final class Kernel
     }
 
     /**
+     * このKernelが探索した独自ブロック(テーマ・プラグインのルートの`build/blocks/`)。ブロック名の昇順。
+     *
+     * @return list<DiscoveredBlock>
+     */
+    public function blocks(): array
+    {
+        return $this->blocks;
+    }
+
+    /**
      * コールバックを、フック $hook の priority $priority の時点で引数なしで実行するよう予約する(§3.3)。
      *
      * 通常はadd_action()で登録する。bootの中(フックの登録の後からキャッチアップの終わりまで。拡張のregister()、
@@ -396,8 +412,8 @@ final class Kernel
     }
 
     /**
-     * コンポーネントの初期化・MetaSchema の WordPress への登録・`#[Action]` / `#[Filter]` のメソッドを、WordPress のフックに
-     * 登録する(§7)。
+     * コンポーネントの初期化・MetaSchemaのWordPressへの登録・独自ブロックの登録・ブロックカテゴリのフィルタ・
+     * `#[Action]` / `#[Filter]`のメソッドを、WordPressのフックに登録する(§7)。
      *
      * 遅延 boot の検査(発火済みのフックがあるか)は、どのフックを登録するよりも先に行う。debug では何も登録・
      * 実行しないまま例外を投げる。本番では発火済みのフックのグループを返し、boot() が拡張とレジストリへの登録の後で
@@ -418,6 +434,12 @@ final class Kernel
             'priority' => 20,
             'runner' => $this->container->get(MetaSchemaRegistry::class)->registerAll(...),
         ];
+        $blockRegistrar = new BlockRegistrar($this);
+
+        // 独自ブロックの登録(register_block_type())も、コンポーネントの初期化と同じ順序の規則で扱う
+        if ($this->blocks !== []) {
+            $groups[] = ['hook' => 'init', 'priority' => BlockRegistrar::INIT_PRIORITY, 'runner' => $blockRegistrar->registerBlocks(...)];
+        }
 
         $firedOrder = self::firedHookOrder();
         $pending = [];
@@ -449,6 +471,11 @@ final class Kernel
                 $hookMethod->priority,
                 $hookMethod->kind->registeredArgs($hookMethod->acceptedArgs),
             );
+        }
+
+        // ブロックカテゴリはエディタを開くたびにフィルタで足す。ハンドラの登録のため、キャッチアップの対象にしない
+        if ($this->config->blockCategories !== []) {
+            add_filter('block_categories_all', $blockRegistrar->addCategories(...), 10, 1);
         }
 
         // 未発火のフックの実行順は WordPress が priority で決めるため、登録の順序に意味は無い

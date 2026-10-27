@@ -23,6 +23,8 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
   - `src/Kernel/DiscoveredHookMethod.php` — `TMSWP\Core\Kernel\DiscoveredHookMethod` (本文書で新設定義)
   - `src/Kernel/DiscoveryFile.php` — `TMSWP\Core\Kernel\DiscoveryFile`(探索結果ファイルの生成と読み込み。§6)
   - `src/Kernel/DiscoverCommand.php` — `TMSWP\Core\Kernel\DiscoverCommand`(WP-CLI `wp tmswp discover`。§3.6)
+  - `src/Block/BlockScanner.php`・`DiscoveredBlock.php`・`BlockName.php` — ビルド出力(`build/blocks/`)のblock.jsonの走査(§4)
+  - `src/Block/BlockRegistrar.php`・`BlockCategory.php` — 独自ブロックの登録とブロックカテゴリ(§2・§7)。投稿タイプごとに使えるブロックの制限(`PostTypeDefinition::allowedBlocks()`)は03-entities §4
   - `src/Kernel/ComponentInitializerInterface.php` — `TMSWP\Core\Kernel\ComponentInitializerInterface` (本文書で新設定義)
   - `src/Kernel/ExtensionInterface.php` — `TMSWP\Core\Kernel\ExtensionInterface`(Kernel ごとに登録する拡張の入口。§3.10)
   - `src/Kernel/PsrInterfaceCheck.php` / `src/Kernel/InstalledVersionCheck.php` — boot 時の psr/container・psr/log の検査と、tmswp/core の版の照合(`@internal`。§3.8・§3.9)
@@ -59,11 +61,12 @@ TMStack WordPress Framework の起動機構を定義する。本文書が確定�
 │     の検査(§3.8・§3.9)                                              │
 │  2. Container 生成・コアサービス登録・この Kernel のログのレジストリ  │
 │  3. Discovery::discover()                                             │
-│       ├─ debug時: Discovery::scan() … appDir を毎回走査              │
+│       ├─ debug時: Discovery::scan() … appDirとbuild/blocks/を毎回 │
+│       │   走査                                                        │
 │       └─ 本番: DiscoveryFile::load() … 探索結果ファイルのincludeのみ │
-│  4. scheduleAll() … #[Action]/#[Filter] メソッドを add_filter で直接  │
-│     登録し、コンポーネント初期化を (フック名, priority) ごとに         │
-│     add_action 登録                                                    │
+│  4. scheduleAll() … #[Action]/#[Filter]メソッドとブロックカテゴリを  │
+│     add_filterで直接登録し、コンポーネント初期化とブロックの登録を   │
+│     (フック名, priority)ごとにadd_action登録                        │
 │       ※ ここでは一切インスタンス化しない(即時同期初期化の禁止)       │
 │  5. コンテキスト別の運用フック登録(有効化・無効化フック)            │
 │  6. KernelConfig の extensions を順に register()(§3.10)              │
@@ -78,10 +81,11 @@ plugins_loaded(0)/after_setup_theme(0) … #[AsHook] register() 例外手段(オ
 plugins_loaded(1)/after_setup_theme(1) … #[AsModel] レジストリ登録
 init(5)  … #[AsOptionGroup]
 init(9)  … #[AsTaxonomy]
-init(10) … #[AsPostType]
+init(10) … #[AsPostType]、独自ブロックの登録(register_block_type。§7)
 init(11) … #[AsUserRole]
 init(20) … MetaSchema の WordPress への登録(register_*_meta)
 宣言フック発火時 … #[Action]/#[Filter] メソッド(Hookクラスはここで初ロード)
+エディタの表示時 … block_categories_all(KernelConfigのblockCategoriesを足す)・allowed_block_types_all(03-entities §5.3)
 ```
 
 boot() 時点で発生する副作用は **add_action / add_filter(`#[Action]`/`#[Filter]` メソッドの直接登録) / register_activation_hook / WP-CLIコマンド登録** に限定される。boot はファイルを書かない(探索結果ファイルを書くのは探索コマンドだけ。§3.6)。`register_post_type`・`register_*_meta` 等のWP登録系APIはすべて上記フック発火時に実行される。WordPress の状態を変えない処理として、boot はエンティティのメタスキーマを Kernel の `MetaSchemaRegistry` に登録する(boot 時の初期化。§7)。そのため boot の後なら、init の前でも `meta()` が使える。
@@ -153,6 +157,7 @@ final readonly class KernelConfig
      * @param list<ExtensionInterface> $extensions この Kernel で有効にする拡張(§3.10)
      * @param (\Closure(): array<string, \TMSWP\Core\Log\LogChannel>)|null $logChannels この Kernel のログのチャンネルを返すクロージャ(07-support §5)
      * @param \TMSWP\Core\Label\LabelLanguage $labelLanguage labelLanguage() を指定しない PostTypeDefinition・TaxonomyDefinition のラベル言語(03-entities §2.2)
+     * @param list<\TMSWP\Core\Block\BlockCategory> $blockCategories このKernelがblock_categories_allで足すブロックカテゴリ(§7)
      */
     private function __construct(
         public KernelContext $context,
@@ -163,6 +168,7 @@ final readonly class KernelConfig
         public array $extensions,
         public ?\Closure $logChannels,
         public LabelLanguage $labelLanguage,
+        public array $blockCategories,
     ) {
     }
 
@@ -173,6 +179,7 @@ final readonly class KernelConfig
         array $extensions = [],
         ?\Closure $logChannels = null,
         LabelLanguage $labelLanguage = LabelLanguage::En,
+        array $blockCategories = [],
     ): self;
 
     public static function plugin(
@@ -183,6 +190,7 @@ final readonly class KernelConfig
         array $extensions = [],
         ?\Closure $logChannels = null,
         LabelLanguage $labelLanguage = LabelLanguage::En,
+        array $blockCategories = [],
     ): self;
 
     /** KernelConfigを返すPHPファイル(tmswp-kernel.php)を読み込む(利用例) */
@@ -215,6 +223,7 @@ final readonly class KernelConfig
 6. `$extensions` に同じクラスの拡張が2つ以上あれば、debug に関係なく例外(`extension {class} is registered more than once in the same kernel`)。別の Kernel が同じクラスの拡張を登録するのは正当である(テーマとプラグインがそれぞれ同じ拡張を使う構成)。
 7. `$logChannels` はここでは呼ばない。boot 中に、psr/log の検査(§3.8)の後で1回だけ呼ぶ(`SimpleLogger` 等の `Psr\Log\LoggerInterface` を実装するクラスを、検査より前に読み込まないため。§3 手順3)。null なら遅延デフォルトチャンネル(07-support §5.4)。
 8. `$labelLanguage` の既定は `LabelLanguage::En`。`labelLanguage()` を指定しない PostTypeDefinition・TaxonomyDefinition は、ラベルを組み立てる時点(初期化時)にこの言語を使う(03-entities §2.2)。
+9. `$blockCategories`は`TMSWP\Core\Block\BlockCategory`(スラッグ・見出し・Dashiconsの名前)のリスト。同じスラッグが2つ以上あるか、WordPressの既定のカテゴリ(`BlockCategory::CORE_SLUGS`。WordPress 7.0の`get_default_block_categories()`の`text`・`media`・`design`・`widgets`・`theme`・`embed`・`reusable`)と同じスラッグなら、debugに関係なく例外。`BlockCategory`の生成でも、スラッグが英小文字・数字・`-`でない、または見出しが空なら`KernelException`。block.jsonの`category`に書けるのは、既定のカテゴリとこのスラッグだけである(§4ブロックの走査)。tms-acfがWordPressなしで`tmswp-kernel.php`を読むため、見出しに`__()`等のWordPressの関数は使えない(D-48)。
 
 `theme()` は `pluginFile = null`、`context = KernelContext::Theme` で構築する。`plugin()` は `context = KernelContext::Plugin` で構築する。
 
@@ -268,6 +277,9 @@ final class Kernel
     /** @var list<DiscoveredHookMethod> 発見済みフックメソッド((class, method, hook, priority, kind) 昇順) */
     private array $hookMethods;
 
+    /** @var list<\TMSWP\Core\Block\DiscoveredBlock> 発見済みの独自ブロック(ブロック名の昇順。§4) */
+    private array $blocks;
+
     private function __construct(KernelConfig $config);
 
     /**
@@ -316,6 +328,13 @@ final class Kernel
 
     /** @return list<DiscoveredComponent> FQCN昇順 */
     public function components(): array;
+
+    /**
+     * このKernelが探索した独自ブロック(テーマ・プラグインのルートのbuild/blocks/。§4)。ブロックの登録(§7)が、
+     * ほかのKernelとの名前の重複の出どころを示すのにも使う
+     * @return list<\TMSWP\Core\Block\DiscoveredBlock> ブロック名の昇順
+     */
+    public function blocks(): array;
 
     /**
      * コールバックを (フック, priority) の時点で引数なしで実行するよう予約する(§3.3)。通常は add_action() と同じ。
@@ -378,12 +397,14 @@ boot(config):
   4. result = container->get(Discovery::class)->discover()
      kernel.components = result.components
      kernel.hookMethods = result.hookMethods
+     kernel.blocks = result.blocks
      // 本番(debug=false): 探索結果ファイル1つのincludeのみ。Reflectionゼロ・appクラスのロードゼロ
      // 探索結果ファイルが無い・構成と合わない場合は DiscoveryException(§6)
   try:
     5. missed = kernel.scheduleAll()  // §7。遅延bootの検査を最初に行い(debug の遅延bootはここで、何も登録しない
                                       // うちに例外)、add_filter/add_actionを登録する(コンポーネント・MetaSchema・
-                                      // #[Action]/#[Filter])。発火済みフックのグループ(本番のみ)を返し、まだ実行しない
+                                      // 独自ブロック・ブロックカテゴリ・#[Action]/#[Filter])。発火済みフックのグループ
+                                      // (本番のみ)を返し、まだ実行しない
     5a. kernel.prepareCatchUp(missed) // キャッチアップの列をmissedで用意する。ここから手順8aまでのdefer()の予約
                                       // (拡張のregister()・boot時の初期化から)は、発火済みのフックならこの列に入る
     6. kernel.registerLifecycleHooks()  // コンテキスト別運用フック(下記)
@@ -494,11 +515,11 @@ boot 時、`WP_CLI` 環境であれば次の1コマンドを登録する(プロ�
 wp tmswp discover [--check]
 ```
 
-実装は `TMSWP\Core\Kernel\DiscoverCommand` で、`Kernel::all()` の全 Kernel について、debug に関係なく `Discovery::scan()`(§4)で appDir を走査し、各 Kernel の探索結果ファイル(§6)を書く。
+実装は`TMSWP\Core\Kernel\DiscoverCommand`で、`Kernel::all()`の全Kernelについて、debugに関係なく`Discovery::scan()`(§4)でappDirと、テーマ・プラグインのルートの`build/blocks/`(独自ブロックのビルド出力)を走査し、各Kernelの探索結果ファイル(§6)を書く。Kernelの中のブロック名の重複と、未登録のブロックカテゴリも走査の失敗になる(§4ブロックの走査)。テーマとプラグインのKernelをまたぐブロック名の重複は、Kernelごとに走査するこのコマンドでは検出できないため、実行時の登録で例外にする(§7ブロックの登録)。
 
 - 全 Kernel の走査を終えてから書く(後の Kernel の走査の失敗で、前の Kernel のファイルだけが更新された状態を作らない)。内容が同じファイルは書き換えない。
 - 走査の失敗・書き込みの失敗は `WP_CLI::error()` で非0終了する。起動中の Kernel が1つも無い場合も `WP_CLI::error()` にする(照合が何も比べずに成功しないようにする)。
-- `--check` はファイルを書かず、メモリ上で生成した内容と各 Kernel のファイルをバイト単位で比べる。ファイルが無い、または内容が違う Kernel があれば、その appNamespace とファイルパスを列挙して `WP_CLI::error()` で非0終了する。CI はこれで探索結果ファイルが最新かを照合する(10-quality §5)。
+- `--check`はファイルを書かず、メモリ上で生成した内容と各Kernelのファイルをバイト単位で比べる。ファイルが無い、または内容が違うKernelがあれば、そのappNamespaceとファイルパスを列挙して`WP_CLI::error()`で非0終了する。CIはこれで探索結果ファイルが最新かを照合する(10-quality §5)。探索結果ファイルはblock.jsonの内容のハッシュを持つ(§6)ため、block.jsonだけを変えて作り直さなかった場合も古いと報告される。
 - 本番(debug=false)で探索結果ファイルが無い・構成と合わない場合は boot が例外になる(§4)ため、そのサイトでは WP-CLI のコマンドも動かない。探索結果ファイルは debug の環境(開発環境)で生成し、コードと一緒にデプロイする。
 
 マイグレーション系コマンド(`wp tmswp migrate` 等)は Model 文書が同じ `tmswp` トップレベル名前空間配下に定義する。
@@ -568,14 +589,15 @@ interface ExtensionInterface
 
 ### 役割
 
-`appDir` 配下のPSR-4クラス/enumを列挙し、(a) コンポーネント属性(`ComponentAttributeInterface` 実装属性)が付与されたクラス/enumを `DiscoveredComponent` のリストとして、(b) `#[AsHook]` クラスのメソッドレベルフック属性(`#[Action]` / `#[Filter]`。§5)を `DiscoveredHookMethod` のリストとして収集する。`discover()` が正面玄関で、debug 時は `scan()` で appDir を走査し、本番(debug=false)は探索結果ファイル(§6)を読む。
+`appDir`配下のPSR-4クラス/enumを列挙し、(a)コンポーネント属性(`ComponentAttributeInterface`実装属性)が付与されたクラス/enumを`DiscoveredComponent`のリストとして、(b) `#[AsHook]`クラスのメソッドレベルフック属性(`#[Action]` / `#[Filter]`。§5)を`DiscoveredHookMethod`のリストとして収集する。あわせて、(c)テーマ・プラグインのルートの`build/blocks/`のblock.jsonを`DiscoveredBlock`のリストとして収集する(後述の「ブロックの走査」)。`discover()`が正面玄関で、debug時は`scan()`でappDirを走査し、本番(debug=false)は探索結果ファイル(§6)を読む。
 
 ### 走査対象の原則
 
 1. **走査対象は `config.appDir` 配下の `.php` ファイルのみ。** コア(`TMSWP\`)・拡張パッケージ・vendor/ は決して走査しない。
    - 旧iwf2bのLoaderは自分自身(`src/Iwf2b`)を自己スキャンし、コア同梱の具象クラス(Post/PagePost/CategoryTax/PostTagTax、abstract修飾漏れのAbstractUser)まで毎リクエスト自動インスタンス化していた。本FWではコア側にコンポーネント属性を持つ具象クラスを置かないことに加え、**走査範囲を構成上 appDir に限定することで構造的に再発を防ぐ**。`KernelConfig` ファクトリの `TMSWP` 名前空間予約(§2)が二重の防壁となる。
 2. app/ のクラスは利用側 composer の PSR-4 オートロード(`"App\\": "app/"`)で解決可能でなければならない。Discovery は **ファイルを自前で require しない**。走査では `class_exists()` 経由(=オートローダ経由)でロードする。理由: 本番のランタイムと同一のロード機構で検証することで「走査では見えるが実行時にロードできない」乖離を排除する。オートロード未設定の場合は全クラスが探索失敗として明示エラーになる(後述)。
-3. 属性はクラス自身に付与されたもののみを見る。**PHPの属性は継承されないため、基底クラスに付与しても子クラスは発見されない**。各具象クラスに付与する(rules/ に明記)。メソッドレベルの `#[Action]` / `#[Filter]`(§5)は `ReflectionClass::getMethods()` が返す public インスタンスメソッド(継承メソッドを含む)を対象とする。
+3. 独自ブロックは、npmのビルド(`@wordpress/scripts`)の出力`{rootDir}/build/blocks/`だけを走査する。ソース(`{rootDir}/blocks/`)は走査しない。実行時に登録するのはビルドの出力であり、ソースのblock.jsonにはビルドで書き換わる値(スクリプトのファイル名等)が含まれうるためである。
+4. 属性はクラス自身に付与されたもののみを見る。**PHPの属性は継承されないため、基底クラスに付与しても子クラスは発見されない**。各具象クラスに付与する(rules/に明記)。メソッドレベルの`#[Action]` / `#[Filter]`(§5)は`ReflectionClass::getMethods()`が返すpublicインスタンスメソッド(継承メソッドを含む)を対象とする。
 
 ### シグネチャ
 
@@ -621,10 +643,35 @@ final readonly class DiscoveryResult
     /**
      * @param list<DiscoveredComponent>  $components  (class, attributeClass) 複合キー昇順
      * @param list<DiscoveredHookMethod> $hookMethods (class, method, hook, priority, kind) 複合キー昇順
+     * @param list<\TMSWP\Core\Block\DiscoveredBlock> $blocks ブロック名(strcmp)昇順
      */
     public function __construct(
         public array $components,
         public array $hookMethods,
+        public array $blocks = [],
+    ) {}
+}
+```
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace TMSWP\Core\Block;
+
+final readonly class DiscoveredBlock
+{
+    /**
+     * @param non-empty-string $name         block.jsonのname(`namespace/name`)
+     * @param non-empty-string $path         block.jsonのあるディレクトリの、テーマ・プラグインのルートからの相対パス
+     *                                       (区切りは`/`。例: `build/blocks/card`)
+     * @param non-empty-string $metadataHash block.jsonをJSONとして読み直して書き出した文字列のSHA-256
+     */
+    public function __construct(
+        public string $name,
+        public string $path,
+        public string $metadataHash,
     ) {}
 }
 ```
@@ -816,8 +863,41 @@ scan():
      - 該当すれば探索失敗。メッセージにクラス(フック名なら class::method)と該当した値を含める
        ("attribute argument of {class} contains the environment-dependent path {R}: '{値}'; ..."、
         "hook name of {class}::{method} contains the environment-dependent path {R}: '{値}'")
-  7. return new DiscoveryResult(components, hookMethods)
+  7. blocks = BlockScanner(config)->scan()          // 後述の「ブロックの走査」
+  8. return new DiscoveryResult(components, hookMethods, blocks)
 ```
+
+### ブロックの走査(BlockScanner)
+
+`TMSWP\Core\Block\BlockScanner::scan()`は、Kernelのルート(`KernelConfig::rootDir()`)の`build/blocks/`以下(入れ子を含む)の`block.json`を読み、`DiscoveredBlock`のリストを返す。失敗は§4の探索失敗と同じく、debugに関係なく`DiscoveryException`にし、途中までの結果は返さない。
+
+```
+scan():
+  1. buildDir = rootDir . '/build/blocks'
+     存在しなければ[]を返す(ブロックを持たないテーマ・プラグイン)。ディレクトリでなければ探索失敗
+  2. RecursiveDirectoryIterator(buildDir, SKIP_DOTS)で再帰列挙し、basenameが'.'で始まるディレクトリは枝刈り。
+     basenameが'block.json'のファイルを、そのディレクトリのルートからの相対パス(区切りは'/'。例:
+     'build/blocks/layout/notice') => ファイルのパスの対応で集め、相対パスのstrcmp昇順に並べる
+     build/blocks/かその下のディレクトリを開けない(権限が無い等)ときに列挙が投げるUnexpectedValueExceptionは、
+     元の例外をpreviousに持つ探索失敗にする("failed to read the built blocks under {buildDir}: ...; make the
+     directories readable, then run 'wp tmswp discover' again")。開けないディレクトリを飛ばして走査を続けない
+  3. 各block.jsonについて:
+     a. 読めなければ探索失敗。json_decode(JSON_THROW_ON_ERROR)の失敗は"invalid JSON in {file}: ..."
+        (元のJsonExceptionをpreviousに持つ)。JSONのオブジェクトでなければ探索失敗
+     b. nameが文字列で、WordPressが受け付ける形式/^[a-z0-9-]+\/[a-z0-9-]+$/(BlockName)でなければ探索失敗
+     c. categoryは省略できる。書いた場合は、WordPressの既定のカテゴリ(BlockCategory::CORE_SLUGS)か、この
+        KernelのKernelConfigのblockCategoriesのスラッグでなければ探索失敗("block '{name}' in {file} uses the
+        unregistered category '{category}'; ...")。別のKernelやプラグインのカテゴリは、探索の時点で有無を
+        確かめられないため使えない
+     d. 同じnameのblock.jsonが先にあれば、両方のファイルを示して探索失敗("block name '{name}' is declared by
+        both {file1} and {file2}; block names must be unique")
+     e. metadataHash = sha256(json_encode(読み込んだ値, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE))
+  4. ブロック名のstrcmp昇順に並べて返す
+```
+
+- render(`"render": "file:./render.php"`)・editorScript等のファイルは、探索では読まず、実行時にWordPressの`register_block_type()`に任せる(§7ブロックの登録)。
+- `metadataHash`は、block.jsonの内容を変えたのに探索結果ファイルを作り直さなかったことを、照合(§3.6)で検出するために持つ。JSONとして読み直した値から求めるため、空白・改行の違いでは変わらない。実行時には使わない。
+- pathはルートからの相対パスで、nameは形式を検査済みのため、探索結果ファイルは環境に依存しない(手順6の検査の対象外)。
 
 **Composer最適化クラスマップとの突合は行わない(確定判断)**: `spl_autoload_functions()` から `Composer\Autoload\ClassLoader` を探り当て `getClassMap()` とPSR-4導出FQCNを突合する検査は持たない。Composer内部実装への暗黙結合であり、別オートローダ併用環境(Bedrock系カスタムローダ等)で破綻し得るためである。このため「機能破綻を伴わない最適化クラスマップの陳腐化(`composer dump-autoload -o` の実行忘れで古いエントリが残存するが、PSR-4フォールバックで正常動作するケース)」は名指しでは検出しない。これは次回 dump-autoload で自己治癒する一過性の開発時ハイジーンに留まり、**機能破綻を伴う不整合はすべて手順3-b(class_exists 失敗)・3-c(getName/getFileName 突合)が「ファイルパス・期待FQCN・是正ヒント(dump-autoload 含む)」付きの明示エラーで検出する**。
 
@@ -1059,7 +1139,7 @@ namespace TMSWP\Core\Kernel;
 final class DiscoveryFile
 {
     /** 探索結果ファイルの形式の版。格納形式の変更時にインクリメントする */
-    public const SCHEMA_VERSION = 4;
+    public const SCHEMA_VERSION = 5;
 
     public function __construct(
         private readonly KernelConfig $config,
@@ -1093,7 +1173,7 @@ final class DiscoveryFile
 ### ファイル形式と配置
 
 - 配置: `KernelConfig::discoveryFile()` = `dirname(appDir) . '/tmswp-discovery.php'`(テーマなら `<theme>/tmswp-discovery.php`、プラグインなら `<plugin>/tmswp-discovery.php`)。Kernel ごとに1ファイルで、置き場を変える設定は持たない。
-- 内容(正準スキーマ。fixture のプラグインの実際の生成物):
+- 内容(正準スキーマ。componentsは空にした例):
 
 ```php
 <?php
@@ -1103,7 +1183,7 @@ final class DiscoveryFile
 declare(strict_types=1);
 
 return [
-    'schema' => 4,
+    'schema' => 5,
     'appNamespace' => 'TmswpFixturePlugin',
     'appDir' => 'app',
     'components' => [],
@@ -1125,10 +1205,17 @@ return [
             'kind' => 'action',
         ],
     ],
+    'blocks' => [
+        [
+            'name' => 'tmswp-fixture/card',
+            'path' => 'build/blocks/card',
+            'metadataHash' => '3e84d7c7527b08765b415d0ed6d74b60277668bfd0f257ec2de512ed0cf0e783',
+        ],
+    ],
 ];
 ```
 
-- `components` の各要素は `class`・`attributeClass`・`attributeArguments` を持つ((class, attributeClass) 昇順)。`hookMethods` の各要素は `class`・`method`・`hook`・`priority`・`acceptedArgs`・`kind`(`'action'` / `'filter'`)を持つ((class, method, hook, priority, kind) 昇順。§4)。
+- `components`の各要素は`class`・`attributeClass`・`attributeArguments`を持つ((class, attributeClass)昇順)。`hookMethods`の各要素は`class`・`method`・`hook`・`priority`・`acceptedArgs`・`kind`(`'action'` / `'filter'`)を持つ((class, method, hook, priority, kind)昇順。§4)。`blocks`の各要素は`name`・`path`(ルートからの相対パス)・`metadataHash`を持つ(name昇順。§4ブロックの走査)。ブロックの無いKernelでも`blocks`は空の配列で書く。
 - `appDir` は探索結果ファイルのディレクトリからの相対パス(ファイルを appDir の親ディレクトリに置くため、appDir のディレクトリ名になる)。
 - **絶対パス・mtime・生成時刻・ファイル一覧を載せない。** ホストと wp-env のコンテナのように絶対パスが違う環境で生成しても、バイト単位で同一になる(CI の照合が環境に依存しない)。
 - 配列は短縮構文で書き、スカラー・enumケースの値は `var_export()` で書く(enumケースは有効なPHPコードとして出力される。属性引数をスカラー/配列/enumに制限している(§4手順3-e)のはこのため)。配列に `var_export()` を使わないのは、行末に空白が残り、空白を削るエディタで内容が変わって照合が失敗するためである。
@@ -1154,7 +1241,7 @@ write(result):
 3. `schema !== DiscoveryFile::SCHEMA_VERSION`
 4. `appNamespace` が KernelConfig の appNamespace と違う
 5. `appDir`(相対パス)を探索結果ファイルのディレクトリから解決した実パスが、KernelConfig の appDir と違う(ファイルの取り違え)
-6. `components` / `hookMethods` の要素の型が違う(破損)
+6. `components` / `hookMethods` / `blocks`が無い・リストでない、または要素の型が違う(破損。`blocks`の要素の`name`・`path`・`metadataHash`は空でない文字列)
 
 ## 7. コンポーネント初期化スケジューリング
 
@@ -1178,6 +1265,25 @@ write(result):
 | `#[Action]` / `#[Filter]` メソッド | 属性が宣言した各フック | 属性宣言値(既定 10) | 両形態。boot手順5(scheduleAll)で登録、宣言フック発火時に実行 | `add_filter($hook, クロージャ, $priority, $kind->registeredArgs($acceptedArgs))` を直接登録(`#[Filter]` は最低 1。§5)。クロージャは発火時に `container->get($class)` してメソッドを呼ぶため、**本番(debug=false)の boot では、Hookクラスはフック発火まで未ロード(遅延)**(debug の boot は走査(§4)でクラスを読み込む)。acceptedArgs はメソッド宣言引数数から自動導出(§4・§5) |
 
 MetaSchema の WordPress への登録(`MetaSchemaRegistry::registerAll()`。`register_post_meta`・`register_term_meta`・`register_meta('user', ...)`)は、コンポーネントではないが、Kernel が `init` 20 のグループとして同じ規則(遅延bootの検査とキャッチアップ。§3.3)で登録する。
+
+独自ブロック(§4ブロックの走査)とブロックカテゴリ(§2)は、次のとおり登録する。
+
+| 機構 | フック | priority | 形態・発火条件 | 内容 |
+|---|---|---|---|---|
+| 独自ブロックの登録(`BlockRegistrar::registerBlocks()`) | `init` | 10(`BlockRegistrar::INIT_PRIORITY`) | 両形態。ブロックが1つ以上あるKernelだけ。コンポーネントの初期化と同じ規則(遅延bootの検査とキャッチアップ。§3.3)のグループ | ブロック名の昇順に、`register_block_type(rootDir . '/' . path)`でblock.jsonのディレクトリを渡して登録する(下記「ブロックの登録」) |
+| ブロックカテゴリ(`BlockRegistrar::addCategories()`) | `block_categories_all` | 10 | 両形態。`blockCategories`を指定したKernelだけ。boot手順5(scheduleAll)で`add_filter`を直接登録する(ハンドラの登録のためキャッチアップの対象外) | WordPressと先に動いたフィルタの一覧の末尾に、`BlockCategory::toArray()`(`slug`・`title`・`icon`)を渡した順に足す |
+
+### ブロックの登録
+
+`BlockRegistrar::registerBlocks()`は、Kernelのブロック(`Kernel::blocks()`)ごとに次を行う。失敗はどれも設定の誤り(00-overview §5.6)なので、debugに関係なく`KernelException`を投げる(本番の遅延bootのキャッチアップの中ならbootの例外になる)。
+
+1. `WP_Block_Type_Registry::get_instance()->is_registered(name)`がtrueなら例外。テーマとプラグインのKernelをまたぐ名前の重複は、Kernelごとに走査する探索コマンドでは検出できないため、ここで検出する。メッセージは、登録しようとしたブロック(KernelのappNamespaceとblock.jsonのパス)と、登録済みのブロックの出どころを示す。登録済みのブロックが別のKernelの`blocks()`にあれば、そのKernelのappNamespaceとblock.jsonのパスを、無ければWordPressのコアかほかのプラグイン・テーマであることを示す(`cannot register the block type '{name}' of the TMSWP kernel '{ns}' ({path}/block.json): it is already registered by the TMSWP kernel '{other}' ({otherPath}/block.json); block names must be unique across the theme and plugins`)
+2. `register_block_type(rootDir . '/' . path)`で、block.jsonのディレクトリをWordPressに渡して登録する。`render`(`file:./render.php`)・`editorScript`・`style`等のファイルの読み込みと登録はWordPressに任せ、FWは独自に読み込まない。`WP_Block_Type`以外(false)が返れば例外
+3. 登録されたブロックの名前が探索結果のnameと違えば例外。block.jsonのnameを変えたのに探索結果ファイルを作り直さずにデプロイした場合で、手順1の重複の検査が古い名前で行われたことになるため、作り直しの案内を含める
+
+`BlockRegistrar::addCategories()`は、受け取った値が配列でなければ例外にし、足すカテゴリと同じスラッグが一覧に既にあれば、例外にする(別のKernelの`blockCategories`にあればそのKernelを、無ければWordPressのコアかほかのプラグイン・テーマであることを示す)。既定のカテゴリとの重複は`KernelConfig`の生成の時点で例外になる(§2)。
+
+投稿タイプごとに使えるブロックを限る`allowed_block_types_all`は、投稿タイプの登録(`init` 10)で投稿タイプごとに登録する(03-entities §5.3)。
 
 補足仕様:
 
@@ -1260,7 +1366,7 @@ runInitializer(c, attr):           // 失敗は設定の誤り。debug に関係
 順序保証のまとめ:
 
 - 異なるフック間: WPのフック発火順。
-- 同一フック・異なるpriority間: priority昇順(WP仕様)。Taxonomy(9)→PostType(10)→UserRole(11)→MetaSchema の WordPress への登録(20)。
+- 同一フック・異なるpriority間: priority昇順(WP仕様)。Taxonomy(9)→PostType(10)・独自ブロックの登録(10)→UserRole(11)→MetaSchemaのWordPressへの登録(20)。投稿タイプと独自ブロックは互いに依存しないため、同じpriorityの中の順序は規約で定めない。
 - 同一(フック, priority)・同一Kernel内のコンポーネント初期化: **components の FQCN 昇順**(グループランナーが1クロージャで順次実行するため、他プラグインの add_action に割り込まれない)。
 - 同一(フック, priority)内の `#[Action]`/`#[Filter]` メソッド間: hookMethods の (class, method, hook, priority, kind) 昇順=登録順。コンポーネント初期化グループとの相対順は「hookMethods 先・グループランナー後」(scheduleAll の手順3・4の順)で決定的だが、この相対順に依存してはならない(規約)。
 - 同一(フック, priority)・複数Kernel間: boot順(=WPロード順)。Kernel間の順序依存は規約で禁止(§3.2)。
@@ -1823,10 +1929,12 @@ final class ContainerTest extends TestCase
 - [ ] Discovery: `#[Action]`/`#[Filter]` の誤用(`#[AsHook]` なしクラスへの付与・static/非public/可変長引数メソッドへの付与・フックを1つも宣言しない `#[AsHook]` クラス)が探索失敗として扱われる
 - [ ] Discovery: 属性引数にオブジェクト(new式)を渡した場合に探索失敗となる(探索結果ファイルに書き出せる値に限る)
 - [ ] Discovery: `#[OptionSchema]` の付与先の誤り(クラス自身・クラスの定数・グループの enum のケースでない定数・`#[AsOptionGroup]` の無い enum のケース)が探索失敗となり、`#[AsOptionGroup]` を付けた enum のケースへの付与は正常に収集される(ユニットテスト)
-- [ ] DiscoveryFile: write→load の往復で `DiscoveryResult` が完全復元される(enum引数・hookMethods 含む)。ファイルが無い・`include` が throw する/配列以外を返す・schema不一致・appNamespace不一致・appDir不一致・破損エントリで、ファイルパスと `wp tmswp discover` の案内を含む `DiscoveryException` を投げる
+- [ ] Discovery: テーマ・プラグインのルートの`build/blocks/`のblock.json(入れ子を含む)を、ブロック名の昇順に、ルートからの相対パスと内容のハッシュとともに収集し、ソース(`blocks/`)と`build/blocks/`の外は走査しない。`build/blocks/`が無ければブロックは空。Kernelの中のブロック名の重複(両方のblock.jsonを示す)・未登録のカテゴリ(既定のカテゴリでもKernelConfigのカテゴリでもない)・壊れたJSON・オブジェクトでないJSON・形式の違うnameが探索失敗になる。ハッシュは空白・改行の違いでは変わらず、値を変えると変わる
+- [ ] `KernelConfig`の`blockCategories`の、同じスラッグの重複と既定のカテゴリのスラッグが`KernelException`になる。`BlockCategory`の形式の違うスラッグと空の見出しが`KernelException`になる
+- [ ] DiscoveryFile: write→loadの往復で`DiscoveryResult`が完全復元される(enum引数・hookMethods・blocks含む)。ファイルが無い・`include`がthrowする/配列以外を返す・schema不一致・appNamespace不一致・appDir不一致・破損エントリ(`blocks`の欠落・要素の欠落を含む)で、ファイルパスと`wp tmswp discover`の案内を含む`DiscoveryException`を投げる
 - [ ] DiscoveryFile: 同じ探索結果からは、絶対パスの違う場所でもバイト単位で同一の内容を生成し、内容に絶対パス・mtime・生成時刻を含まない。書き込みの失敗は `DiscoveryException` になる
 - [ ] Kernel: debug=false の boot が探索結果ファイルだけを読み、app/ を走査しない。ファイルが無ければ boot が `DiscoveryException`(ファイルパス入り)になる。debug=true の boot は毎回走査し、探索結果ファイルを読まない
-- [ ] `wp tmswp discover` が全 Kernel の探索結果ファイルを書き、走査の失敗ではどのファイルも書かずに非0で終わる。`--check` はファイルが無い・内容が違う Kernel を appNamespace とファイルパスで列挙して非0で終わり、すべて最新なら成功する。起動中の Kernel が無い場合は非0で終わる
+- [ ] `wp tmswp discover`が全Kernelの探索結果ファイルを書き、走査の失敗(Kernelの中のブロック名の重複を含む)ではどのファイルも書かずに非0で終わる。`--check`はファイルが無い・内容が違うKernelをappNamespaceとファイルパスで列挙して非0で終わり、すべて最新なら成功する。block.jsonだけを変えて作り直さなかったKernelも古いと報告される。起動中のKernelが無い場合は非0で終わる
 - [ ] `Kernel::reset()` 後に同一名前空間で再bootできる(テスト隔離)
 - [ ] `Kernel::boot()` が、WordPress 7.0 未満(`$wp_version` の最初の `-` より前を比べる。`6.9-RC1` を含む)で debug に関係なく `KernelException` を投げ、`7.0-RC1` 等の 7.0 のリリース候補・開発版と 7.0 以降は受け付ける。`$wp_version` が無いと `KernelException` を投げる
 - [ ] `KernelConfig` の debug を省略すると、`WP_DEBUG` の真偽が既定値になる(`1` 等の真値でも true、未定義・偽値なら false)
@@ -1870,6 +1978,9 @@ final class ContainerTest extends TestCase
 - [ ] 発火済みフックに対する遅延bootが、debug=true のときに `KernelException`、本番相当でログ+キャッチアップ実行になる。debug=true の例外の後に `$wp_filter` への登録が増えていない(コンポーネントと `#[Action]`/`#[Filter]` メソッドの両方を持つ Kernel で確かめる)
 - [ ] テーマ形態・プラグイン形態の boot が `template_include` にコールバックを登録しない(テンプレート階層に介入しない。§3.7)
 - [ ] コミット済みの fixture のテーマ・プラグインの探索結果ファイルが、走査結果と一致する(統合テストと `composer discover:check`。10-quality §5)
+- [ ] fixtureのテーマの`build/blocks/`のブロック(入れ子のディレクトリを含む)が`init` 10で`register_block_type()`により登録され、render.phpで描画され、editorScriptのハンドルもWordPressが登録する。initの前のbootではinitまで登録されず、本番の遅延bootではキャッチアップで登録され、debugの遅延bootでは登録されずに例外になる
+- [ ] 別のKernelのブロックやコアのブロックと同じ名前のブロックの登録が、両方の出どころを示す`KernelException`になる。探索結果ファイルのnameとblock.jsonのnameが食い違うと、作り直しの案内を含む`KernelException`になる
+- [ ] `KernelConfig`の`blockCategories`が、`get_block_categories()`でWordPressの既定のカテゴリの後に1回だけ現れる。`BlockCategory::CORE_SLUGS`が`get_default_block_categories()`のスラッグと一致する。別のKernelが足したスラッグを足すと、そのKernelを示す`KernelException`になる
 
 ## 品質
 

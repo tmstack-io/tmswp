@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Core\Kernel;
 
 use Throwable;
+use TMSWP\Core\Block\DiscoveredBlock;
 use TMSWP\Core\Exception\DiscoveryException;
 
 /**
@@ -15,7 +16,7 @@ use TMSWP\Core\Exception\DiscoveryException;
  */
 final class DiscoveryFile
 {
-    public const SCHEMA_VERSION = 4;
+    public const SCHEMA_VERSION = 5;
 
     private const REGENERATE_HINT = "regenerate it with 'wp tmswp discover' and deploy it together with the code";
 
@@ -68,6 +69,7 @@ final class DiscoveryFile
         return new DiscoveryResult(
             array_map($this->component(...), $this->entries($payload, 'components')),
             array_map($this->hookMethod(...), $this->entries($payload, 'hookMethods')),
+            array_map($this->block(...), $this->entries($payload, 'blocks')),
         );
     }
 
@@ -97,6 +99,14 @@ final class DiscoveryFile
                     'kind' => $hookMethod->kind->value,
                 ],
                 $result->hookMethods,
+            ),
+            'blocks' => array_map(
+                static fn(DiscoveredBlock $block): array => [
+                    'name' => $block->name,
+                    'path' => $block->path,
+                    'metadataHash' => $block->metadataHash,
+                ],
+                $result->blocks,
             ),
         ];
 
@@ -256,6 +266,16 @@ final class DiscoveryFile
             $priority,
             $acceptedArgs,
             $kind,
+        );
+    }
+
+    /** @param array<mixed> $entry */
+    private function block(array $entry): DiscoveredBlock
+    {
+        return new DiscoveredBlock(
+            $this->nonEmptyString($entry, 'name', 'blocks'),
+            $this->nonEmptyString($entry, 'path', 'blocks'),
+            $this->nonEmptyString($entry, 'metadataHash', 'blocks'),
         );
     }
 

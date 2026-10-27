@@ -20,6 +20,7 @@ use TMSWP\Core\Attribute\AsOptionGroup;
 use TMSWP\Core\Attribute\ComponentAttributeInterface;
 use TMSWP\Core\Attribute\Filter;
 use TMSWP\Core\Attribute\OptionSchema;
+use TMSWP\Core\Block\BlockScanner;
 use TMSWP\Core\Exception\DiscoveryException;
 use TMSWP\Core\Hook\Hook;
 use UnitEnum;
@@ -42,7 +43,8 @@ final class Discovery
     }
 
     /**
-     * appDir を走査する。失敗は debug に関係なく DiscoveryException にし、途中までの結果は返さない。
+     * appDirと、テーマ・プラグインのルートの`build/blocks/`(BlockScanner)を走査する。失敗はdebugに関係なく
+     * DiscoveryExceptionにし、途中までの結果は返さない。
      *
      * @throws DiscoveryException
      */
@@ -93,7 +95,7 @@ final class Discovery
             return $order !== 0 ? $order : strcmp($a->kind->value, $b->kind->value);
         });
 
-        return new DiscoveryResult($components, $hookMethods);
+        return new DiscoveryResult($components, $hookMethods, (new BlockScanner($this->config))->scan());
     }
 
     /**

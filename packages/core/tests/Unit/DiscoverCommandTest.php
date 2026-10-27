@@ -68,6 +68,46 @@ final class DiscoverCommandTest extends UnitTestCase
         self::assertSame(['success', 'discovery files are up to date for 2 kernel(s)'], $this->lastCall());
     }
 
+    /**
+     * ブロックの探索結果も照合する。ビルド出力のblock.jsonだけを変えて探索結果ファイルを更新しないと、そのKernelが
+     * 古いと報告され、作り直せば照合が通る。
+     */
+    #[RunInSeparateProcess]
+    public function testCheckFailsWhenOnlyBlockJsonChanged(): void
+    {
+        $this->loadWpCliDouble();
+        $config = $this->bootKernel('Blocks');
+        $blockJson = $config->rootDir() . '/build/blocks/card/block.json';
+        $this->writeFile($blockJson, '{"name": "example/card", "title": "Card"}');
+        $command = new DiscoverCommand();
+        $command([], []);
+        $command([], ['check' => true]);
+        self::assertSame(['success', 'discovery files are up to date for 1 kernel(s)'], $this->lastCall());
+
+        $this->writeFile($blockJson, '{"name": "example/card", "title": "Renamed card"}');
+        $error = $this->runFailing($command, ['check' => true]);
+        self::assertStringContainsString("{$config->appNamespace}: {$config->discoveryFile()} is out of date", $error);
+
+        $command([], []);
+        $command([], ['check' => true]);
+        self::assertSame(['success', 'discovery files are up to date for 1 kernel(s)'], $this->lastCall());
+    }
+
+    /** Kernelの中のブロック名の重複は、探索コマンドのエラーになり、ファイルを書かない。 */
+    #[RunInSeparateProcess]
+    public function testItReportsDuplicateBlockNamesWithoutWritingFiles(): void
+    {
+        $this->loadWpCliDouble();
+        $config = $this->bootKernel('DuplicateBlocks');
+        $this->writeFile($config->rootDir() . '/build/blocks/a/block.json', '{"name": "example/card"}');
+        $this->writeFile($config->rootDir() . '/build/blocks/b/block.json', '{"name": "example/card"}');
+
+        $error = $this->runFailing(new DiscoverCommand(), []);
+
+        self::assertStringContainsString("block name 'example/card' is declared by both", $error);
+        self::assertFileDoesNotExist($config->discoveryFile());
+    }
+
     #[RunInSeparateProcess]
     public function testItFailsWithoutBootedKernels(): void
     {

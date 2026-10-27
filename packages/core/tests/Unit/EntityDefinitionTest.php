@@ -351,6 +351,36 @@ final class EntityDefinitionTest extends UnitTestCase
         }
     }
 
+    /** allowedBlocks()は重複を除いて渡した順に保ち、呼ばなければnull(WordPressの既定のまま)。register_post_typeの引数には入れない。 */
+    public function testAllowedBlocksKeepsUniqueBlockNamesInOrder(): void
+    {
+        $definition = PostTypeDefinition::create('product')->label('製品', '製品');
+        self::assertNull($definition->allowedBlockNames());
+
+        $definition->allowedBlocks('my-theme/card', 'core/paragraph', 'my-theme/card');
+
+        self::assertSame(['my-theme/card', 'core/paragraph'], $definition->allowedBlockNames());
+        self::assertArrayNotHasKey('allowed_block_types', $definition->toArgs(LabelLanguage::Ja));
+    }
+
+    /** @return iterable<string, array{list<string>, string}> */
+    public static function invalidAllowedBlocks(): iterable
+    {
+        yield 'no block names' => [[], "post type 'product' got no block names in allowedBlocks(); pass at least one block name, or use blockEditor(false) to disable the block editor"];
+        yield 'without namespace' => [['paragraph'], "post type 'product' got an invalid block name 'paragraph' in allowedBlocks(); use the form 'namespace/name'"];
+        yield 'uppercase' => [['core/paragraph', 'Core/Heading'], "post type 'product' got an invalid block name 'Core/Heading' in allowedBlocks(); use the form 'namespace/name'"];
+    }
+
+    /** @param list<string> $blockNames */
+    #[DataProvider('invalidAllowedBlocks')]
+    public function testAllowedBlocksRejectsMissingOrInvalidBlockNames(array $blockNames, string $message): void
+    {
+        $this->expectException(EntityDefinitionException::class);
+        $this->expectExceptionMessage($message);
+
+        PostTypeDefinition::create('product')->allowedBlocks(...$blockNames);
+    }
+
     public function testTaxonomyDefinitionResolvesPostTypeClassReferences(): void
     {
         $args = TaxonomyDefinition::create('product_category')

@@ -10,6 +10,7 @@ use RuntimeException;
 use Throwable;
 use TMSWP\Core\Attribute\AsOptionGroup;
 use TMSWP\Core\Attribute\AsPostType;
+use TMSWP\Core\Block\DiscoveredBlock;
 use TMSWP\Core\Exception\DiscoveryException;
 use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\DiscoveredHookMethod;
@@ -62,7 +63,7 @@ final class DiscoveryFileTest extends UnitTestCase
 declare(strict_types=1);
 
 return [
-    'schema' => 4,
+    'schema' => 5,
     'appNamespace' => 'Example\\DiscoveryFile',
     'appDir' => 'app',
     'components' => [
@@ -101,6 +102,18 @@ return [
             'priority' => 10,
             'acceptedArgs' => 0,
             'kind' => 'filter',
+        ],
+    ],
+    'blocks' => [
+        [
+            'name' => 'example/card',
+            'path' => 'build/blocks/card',
+            'metadataHash' => 'aaaa',
+        ],
+        [
+            'name' => 'example/notice',
+            'path' => 'build/blocks/layout/notice',
+            'metadataHash' => 'bbbb',
         ],
     ],
 ];
@@ -242,6 +255,28 @@ PHP;
         $this->expectLoadFailure($root, "invalid 'kind'");
     }
 
+    /** blocksの要素はname・path・metadataHashを空でない文字列で持つ(破損した探索結果ファイルを読まない)。 */
+    #[DataProvider('malformedBlocks')]
+    public function testLoadRejectsMalformedBlocks(mixed $blocks, string $reason): void
+    {
+        $root = $this->createTempDirectory('blocks');
+        $this->writePayload($root, ['blocks' => $blocks] + $this->payload());
+
+        $this->expectLoadFailure($root, $reason);
+    }
+
+    /** @return iterable<string, array{mixed, string}> */
+    public static function malformedBlocks(): iterable
+    {
+        $valid = ['name' => 'example/card', 'path' => 'build/blocks/card', 'metadataHash' => 'aaaa'];
+
+        yield 'missing section' => [null, "discovery file entry 'blocks' must be a list"];
+        yield 'not a list' => [['card' => $valid], "discovery file entry 'blocks' must be a list"];
+        yield 'missing name' => [[['path' => 'build/blocks/card', 'metadataHash' => 'aaaa']], "discovery file blocks entry has invalid 'name'"];
+        yield 'empty path' => [[['path' => ''] + $valid], "discovery file blocks entry has invalid 'path'"];
+        yield 'missing hash' => [[['name' => 'example/card', 'path' => 'build/blocks/card']], "discovery file blocks entry has invalid 'metadataHash'"];
+    }
+
     private function expectLoadFailure(string $root, string $reason): void
     {
         $file = new DiscoveryFile($this->config($root));
@@ -276,6 +311,10 @@ PHP;
                 new DiscoveredHookMethod('Example\\DiscoveryFile\\Hook\\ProductHook', 'onSave', 'save_post_product', 10, 2, HookMethodKind::Action),
                 new DiscoveredHookMethod('Example\\DiscoveryFile\\Hook\\ProductHook', 'title', 'the_title', 10, 0, HookMethodKind::Filter),
             ],
+            [
+                new DiscoveredBlock('example/card', 'build/blocks/card', 'aaaa'),
+                new DiscoveredBlock('example/notice', 'build/blocks/layout/notice', 'bbbb'),
+            ],
         );
     }
 
@@ -288,6 +327,7 @@ PHP;
             'appDir' => 'app',
             'components' => [],
             'hookMethods' => [],
+            'blocks' => [],
         ];
     }
 
