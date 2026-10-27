@@ -910,7 +910,7 @@ v0.2.0〜v0.7.0
 
 #### v0.8.0-T1: 独自ブロックの自動登録
 
-- 対象ファイル領域: packages/core/src/Block/(新設)、探索コマンド(block.json の走査)、packages/core/src/Kernel/KernelConfig.php(ブロックカテゴリ)、packages/core/src/Post/PostTypeDefinition.php(`allowedBlocks()`)、packages/core/tests/(ブロック関連)、tests/fixtures/(ブロックを含む fixture テーマ)、docs/02、docs/03、packages/core/rules/blocks.md(新設)
+- 対象ファイル領域: packages/core/src/Block/(新設)、packages/core/src/Kernel/(Kernelのブロックの登録、KernelConfigのブロックカテゴリ、Discovery・DiscoveryFile・DiscoveryResult・DiscoverCommand等の探索系によるblock.jsonの走査と探索結果ファイルへの出力)、packages/core/src/Post/PostTypeDefinition.php(`allowedBlocks()`)、packages/core/src/Post/PostType.php(`allowed_block_types_all`への反映)、packages/core/tests/(ブロック関連)、tests/fixtures/(ブロックを含む fixture テーマ。tests/fixtures/themes/tmswp-fixture-theme/のblocks/とbuild/blocks/、fixtureのテーマとプラグインの探索結果ファイル`tmswp-discovery.php`)、docs/02、docs/03、packages/core/rules/blocks.md(新設)
 - 完了条件:
   - 探索コマンドが `build/blocks/**/block.json`(入れ子可)を走査して同じ探索結果ファイルに出力し、実行時に `register_block_type()` で登録する(統合テスト)。
   - 名前の重複と未登録のカテゴリが探索コマンドのエラーになる。`allowedBlocks()` が `allowed_block_types_all` に反映される。カテゴリを `KernelConfig` で登録できる。
@@ -920,43 +920,55 @@ v0.2.0〜v0.7.0
 
 #### v0.8.0-T2: スターター
 
-- 対象ファイル領域: starters/(.php-cs-fixer の設定を除く)、docs/11 §10
+- 対象ファイル領域: starters/(.php-cs-fixer の設定を除く。starters/*/composer.jsonのlicenseを含む)、docs/11 §5(スターターのAGENTS.mdの文案)・§6.2(レシピのコード例の名前空間)・§10(§10.1の手順と§10.2のsetup.phpの全文)、ルートの.wp-env.json(スターター由来のプロジェクトのマウント)、tests/Integration/(新設。スターター由来のプラグイン2本とテーマの同時起動の統合テスト)、phpunit.integration.xml.dist(tests/Integration/のtestsuiteの追加)、docs/10 §4.5・§4.7(phpunit.integration.xml.distと.wp-env.jsonの完全版)
 - 完了条件:
   - setup.php がスラッグから名前空間を生成し、composer.json の psr-4・name(`local/<slug>`)、本体ファイル、app/、AGENTS.md を書き換え、post-create-project-cmd を除去して自己削除し、次の手順を案内する(docs/11 §10.2)。
   - スターターのラベル言語の既定が日本語(§1.13)。テーマスターターに blocks/ と、npm のビルドと探索コマンドの連結がある(§1.11)。探索結果ファイルの生成がビルド手順にあり、各スターターの探索結果ファイル(`tmswp-discovery.php`)を生成してコミットしている。setup.php が名前空間を書き換えた後に探索結果ファイルを作り直す(または作り直す手順を案内する)(§1.4)。
   - スターター由来のプラグイン 2 本とテーマを同じサイトで起動できる(統合テストまたは wp-env 上の確認)。
   - スターターの `composer qa` が探索結果ファイルの照合(§1.4)を含む。CLAUDE.md を置いていない(§1.18)。
   - docs/11 §10のsetup.phpの記述(§10.2の全文と説明)を、starters/theme/bin/setup.phpとstarters/plugin/bin/setup.phpの実物に合わせ、両者が一致している。v0.6.0の時点では、docs/11 §10.2の全文はスラッグの正規化・対話での入力・composer.jsonのnameの`local/<slug>`への書き換え・自己削除を含むが、starters/theme/bin/setup.phpとstarters/plugin/bin/setup.phpはどれも行わず、プレースホルダの置き換え(プラグインは本体ファイルの名前の変更も)だけを行う。
+  - docs/11 §10.1が、setup.phpがスラッグから名前空間を生成してcomposer.jsonのpsr-4・本体ファイル・app/・AGENTS.mdを書き換えること(§1.6)を述べ、「名前空間の置換は行わない」とする記述が無い。v0.7.0の時点では、docs/11の891行が「名前空間の置換は行わない(テーマスターターは`App\`、プラグインスターターは`PluginApp\`固定が既定)」としており、§1.6と逆である。
+  - starters/theme/composer.jsonとstarters/plugin/composer.jsonのlicenseがGPL-2.0-or-later(packages/*と同じ)であり、setup.phpを実行して作ったプロジェクトのcomposer.jsonのlicenseが`proprietary`である。docs/11 §10がこのlicenseの書き換えを述べている。starters/theme・starters/pluginにはLICENSEのファイルを置かず、licenseはcomposer.jsonのフィールドだけで示す(LICENSEのファイルを置くのはpackages/*だけ。v0.8.0-T3)。v0.7.0の時点では、両スターターのcomposer.jsonのlicenseは`proprietary`で、starters/theme/bin/setup.phpとstarters/plugin/bin/setup.phpはlicenseを書き換えない。
 - 検証コマンド: スターターから create-project 相当で 2 つ生成して `composer qa`、wp-env 上でフロントが 200 を返すことの確認
 
 #### v0.8.0-T3: 配布物の整備
 
-- 対象ファイル領域: packages/*/composer.json、packages/*/phpunit.xml.dist(新設)、packages/*/.gitattributes(新設)、テスト支援コード(packages/core/tests/Support の切り出し先)、packages/core/tests/Support/UsesTempDirectories.php(一時ディレクトリの隔離。切り出す場合は切り出し先)、CHANGELOG.md(新設)、monorepo-builder.php、docs/01、docs/10 §5〜§6、docs/RELEASING.md
+- 対象ファイル領域: packages/*/composer.json、packages/*/phpunit.xml.dist(新設)、packages/*/.gitattributes(新設)、テスト支援コード(packages/core/tests/Support の切り出し先)、packages/core/tests/Support/UsesTempDirectories.php(一時ディレクトリの隔離。切り出す場合は切り出し先)、CHANGELOG.md(新設)、monorepo-builder.php、docs/01(§3.1のスターターの名前空間、§8.1の641行付近の`App\`の共存の記述を含む)、docs/10 §5〜§6、docs/RELEASING.md、ルートのcomposer.json(autoload-dev。テスト支援コードの切り出しに合わせる)、phpunit.unit.xml.dist、docs/10 §1.1・§4.3(ルートのcomposer.jsonとphpunit.unit.xml.distの完全版)、starters/*/composer.json(`composer monorepo:validate`に要る`tmswp/core`の制約の整合)、packages/*/LICENSE(新設)
 - 完了条件:
   - 各パッケージを単独で clone して `composer install && composer test` が通る(require-dev と phpunit の設定がある)。export-ignore で tests や fixture が配布物に入らない。.DS_Store が混入しない。
-  - CHANGELOG.md があり、docs/01 のスターターの名前空間の記述が §1.6 どおり。
+  - 受け入れ条件2(各パッケージを単独でテストできる)を、split相当の手順で確かめている。各パッケージをsplit相当で一時ディレクトリに取り出し(`git subtree split --prefix=packages/<pkg>`のコミットのcloneなど、export-ignoreを適用しない取り出し方)、tmswp/coreを要るパッケージでは、同じくsplit相当で取り出したcoreを、その一時ディレクトリのcomposer.jsonに足したpathリポジトリ(`versions`に`Kernel::VERSION`の版)で解決して、`composer install && composer test`が成功する。tmswp/coreはPackagistに未公開のためこの手順にし、リポジトリのpackages/*/composer.jsonにはpathリポジトリを足さない。
+  - packages/core/src/に.DS_Storeを置いた状態で、pathリポジトリ(`symlink: false`)でpackages/*を入れた一時のプロジェクトで`composer install`を実行し、`find vendor/tmswp -name .DS_Store`が0件である(Composerのpathリポジトリの写しが従うのは、各パッケージの.gitattributesのexport-ignoreだけのため、除外はexport-ignoreで行う。composer.jsonの`archive.exclude`は`composer archive`の生成の設定で、pathリポジトリの写しには効かない)。v0.7.0の時点では、packages/core/src/・packages/acf-bridge/src/・packages/ja-toolkit/src/等に.DS_Storeがあり(.gitignoreの対象のためリポジトリには無い)、examples/sample-siteのpathリポジトリの写しに入る。
+  - packages/*とstarters/*のcomposer.jsonの`tmswp/core`の制約と、packages/core/composer.jsonの`branch-alias`が、`Kernel::VERSION`の版を満たす形で揃い、`composer monorepo:validate`が成功する。v0.7.0の時点では、`Kernel::VERSION`は`0.2.0`(packages/core/src/Kernel/Kernel.phpの36行)だが、packages/core/composer.jsonのbranch-aliasは`0.1.x-dev`で、4つの拡張と2つのスターターの`tmswp/core`の制約は`^0.1`(0.2.0を満たさない)である。
+  - CHANGELOG.md があり、docs/01 のスターターの名前空間の記述が §1.6 どおり。docs/01の641行(v0.7.0の時点)の、同じサイトの複数のコンポーネントがそれぞれ`App\`を使っても各vendor/のオートローダが自身の`App\`を解決するため衝突しないとする記述が無く、同じ名前のクラスはオートローダの先勝ちで後のものが隠れることと、プラグインの名前空間はcreate-projectで生成すること(§1.6)を述べている。
+  - packages/*のそれぞれにGPL-2.0-or-laterのLICENSEがあり、split相当で取り出した各パッケージにLICENSEが入っている。v0.7.0の時点では、LICENSEはリポジトリのルートにだけあり、split.ymlが送るpackages/*のディレクトリには無い。
+  - docs/RELEASING.mdの手順が、`vendor/bin/monorepo-builder release`の実際の動作と一致する。v0.7.0の時点では、monorepo-builder.phpのリリースのワーカー(TagVersionReleaseWorker・PushTagReleaseWorker・PushNextDevReleaseWorker)により、手順3の`monorepo-builder release`がmainへのpushとタグのpushを自ら行うが、docs/RELEASING.mdはそれを書かずに手順4で`git push origin main --tags`を指示している。mainへのpushとタグ付けは毎回ユーザーに確認するため(v0.9.0-T4)、どの手順でpushが起きるかを手順に書く。
   - テストの一時ディレクトリを、テストごとに専用の親ディレクトリの下に作り、`KernelConfig` が `dirname(appDir)` に書く探索結果ファイル(`tmswp-discovery.php`)もその中に収まる。テストの後に、探索結果ファイルを含めて片付ける。PHP 8.3 と 8.5 の unit を並列に実行しても干渉しない(v0.2.0 の時点では、UsesTempDirectories が `sys_get_temp_dir()` の直下に一時ディレクトリを作るため、探索結果ファイルが `sys_get_temp_dir()` の直下に書かれて残り、並列の実行で `KernelTest::testInitializerWithoutInterfaceThrowsInProduction` が 1 件エラーになる)。
 - 検証コマンド: 各パッケージを split 相当で取り出して `composer install && composer test`、`git archive HEAD packages/<pkg> | tar -t`(tests 等が含まれない)、`composer monorepo:validate`、PHP 8.3 と 8.5 の `vendor/bin/phpunit -c phpunit.unit.xml.dist` の並列実行(どちらも成功し、実行後の `sys_get_temp_dir()` の直下に `tmswp-discovery.php` が無い)
 
 #### v0.8.0-T4: sample-site の作り直し
 
-- 対象ファイル領域: examples/sample-site/
+- 対象ファイル領域: examples/sample-site/(tmswp-kernel.php(新設)と、wp-envでsample-siteを動かす設定のexamples/sample-site/.wp-env.json(新設)を含む。sample-siteのテーマを有効にする環境は、fixtureのテーマを有効にして統合テストを走らせるルートの.wp-env.jsonの環境と分け、別のポートにする。tools/acf-pro-integration.shがACF Proの環境をポートで分けているのと同じ扱い)
 - 完了条件:
   - sample-site が想定する用途の機能(フォーム、設定ページ、サムネイル、日本語対応、ACF、ブロック)を備え、README が sample-site 用で、lock と path リポジトリの扱いが決まり、`composer qa` が通り、wp-env 上で動く。探索結果ファイル(ブロックを含む)をコミットし、sample-site の `composer qa` が照合する(§1.4)。
   - sample-siteの依存が今のpackages/*から解決され、`composer validate`がlockの古さを報告しない(lockをコミットしない扱いにする場合は、lockを作る手順がREADMEにある)。v0.5.0の時点では、examples/sample-site/composer.lockは.gitignoreの対象(`/composer.lock`)でコミットされておらず、手元に残るlockの更新日は2026-07-05で、`composer validate`が「The lock file is not up to date with the latest changes in composer.json」を出す。lockのtmswp/core 0.1.0は`php: >=8.2`と`ext-mbstring`を要求し、今のpackages/core/composer.json(`php: >=8.3`、ext-mbstringなし)と食い違う。pathリポジトリが`symlink: false`のため、vendor/tmswp/*(.gitignoreの対象)もその時点のpackages/*の写しで、今のpackages/core/srcと一致しない。
   - sample-siteのcomposer scriptsが、acf-bridgeの生成と照合に`vendor/bin/tms-acf`(`tms-acf sync`・`tms-acf check`。docs/09 §5.1)を使い、`wp tmswp acf`の呼び出しが残っていない。v0.6.0の時点では、examples/sample-site/composer.jsonのscriptsの`acf:check`・`acf:sync`が`wp tmswp acf check`・`wp tmswp acf sync`のままである。
   - sample-siteが、thumbnail・settings-page・ja-toolkitを`KernelConfig`の`extensions`で登録し(docs/08のパッケージ共通規約の登録API)、旧APIの呼び出しが残っていない(`grep -rnE "Thumbnail::register|SettingsPages::register|JaToolkit::enable" examples/sample-site --exclude-dir=vendor`が一致なし)。v0.7.0の時点では、examples/sample-site/functions.phpが`extensions`にacf-bridgeだけを渡し、18〜22行で`Thumbnail::register()`・`SettingsPages::register()`・`JaToolkit::enable([...])`を静的に呼んでいる。v0.7.0では、`Thumbnail`・`SettingsPages`の`register()`は`ExtensionInterface`のインスタンスのメソッド(引数は`Kernel`)で、`JaToolkit`に`enable()`は無い。
+  - examples/sample-site/composer.jsonのpathリポジトリの`versions`の`tmswp/core`の版が`Kernel::VERSION`と一致し、requireの制約がその版を満たし、wp-env上でsample-siteのKernelが`InstalledVersionCheck`の照合で例外にならずに起動する(フロントが200を返す)。v0.7.0の時点では、examples/sample-site/composer.jsonの52行の`versions`が`"tmswp/core": "0.1.0"`で、packages/core/src/Kernel/Kernel.phpの36行の`Kernel::VERSION`は`'0.2.0'`のため、installed.phpの`pretty_version`(0.1.0)と食い違い、起動時に`InstalledVersionCheck::assertInstalledVersions()`(Kernel.phpの138行)が`KernelException`を投げる。requireの`tmswp/core`の制約`^0.1`も0.2.0を満たさない。
+  - examples/sample-site/tmswp-kernel.phpが`KernelConfig`を返し、functions.phpがそれを`KernelConfig::load()`で読んで起動し、sample-siteのルートで`vendor/bin/tms-acf check`が成功する(tms-acfはルートの`tmswp-kernel.php`の`KernelConfig`からacf-bridgeの設定を読む。packages/acf-bridge/src/Cli/TmsAcf.php)。v0.7.0の時点では、examples/sample-site/tmswp-kernel.phpが無く、functions.phpの7〜16行が`KernelConfig::theme()`を直接組み立てている。
+  - examples/sample-site/.wp-env.jsonの環境とルートの.wp-env.jsonの環境を同時に起動でき、sample-siteのwp-envはルートのnode_modulesの`@wordpress/env`をパスで呼ぶ(コマンド名`wp-env`で解決しない)。
 - 検証コマンド: `cd examples/sample-site && composer qa`、wp-env 上での表示確認
 
 #### v0.8.0-T5: テスト構成の整理
 
-- 対象ファイル領域: packages/*/tests/Unit/(docs の改訂は伴わない)
-- 完了条件: テストが src をミラーして配置され、docs/10 §8.1・§8.2 の対応表のデータプロバイダが移植されている。対象領域(テスト基盤・開発基盤・配布導線)を再点検して、件数のみ判明している軽微な不具合(4 件)を特定し、すべて対処した。
+- 対象ファイル領域: packages/*/tests/Unit/、docs/10 §8(移植対応表と新規テスト必須リストのテストのパス)
+- 完了条件:
+  - テストが src をミラーして配置され、docs/10 §8.1・§8.2 の対応表のデータプロバイダが移植されている。
+  - docs/10 §8.1の移植先の列のテストのパスが、配置を直した後の実在のテストファイルを指す。v0.7.0の時点では、§8.1は移植先を`packages/core/tests/Unit/FormRuleTest.php`・`SupportTest.php`等のsrcをミラーしないファイル名で示している。
 - 検証コマンド: `composer test:unit`
 
 #### v0.8.0-T6: 開発基盤の残り
 
-- 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.github/workflows/split.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、package.json・package-lock.json(@wordpress/env の版と、npm のインストールスクリプトの扱い)、docs/10 §1.1(package.json の写しの版)・§4.8(カバレッジゲート)・§5(ワークフローの完全版)、docs/01 §4.4(ワークフロー)、packages/core/src/Kernel/DiscoverCommand.php(照合したKernelの数)、tests/fixtures/_wp-cli.php(`theme_roots`に左右されないfixtureの読み込み)、tools/(PHPStanのワーカーごとのメモリの最大量を測る手順。新設)、docs/10 §2.2(計測の手順と上限の扱い)、composer.json(`analyse`)・phpstan.neon.dist(上限を超えそうな場合の解析の分割)
+- 対象ファイル領域: tools/verify-rules-code.php、tools/extract-rules-code.php、bin/coverage-check.php、.github/workflows/qa.yml、.github/workflows/split.yml、.php-cs-fixer.dist.php、starters/*/.php-cs-fixer*、package.json・package-lock.json(@wordpress/env の版と、npm のインストールスクリプトの扱い)、docs/10 §1.1(package.json の写しの版)・§4.8(カバレッジゲート)・§5(ワークフローの完全版)、docs/01 §4.4(ワークフロー)、packages/core/src/Kernel/DiscoverCommand.php(照合したKernelの数)、tests/fixtures/_wp-cli.php(`theme_roots`に左右されないfixtureの読み込み)、tools/(PHPStanのワーカーごとのメモリの最大量を測る手順。新設)、docs/10 §2.2(計測の手順と上限の扱い)、composer.json(`analyse`)・phpstan.neon.dist(上限を超えそうな場合の解析の分割)、docs/10 §3(php-cs-fixerの設定の完全版と補足規律)・§9(開発環境セットアップ手順)、tests/Unit/CoverageCheckTest.php(閾値の判定の境界)、packages/core/tests/Unit/(DiscoverCommandの照合したKernelの数のテスト。T5の配置に従う)
 - 完了条件:
   - rules の検査が全パッケージの rules/ を対象にし、docs/11 §6.3 どおりの検証をする。sample-site と starters の `composer qa` が CI にある。
   - starters/pluginのphp-cs-fixerの設定(starters/plugin/.php-cs-fixer.dist.php)が、setup.phpの実行の前と後のどちらでも、実在するファイルだけを参照する。v0.6.0の時点では、starters/plugin/.php-cs-fixer.dist.phpが`__DIR__ . '/plugin.php'`をappendしているが、setup.phpが本体ファイルを`<slug>.php`に名前を変えるため、スラッグが`plugin`以外のプロジェクトでは無いファイルを参照する。
@@ -966,11 +978,16 @@ v0.2.0〜v0.7.0
   - CI の `npm ci` の警告を解消する。v0.2.0 の時点では、`npm ci` を実行するジョブ(Integration の 4 セルと Coverage)で、`npm warn deprecated` の @octokit/webhooks-types@7.6.1・glob@10.5.0 と、fs-ext-extra-prebuilt@2.2.7 のインストールスクリプトが allowScripts で許可されていないという `npm warn install-scripts` が出ている(いずれも @wordpress/env 11.17.0 の依存)。@wordpress/env の更新か、インストールスクリプトの扱いの決定で解消し、最新の版でも出る警告は、そのパッケージと版を受け入れ記録に書く。全ジョブの runner の版が固定され、`ubuntu-latest` を使っていない。docs/10 §5 と docs/01 §4.4 のワークフローの完全版が実ファイルと一致する。
   - `composer discover:check`が、開発用サイトのsite transient `theme_roots`の状態に左右されず、照合したKernelの数(fixtureのテーマとプラグインの2つ)を確かめる。v0.5.0の時点では、fixtureのテーマの置き場(tests/fixtures/themes)を含まない`theme_roots`が開発用サイトに残っていると、fixtureのテーマが見つからずテーマのKernelが起動しないため、2つのKernelのうちプラグインの1つだけを照合して成功する(照合したKernelの数を確かめていない)。このtransientは、`--require=tests/fixtures/_wp-cli.php`の無いWP-CLIの実行や、開発用サイトへの通常のリクエストの後に、fixtureのテーマの置き場を含まない形で作られうる。
   - PHPStanのワーカーごとのメモリの最大量を測る手順を用意し、各版の受け入れ記録でその値と`composer analyse`の`--memory-limit`に対する余裕を記録する。上限を超えそうなら、解析の分割などで対処する。v0.5.0の時点では、ワーカーのメモリの最大量はCIと同じ4ワーカー・キャッシュなしで約1040MiB(1GiBを超える)で、当時の上限の1G(1024MiB)に達してCIのStatic Analysisが失敗したため、上限を2Gにした。packages/core/tests/Integration/とpackages/core/tests/Support/が入るジョブのワーカーが最も重い。
+  - docs/10 §3.1のFinderの完全版と§3.2の補足規律が互いに一致し、.php-cs-fixer.dist.phpの実物とも一致する。v0.7.0の時点では、§3.1のFinder(docs/10の374行・380行)がstarters/の全体を対象にして`core/src/Exception`を除外するのに対し、§3.2(458行)はstartersの対象を`app/`のみとしている。
+  - CIに、各スターターをcreate-project相当で作るジョブがある。スターターから一時ディレクトリにプロジェクトを作ってsetup.phpを非対話で実行し(tmswp/coreなどはpathリポジトリで解決する)、作ったプロジェクトに`{{`が残っていない(`grep -rn "{{" <プロジェクト> --exclude-dir=vendor --exclude-dir=node_modules`が一致なし)こと、プラグインの本体ファイルが`<slug>.php`に名前が変わり`plugin.php`が無いこと、そのプロジェクトの`composer qa`が成功することを確かめる。v0.7.0の時点では、qa.ymlにスターターのジョブは無く、starters/theme・starters/pluginの`{{`はsetup.phpの実行の前の状態でコミットされている。
+  - CIで、テーマスターターのblocks/をNodeでビルドし(`npm ci`とビルドのスクリプト)、その出力から探索結果ファイルを照合する(§1.4・§1.11)。
+  - bin/coverage-check.phpが、合算のカバレッジを丸めた値ではなく丸める前の値で閾値と比べ、閾値をわずかに下回る値(たとえば閾値78に対する77.995%)を不合格にする(tests/Unit/CoverageCheckTest.phpで固定する)。docs/10 §4.8の手順もそれに合わせる。v0.7.0の時点では、bin/coverage-check.phpが`round(..., 2)`で小数2桁に丸めた値を`$coverage < $minimum`で比べるため、77.995%は78.00%として閾値78を満たす。
+  - docs/10 §9の開発環境セットアップ手順が、ルートのcomposer.jsonの`config.allow-plugins`と一致する。v0.7.0の時点では、composer.jsonの`allow-plugins`が`bamarni/composer-bin-plugin`をすでに許可している(133行)が、docs/10 §9の手順2はallow-pluginsの確認にyesと答えるよう案内し、トラブルシューティングの表はallow-pluginsでbamarniを拒否した場合を挙げている。
 - 検証コマンド: `composer lint`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`、`composer test:coverage`、`grep -n "ubuntu-latest" .github/workflows/*.yml`(0 件)
 
 #### v0.8.0-T7: rules・AGENTS.md・README の全面整備
 
-- 対象ファイル領域: packages/*/rules/、packages/*/README.md、AGENTS.md、README.md、starters/*/AGENTS.md、starters/*/CLAUDE.md・examples/sample-site/CLAUDE.md(削除)、docs/11 §1.4・§12.1(CLAUDE.mdとAGENTS.mdの記述)
+- 対象ファイル領域: packages/*/rules/、packages/*/README.md、AGENTS.md、README.md、starters/*/AGENTS.md、starters/*/CLAUDE.md・examples/sample-site/CLAUDE.md(削除)、docs/11 §1.4・§12.1(CLAUDE.mdとAGENTS.mdの記述)、docs/11 §5・§6.2・§8・§9のうち、名前空間の自動生成(§1.6)・独自ブロック(§1.11)・CLAUDE.mdを置かないこと(§1.18)に合わせて要る箇所(スターターのAGENTS.mdの文案、レシピのコード例の名前空間、starter-themeとstarter-pluginのファイルツリーと全文)
 - 完了条件:
   - rules/・AGENTS.md・README が v0.2.0〜v0.8.0 で確定した API を反映し、docs/11 が定める項目(配置決定木、コーディング規約、デバッグ節、探索結果ファイルの扱い等)を備え、コード例が抽出・検査を通る。CLAUDE.md を置いていない(§1.18)。
   - packages/core/rules に次の注意がある(v0.3.0 の時点では無い)。builtin の `post` のクラスに `#[WithMetaRevisions]` を付けるには、定義で `supports('revisions')` を指定する(`MetaSchemaRegistry` は定義の supports を検査するため、WordPress が `post` に付ける revisions では足りない)。attachment のアダプタのクラスの `query()` は、`status('inherit')` を指定しないと添付ファイルを返さない(PostQuery の既定の `post_status` は `publish`)。
@@ -986,10 +1003,10 @@ v0.2.0〜v0.7.0
 
 ### 並列化
 
-- 順序: T1 → {T2 ∥ T3 ∥ T4} → {T5 ∥ T6} → T7 → T8
-- T2(starters/ と docs/11)・T3(packages/* の配布設定、テスト支援、docs/01・10)・T4(examples/sample-site/)はファイル領域が重ならない。T2 と T4 は T1 のブロック登録を使うため T1 の後。
-- T5(packages/*/tests/Unit)と T6(tools・bin・CI・cs-fixer の設定・package.json・docs/10 §1.1・§4.8・§5、docs/01 §4.4)はファイル領域が重ならない。T5 は T3(テスト支援の配置)、T6 は T2・T4(CI に入れる対象)と T3(docs/01・docs/10 §5)の後。
-- T7 は全 API の確定後に行う。T7のstarters/*/AGENTS.md・CLAUDE.mdはT2(starters/)、examples/sample-site/CLAUDE.mdはT4(examples/sample-site/)、docs/11 §1.4・§12.1はT2(docs/11 §10と同じファイル)の対象ファイル領域と重なるが、T7はT2・T4の完了後に着手するため並列にならない。
+- 順序: T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8
+- T2・T3・T4は逐次にする。T2とT3は、starters/*/composer.json(T2のlicense、T3の`tmswp/core`の制約の整合。monorepo-builder.phpがpackages/とstarters/を`composer monorepo:validate`の対象にする)、tests/とphpunitの設定(T2のtests/Integration/とphpunit.integration.xml.dist、T3のテスト支援コードの切り出し先とphpunit.unit.xml.dist)、docs/10(T2の§4.5・§4.7、T3の§1.1・§4.3・§5〜§6)が重なる。T4はT2(ルートの.wp-env.jsonの環境と分けるsample-siteのwp-envの設定、スターターと同じ`tmswp-kernel.php`の形)とT3(sample-siteのpathリポジトリの版とrequireが、T3で揃える`tmswp/core`の制約と`branch-alias`に依存する。pathリポジトリの写しから.DS_Storeを除くのもT3)の結果を使う。T2とT4はT1のブロック登録を使うためT1の後。
+- T5とT6も逐次にする。DiscoverCommandのテスト(T5がpackages/core/tests/Unit/の配置をsrcのミラーに直し、T6が照合したKernelの数の検査のテストを足す)と、docs/10(T5の§8、T6の§1.1・§2.2・§3・§4.8・§5・§9)が重なる。T5はT3(テスト支援の配置)、T6はT2・T4(CIに入れる対象)とT3(docs/01・docs/10 §5)の後。
+- T7 は全 API の確定後に行う。T7のstarters/*/AGENTS.md・CLAUDE.mdはT2(starters/)、examples/sample-site/CLAUDE.mdはT4(examples/sample-site/)、docs/11 §1.4・§12.1・§8・§9はT2(docs/11 §10と同じファイル)、docs/11 §5・§6.2はT2の対象ファイル領域と重なるが、T7はT2・T4の完了後に着手するため並列にならない。
 - T6のpackages/core/src/Kernel/DiscoverCommand.phpとtests/fixtures/_wp-cli.phpはT1(探索コマンド、tests/fixtures/)の対象ファイル領域と重なるが、T6はT1の完了後に着手する。
 
 ### 受け入れ条件
