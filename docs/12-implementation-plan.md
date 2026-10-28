@@ -35,7 +35,7 @@ monorepo `tmswp` 全体。すなわち:
 
 ## 0.1 作業手順
 
-- 作業ブランチは `main` から切り、1 タスクごとにレビューを経てコミットする。コミットメッセージは日本語で、変更内容がひと目で分かる具体的な表現にする。
+- 作業はブランチ`rewrite/v0`で行い、1タスクごとにレビューを経てコミットする。コミットメッセージは日本語で、変更内容がひと目で分かる具体的な表現にする。`main`は初期のコミットだけを持ち、`rewrite/v0`の`main`への反映は、プルリクエスト#1(`rewrite/v0`→`main`)のマージで、ユーザーの確認を経て行う(v0.9.0-T4)。
 - タグ付けとリリースはメンテナが `RELEASING.md` の手順で行う。
 - コードを変えるタスクは、対応する docs/00〜10 と rules/ の改訂も同じタスクで行う。設計側の問題が見つかった場合は、設計文書の改訂案をそのタスクで示し、合意のうえで同じタスクで反映する。
 - 破壊的変更では、旧名・deprecated コメント・移行分岐を残さない。0.x の間は後方互換を保証しない。
@@ -56,7 +56,7 @@ monorepo `tmswp` 全体。すなわち:
 各版の受け入れ条件に加えて、次を満たすこと。
 
 - その版のすべてのタスクが完了条件を満たしている。
-- integration を含む `composer qa` が、CI の 4 セル(PHP 8.3 と 8.5 × WordPress 7.0 と最新版)で通る(v0.1.0 以降)。
+- integrationを含む`composer qa`がCIで通る(v0.1.0以降)。CIでは、`composer qa`の各段をジョブに分けて実行する。integrationの段(`test:integration`)は4セル(PHP 8.3と8.5 × WordPress 7.0と最新版)で、lint・analyse・`discover:check`等のほかの段は別のジョブで実行する(ジョブの分け方は`10-quality.md` §5.1)。そのため、この条件は、同じコミットでCIの全ジョブが成功することで確かめる。
 - `composer monorepo:validate` と、rules/ のコード例の抽出・検査が通る。
 - 受け入れ記録を `docs/acceptance/v0.x.y.md` に書く。
 
@@ -114,7 +114,7 @@ v0.1.0 → v0.2.0 ─┬→ v0.3.0 ─→ v0.6.0 ─┐
 | v0.8.0 | 82% |
 | v0.9.0 | 85% |
 
-- 各版の受け入れ確認のタスク(各版の最後のタスク)は、composer.json の閾値を、その版の値と完了済みの版の値のうち最大のものにし、CI の `coverage` ジョブで判定が通ることを確かめる。この閾値の変更は、受け入れ確認のタスクの対象ファイル領域に含む。
+- 各版の受け入れ確認のタスク(各版の最後のタスク)は、composer.json の閾値を、その版の値と完了済みの版の値のうち最大のものにし、CI の `coverage` ジョブで判定が通ることを確かめる。この閾値の変更は、受け入れ確認のタスクの対象ファイル領域に含む。ただしv0.9.0では、タグ`v0.9.0`のcomposer.jsonに閾値を入れるため、受け入れ確認のタスク(T5)ではなく、公開の前のT3で上げる。
 - パッケージ別の判定は v0.8.0-T6 で加える(パッケージ別の基準値はその版で決める)。v0.8.0-T6で、基準値をtestingを含む6パッケージ(core・acf-bridge・settings-page・thumbnail・ja-toolkit・testing)とも80%に決めた(composer.jsonの`test:coverage:check`の`--package`の引数で定義する)。
 - 版の完了の順が版番号の順と異なる場合(§0.6)も閾値は下げない。たとえば v0.5.0 が v0.3.0 より先に完了した場合、v0.3.0 の受け入れ確認では、合算カバレッジが v0.3.0 の値(65%)以上であることを確かめ、閾値は v0.5.0 の値(72%)のまま保つ。
 
@@ -133,6 +133,7 @@ v0.1.0 → v0.2.0 ─┬→ v0.3.0 ─→ v0.6.0 ─┐
 ## 1.1 対応範囲と開発環境
 
 - 対応範囲は PHP 8.3〜8.5、WordPress 7.0 以上(DR-02)。CI の unit は PHP 8.3 と 8.5、integration は「PHP 8.3 と 8.5」×「WP 7.0 と最新版」の 4 セルで、統合テストのテストライブラリは各セルの WP の版に揃える(DR-12)。
+- wp-envのDBはMariaDBに固定されるため、MySQL 8.4 LTSと9.7 LTSでの統合テストは、CIのservicesで立てたMySQLにwp-envのcliから接続するジョブ(2セル)で行う(v0.9.0-T3a)。
 - `@wordpress/env` は package.json で版を固定し、ローカルに入ったものだけを呼ぶ。コマンド名 `wp-env` を npx 等で名前解決する呼び出しは、第三者のパッケージやグローバルの同名コマンドを実行しうるので使わない。
 - 反映先: `00-overview.md` DR-02、`01-architecture.md` §3・§5、`10-quality.md` §1〜§5、AGENTS.md。
 
@@ -238,7 +239,7 @@ TMSWP の主な利用形態は、1 サイト用のテーマ(必要に応じて�
 - 読み取り専用にする方法は、Issue と Wiki の無効化、説明文での monorepo への案内、誤って送られたプルリクエストの自動クローズと案内である。アーカイブは使わない(同期が書き込めなくなるため)。
 - スターターは `composer create-project tmswp/starter-theme` 等で作る。
 - 名前空間のプレフィックス化(strauss 等)は行わない。
-- 反映先: `01-architecture.md` §3〜§4、`10-quality.md` §5〜§6、`RELEASING.md`。担当: v0.8.0-T3、v0.9.0-T4。
+- 反映先: `01-architecture.md` §3〜§4、`10-quality.md` §5〜§6、`RELEASING.md`。担当: v0.8.0-T3、v0.9.0-T4a(リリースの道具とsplit.yml)、v0.9.0-T4(公開)。
 
 ## 1.17 導入できる版
 
@@ -1023,7 +1024,7 @@ v0.2.0〜v0.7.0
 
 ### 目的
 
-導入できる版の 5 条件(§1.17)を満たすことを確認し、公開して、利用者のプロジェクトから `composer require` で導入できる状態にする。
+導入できる版の5条件(§1.17)を満たすことを確認し、公開して、利用者のプロジェクトから`composer require`で導入できる状態にする。
 
 ### 依存する版
 
@@ -1031,51 +1032,162 @@ v0.8.0
 
 ### タスク
 
-#### v0.9.0-T1: 実物の ACF Pro での確認
+タスクは、下の並列化の順序で並べる。T1〜T5の番号は、v0.9.0の計画の初版の番号のままにする(T0・T0b・T0c・T3a・T4aは、計画の補正で足したタスク)。
 
-- 対象ファイル領域: なし(確認作業。不具合が見つかった場合は、該当パッケージの修正タスクを追加する)
-- 完了条件: ACF Proのzipのパスを環境変数`TMSWP_ACF_PRO_ZIP`で渡し、v0.6.0で手元確認したPro専用の型とPro限定機能のテストを含むacf-bridgeの統合テストと、sample-siteのACF機能が実物のACF Proで通ったことを記録している(§1.2)。
-- 検証コマンド: `TMSWP_ACF_PRO_ZIP`を設定して`composer test:integration:acf-pro`
+#### v0.9.0-T0: 計画の補正
 
-#### v0.9.0-T2: E2E の自動化と統合テストの網羅確認
-
-- 対象ファイル領域: E2E テスト(新設。examples/sample-site 配下または tests/ 配下)、package.json、.github/workflows/qa.yml、docs/10(E2E の記述)
-- 完了条件: sample-site の想定用途の機能(フォーム、設定ページ、サムネイル、日本語対応、ACF、ブロック)の E2E が自動で走り、各版の受け入れ基準が統合テストで網羅されていることを確認して記録している。
-- 検証コマンド: E2E の実行コマンド(CI とローカル)、`composer test:integration`
-
-#### v0.9.0-T3: 全マトリクスの qa と critical / high の解消確認
-
-- 対象ファイル領域: なし(確認作業)
+- 対象ファイル領域: docs/12(§0.1・§1.1・§1.16と、この版の節)
 - 完了条件:
-  - 既知の critical / high の不具合がすべて解消し、CI の 4 セルで `composer qa`(integration を含む)と E2E が通り、CI の `coverage` ジョブで合算カバレッジが 85% 以上である(§0.7)。
-  - Modelの予約語の一覧(packages/core/src/Model/Identifier.php。TableDefinitionが宣言の時点で使う)と、MigratorのdbDeltaの後の実際の構造の照合を、MySQL 8.4 LTSと9.xでも確かめ、違いがあれば直している(修正は、v0.9.0-T1と同じく、該当パッケージの修正タスクを追加して行う)。v0.5.0の時点では、予約語の一覧(283語)はMySQL 8.0.44とMariaDB 10.11・12.3の実測にもとづき、Migratorの照合もこの3つのDBで確かめた。MySQL 8.4 LTSと9.xでは、どちらも確かめていない。
-- 検証コマンド: `composer qa`(CI の 4 セル)
+  - この版の節が、版の準備(T0b)・v0.8.0からの引き継ぎ(T0c)・MySQL 8.4 LTSと9.7 LTS(T3a)・リリースの道具(T4a)のタスクと、T1〜T5の補正を含む。
+  - v0.8.0の受け入れ記録(docs/acceptance/v0.8.0.md)の6章の引き継ぎ13項目を、次の表のとおりタスクに振り分けている。
+  - §0.1の作業ブランチの記述が実態(作業は`rewrite/v0`で行い、`main`は初期のコミットだけを持つ)と一致する。
+- 検証コマンド: `git diff HEAD --stat -- docs/12-implementation-plan.md`(T0の差分。並行のT0bの変更が作業ツリーにあるため、対象を限って確かめる。ほかのファイルの差分は、T0bの対象ファイル領域のものであることを照合する)、本書の中で`main`を検索し、作業ブランチを`main`とする記述が残っていないこと
 
-#### v0.9.0-T4: 公開(push・split・Packagist 登録・タグ付け)
+| 引き継ぎの項目(docs/acceptance/v0.8.0.mdの6章) | 担当 |
+|---|---|
+| 1. スターターから作ったプロジェクトの`composer qa`がテストを1件も実行しない | T0c(a) |
+| 2. スターターとsample-siteのphpunit.xml.distの設定が揃っていない | T0c(b) |
+| 3. CHANGELOG.mdの見出しの形が揃わない | T0b(Unreleasedを`## v0.8.0 — 題名`に閉じる)、T4a(リリースの前の検査で見出しの形を確かめる)、T4(リリースの準備のコミットで`## v0.9.0 — 題名`にする) |
+| 4. `TagVersionReleaseWorker`がmainへのpushの失敗を握りつぶす | T4a(標準のワーカーを外す) |
+| 5. `npm audit`の残り | T3(E2Eの依存を足した後に測り直す)、T5(記録) |
+| 6. `UsesTempDirectories`に専用のユニットテストが無い | T0c(c) |
+| 7. v0.8.0-T1の確かめていない点 | 1つ目(未登録のカテゴリを探索コマンドを通して確かめるテスト)はT0c(d)。2つ目(fixtureのblock.jsonを実際に変えた`discover:check`の失敗)は、同じ経路をDiscoverCommandTest::`testCheckFailsWhenOnlyBlockJsonChanged`が確かめているため、対応しない。3つ目(metadataHashが空白・改行とrender.php・index.jsの変更を検出しない)は、完了条件の違反ではないため対応しない。2つ目と3つ目は、T5が受け入れ記録に扱いを書く |
+| 8. CIのユニットテストのログにテストの名前が出ない | T2(`--testdox`) |
+| 9. CIと手元でアサーションの数が4件違う | T0c(e) |
+| 10. ルートのlockのPHPStanが2.2.2 | この版では上げないため対応しない。申し送りをT5が受け入れ記録に残す |
+| 11. スターターの`tmswp-kernel.php`の`new SimpleLogger()` | 記録だけにする(v0.8.0の判断のまま)。T5が受け入れ記録に残す |
+| 12. sample-siteのREADMEのサムネイルのURLの説明 | T2 |
+| 13. ACF Proでのsample-site・E2E・公開・85% | T1・T2・T4・T3(全体の閾値を85にする) |
 
-- 対象ファイル領域: GitHub 上のリポジトリ(monorepo と split 先の8リポジトリ)、.github/workflows/split.yml、packages/*/.github/workflows/ と starters/*/.github/workflows/(同期先でプルリクエストを自動で閉じるワークフロー。新設)、Packagist
+#### v0.9.0-T0b: 版の準備
+
+- 対象ファイル領域: packages/core/src/Kernel/Kernel.php(`Kernel::VERSION`)、packages/*/composer.json・starters/*/composer.json(`tmswp/*`の制約とbranch-alias)、examples/sample-site/composer.json(requireとpathリポジトリの`versions`)、examples/sample-site/README.md(版の記述)、packages/*/README.md(版の例)、docs/01・docs/02・docs/08・docs/11(版の例)、CHANGELOG.md、手元のnode_modules(コミットしない)
 - 完了条件:
-  - split 先の8リポジトリ(`tmstack-io/tmswp-core`、`tmswp-acf-bridge`、`tmswp-settings-page`、`tmswp-thumbnail`、`tmswp-ja-toolkit`、`tmswp-testing`、`tmswp-starter-theme`、`tmswp-starter-plugin`)が作成され、Issue と Wiki が無効で、説明文で monorepo へ案内している。アーカイブしていない(§1.16)。
-  - 各パッケージ・スターターのディレクトリに置いたワークフローが split で同期先へ複製され、同期先で動いて、送られたプルリクエストを自動で閉じ、monorepo へ案内する(同期先に試しのプルリクエストを送って確認した)。
-  - 送り先への書き込み権限だけを持つトークンを発行し、monorepo の Secrets に `SPLIT_ACCESS_TOKEN` として登録した。トークンは fine-grained PAT。対象は送り先の8リポジトリ(`tmstack-io/tmswp-*`)だけ。権限は Contents: Read and write と Workflows: Read and write だけ(同期先の `.github/workflows/` を更新するため Workflows も要る)。トークンの発行と登録は、ユーザーに確認したうえで行った。
-  - 各パッケージが Packagist に `tmswp/*` の名前で登録され、v0.9.0 のタグが付いている(§1.16)。main への push・split・Packagist 登録・タグ付けは、毎回ユーザーに確認したうえで、メンテナが `RELEASING.md` の手順で行った。
-  - リリースの版と `Kernel::VERSION`(packages/core/src/Kernel/Kernel.php)が一致することを、タグ付けの前に検査している(`RELEASING.md` の手順、または自動の検査。§1.6)。食い違うと、そのタグの tmswp/core を入れたサイトは boot 時の版の照合で起動しない。
-- 検証コマンド: `composer show tmswp/core --available`(Packagist から取得できる)、`gh repo view tmstack-io/tmswp-core --json hasIssuesEnabled,hasWikiEnabled,isArchived,description`(8リポジトリで実行)
+  - `Kernel::VERSION`が`0.9.0`、packages/*・starters/*・examples/sample-siteの`tmswp/*`の制約が`^0.9`、packages/*のbranch-aliasが`0.9.x-dev`、sample-siteのpathリポジトリの`versions`が`0.9.0`である。これらを1つのコミットで変えている(`Kernel::VERSION`と制約を別のコミットで変えると、間のコミットでStarter ProjectsとSample Site QAのジョブが落ちるため)。
+  - docs/01・02・08・11とpackages/*/README.md・examples/sample-site/README.mdの版の例が、上の版と一致する(`git grep -nE '\^0\.[1-8]\b|0\.[1-8]\.x-dev' -- docs/01-architecture.md docs/02-kernel.md docs/08-extensions.md docs/11-ai-docs.md 'packages/*/README.md' examples/sample-site/README.md`が一致なし)。
+  - CHANGELOG.mdの今のUnreleasedの節を`## v0.8.0 — ブロック・スターター・配布導線・AI向け文書`に閉じ、新しいUnreleasedの節を開いている。冒頭の説明から、`monorepo-builder`がCHANGELOGを書き換えるとする記述が無く、リリースの準備のコミットで見出しを手で`## vX.Y.Z — 題名`に改めると書いている。
+  - 手元のnode_modulesの`@wordpress/env`を、`npm ci`でpackage-lock.jsonの版(12.0.0)に揃えている(v0.8.0の後の時点では、手元のnode_modulesは11.17.0のまま)。
+- 検証コマンド: `composer monorepo:validate`、`composer qa:fast`、`grep '"version"' node_modules/@wordpress/env/package.json`(12.0.0)、`cd examples/sample-site && composer update 'tmswp/*' && composer wp:start && composer qa`
+
+#### v0.9.0-T0c: v0.8.0からの引き継ぎ
+
+- 対象ファイル領域: starters/*/phpunit.xml.dist、starters/*/tests/Unit/Hook/(新設。例のユニットテスト)、starters/*/bin/setup.php(tests/の名前空間の書き換えが要る場合)、starters/*/AGENTS.md、examples/sample-site/phpunit.xml.dist、docs/10 §7、docs/11 §5(スターターのAGENTS.mdの全文案)・§10.2(setup.phpの全文。setup.phpを変えた場合)、tests/Unit/StarterSetupTest.php、tools/ci/create-starter-project.sh(要る場合)、packages/testing/tests/Unit/UsesTempDirectoriesTest.php(新設)、packages/core/tests/Unit/Kernel/DiscoverCommandTest.php。(e)・(f)の原因が分かって直す場合は、直すファイルを対象ファイル領域に足してから着手する(§0.1)
+- 完了条件:
+  - (a) starters/theme・starters/pluginのphpunit.xml.distに`failOnEmptyTestSuite="true"`がある。各スターターのtests/Unit/Hook/に、Brain Monkeyだけで書いた例のユニットテストが1つずつある(`app/Hook/ThemeSetupHook.php`・`app/Hook/PluginSetupHook.php`を対象にし、`tmswp/testing`を使わない)。スターターからsetup.phpで作ったプロジェクトで、テストの名前空間がスラッグから作った名前空間に置き換わり、`composer test`が1件以上のテストを実行して成功する。
+  - (b) starters/*とexamples/sample-siteのphpunit.xml.distが、packages/*/phpunit.xml.distと同じ属性(`failOnRisky`・`failOnWarning`・`failOnDeprecation`・`failOnNotice`・`beStrictAboutOutputDuringTests`・`displayDetailsOnTestsThatTriggerDeprecations`・`displayDetailsOnTestsThatTriggerNotices`・`displayDetailsOnTestsThatTriggerWarnings`)を持つ。docs/10 §7とスターターのAGENTS.md(とdocs/11 §5の全文案)が、この設定と例のテストを述べている。
+  - (c) packages/testingの`UsesTempDirectories`に、専用のユニットテストがある(テストごとの親ディレクトリの下に作ること、探索結果ファイルを含めて片付けること)。
+  - (d) 未登録のブロックのカテゴリが、探索コマンド(DiscoverCommandTestの階層)を通してエラーになることをテストで確かめている。
+  - (e) CIと手元で、ユニットテストのアサーションの数が4件違う(CIは13848、手元は13852)原因を調べている。原因が分かれば直すか、違いが正当である理由を示す。分からなければ、調べた範囲をT5が受け入れ記録に書けるよう、タスクの報告に残す。
+  - (f) 実行ごとに、testingのパッケージ別のカバレッジが2行ほど揺れる件(run 40637361238で90.41%、run 40636713298で90.81%)の原因を調べている。扱いは(e)と同じ。
+- 検証コマンド: `composer qa:fast`、`bash tools/ci/create-starter-project.sh theme <ディレクトリ> <スラッグ> <表示名>`と`bash tools/ci/create-starter-project.sh plugin <ディレクトリ> <スラッグ> <表示名>`(スラッグと表示名を渡す4引数の形。2引数の形は`--no-scripts`で写すだけでsetup.phpを実行しないため、名前空間の書き換えを確かめられない。例はCIのStarter Projectsのジョブの`client-theme 'Client Theme'`・`shop-tools 'Shop Tools'`)で作ったテーマ・プラグインのそれぞれで、`composer qa`が成功し、テストを1件以上実行すること(`discover:check`は、CIのStarter Projectsのジョブと同じく、作ったプロジェクトを有効にしたwp-envに届く場所で実行する)、`cd examples/sample-site && composer qa`、`vendor/bin/phpunit -c phpunit.unit.xml.dist --filter 'UsesTempDirectoriesTest|DiscoverCommandTest'`
+
+#### v0.9.0-T1: 実物のACF Proでの確認
+
+- 対象ファイル領域: tools/(sample-siteをACF Proで起動する手順のスクリプト。道具にする場合に新設し、使い方はスクリプトの先頭のコメントに書く)。docs/10とexamples/sample-site/README.mdは、並列のT2が触るため、T1では触らない。確認作業で不具合が見つかった場合は、該当パッケージの修正タスクを追加する
+- 完了条件:
+  - ACF Proのzipのパスを環境変数`TMSWP_ACF_PRO_ZIP`で渡し、v0.6.0で手元確認したPro専用の型とPro限定機能のテストを含むacf-bridgeの統合テストが、実物のACF Proで通る(§1.2)。
+  - sample-siteを、同じ`TMSWP_ACF_PRO_ZIP`のACF Proで起動し、sample-siteのACFの機能(製品の詳細の価格と仕様の表示と、管理画面での値の変更の反映)が動く。並列のT2がsample-siteの専用のwp-env(ポート8882)をE2Eで使うため、T1はその環境を使わず、`examples/sample-site/.wp-env.override.json`も使わない。T1は、examples/sample-site/.wp-env.jsonを写した別の設定ファイルをリポジトリの外に作り(`plugins`は`[]`にし、Proを展開したディレクトリを`mappings`で`wp-content/plugins/advanced-custom-fields`に載せる。themes・mappingsのパスは絶対パスにする)、`wp-env --config`と別の`WP_ENV_HOME`と別のポートで、別のプロジェクトとして起動する(tools/acf-pro-integration.shと同じ隔離の方法)。examples/sample-site/のファイルは読むだけで変えない。zipの展開はリポジトリの外で行い、確認の後に、展開したProと作った設定ファイルと、そのwp-envの環境を消す。ライセンスキーは使わない。
+  - 手順を道具にするかは担当が判断する。道具にしない場合は、手順をタスクの報告に残し、T5が受け入れ記録に書く。
+  - 2つの確認の結果(ACF Proの版、テストの件数と終了コード、sample-siteで確かめた画面)を、T5が受け入れ記録に書けるよう、タスクの報告に残す。
+- 検証コマンド: `TMSWP_ACF_PRO_ZIP=<zipのパス> composer test:integration:acf-pro`、ACF Proで起動したsample-siteのwp-env上での表示確認
+
+#### v0.9.0-T2: E2Eの自動化と統合テストの網羅確認
+
+- 対象ファイル領域: ルートのpackage.json・package-lock.json(`@playwright/test`を版の完全一致で追加)、tests/E2E/(新設)、playwright.config(新設)、.github/workflows/qa.yml(Sample Site QAのE2Eの段、UnitとCoverageのユニットの段の`--testdox`)、ルートのcomposer.json(E2Eの実行のスクリプトを足す場合と、`test:coverage:unit`に`--testdox`を渡すためにスクリプトを変える場合)、docs/10 §1.1(package.jsonとcomposer.jsonの写し)・§4(E2Eの節。新設)・§5.1(qa.ymlの完全版)、packages/*/tests/Integration/(網羅の確認で足す統合テスト)、docs/acceptance/v0.9.0.md(新設。網羅の対応表の節)、examples/sample-site/README.md(サムネイルのURLの説明)
+- 完了条件:
+  - E2Eは`@playwright/test`でルートのtests/E2E/に置き、sample-site(専用のwp-env、ポート8882)に対して走らせる。webServerを使わず(wp-envの起動はcomposerのスクリプトで行う)、workersは1、CIでもretriesは0にする。`@wordpress/e2e-test-utils-playwright`は入れず、ログインとwp-envのcliの呼び出しは小さな補助で書く。
+  - E2Eが次の機能を確かめる(sample-siteのREADMEの「確認の方法」の1〜5に対応する)。
+    - フォーム: `/contact/`で入力・確認・送信ができ、送信の後に`/contact/thanks/`へ移る。必須の項目が空のときは確認画面へ進まずにエラーを出す。送ったメールが`sample_site_captured_mails`に記録される。
+    - 設定ページ: 管理画面の「設定 > Sample Site」で通知先と説明文を保存でき、説明文がトップページに出る。メールアドレスの形でない通知先は保存されずにエラーになる。
+    - サムネイル: トップページの製品のカードのアイキャッチのURLから画像が取得できる(生成の前のRESTのURLと、生成の後のキャッシュの静的なURLの両方)。署名を変えたURLは画像を返さない。
+    - 日本語対応: 日本語のタイトルの製品のスラッグが`product-<ID>`の形になる。フォームのフリガナのひらがな・半角カナが、確認画面で全角カタカナになる。
+    - ACF: 製品の詳細に価格と仕様(ACFの値)が出て、管理画面で値を変えると表示が変わる(CIは無料版のACF)。
+    - ブロック: `/blocks/`に`sample-site/latest-products`の製品の一覧が出る。固定ページの編集画面でカテゴリ「Sample Site」からこのブロックを挿入できる。製品の編集画面では、`allowedBlocks()`で許したブロックだけを使える。
+  - E2Eが失敗を検出できることを、手元で期待値を一時的に変えて失敗させて確かめている。
+  - CIでは、Sample Site QAのジョブ(1セル)にE2Eの段を足す。ブラウザはキャッシュしない。失敗したときだけtraceを成果物として保存する。
+  - CIのUnitのジョブとCoverageのユニットの段が`--testdox`で実行し、ログにテストの名前が出る。
+  - 網羅の確認: docs/00〜10の「受け入れ基準」の節のチェックリストの項目と、本書の各版(v0.1.0〜v0.9.0)の受け入れ条件を、根拠のテストの名前(クラス::メソッド)に対応させた表を、docs/acceptance/v0.9.0.mdの新しい節に作る。WordPressに依存する項目の根拠は、統合テストかE2Eを必須とする(ユニットテストだけを根拠にしない)。根拠のテストが無い項目は、統合テストかE2Eを足すか、テストでない根拠(文書の確認・静的な検査等)をその理由とともに書く。表の行の数と、数えた受け入れ基準の項目の数が一致する(数え方を節に書く)。
+  - examples/sample-site/README.mdの確認の方法の1が、サムネイルのURLは生成の前はRESTのURL(`/wp-json/tmswp/v1/thumb?...`)、生成の後はキャッシュの静的なURL(`/wp-content/uploads/tmswp-thumb/...`)になると述べている。
+- 検証コマンド: E2Eの実行コマンド(手元とCI。sample-siteのwp-envを起動した状態)、`composer test:integration`、`composer qa:fast`
+
+#### v0.9.0-T3a: MySQL 8.4 LTSと9.7 LTS
+
+- 対象ファイル領域: .github/workflows/qa.yml(MySQLのジョブ。新設)、packages/core/src/Model/Identifier.php(予約語)、packages/core/src/Model/Migrator.php(MySQL 8.4 LTS・9.7 LTSとの差異への対応が要る場合)、packages/core/tests/Unit/Model/(予約語の追加のテスト)、packages/core/tests/Integration/(予約語の照合と、全型の作成と再適用の照合の統合テスト。新設)、phpunit.integration.xml.dist(新しいテストを分けて実行する場合)、docs/06 §2(予約語の集合の根拠)・§5(Migratorの照合を確かめたDBの版)、docs/10 §4(統合層のDBの構成)・§5.1(qa.ymlの完全版)
+- 完了条件:
+  - qa.ymlに、servicesでMySQL 8.4 LTSと9.7 LTSのコンテナを立て、wp-envのcliから`WP_TESTS_DB_HOST`(要れば`WP_TESTS_DB_USER`・`WP_TESTS_DB_PASSWORD`・`WP_TESTS_DB_NAME`。tests/wp-tests-config.php)で接続して統合テストを走らせるジョブ(2セル)がある。MySQLのイメージは版のタグで指定し、`latest`を使わない。PHPとWordPressの版は1つに固定し、選んだ版をdocs/10に書く。接続先がそのセルのMySQLの版であることを、ジョブの中で`SELECT VERSION()`等で確かめる(wp-envのMariaDBに接続して成功することを防ぐため)。
+  - wp-env 12はDBをMariaDBに固定するため、`http://wordpress/`を叩くテストはこのジョブでも開発用サイトのMariaDBを使う。この制約をdocs/10に書く。
+  - Identifier.phpの予約語に、MySQL 8.4のqualify・tablesampleと、9.7のexternal・libraryがある。docs/06 §2の予約語の集合の根拠が、MySQL 8.4 LTSと9.7 LTSを含む。
+  - DBの`information_schema.KEYWORDS`の全語(`WORD`の列。MariaDBのこの表には`RESERVED`の列が無いため、`RESERVED`で絞らない)で、クォートしないカラム名での作成を試し、構文エラーになる語がすべて`TableDefinition`の宣言の時点で拒否されることを確かめる統合テストがある。MySQLの2セルとwp-envのMariaDBのすべてで通る。
+  - v0.5.0のレビューで行った全型の作成と再適用の照合(組込の全ての列の型と、§2で受け付けるrawColumnの型を作成し、再適用で差分が残らない)が統合テストとしてあり、MySQLの2セルとwp-envのMariaDBのすべてで通る。docs/06 §5の照合を確かめたDBの版が、MySQL 8.4 LTSと9.7 LTSを含む。
+  - 違いが見つかった場合は、このタスクでIdentifier.phpかMigrator.phpを直す(この2つを超える変更が要る場合は、対象ファイル領域を見直してから着手する。§0.1)。
+- 検証コマンド: `composer test:unit`、`composer test:integration`、CIのMySQLのジョブ(2セル)の成功
+
+#### v0.9.0-T4a: リリースの道具
+
+- 対象ファイル領域: monorepo-builder.php、tools/release/(新設。2つのワーカー)、tests/Unit/(ワーカーのユニットテスト。新設)、ルートのcomposer.json(tools/release/のオートロード)、.github/workflows/split.yml、.github/split/close-pull-request.yml(新設)、packages/*/.gitattributes・starters/*/.gitattributes(8つ)、docs/RELEASING.md、docs/01 §4.3(monorepo-builderの利用範囲)・§4.4(split.ymlの写し)・§4.5(ブランチ・タグ運用とリリース手順)、docs/10 §1.1(composer.jsonの写し)・§5.2(split.ymlの完全版)・§6(monorepo-builderの設定・制約の同期・リリース手順)、AGENTS.md(リリースの節)。外部への書き込み(push・タグ・GitHubの設定)は行わない
+- 完了条件:
+  - monorepo-builder.phpから標準のリリースのワーカー7つ(SetCurrentMutualDependencies・AddTagToChangelog・TagVersion・PushTag・SetNextMutualDependencies・UpdateBranchAlias・PushNextDev)がすべて外れ、tools/release/の2つのワーカーだけが登録されている。リリースの後に次の版(`^0.10`等)へ自動で上げない。
+  - 1つ目のワーカー(リリースの前の検査)は、次のどれか1つでも満たさなければ例外で止まる: 今のブランチが`main`である、`origin/main`と同じコミットである、作業ツリーが空である、そのタグが手元にも`origin`にも無い、`Kernel::VERSION`・packages/*とstarters/*の`tmswp/*`の制約・branch-alias・sample-siteのpathリポジトリの`versions`とrequireがタグの版と一致する、CHANGELOG.mdに`## vX.Y.Z — 題名`の見出しがある。
+  - 2つ目のワーカーは、注釈付きのタグを作り、そのタグだけをpushする(`git push --tags`のように手元のすべてのタグを送らない)。gitのコマンドの失敗を握りつぶさず、例外で止まる。mainへのcommit・pushは行わない(mainへの反映はPR(`rewrite/v0`→`main`)のマージで行う)。
+  - 2つのワーカーのユニットテストが、一時ディレクトリのgitのリポジトリ(originは手元のbareのリポジトリ)で、成功と、検査の各項目の失敗と、pushの失敗を確かめる。
+  - split.ymlで、`SPLIT_ACCESS_TOKEN`が空のとき、mainとタグのpushのジョブが失敗する(成功で終わる今の空実行の段を残さない)。matrixの同期先のリポジトリごとに`concurrency`があり、同じ同期先への同期が並行して走らない(先の実行を取り消さない)。
+  - 同期先でプルリクエストを自動で閉じてmonorepoへ案内するワークフローの正本が`.github/split/close-pull-request.yml`にあり、split.ymlが同期の前に各パッケージの`.github/workflows/`へ写す(monorepoのpackages/*・starters/*には置かない)。このワークフローは`pull_request_target`で動き、プルリクエストのコードをcheckoutせず、権限は`pull-requests: write`だけにする。外部アクションを使う場合はSHAで固定する。閉じるときの文面は英語だけとし(ユーザーの決定)、その文面を正本に入れる。
+  - packages/*・starters/*の8つの`.gitattributes`に`/.github export-ignore`がある。8つのそれぞれについて、パッケージのディレクトリを写して正本のワークフローを`.github/workflows/close-pull-request.yml`に置いた、split相当の一時のgitのツリーを作り、その`git archive HEAD`(またはそのツリーをpathリポジトリにしてcreate-projectで作った先)に`.github`が入らないことを確かめている。対照として、一時のツリーの`.gitattributes`から`/.github export-ignore`を外すと、archiveに`.github/workflows/close-pull-request.yml`が入ることも確かめている(除外の検査が空振りしないことの確認)。
+  - docs/RELEASING.md・docs/01 §4.3〜§4.5・docs/10 §5.2・§6・AGENTS.mdのリリースの節が、新しいワーカーとsplit.yml・mainへの反映の方法(PRのマージ)と一致する。
+- 検証コマンド: `composer qa:fast`、`vendor/bin/monorepo-builder release v0.9.0 --dry-run`(登録したワーカーだけが表示され、外部への書き込みが無い)、`grep -nE 'SetCurrentMutualDependencies|AddTagToChangelog|TagVersion|PushTag|SetNextMutualDependencies|UpdateBranchAlias|PushNextDev' monorepo-builder.php`(一致なし)、8つのsplit相当の一時のgitのツリー(正本のワークフローを置いたもの)での`git archive HEAD | tar -t | grep '^\.github'`(一致なし)と、`/.github export-ignore`を外した対照での同じコマンド(一致あり)
+
+#### v0.9.0-T3: 全マトリクスのqaとcritical / highの解消確認
+
+- 対象ファイル領域: composer.json(`test:coverage:check`の全体の閾値)、docs/10 §1.1(composer.jsonの写し)。ほかは確認作業で、不具合が見つかった場合は、該当パッケージの修正タスクを追加する
+- 完了条件:
+  - 既知のcritical / highの不具合がすべて解消している。
+  - composer.jsonの`test:coverage:check`の全体の閾値を85にしている(§0.7。タグ`v0.9.0`に入れるため、公開の前のこのタスクで上げる)。docs/10 §1.1の写しも同じ値にしている。
+  - 閾値を85にしたコミットで、CIの全ジョブが成功する。全ジョブは、Coding Standards・Static Analysis・Monorepo Validate・Rules Code Examples・Unit(2セル)・Integration(PHP 8.3と8.5 × WordPress 7.0と最新版の4セル)・Coverage・Sample Site QA(T2のE2Eを含む1セル)・Starter Projects・T3aのMySQLのジョブ(MySQL 8.4 LTSと9.7 LTSの2セル)である。Coverageのジョブの合算カバレッジが85%以上である(§0.7)。
+  - Modelの予約語の一覧(packages/core/src/Model/Identifier.php)と、MigratorのdbDeltaの後の実際の構造の照合を、MySQL 8.4 LTSと9.7 LTSでも確かめている(T3aのジョブの成功で確かめる)。v0.5.0の時点では、予約語の一覧(283語)はMySQL 8.0.44とMariaDB 10.11・12.3の実測にもとづき、Migratorの照合もこの3つのDBで確かめた。
+  - E2Eの依存を足した後に、ルート・examples/sample-site・starters/themeの`npm audit`を測り直し、件数・重大度・経路を、T5が受け入れ記録に書けるよう、タスクの報告に残す(v0.8.0の時点の残りは12件。docs/acceptance/v0.8.0.mdの6章の5)。
+- 検証コマンド: `gh run view <run id>`(全ジョブの成功と、Coverageの合算カバレッジの値)、`npm audit`(ルート・examples/sample-site・starters/theme)
+
+#### v0.9.0-T4: 公開(リポジトリの作成・PRのマージ・split・Packagistへの登録・タグ付け)
+
+- 対象ファイル領域: GitHub上のリポジトリ(monorepoと同期先の8リポジトリ)とmonorepoのSecrets、Packagist、CHANGELOG.md(リリースの準備のコミット)、.github/split/close-pull-request.yml(閉じるときの文面を直す場合)
+- 完了条件:
+  - 次の順で行っている。各段は前の段を前提にする。
+    1. 同期先の8リポジトリ(`tmstack-io/tmswp-core`、`tmswp-acf-bridge`、`tmswp-settings-page`、`tmswp-thumbnail`、`tmswp-ja-toolkit`、`tmswp-testing`、`tmswp-starter-theme`、`tmswp-starter-plugin`)を作成し、IssueとWikiを無効にし、説明文でmonorepoへ案内する。アーカイブしない(§1.16)。
+    2. 送り先への書き込み権限だけを持つトークンを発行する。トークンはfine-grained PAT。対象は同期先の8リポジトリ(`tmstack-io/tmswp-*`)だけ。権限はContents: Read and writeとWorkflows: Read and writeだけ(同期先の`.github/workflows/`を更新するためWorkflowsも要る)。
+    3. トークンを、monorepoのSecretsに`SPLIT_ACCESS_TOKEN`として登録する(T4aの後のsplit.ymlは、トークンが空だとmainのpushで失敗するため、PRのマージの前に登録する)。
+    4. 同期先でプルリクエストを閉じるときの文面が、`.github/split/close-pull-request.yml`の正本のとおりでよいかをユーザーに確かめる。直す場合は、正本を直したコミットを`rewrite/v0`に置く。そのうえで、CHANGELOG.mdのUnreleasedを`## v0.9.0 — 導入できる版`に改めるリリースの準備のコミットを`rewrite/v0`に置き、PR #1(`rewrite/v0`→`main`)をマージする。マージの方法(マージコミット・squash等)もユーザーに確かめる。mainへのpushでsplit.ymlが8リポジトリへ同期し、各リポジトリに`.github/workflows/close-pull-request.yml`が入る。
+    5. 同期先に試しのプルリクエストを送り、自動で閉じられ、monorepoへの案内が付くことを確かめる。mainへの反映の後に文面を変えることになった場合は、正本を直したコミットを`rewrite/v0`に置き、ユーザーの確認を経たPR(`rewrite/v0`→`main`)のマージでmainへ反映し、8つの同期先の`.github/workflows/close-pull-request.yml`が新しい文面に同期されたことを確かめてから、試しのプルリクエストを送る。
+    6. 8パッケージをPackagistに`tmswp/*`の名前で登録し、GitHubのwebhookで自動で更新されるようにする。
+    7. `vendor/bin/monorepo-builder release v0.9.0`で、リリースの前の検査を通したうえで注釈付きのタグ`v0.9.0`を作ってpushし、split.ymlがタグを8リポジトリへ同期し、Packagistに0.9.0が出る。
+  - リポジトリの作成・トークンの発行と登録・PRのマージ・試しのプルリクエスト・Packagistへの登録・タグ付けは、それぞれの段の前にユーザーに確認している。
+  - リリースの版と`Kernel::VERSION`の一致は、T4aのリリースの前の検査で確かめている(食い違うと、そのタグのtmswp/coreを入れたサイトはbootの時の版の照合で起動しない。§1.6)。
+- 検証コマンド: `composer show tmswp/core --available`(Packagistから0.9.0を取得できる)、`gh repo view tmstack-io/<リポジトリ> --json hasIssuesEnabled,hasWikiEnabled,isArchived,description`(8リポジトリで実行)、`gh pr view <試しのPRの番号> --repo tmstack-io/<リポジトリ> --json state`(CLOSED)
 
 #### v0.9.0-T5: 利用者のプロジェクトからの導入確認と受け入れ記録
 
 - 対象ファイル領域: docs/acceptance/v0.9.0.md
-- 完了条件: 空のテーマから `composer require tmswp/core` 等で導入して起動できることを確認し、導入できる版の 5 条件と計画全体の完了条件 3 つ(§1.17)の結果を記録している。
-- 検証コマンド: 空のテーマで `composer require tmswp/core tmswp/acf-bridge tmswp/settings-page tmswp/thumbnail tmswp/ja-toolkit`、wp-env 上での起動確認
+- 完了条件:
+  - 空のテーマから、Packagistの`composer require tmswp/core`等で導入して起動できる。
+  - Packagist経由の`composer create-project tmswp/starter-theme`と`composer create-project tmswp/starter-plugin`でプロジェクトを作り、setup.phpが動き、作ったプロジェクトの`composer qa`が通り、wp-env上で起動する。
+  - 導入できる版の5条件と計画全体の完了条件3つ(§1.17)の結果と、T0c(e)・(f)・T1・T3の報告の内容と、v0.8.0からの引き継ぎのうち対応しない項目(T0の表の7の2つ目・3つ目、10、11)の扱いを、受け入れ記録に書いている。
+  - 受け入れ記録のコミットは`rewrite/v0`に置き、mainへの反映は、ユーザーの確認を経てPRのマージで行う。
+- 検証コマンド: 空のテーマで`composer require tmswp/core tmswp/acf-bridge tmswp/settings-page tmswp/thumbnail tmswp/ja-toolkit`、`composer create-project tmswp/starter-theme <ディレクトリ>`と`composer create-project tmswp/starter-plugin <ディレクトリ>`、wp-env上での起動確認、`composer test:coverage`
 
 ### 並列化
 
-- 順序: {T1 ∥ T2} → T3 → T4 → T5
-- T1(確認作業)と T2(E2E と qa.yml)はファイル領域が重ならない。
+- 順序: {T0 ∥ T0b} → T0c → {T1 ∥ T2} → T3a → T4a → T3 → T4 → T5
+- T0(docs/12だけ)とT0b(docs/12を触らない)は、ファイル領域が重ならない。
+- T0cはT0bの後にする。docs/11(T0bの版の例と、T0cの§5・§10.2)と、スターターの設定(T0bのstarters/*/composer.jsonと、T0cのstarters/*のphpunit・テスト・setup.php)が、同じファイルか同じプロジェクトの検証に関わる。
+- T1とT2は、ファイル領域が重ならない。T1はtools/のスクリプトだけを足し、docs/10とexamples/sample-site/README.mdはT2だけが触る。実行の環境も重ならない。T2はsample-siteの専用のwp-env(ポート8882)を使い、T1は別の設定ファイル・別の`WP_ENV_HOME`・別のポートのwp-envを使う(T2のCIのACFは無料版のまま)。
+- docs/10は、T0c(§7)・T2(§1.1・§4・§5.1)・T3a(§4・§5.1)・T4a(§1.1・§5.2・§6)・T3(§1.1)が触る。.github/workflows/qa.ymlは、T2(E2Eと`--testdox`)とT3a(MySQLのジョブ)が触る(T4aが触るsplit.ymlは別のファイル)。ルートのcomposer.jsonは、T2(E2Eと`--testdox`のスクリプトを変える場合)・T4a(オートロード)・T3(閾値)が触る。このため、T0c → T2 → T3a → T4a → T3を逐次にする(§0.4)。
+- T3は、T2とT3aで足したジョブを含むCIの全ジョブと、T4aで変えたリリースの道具を含む、公開の直前のコミットで確かめるため、T4aの後にする。T4はT4aの道具とT3の確認を前提にし、T5はT4の公開を前提にする。
 
 ### 受け入れ条件
 
-1. 導入できる版の 5 条件(既知の critical / high の全解消、全マトリクスの qa、実物の ACF Pro での確認、想定用途の機能の sample-site での動作、合算カバレッジ 85% 以上)を満たす(§1.17)。
-2. 計画全体の完了条件 3 つ(qa、sample-site が実際の WordPress で動く、`composer require` で導入できる)を満たす(§1.17)。
-3. 1.0.0 は導入先での安定運用を確認してから出す(この版では出さない)。
-4. unit と integration の合算カバレッジが §0.7 の表のこの版の閾値(85%)以上である(CI の `coverage` ジョブ)。composer.json の `test:coverage:check` の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。
+1. 導入できる版の5条件(既知のcritical / highの全解消、全マトリクスのqa、実物のACF Proでの確認、想定用途の機能のsample-siteでの動作、合算カバレッジ85%以上)を満たす(§1.17)。全マトリクスのqaは、T3のCIの全ジョブ(MySQL 8.4 LTSと9.7 LTSのジョブとE2Eを含む)の成功で確かめる。
+2. 計画全体の完了条件3つ(qa、sample-siteが実際のWordPressで動く、`composer require`で導入できる)を満たす(§1.17)。
+3. 1.0.0は導入先での安定運用を確認してから出す(この版では出さない)。
+4. unitとintegrationの合算カバレッジが§0.7の表のこの版の閾値(85%)以上である(CIの`coverage`ジョブ)。composer.jsonの`test:coverage:check`の閾値は、この版の値と完了済みの版の値のうち最大のものになっている(§0.7)。
+5. 想定用途の機能(フォーム、設定ページ、サムネイル、日本語対応、ACF、ブロック)のE2EがCIのSample Site QAのジョブで通り、docs/00〜10の受け入れ基準と各版の受け入れ条件の網羅の対応表がdocs/acceptance/v0.9.0.mdにある。
+6. スターターから作ったプロジェクトの`composer qa`が1件以上のユニットテストを実行し、Packagist経由の`composer create-project`でスターターからプロジェクトを作れる。
+7. タグ`v0.9.0`は、リリースの前の検査を通したうえで、注釈付きのタグとしてそのタグだけがpushされている。mainへの反映はPR #1のマージで行い、同期先の8リポジトリは読み取り専用の設定(IssueとWikiが無効、説明文での案内、プルリクエストの自動のクローズ)になっている。
