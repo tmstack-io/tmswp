@@ -549,23 +549,14 @@ final class FormIntegrationTest extends IntegrationTestCase
      */
     public function testResponseOfPageWithFormHasNoCacheHeadersAndDoNotCachePage(): void
     {
-        $body = file_get_contents('http://wordpress/wp-content/plugins/tmswp/tests/fixtures/http/form-page.php');
+        $response = wp_remote_get('http://wordpress/wp-content/plugins/tmswp/tests/fixtures/http/form-page.php');
 
-        self::assertIsString($body);
-        self::assertStringContainsString('name="' . Form::FIELD_SUBMIT_TOKEN . '"', $body);
-
-        $headers = [];
-
-        foreach ($http_response_header as $line) {
-            if (str_contains($line, ':')) {
-                [$name, $value] = explode(':', $line, 2);
-                $headers[strtolower($name)] = trim($value);
-            }
-        }
-
-        self::assertSame('no-cache, must-revalidate, max-age=0, no-store, private', $headers['cache-control'] ?? null);
-        self::assertSame('Wed, 11 Jan 1984 05:00:00 GMT', $headers['expires'] ?? null);
-        self::assertSame('true', $headers['x-tmswp-donotcachepage'] ?? null);
+        $this->assertNotWPError($response);
+        self::assertSame(200, wp_remote_retrieve_response_code($response));
+        self::assertStringContainsString('name="' . Form::FIELD_SUBMIT_TOKEN . '"', wp_remote_retrieve_body($response));
+        self::assertSame('no-cache, must-revalidate, max-age=0, no-store, private', wp_remote_retrieve_header($response, 'cache-control'));
+        self::assertSame('Wed, 11 Jan 1984 05:00:00 GMT', wp_remote_retrieve_header($response, 'expires'));
+        self::assertSame('true', wp_remote_retrieve_header($response, 'x-tmswp-donotcachepage'));
     }
 
     private function contactDefinition(): FormDefinition

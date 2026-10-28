@@ -151,11 +151,15 @@ final class StarterSetupTest extends UnitTestCase
 
     /**
      * 標準入力が端末のときは、スラッグと表示名を尋ね、空の入力は示した既定値にする。
+     *
+     * setup.phpが端末かを判定するのは標準入力(stream_isatty(STDIN))だけなので、端末(pty)にするのは標準入力だけにし、
+     * 標準出力・標準エラーはパイプで受け取る。Linuxでは子プロセスの終了後にptyのmaster側を読むとEIOになり、
+     * freadがE_NOTICEを出すため、出力をptyから読まない。
      */
     public function testTerminalAsksForTheValuesAndAcceptsTheDefaults(): void
     {
         $project = $this->copyStarter('plugin', 'acme-tools');
-        $process = proc_open([PHP_BINARY, $project . '/bin/setup.php'], [0 => ['pty'], 1 => ['pty'], 2 => ['pty']], $pipes, $project, $this->environment([]));
+        $process = proc_open([PHP_BINARY, $project . '/bin/setup.php'], [0 => ['pty'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $project, $this->environment([]));
 
         if (!\is_resource($process)) {
             self::fail('setup.phpを端末で起動できません。');
@@ -163,18 +167,13 @@ final class StarterSetupTest extends UnitTestCase
 
         // スラッグは既定値(ディレクトリ名)、表示名は入力した値にする
         fwrite($pipes[0], "\nAcme Toolkit\n");
-        stream_set_blocking($pipes[1], false);
-        $output = '';
-
-        for ($i = 0; $i < 500 && proc_get_status($process)['running']; ++$i) {
-            $output .= (string) fread($pipes[1], 8192);
-            usleep(10_000);
-        }
-
-        $output .= (string) fread($pipes[1], 8192);
+        $output = (string) stream_get_contents($pipes[1]);
+        $errorOutput = (string) stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
         $code = proc_close($process);
 
-        self::assertSame(0, $code, $output);
+        self::assertSame(0, $code, $output . $errorOutput);
         self::assertStringContainsString('Project slug [acme-tools]: ', $output);
         self::assertStringContainsString('Project name [Acme Tools]: ', $output);
         self::assertStringContainsString('Plugin Name: Acme Toolkit', $this->read($project . '/acme-tools.php'));

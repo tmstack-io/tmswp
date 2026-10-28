@@ -8,8 +8,10 @@
          failOnRisky="true"
          failOnWarning="true"
          failOnDeprecation="true"
+         failOnNotice="true"
          beStrictAboutOutputDuringTests="true"
          displayDetailsOnTestsThatTriggerDeprecations="true"
+         displayDetailsOnTestsThatTriggerNotices="true"
          displayDetailsOnTestsThatTriggerWarnings="true">
     <testsuites>
         <testsuite name="acf-bridge">

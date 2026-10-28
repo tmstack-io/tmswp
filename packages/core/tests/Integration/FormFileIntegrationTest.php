@@ -116,9 +116,10 @@ final class FormFileIntegrationTest extends IntegrationTestCase
         }
 
         // 一時保管の場所は、Web から直接取得できない(.htaccess による拒否)
-        file_get_contents('http://wordpress/wp-content/uploads/tmswp-form-tmp/index.html', false, stream_context_create(['http' => ['ignore_errors' => true]]));
+        $response = wp_remote_get('http://wordpress/wp-content/uploads/tmswp-form-tmp/index.html');
 
-        self::assertStringContainsString(' 403 ', $http_response_header[0] ?? '');
+        $this->assertNotWPError($response);
+        self::assertSame(403, wp_remote_retrieve_response_code($response));
     }
 
     /** 完了条件: onComplete が消費しなかった一時ファイルは、完了の後に消える(確認画面の有無の両方) */
