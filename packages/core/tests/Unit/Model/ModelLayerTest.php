@@ -183,6 +183,9 @@ SQL, $definition->toSql($connection));
         $wpdb = WpdbTestDouble::create();
         $connection = new Connection($wpdb);
         Model::useConnection($connection);
+        // 挿入が作る行のID(insert_id)
+        $wpdb->queueInsertId(1);
+        $wpdb->queueInsertId(2);
 
         self::assertSame(1, TestContactModel::insert(['email' => 'a@example.test', 'active' => true]));
         self::assertSame([
@@ -191,6 +194,7 @@ SQL, $definition->toSql($connection));
             'format' => ['%s', '%d'],
         ], $wpdb->insertCalls()[0]);
 
+        $wpdb->queueAffectedRows(1);
         self::assertSame(2, TestCounterModel::insert([]));
         self::assertSame('INSERT INTO wp_counters () VALUES ()', $wpdb->queries()[0]);
 
@@ -206,6 +210,8 @@ SQL, $definition->toSql($connection));
 
         self::assertInstanceOf(TestContactRow::class, $found);
         self::assertSame('b@example.test', $found->email);
+        $wpdb->queueAffectedRows(1);
+        $wpdb->queueAffectedRows(1);
         self::assertSame(1, TestContactModel::update(['email' => 'c@example.test'], 10));
         self::assertSame(1, TestContactModel::delete(10));
         self::assertSame('UPDATE wp_contacts SET email = \'c@example.test\' WHERE id = 10', $wpdb->queries()[2]);
@@ -256,6 +262,8 @@ SQL, $definition->toSql($connection));
         $wpdb = WpdbTestDouble::create();
         $connection = new Connection($wpdb);
         $wpdb->failNextWrite("Duplicate entry 'a@example.test' for key 'email_unique'");
+        // 失敗した挿入は行を作らないため、このIDは次の成功した挿入が使う
+        $wpdb->queueInsertId(1);
 
         try {
             $connection->insert('contacts', ['email' => 'a@example.test']);
@@ -277,6 +285,10 @@ SQL, $definition->toSql($connection));
         $wpdb = WpdbTestDouble::create();
         $connection = new Connection($wpdb);
         $createdAt = new DateTimeImmutable('2026-06-13 09:10:11', new DateTimeZone('Asia/Tokyo'));
+        // insert()のIDと、update()・delete()が影響する行の数(代役は行を持たないため、テストが決める)
+        $wpdb->queueInsertId(1);
+        $wpdb->queueAffectedRows(1);
+        $wpdb->queueAffectedRows(1);
 
         $connection->insert('contacts', [
             'email' => new TestEmail('a@example.test'),
@@ -450,6 +462,7 @@ SQL, $definition->toSql($connection));
     public function testQueryBuilderUpdateAssignsNull(): void
     {
         $wpdb = WpdbTestDouble::create();
+        $wpdb->queueAffectedRows(1);
 
         $affected = (new QueryBuilder(new Connection($wpdb), 'contacts'))
             ->where('id', 10)
@@ -797,10 +810,15 @@ SQL, $definition->toSql($connection));
         $wpdb = WpdbTestDouble::create();
         Model::useConnection(new Connection($wpdb));
 
+        // 影響した行の数は、wpdbが返した数をそのまま返す
+        foreach ([1, 3, 0, 2] as $rows) {
+            $wpdb->queueAffectedRows($rows);
+        }
+
         self::assertSame(1, TestPlainModel::update(['email' => 'new@example.test'], 7));
-        self::assertSame(1, TestPlainModel::update(['deleted_at' => null], ['email' => 'old@example.test', 'deleted_at' => null]));
-        self::assertSame(1, TestPlainModel::delete(7));
-        self::assertSame(1, TestPlainModel::delete(['email' => 'old@example.test']));
+        self::assertSame(3, TestPlainModel::update(['deleted_at' => null], ['email' => 'old@example.test', 'deleted_at' => null]));
+        self::assertSame(0, TestPlainModel::delete(7));
+        self::assertSame(2, TestPlainModel::delete(['email' => 'old@example.test']));
 
         self::assertSame([
             "UPDATE wp_plain_rows SET email = 'new@example.test' WHERE id = 7",

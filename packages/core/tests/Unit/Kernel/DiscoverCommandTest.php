@@ -6,6 +6,7 @@ namespace TMSWP\Core\Tests\Unit\Kernel;
 
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use RuntimeException;
+use TMSWP\Core\Block\BlockCategory;
 use TMSWP\Core\Kernel\DiscoverCommand;
 use TMSWP\Core\Kernel\Discovery;
 use TMSWP\Core\Kernel\DiscoveryFile;
@@ -106,6 +107,31 @@ final class DiscoverCommandTest extends UnitTestCase
 
         self::assertStringContainsString("block name 'example/card' is declared by both", $error);
         self::assertFileDoesNotExist($config->discoveryFile());
+    }
+
+    /**
+     * 未登録のカテゴリのblock.jsonは、探索コマンドのエラー(WP_CLI::error()による非0の終了)になり、生成でも照合でも
+     * どのKernelのファイルも書かない。カテゴリは、そのKernelのblockCategoriesだけで判定する(別のKernelが登録する
+     * カテゴリも、そのKernelのブロックには使えない)。
+     */
+    #[RunInSeparateProcess]
+    public function testItReportsUnregisteredBlockCategoryWithoutWritingFiles(): void
+    {
+        $this->loadWpCliDouble();
+        $alpha = $this->bootKernel('Alpha', blockCategories: [new BlockCategory('alpha-blocks', 'Alpha blocks')]);
+        $beta = $this->bootKernel('Beta');
+        // 走査はKernelの登録の順に行うため、先に走査するKernel(Alpha)の正しいブロックだけでは書かないことも確かめる
+        $this->writeFile($alpha->rootDir() . '/build/blocks/hero/block.json', '{"name": "example/hero", "category": "alpha-blocks"}');
+        $blockJson = $beta->rootDir() . '/build/blocks/card/block.json';
+        $this->writeFile($blockJson, '{"name": "example/card", "category": "alpha-blocks"}');
+        $expected = "block 'example/card' in {$blockJson} uses the unregistered category 'alpha-blocks'; use one of WordPress's categories (text, media, design, widgets, theme, embed, reusable) or register it with the blockCategories of KernelConfig; fix the block source and rebuild it, then run 'wp tmswp discover'";
+
+        self::assertSame($expected, $this->runFailing(new DiscoverCommand(), []));
+        self::assertSame($expected, $this->runFailing(new DiscoverCommand(), ['check' => true]));
+        // WP_CLI::error()の前に、成功や書き込みの行を出していない
+        self::assertSame([['error', $expected], ['error', $expected]], $GLOBALS['tmswp_test_wp_cli']);
+        self::assertFileDoesNotExist($alpha->discoveryFile());
+        self::assertFileDoesNotExist($beta->discoveryFile());
     }
 
     #[RunInSeparateProcess]
@@ -248,12 +274,13 @@ PHP);
         require $file;
     }
 
-    private function bootKernel(string $suffix, bool $debug = true): KernelConfig
+    /** @param list<BlockCategory> $blockCategories */
+    private function bootKernel(string $suffix, bool $debug = true, array $blockCategories = []): KernelConfig
     {
         $root = $this->createTempDirectory('discover-command-' . strtolower($suffix));
         self::assertTrue(mkdir($root . '/app'));
         $namespace = 'Example\\Tests\\DiscoverCommand' . $suffix . uniqid();
-        $config = KernelConfig::theme($root . '/app', $namespace, $debug);
+        $config = KernelConfig::theme($root . '/app', $namespace, $debug, blockCategories: $blockCategories);
         $this->writeHookClass($config, 'ProbeHook', 'tmswp_probe_hook_' . strtolower($suffix));
 
         spl_autoload_register(static function (string $class) use ($namespace, $root): void {

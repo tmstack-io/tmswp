@@ -1639,6 +1639,8 @@ vendor/bin/monorepo-builder release vX.Y.Z             # mainとタグをpushす
 3. アプリの `app/Acf/*Fields.php`(`@generated`、DR-06)は解析対象に**含める**(生成コードも型検査を通す。CI でのドリフト検知は acf-bridge 文書の管轄)。
 4. テーマテンプレート(`*.php`のうちWPテンプレート階層ファイルと`template-parts/`)はphp-cs-fixer / PHPStan(型検査)の対象に含めない(要件3の絶対原則)。テンプレートの前処理クラス(`app/Page/`)は`app/`の一部として解析対象に含める(§3A)。スターターのphp-cs-fixerの設定は、monorepoと同じ規則で、テンプレートを除いたPHPを対象にする(§3.2)。
 5. スターターの`composer qa`は`lint` → `analyse` → `discover:check` → `test`の順とする。`discover:check`(`wp tmswp discover --check`)は探索結果ファイルの照合で、WP-CLIがそのテーマ・プラグインを有効にしたサイトに届く場所で実行する。
+6. スターターとサンプルサイト(`examples/sample-site`)の`phpunit.xml.dist`は、packages/*の`phpunit.xml.dist`(§4.3)と同じく`failOnRisky`・`failOnWarning`・`failOnDeprecation`・`failOnNotice`・`beStrictAboutOutputDuringTests`・`displayDetailsOnTestsThatTriggerDeprecations`・`displayDetailsOnTestsThatTriggerNotices`・`displayDetailsOnTestsThatTriggerWarnings`を持つ。スターターはさらに`failOnEmptyTestSuite`を持ち、テストが1件も無い`composer test`を失敗にする。
+7. スターターは、`app/Hook/`の例のフック(`ThemeSetupHook`・`PluginSetupHook`)の例のユニットテストを`tests/Unit/Hook/`に1つずつ持つ。例のテストはtmswp/testingを使わず、Brain MonkeyとPHPUnitの`TestCase`だけで書く(スターターはtmswp/testingをrequire-devに入れない)。setup.phpは`tests/`の名前空間も書き換えるため、スターターから作ったプロジェクトの`composer test`は、そのまま1件以上のテストを実行する(CIのStarter Projectsが確かめる)。
 
 ---
 

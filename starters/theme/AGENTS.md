@@ -109,6 +109,8 @@ npm run build       # blocks/をbuild/blocks/にビルドし、続けて探索�
 
 - このプロジェクトの`composer test`はユニットテストだけを指す(統合テストは既定で持たない)。
 - スターターのユニットテストはBrain Monkey(`brain/monkey`)だけで書く構成で、`tmswp/testing`は入っていない。Kernelをbootするテスト(メタ・オプションのメモリのストレージ等を使うもの)を書くときは、`composer require --dev tmswp/testing`で入れ、`vendor/tmswp/testing/rules/testing.md`を読む。
+- ユニットテストは、`app/`のディレクトリの構成をミラーして`tests/Unit/`に置く(`app/Hook/ThemeSetupHook.php`のテストは`tests/Unit/Hook/ThemeSetupHookTest.php`で、名前空間は`TmswpStarterTheme\Tests\Unit\Hook\`)。例の`ThemeSetupHookTest`のとおり、`PHPUnit\Framework\TestCase`を継承して`MockeryPHPUnitIntegration`を使い(Brain Monkeyの期待をアサーションとして数える)、`setUp()`で`Brain\Monkey\setUp()`を、`tearDown()`で`Brain\Monkey\tearDown()`を呼ぶ。フックのメソッドを直接呼び、WordPressの関数の呼び出しを`Brain\Monkey\Functions\expect()`で、戻り値を`assertSame()`等で確かめる。
+- `phpunit.xml.dist`は、テストが1件も無いとき(`failOnEmptyTestSuite`)と、risky・警告・非推奨・Noticeを出したテストやテスト中の出力があるときに、`composer test`を失敗にする。
 - `composer qa`は探索結果ファイルの照合(`wp tmswp discover --check`)を含む。`composer discover`・`npm run build`とともに、WP-CLIの`wp`がこのテーマを有効にしたサイトに届く場所で実行する。
 - `npm run build`の前に一度`npm ci`でビルドの道具を入れる。
 

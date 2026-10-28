@@ -5,9 +5,24 @@
 
 ## Unreleased
 
+### 追加
+
+- テーマとプラグインのスターターに、Brain Monkeyだけで書いた例のユニットテスト(`tests/Unit/Hook/ThemeSetupHookTest.php`・`PluginSetupHookTest.php`)を置いた。スターターから作ったプロジェクトの`composer test`が、テストを0件で成功せず、そのまま例のテストを実行する。
+
 ### 変更
 
 - `Kernel::VERSION`を0.9.0にし、packages/*・starters/*・examples/sample-siteの`tmswp/*`の制約を`^0.2`から`^0.9`に、packages/*のbranch-aliasを`dev-main`→`0.9.x-dev`にした。
+- スターターとサンプルサイトの`phpunit.xml.dist`に、packages/*と同じ`failOnRisky`・`failOnDeprecation`・`failOnNotice`・`beStrictAboutOutputDuringTests`・`displayDetailsOnTestsThatTrigger*`を足し、スターターには`failOnEmptyTestSuite`も足した。risky・非推奨・Noticeを出すテスト、テスト中の出力、テストが0件のときに`composer test`が失敗する。既存のプロジェクトで同じ扱いにするには、この属性を`phpunit.xml.dist`に足す。
+- スターターの`bin/setup.php`が、名前空間を書き換えた後に、プロジェクトの`vendor/bin/php-cs-fixer`(`.php-cs-fixer.dist.php`の設定)で`fix`を実行し、崩れた`use`の並びを整える。php-cs-fixerが失敗するとエラーで止まり(composer.jsonを書く前のため、もう一度実行できる)、`--no-install`で作ってphp-cs-fixerが無い場合は`composer fix`の実行を案内する。
+- tmswp/testingの`WpdbTestDouble`の戻り値を実際の`wpdb`と同じ意味にし、代役が決められない形を、黙って値を返さずに`InvalidArgumentException`にした(破壊的な変更)。`update()`・`delete()`と、`query()`で実行するINSERT・UPDATE・DELETE・REPLACEは、新しい`queueAffectedRows()`で入れた行の数を返し、入れていなければ例外になる(これまでは常に1)。`insert()`と、`query()`で実行して行を作るINSERT・REPLACEの`insert_id`は、新しい`queueInsertId()`で入れたIDになり、入れていなければ例外になる(これまでは自動で1つずつ進めた)。0件と失敗のINSERT・REPLACEの`insert_id`は0になる。すべての操作の開始時に、実際の`wpdb`の`flush()`と同じく`rows_affected`を0、`last_error`を空にする(これまでは、DDLや読み取りの後も直前の書き込みの件数が残った)。`get_var()`は空文字を`null`で返す。`query()`はDDLに`true`を返し(これまでは1)、SELECT等の対応しない形と、JtiStoreの形でないINSERT IGNOREと`option_name`のDELETEは例外になる。`get_results()`は、行が無いとき(キューが空)とエラーのときに空の配列を返し(これまでは`null`)、`OBJECT_K`は1列目の値をキーにする。JtiStoreの獲得・解放・掃除と`isClaimed()`の読み取りは、状態を`%i`のテーブルごとに分け、`option_name`の大文字と小文字を区別せず、`isClaimed()`には`queueVar()`のキューではなく獲得済みの状態から答える。獲得の後の`insert_id`は、行を作れば正の値、重複で無視されれば0になる(値そのものはサーバーの自動採番の設定に依存するため、実物との一致は約束しない)。`query()`のDDLは、CREATE・ALTER(単語のRENAME・PARTITION・TABLESPACEを含むALTERは例外)と、単一のテーブルの`TRUNCATE [TABLE]`・`DROP TABLE [IF EXISTS]`、`DROP INDEX`・`DROP VIEW`だけを受け付ける。TRUNCATEとDROP TABLEは、そのテーブルの獲得済みのjtiも消す。ほかのDROP・TRUNCATE(複数のテーブル・データベース名で修飾した名前・`DROP TEMPORARY TABLE`・`DROP DATABASE`・列挙していないDROP)と、SQLのコメント(`/*`・`--`・`#`)を含むDROP・TRUNCATEと、単独の文の`RENAME TABLE`は例外になる。`get_var()`の先頭でない列・行と、`get_row()`の先頭でない行・`OBJECT`・`ARRAY_A`・`ARRAY_N`以外の出力の形は例外になる。利用側では、Model・`Connection`の`update()`・`delete()`・`execute()`の書き込みを通すテストで、実行の前に`$wpdb->queueAffectedRows(<行の数>)`を呼び、`insert()`と行を作る`execute()`のINSERTの前に`$wpdb->queueInsertId(<ID>)`を呼ぶ。`get_results()`の`null`を確かめていたテストは、空の配列に直す。JtiStoreの`isClaimed()`のために`queueVar()`で値を入れていたテストは、その`queueVar()`を外す(獲得した状態がそのまま読まれる)。
+
+### 修正
+
+- tmswp/testingの`WpdbTestDouble`の`query()`が、`JtiStore::gc()`の掃除のDELETE(`option_name LIKE %s AND CAST(option_value AS UNSIGNED) < %d`)で何も消さずに0を返していたのを、実wpdbと同じく、LIKEのパターン(大文字と小文字を区別しない)に合い期限が時刻より前の獲得済みのjtiを消し、消した件数を返すようにした。これと違う形の`option_name LIKE`のDELETEは、黙って成功せずに`InvalidArgumentException`になる。
+
+### 開発
+
+- testingの`UsesTempDirectories`の専用のユニットテスト(`packages/testing/tests/Unit/UsesTempDirectoriesTest.php`。テストごとの親ディレクトリの下に作ること、探索結果ファイルを含めて親ディレクトリごと片付けること、作れないときに失敗すること)と、未登録のブロックのカテゴリが探索コマンドのエラーになり、どのKernelの探索結果ファイルも書かないことのテスト(`DiscoverCommandTest`)を足した。`WpdbTestDouble`の掃除のDELETEの単体のテスト(`WpdbTestDoubleTest`)と、実wpdbとの照合(`WpdbTestDoubleParityTest`)を足し、testingのパッケージ別のカバレッジが実行ごとに揺れない(確率的な掃除に当たったときだけ通る行が無い)ようにした。ja-toolkit・settings-pageのソースの検査のテスト(`JaToolkitSourceTest`・`SettingsPageSourceTest`)が、src/の`.php`以外のファイル(`.DS_Store`等)の数だけアサーションを数えていたのを直し、手元とCIでユニットテストのアサーションの数が揃うようにした。
 
 ## v0.8.0 — ブロック・スターター・配布導線・AI向け文書
 

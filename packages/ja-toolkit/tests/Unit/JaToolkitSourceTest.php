@@ -89,11 +89,12 @@ final class JaToolkitSourceTest extends UnitTestCase
         $files = [];
 
         foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator(\dirname(__DIR__, 2) . '/src', FilesystemIterator::SKIP_DOTS)) as $file) {
-            self::assertInstanceOf(SplFileInfo::class, $file);
-
-            if ($file->getExtension() === 'php') {
-                $files[] = $file->getPathname();
+            // .DS_Store等の追跡外のファイルでアサーションの数が変わらないよう、絞り込みはアサーションにしない
+            if (!$file instanceof SplFileInfo || $file->getExtension() !== 'php') {
+                continue;
             }
+
+            $files[] = $file->getPathname();
         }
 
         self::assertNotSame([], $files);

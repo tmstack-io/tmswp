@@ -58,7 +58,7 @@ final class NewsletterOptionTest extends UnitTestCase
 | `UsesTempDirectories` | テストごとの一時ディレクトリを、テストごとに専用の親ディレクトリの下に作り、テストの後に親ディレクトリごと消す |
 | `MemoryMetaStorage`・`MemoryOptionStorage`・`StorageExtension` | メタ・オプションの保存先をメモリに差し替える |
 | `RecordingLogger` | 書かれたログを記録するPSR-3のロガー |
-| `WpdbTestDouble` | ユニット層用の`wpdb`の代役。実行したSQLを記録し、読み取りの結果をキューから返す |
+| `WpdbTestDouble` | ユニット層用の`wpdb`の代役。実行したSQLを記録し、読み取りの結果と、書き込みが影響する行の数・作る行のIDをキューから返す。戻り値と状態(`rows_affected`・`insert_id`・`last_error`)は実際の`wpdb`と同じ意味にし、代役が対応しない形のSQLと、影響する行の数・IDを入れていない書き込みは例外にする |
 | `MetaStorageContract` | `MetaStorageInterface`の実装が契約を満たすかを確かめるテストの共通部分(データベースに依存しない部分) |
 | `IntegrationTestCase`・`MetaStorageContractTestCase`・`BootsKernelBeforeInit` | TMSWPのmonorepoの統合テストの基盤。monorepoの`tests/bootstrap-integration.php`がfixtureのテーマ・プラグイン(`tests/fixtures/`)を有効にして起動したWordPressの上で動く。利用側のプロジェクトのテストでは使わない |
 

@@ -176,13 +176,14 @@ final class SettingsPageSourceTest extends UnitTestCase
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($src, FilesystemIterator::SKIP_DOTS));
 
         foreach ($iterator as $file) {
-            self::assertInstanceOf(SplFileInfo::class, $file);
-
-            if ($file->getExtension() === 'php') {
-                $contents = file_get_contents($file->getPathname());
-                self::assertIsString($contents);
-                $files[str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), \strlen($src) + 1))] = self::tokenize($contents);
+            // .DS_Store等の追跡外のファイルでアサーションの数が変わらないよう、絞り込みはアサーションにしない
+            if (!$file instanceof SplFileInfo || $file->getExtension() !== 'php') {
+                continue;
             }
+
+            $contents = file_get_contents($file->getPathname());
+            self::assertIsString($contents);
+            $files[str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), \strlen($src) + 1))] = self::tokenize($contents);
         }
 
         self::assertNotSame([], $files);

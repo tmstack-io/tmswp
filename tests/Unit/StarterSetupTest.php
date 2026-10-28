@@ -221,6 +221,89 @@ final class StarterSetupTest extends UnitTestCase
         self::assertStringContainsString('Then run `composer update --lock`', $result['stdout']);
     }
 
+    /**
+     * 名前空間を書き換えた後に、プロジェクトのphp-cs-fixerでuseの並びを整える。スターターの名前空間(T)より前に並ぶ
+     * 名前空間(ClientTheme)では、例のテストのuseの並びが変わる。
+     */
+    public function testSortsTheImportsWithThePhpCsFixerOfTheProject(): void
+    {
+        $project = $this->copyStarter('theme', 'client-theme');
+        mkdir($project . '/vendor/bin', 0o777, true);
+        $fixer = \dirname(__DIR__, 2) . '/vendor/friendsofphp/php-cs-fixer/php-cs-fixer';
+        file_put_contents($project . '/vendor/bin/php-cs-fixer', "<?php\n\nrequire " . var_export($fixer, true) . ";\n");
+
+        $result = $this->runSetup($project, ['--slug=client-theme', '--name=Client Theme']);
+
+        self::assertSame(0, $result['code'], $result['stderr']);
+        self::assertStringContainsString(
+            "use Brain\\Monkey\\Functions;\nuse ClientTheme\\Hook\\ThemeSetupHook;\nuse Mockery\\Adapter\\Phpunit\\MockeryPHPUnitIntegration;\nuse PHPUnit\\Framework\\TestCase;\n",
+            $this->read($project . '/tests/Unit/Hook/ThemeSetupHookTest.php'),
+        );
+        self::assertStringNotContainsString('composer fix', $result['stdout']);
+        self::assertFileDoesNotExist($project . '/.php-cs-fixer.cache');
+    }
+
+    /**
+     * php-cs-fixerは、ほかのファイルを書き換えた後、composer.jsonを書く前に、プロジェクトの設定で実行する。
+     */
+    public function testRunsPhpCsFixerBeforeWritingComposerJson(): void
+    {
+        $project = $this->copyStarter('plugin', 'shop-tools');
+        $record = \dirname($project) . '/fixer.json';
+        $this->writeFakeFixer($project, $record, 0);
+
+        $result = $this->runSetup($project, ['--slug=shop-tools', '--name=Shop Tools']);
+
+        self::assertSame(0, $result['code'], $result['stderr']);
+        $root = realpath($project);
+        self::assertIsString($root);
+        self::assertSame(
+            [
+                'arguments' => ['fix', '--config=' . $root . '/.php-cs-fixer.dist.php', '--using-cache=no'],
+                'cwd' => $root,
+                'rewritten' => true,
+                'composerRewritten' => false,
+            ],
+            json_decode($this->read($record), true, 512, JSON_THROW_ON_ERROR),
+        );
+    }
+
+    /**
+     * php-cs-fixerが失敗したら止まる。composer.jsonとbin/setup.phpは残るため、直した後でもう一度実行できる。
+     */
+    public function testStopsWhenPhpCsFixerFailsAndCanRunAgain(): void
+    {
+        $project = $this->copyStarter('plugin', 'shop-tools');
+        $this->writeFakeFixer($project, \dirname($project) . '/fixer.json', 1);
+
+        $result = $this->runSetup($project, ['--slug=shop-tools', '--name=Shop Tools']);
+
+        self::assertSame(1, $result['code']);
+        self::assertSame("ERROR: php-cs-fixer failed to format the rewritten PHP files; fix the error and run bin/setup.php again\n", $result['stderr']);
+        self::assertSame(['psr-4' => ['TmswpStarterPlugin\\' => 'app/']], $this->composerJson($project)['autoload']);
+        self::assertFileExists($project . '/bin/setup.php');
+
+        $this->writeFakeFixer($project, \dirname($project) . '/fixer.json', 0);
+        $result = $this->runSetup($project, ['--slug=shop-tools', '--name=Shop Tools']);
+
+        self::assertSame(0, $result['code'], $result['stderr']);
+        self::assertSame(['psr-4' => ['ShopTools\\' => 'app/']], $this->composerJson($project)['autoload']);
+        self::assertSame([], $this->filesContaining($project, ['{{', 'TmswpStarterPlugin', "'/plugin.php'"]));
+    }
+
+    /**
+     * 依存を入れていない(create-projectの--no-install)ためにphp-cs-fixerが無ければ、`composer fix`の実行を案内する。
+     */
+    public function testAsksToRunTheFixerWhenPhpCsFixerIsNotInstalled(): void
+    {
+        $project = $this->copyStarter('plugin', 'shop-tools');
+
+        $result = $this->runSetup($project, ['--slug=shop-tools', '--name=Shop Tools']);
+
+        self::assertSame(0, $result['code'], $result['stderr']);
+        self::assertStringContainsString('Then run `composer fix`', $result['stdout']);
+    }
+
     public function testArgumentsTakePrecedenceOverEnvironmentVariables(): void
     {
         $project = $this->copyStarter('plugin', 'shop-tools');
@@ -432,6 +515,32 @@ final class StarterSetupTest extends UnitTestCase
         ]));
 
         return $path;
+    }
+
+    /**
+     * プロジェクトのvendor/bin/php-cs-fixerに、$exitCodeで終わる代わりのスクリプトを置く。受け取った引数・作業ディレクトリと、
+     * 実行の時点で、ほかのファイル(app/)とcomposer.jsonが書き換え済みかを、$recordにJSONで書く。
+     */
+    private function writeFakeFixer(string $project, string $record, int $exitCode): void
+    {
+        if (!is_dir($project . '/vendor/bin')) {
+            mkdir($project . '/vendor/bin', 0o777, true);
+        }
+
+        file_put_contents($project . '/vendor/bin/php-cs-fixer', implode("\n", [
+            '<?php',
+            '',
+            'declare(strict_types=1);',
+            '',
+            'file_put_contents(' . var_export($record, true) . ', json_encode([',
+            "    'arguments' => array_slice(\$argv, 1),",
+            "    'cwd' => getcwd(),",
+            "    'rewritten' => str_contains((string) file_get_contents('app/Hook/PluginSetupHook.php'), 'namespace ShopTools\\\\Hook;'),",
+            "    'composerRewritten' => str_contains((string) file_get_contents('composer.json'), 'ShopTools'),",
+            ']));',
+            "exit({$exitCode});",
+            '',
+        ]));
     }
 
     /**

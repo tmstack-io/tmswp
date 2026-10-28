@@ -36,11 +36,62 @@ if (!class_exists(wpdb::class, false)) {
  *    InvalidArgumentExceptionにする。実wpdbはこれらにPHPの警告・非推奨の通知・TypeErrorを出し、結果はPHPの弱い
  *    型の変換と診断の順序で決まるため、再現しない。
  *
+ * 対応する操作は、同じ順序の操作を同じインスタンスに流したとき、戻り値と状態(rows_affected・insert_id・last_error)
+ * が実wpdbと同じになるようにする。ただし、JtiStoreの獲得の後のinsert_idは、下の1のとおり正か0かだけを約束する。
+ * 代役が決められない形は、黙って値を返さずにInvalidArgumentExceptionにする。
+ *
+ * 状態は実wpdbと同じく扱う。query()・get_results()・get_row()・get_var()・insert()・update()・delete()は、開始時に
+ * 実wpdbのflush()と同じくrows_affectedを0に、last_errorを空にする(読み取り・DDL・失敗の後のrows_affectedは0)。
+ * insert_idは、INSERT・REPLACEが行を作れば新しいID、行を作らなければ(0件・失敗)0にし、ほかの操作では変えない。
+ *
+ * query()が対応する形は次の4つだけ。
+ * 1. JtiStoreの獲得(INSERT IGNORE)・解放(option_name = %sのDELETE)・掃除(LIKEと期限のDELETE)。直前のprepare()に
+ *    JtiStoreと同じSQLを渡し、その戻り値を実行したときだけ、この形とみなす。獲得済みのoption_nameと値を`%i`の
+ *    テーブルごとに覚え、実wpdbと同じ件数を返す。テーブルはwp_optionsと同じ構造(AUTO_INCREMENTのoption_id、
+ *    大文字と小文字を区別しないoption_nameの一意キー)とみなす。獲得の後のinsert_idは、行を作れば正の値、重複で
+ *    無視されれば0にする。値そのものは、実物のサーバーの自動採番の設定(重複で無視された挿入が採番を消費するか
+ *    等。innodb_autoinc_lock_mode)に依存するため、一致を約束しない(JtiStoreはinsert_idを使わない)。掃除の値は
+ *    10進の数字だけを扱う。この形でないINSERT IGNOREと、option_nameを含むDELETEは例外にする。
+ * 2. DDL。実wpdbと同じくtrueを返す。受け付けるのは次の形だけで、ほかのDROP・TRUNCATEは例外にする。
+ *    - CREATE・ALTER。状態を変えない。ただし、単語のRENAME・PARTITION・TABLESPACE(大文字と小文字を区別しない)を
+ *      含むALTERは、テーブルの名前や行に作用するため例外にする。単独の文のRENAME TABLEも例外にする。
+ *    - 単一のテーブルの`TRUNCATE [TABLE] t`と`DROP TABLE [IF EXISTS] t [RESTRICT|CASCADE]`。そのテーブルの獲得済みの
+ *      jtiも消す(実物では行が消えるため)。テーブル名は、データベース名で修飾しない1つだけを受け付ける。
+ *    - `DROP INDEX`・`DROP VIEW`。テーブルの行に作用しないため、状態を変えない。
+ *    `DROP TEMPORARY TABLE`は、代役が一時表と通常表を区別して持たないため例外にする。DROP・TRUNCATEの文字列に
+ *    SQLのコメント(`/*`・`--`・`#`)が含まれていれば、形を判定せずに例外にする。
+ * 3. INSERT・UPDATE・DELETE・REPLACE。代役は行を持たないため、queueAffectedRows()で入れた、影響した行の数を返す。
+ *    行を作ったINSERT・REPLACEのinsert_idは、queueInsertId()で入れたIDにする(AUTO_INCREMENTの列の無いテーブル
+ *    では0を入れる)。入れていなければ例外にする。
+ * 4. failNextWrite()を予約した呼び出し。形に関係なくfalseを返す。
+ * SELECT等、ほかの形は例外にする。update()・delete()も、queueAffectedRows()で入れた数を返す(MySQLが実際に変えた
+ * 行の数で、同じ値への更新は0)。insert()は1行を挿入するため、実wpdbと同じく1を返し、insert_idは
+ * queueInsertId()で入れたIDにする。
+ *
+ * get_results()は、行が無いとき(キューが空)とエラーのとき、実wpdbと同じく空の配列を返す。出力の形はOBJECT・
+ * OBJECT_K(1列目の値をキーにする)・ARRAY_A・ARRAY_Nだけを受け付ける。get_row()はOBJECT・ARRAY_A・ARRAY_Nと
+ * 先頭の行だけを、get_var()は先頭の行の先頭の列だけを受け付ける(ほかの位置は例外)。get_var()は、実wpdbと同じく
+ * 空文字をnullで返す。JtiStore::isClaimed()の形(直前のprepare()の戻り値)なら、キューではなく、そのテーブルの
+ * 獲得済みの状態から値を返す。
+ *
  * failNextWrite() で、書き込み系の呼び出しを実 wpdb の失敗と同じく false で返させられる。
- * failNextRead() で、読み取り系の呼び出しを実 wpdb の失敗と同じく last_error を残して null で返させられる。
+ * failNextRead()で、読み取り系の呼び出しを実wpdbの失敗と同じくlast_errorを残して失敗させられる(get_row()・
+ * get_var()はnull、get_results()は空の配列を返す)。
  */
 final class WpdbTestDouble extends wpdb
 {
+    /** JtiStore::claim()のSQL(prepare()に渡す形) */
+    private const JTI_CLAIM_SQL = "INSERT IGNORE INTO %i (option_name, option_value, autoload) VALUES (%s, %s, 'off')";
+
+    /** JtiStore::release()のSQL */
+    private const JTI_RELEASE_SQL = 'DELETE FROM %i WHERE option_name = %s';
+
+    /** JtiStore::isClaimed()のSQL */
+    private const JTI_READ_SQL = 'SELECT option_value FROM %i WHERE option_name = %s';
+
+    /** JtiStore::gc()のSQL */
+    private const JTI_GARBAGE_COLLECTION_SQL = 'DELETE FROM %i WHERE option_name LIKE %s AND CAST(option_value AS UNSIGNED) < %d';
+
     /** @var string */
     public $prefix = 'wp_';
 
@@ -85,10 +136,22 @@ final class WpdbTestDouble extends wpdb
     /** @var list<string|null> */
     private array $tmswpVars = [];
 
-    /** @var array<string, string> */
+    /** @var array<string, array<string, string>> 獲得済みのjti(テーブル => option_name => 値) */
     private array $tmswpClaimedJtis = [];
 
     private string $tmswpLastQuery = '';
+
+    /** 直前のprepare()が返したSQL。失敗したprepare()の後はnull。JtiStoreの形の判定は、このSQLを実行したときだけ行う。 */
+    private ?string $tmswpLastPrepared = null;
+
+    /** JtiStoreの獲得で採番した最後の値。獲得の後のinsert_idを正の値にするために使う(値の一致は約束しない)。 */
+    private int $tmswpAutoIncrement = 0;
+
+    /** @var list<int> 行を作るINSERT・REPLACE・insert()のinsert_idにするID */
+    private array $tmswpInsertIds = [];
+
+    /** @var list<int> update()・delete()・query()の書き込みが返す、影響した行の数 */
+    private array $tmswpAffectedRows = [];
 
     /** 次の書き込み系呼び出しを失敗させるときに wpdb::$last_error へ入れる値。null なら失敗させない。 */
     private ?string $tmswpNextWriteError = null;
@@ -146,8 +209,8 @@ final class WpdbTestDouble extends wpdb
     /**
      * 次の読み取り系呼び出し（get_results / get_row / get_var）を、実 wpdb の失敗と同じく失敗させる。
      *
-     * 実 wpdb の読み取り系はデータベースのエラーでも false を返さず、null を返して wpdb::$last_error に MySQL の
-     * エラー文を残す。キューの値は消費しない。
+     * 実wpdbの読み取り系はデータベースのエラーでもfalseを返さず、get_row()・get_var()はnullを、get_results()は
+     * 空の配列を返して、wpdb::$last_errorにMySQLのエラー文を残す。キューの値は消費しない。
      */
     public function failNextRead(string $lastError): void
     {
@@ -175,6 +238,34 @@ final class WpdbTestDouble extends wpdb
     public function queueVar(?string $value): void
     {
         $this->tmswpVars[] = $value;
+    }
+
+    /**
+     * 次の書き込み(update()・delete()と、query()で実行するINSERT・UPDATE・DELETE・REPLACE)が返す、影響した行の数を
+     * 入れる。代役はテーブルの行を持たず、実wpdbが返す数(MySQLが実際に変えた行の数)を決められないため、テストが
+     * 入れる。入れずに書き込むと例外になる。
+     */
+    public function queueAffectedRows(int $rows): void
+    {
+        if ($rows < 0) {
+            throw new InvalidArgumentException('affected rows must not be negative');
+        }
+
+        $this->tmswpAffectedRows[] = $rows;
+    }
+
+    /**
+     * 次に行を作るINSERT・REPLACE(insert()と、query()で実行して1行以上を作るもの)のinsert_idを入れる。新しいIDか、
+     * AUTO_INCREMENTの列の無いテーブルなら0になるかを代役は決められないため、テストが入れる。入れずに行を作ると
+     * 例外になる。0件や失敗のINSERT・REPLACEは、実wpdbと同じくinsert_idを0にし、入れたIDを使わない。
+     */
+    public function queueInsertId(int $id): void
+    {
+        if ($id < 0) {
+            throw new InvalidArgumentException('insert id must not be negative');
+        }
+
+        $this->tmswpInsertIds[] = $id;
     }
 
     /** @return list<string> */
@@ -237,6 +328,7 @@ final class WpdbTestDouble extends wpdb
         }
 
         $this->tmswpLastQuery = $query;
+        $this->tmswpLastPrepared = null;
 
         if (!str_contains($query, '%')) {
             $this->tmswpPrepareNotices[] = 'The query argument of wpdb::prepare() must have a placeholder.';
@@ -354,7 +446,9 @@ final class WpdbTestDouble extends wpdb
             }
         }
 
-        return $this->add_placeholder_escape(vsprintf($query, $escapedArgs));
+        $this->tmswpLastPrepared = $this->add_placeholder_escape(vsprintf($query, $escapedArgs));
+
+        return $this->tmswpLastPrepared;
     }
 
     /**
@@ -397,36 +491,62 @@ final class WpdbTestDouble extends wpdb
     }
 
     /**
+     * 実wpdbと同じく、行が無いとき(キューが空)とエラーのときは空の配列を返す。
+     *
      * @param mixed $query
      * @param mixed $output
+     *
+     * @return ($output is 'ARRAY_A' ? list<array<mixed>> : ($output is 'ARRAY_N' ? list<array<int, mixed>> : ($output is 'OBJECT_K' ? array<stdClass> : list<stdClass>)))
      */
-    public function get_results($query = null, $output = \OBJECT)
+    public function get_results($query = null, $output = \OBJECT): array
     {
         if (!\is_string($query)) {
             throw new InvalidArgumentException('query must be string');
         }
 
+        if (!\in_array($output, [\OBJECT, \OBJECT_K, \ARRAY_A, \ARRAY_N], true)) {
+            throw new InvalidArgumentException('WpdbTestDouble emulates get_results() only with OBJECT, OBJECT_K, ARRAY_A and ARRAY_N');
+        }
+
         $this->tmswpQueries[] = $this->remove_placeholder_escape($query);
 
+        // 実wpdbは、エラーでも行が無くても、空にしたlast_resultから空の配列を返す
         if ($this->consumeReadFailure()) {
-            return null;
+            return [];
         }
 
-        $rows = array_shift($this->tmswpResultSets);
+        $rows = array_shift($this->tmswpResultSets) ?? [];
 
-        if ($rows === null) {
-            return null;
+        return match ($output) {
+            \ARRAY_A => $rows,
+            \ARRAY_N => array_map(static fn(array $row): array => array_values($row), $rows),
+            \OBJECT_K => self::keyedByFirstColumn($rows),
+            default => array_map(static fn(array $row): stdClass => (object) $row, $rows),
+        };
+    }
+
+    /**
+     * 実wpdbのOBJECT_Kと同じく、1列目の値をキーにした行のオブジェクトにする。同じキーの行は、最初の行だけを残す。
+     *
+     * @param list<array<string, mixed>> $rows
+     *
+     * @return array<stdClass>
+     */
+    private static function keyedByFirstColumn(array $rows): array
+    {
+        $keyed = [];
+
+        foreach ($rows as $row) {
+            $key = array_values($row)[0] ?? '';
+
+            if (!\is_string($key) && !\is_int($key)) {
+                throw new InvalidArgumentException('WpdbTestDouble emulates OBJECT_K only with a string, int or null first column, got ' . get_debug_type($key));
+            }
+
+            $keyed[$key] ??= (object) $row;
         }
 
-        if ($output === \ARRAY_A) {
-            return $rows;
-        }
-
-        if ($output === \ARRAY_N) {
-            return array_map(static fn(array $row): array => array_values($row), $rows);
-        }
-
-        return array_map(static fn(array $row): stdClass => (object) $row, $rows);
+        return $keyed;
     }
 
     /**
@@ -442,6 +562,10 @@ final class WpdbTestDouble extends wpdb
 
         if (!\is_string($query)) {
             throw new InvalidArgumentException('query must be string');
+        }
+
+        if (!\in_array($output, [\OBJECT, \ARRAY_A, \ARRAY_N], true) || $y !== 0) {
+            throw new InvalidArgumentException('WpdbTestDouble emulates get_row() only with OBJECT, ARRAY_A and ARRAY_N and the first row');
         }
 
         $this->tmswpQueries[] = $this->remove_placeholder_escape($query);
@@ -474,75 +598,66 @@ final class WpdbTestDouble extends wpdb
             throw new InvalidArgumentException('query must be string');
         }
 
+        if ($x !== 0 || $y !== 0) {
+            throw new InvalidArgumentException('WpdbTestDouble emulates get_var() only for the first column of the first row');
+        }
+
         $this->tmswpQueries[] = $this->remove_placeholder_escape($query);
 
         if ($this->consumeReadFailure()) {
             return null;
         }
 
-        return array_shift($this->tmswpVars);
+        // JtiStore::isClaimed(): キューではなく、獲得・解放・掃除と同じ獲得済みの状態から答える
+        if ($query === $this->tmswpLastPrepared && $this->tmswpLastQuery === self::JTI_READ_SQL) {
+            [$table, $name] = $this->jtiTableAndName('lookup');
+            $key = $this->claimedJtiKey($table, $name);
+            $value = $key === null ? null : $this->tmswpClaimedJtis[$table][$key];
+        } else {
+            $value = array_shift($this->tmswpVars);
+        }
+
+        // 実wpdbと同じく、空文字はnullで返す
+        return $value === '' ? null : $value;
     }
 
-    /** @param mixed $query */
-    public function query($query): int|false
+    /**
+     * 実wpdb::query()と同じ意味の戻り値を返す。対応する形は、クラスのdocblockの「query()が対応する形」のとおり。
+     *
+     * @param mixed $query
+     *
+     * @throws InvalidArgumentException 対応しない形のSQL、または影響した行の数を入れていない書き込み
+     */
+    public function query($query): int|bool
     {
         if (!\is_string($query)) {
             throw new InvalidArgumentException('query must be string');
         }
 
-        $this->tmswpQueries[] = $this->remove_placeholder_escape($query);
+        $sql = $this->remove_placeholder_escape($query);
+        $this->tmswpQueries[] = $sql;
 
         if ($this->consumeWriteFailure()) {
+            // 実wpdbと同じく、失敗したINSERT・REPLACEはinsert_idを0にする
+            if (self::isInsertOrReplace($sql)) {
+                $this->insert_id = 0;
+            }
+
             return false;
         }
 
-        if (str_starts_with($this->tmswpLastQuery, 'INSERT IGNORE')) {
-            $jti = $this->tmswpLastArgs[1] ?? null;
-            $expires = $this->tmswpLastArgs[2] ?? null;
+        $template = $query === $this->tmswpLastPrepared ? $this->tmswpLastQuery : null;
 
-            if (!\is_string($jti) || !\is_string($expires)) {
-                throw new InvalidArgumentException('invalid JTI claim arguments');
-            }
-
-            if (\array_key_exists($jti, $this->tmswpClaimedJtis)) {
-                $this->rows_affected = 0;
-
-                return 0;
-            }
-
-            $this->tmswpClaimedJtis[$jti] = $expires;
-            $this->rows_affected = 1;
-
-            return 1;
-        }
-
-        if (str_starts_with($this->tmswpLastQuery, 'DELETE FROM') && str_contains($this->tmswpLastQuery, 'option_name LIKE')) {
-            $this->rows_affected = 0;
-
-            return 0;
-        }
-
-        // JtiStore::release(): 獲得済みの jti を手放す
-        if (str_starts_with($this->tmswpLastQuery, 'DELETE FROM') && str_contains($this->tmswpLastQuery, 'option_name = %s')) {
-            $jti = $this->tmswpLastArgs[1] ?? null;
-
-            if (!\is_string($jti)) {
-                throw new InvalidArgumentException('invalid JTI release arguments');
-            }
-
-            $this->rows_affected = \array_key_exists($jti, $this->tmswpClaimedJtis) ? 1 : 0;
-            unset($this->tmswpClaimedJtis[$jti]);
-
-            return $this->rows_affected;
-        }
-
-        $this->rows_affected = 1;
-
-        if (str_starts_with($query, 'INSERT INTO')) {
-            ++$this->insert_id;
-        }
-
-        return 1;
+        return match (true) {
+            $template === self::JTI_CLAIM_SQL => $this->claimJti(),
+            $template === self::JTI_RELEASE_SQL => $this->releaseJti(),
+            $template === self::JTI_GARBAGE_COLLECTION_SQL => $this->collectJtiGarbage(),
+            preg_match('/^\s*(create|alter|truncate|drop)\s/i', $sql) === 1 => $this->ddl($sql),
+            preg_match('/^\s*insert\s+ignore\s/i', $sql) === 1,
+            preg_match('/^\s*delete\s/i', $sql) === 1 && str_contains($sql, 'option_name') => throw new InvalidArgumentException("WpdbTestDouble emulates INSERT IGNORE and DELETE of option_name only in the forms of JtiStore prepared with prepare(): {$sql}"),
+            preg_match('/^\s*(insert|delete|update|replace)\s/i', $sql) === 1 => $this->writeQuery($sql),
+            default => throw new InvalidArgumentException("WpdbTestDouble does not emulate the query: {$sql}; it emulates DDL, INSERT, UPDATE, DELETE, REPLACE and the queries of JtiStore"),
+        };
     }
 
     /**
@@ -557,15 +672,16 @@ final class WpdbTestDouble extends wpdb
         }
 
         $this->tmswpInsertCalls[] = ['table' => $table, 'data' => $this->stringKeyedArray($data), 'format' => $this->normalizeFormat($format)];
+        // 実wpdbのinsert()は、実行の前にinsert_idを0にする(失敗ならそのまま)
+        $this->insert_id = 0;
 
         if ($this->consumeWriteFailure()) {
             return false;
         }
 
-        ++$this->insert_id;
-        $this->rows_affected = 1;
+        $this->insert_id = $this->consumeInsertId('insert()');
 
-        return 1;
+        return $this->rows_affected = 1;
     }
 
     /**
@@ -593,9 +709,7 @@ final class WpdbTestDouble extends wpdb
             return false;
         }
 
-        $this->rows_affected = 1;
-
-        return 1;
+        return $this->rows_affected = $this->consumeAffectedRows('update()');
     }
 
     /**
@@ -619,9 +733,7 @@ final class WpdbTestDouble extends wpdb
             return false;
         }
 
-        $this->rows_affected = 1;
-
-        return 1;
+        return $this->rows_affected = $this->consumeAffectedRows('delete()');
     }
 
     /** @param mixed $text */
@@ -634,17 +746,244 @@ final class WpdbTestDouble extends wpdb
         return addcslashes($text, '_%\\');
     }
 
+    /**
+     * MySQLのLIKEのパターンを、同じ文字列に合う正規表現にする。`%`は任意の文字列、`_`は任意の1文字、`\`の次の文字は
+     * その文字そのもの(esc_like()で戻した文字)。wp_optionsの既定の照合順序と同じく、大文字と小文字を区別しない。
+     */
+    private static function likePatternToRegex(string $pattern): string
+    {
+        $chars = preg_split('//u', $pattern, -1, PREG_SPLIT_NO_EMPTY);
+
+        if ($chars === false) {
+            throw new InvalidArgumentException('LIKE pattern must be valid UTF-8');
+        }
+
+        $regex = '';
+        $count = \count($chars);
+
+        for ($i = 0; $i < $count; ++$i) {
+            $regex .= match (true) {
+                $chars[$i] === '\\' && $i + 1 < $count => preg_quote($chars[++$i], '/'),
+                $chars[$i] === '%' => '.*',
+                $chars[$i] === '_' => '.',
+                default => preg_quote($chars[$i], '/'),
+            };
+        }
+
+        return '/\A' . $regex . '\z/isu';
+    }
+
     public function get_charset_collate(): string
     {
         return 'DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci';
     }
 
+    /** JtiStore::claim(): そのテーブルでoption_nameを獲得する。大文字と小文字を区別せずに同じ名前があれば重複(0)。 */
+    private function claimJti(): int
+    {
+        [$table, $name] = $this->jtiTableAndName('claim');
+        $expires = $this->tmswpLastArgs[2] ?? null;
+
+        if (!\is_string($expires)) {
+            throw new InvalidArgumentException('invalid JTI claim arguments');
+        }
+
+        // 行を作らなかった(無視された)INSERT IGNOREのinsert_idは0、作ったら正の値(値はクラスのdocblockの1のとおり約束しない)
+        if ($this->claimedJtiKey($table, $name) !== null) {
+            $this->insert_id = 0;
+
+            return 0;
+        }
+
+        $this->tmswpClaimedJtis[$table][$name] = $expires;
+        $this->insert_id = ++$this->tmswpAutoIncrement;
+
+        return $this->rows_affected = 1;
+    }
+
+    /** JtiStore::release(): そのテーブルの獲得済みのoption_name(大文字と小文字を区別しない)を手放す。 */
+    private function releaseJti(): int
+    {
+        [$table, $name] = $this->jtiTableAndName('release');
+        $key = $this->claimedJtiKey($table, $name);
+
+        if ($key === null) {
+            return 0;
+        }
+
+        unset($this->tmswpClaimedJtis[$table][$key]);
+
+        return $this->rows_affected = 1;
+    }
+
+    /** JtiStore::gc(): そのテーブルの獲得済みのjtiのうち、名前がLIKEのパターンに合い、期限(値)が時刻より前のものを消す。 */
+    private function collectJtiGarbage(): int
+    {
+        $table = $this->tmswpLastArgs[0] ?? null;
+        $pattern = $this->tmswpLastArgs[1] ?? null;
+        $threshold = $this->tmswpLastArgs[2] ?? null;
+
+        if (!\is_string($table) || !\is_string($pattern) || !\is_int($threshold)) {
+            throw new InvalidArgumentException('invalid JTI garbage collection arguments');
+        }
+
+        $regex = self::likePatternToRegex($pattern);
+        $deleted = 0;
+
+        foreach ($this->tmswpClaimedJtis[$table] ?? [] as $name => $expires) {
+            if (!ctype_digit($expires)) {
+                throw new InvalidArgumentException("WpdbTestDouble emulates CAST(option_value AS UNSIGNED) only for decimal digits, got '{$expires}'");
+            }
+
+            if (preg_match($regex, (string) $name) === 1 && (int) $expires < $threshold) {
+                unset($this->tmswpClaimedJtis[$table][$name]);
+                ++$deleted;
+            }
+        }
+
+        return $this->rows_affected = $deleted;
+    }
+
     /**
-     * 実 wpdb の flush() と同じく直前の last_error を消し、failNextWrite() の予約があれば消費して失敗状態にする。
+     * JtiStoreの形のSQLの、テーブル(`%i`の値)とoption_name。
+     *
+     * @return array{string, string}
+     */
+    private function jtiTableAndName(string $operation): array
+    {
+        $table = $this->tmswpLastArgs[0] ?? null;
+        $name = $this->tmswpLastArgs[1] ?? null;
+
+        if (!\is_string($table) || !\is_string($name)) {
+            throw new InvalidArgumentException("invalid JTI {$operation} arguments");
+        }
+
+        return [$table, $name];
+    }
+
+    /** そのテーブルの獲得済みのoption_nameのうち、$nameと大文字と小文字を区別せずに同じもの(wp_optionsの照合順序と同じ)。 */
+    private function claimedJtiKey(string $table, string $name): ?string
+    {
+        foreach (array_keys($this->tmswpClaimedJtis[$table] ?? []) as $key) {
+            if (mb_strtolower((string) $key) === mb_strtolower($name)) {
+                return (string) $key;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * query()で実行するINSERT・UPDATE・DELETE・REPLACE。影響した行の数は、テストが入れた数を返す。INSERT・REPLACEの
+     * insert_idは、行を作らなければ0、作ればテストが入れたID。
+     */
+    private function writeQuery(string $sql): int
+    {
+        $rows = $this->consumeAffectedRows("query({$sql})");
+
+        if (self::isInsertOrReplace($sql)) {
+            $this->insert_id = $rows === 0 ? 0 : $this->consumeInsertId("query({$sql})");
+        }
+
+        return $this->rows_affected = $rows;
+    }
+
+    /**
+     * DDLはtrueを返す。受け付ける形は、クラスのdocblockの2のとおり。TRUNCATE TABLEとDROP TABLEは、実物と同じく、
+     * そのテーブルの獲得済みのjtiを消す。
+     *
+     * @throws InvalidArgumentException 受け付けない形のDROP・TRUNCATE、SQLのコメントを含むDROP・TRUNCATE、または
+     *                                  RENAME・PARTITION・TABLESPACEを含むALTER
+     */
+    private function ddl(string $sql): bool
+    {
+        if (preg_match('/^\s*create\s/i', $sql) === 1) {
+            return true;
+        }
+
+        // テーブルの名前を変える・パーティションやテーブルスペースを操作するALTERは、行やテーブルの同一性に作用する
+        if (preg_match('/^\s*alter\s/i', $sql) === 1) {
+            if (preg_match('/\b(rename|partition|tablespace)\b/i', $sql) === 1) {
+                throw new InvalidArgumentException("WpdbTestDouble does not emulate the query: {$sql}; it rejects ALTER containing RENAME, PARTITION or TABLESPACE");
+            }
+
+            return true;
+        }
+
+        if (str_contains($sql, '/*') || str_contains($sql, '--') || str_contains($sql, '#')) {
+            throw new InvalidArgumentException("WpdbTestDouble does not emulate the query: {$sql}; it rejects DROP and TRUNCATE containing an SQL comment");
+        }
+
+        if (preg_match('/^\s*drop\s+temporary\s/i', $sql) === 1) {
+            throw new InvalidArgumentException("WpdbTestDouble does not emulate the query: {$sql}; it does not tell temporary tables from regular tables");
+        }
+
+        if (preg_match('/^\s*drop\s+(index|view)\s/i', $sql) === 1) {
+            return true;
+        }
+
+        $unsupported = "WpdbTestDouble does not emulate the query: {$sql}; it emulates TRUNCATE and DROP TABLE of a single table named without the database, DROP INDEX and DROP VIEW";
+
+        if (preg_match('/^\s*(truncate(\s+table)?|drop\s+table(\s+if\s+exists)?)\s/i', $sql, $matches) !== 1) {
+            throw new InvalidArgumentException($unsupported);
+        }
+
+        $identifier = '(?:`(?:[^`]|``)+`|[A-Za-z0-9_$]+)';
+        // RESTRICT・CASCADEはDROP TABLEだけの句。MySQLのTRUNCATEには無く、実物では構文の誤りになる
+        $trailingClause = stripos(ltrim($sql), 'drop') === 0 ? '(?:(?:restrict|cascade)\s*)?' : '';
+
+        if (preg_match('/\G\s*(' . $identifier . ')\s*' . $trailingClause . ';?\s*\z/i', $sql, $table, 0, \strlen($matches[0]) - 1) !== 1) {
+            throw new InvalidArgumentException($unsupported);
+        }
+
+        $name = $table[1];
+
+        if (str_starts_with($name, '`')) {
+            $name = str_replace('``', '`', substr($name, 1, -1));
+        }
+
+        unset($this->tmswpClaimedJtis[$name]);
+
+        return true;
+    }
+
+    private static function isInsertOrReplace(string $sql): bool
+    {
+        return preg_match('/^\s*(insert|replace)\s/i', $sql) === 1;
+    }
+
+    /** queueInsertId()で入れたIDを取り出す。入れていなければ、黙ってIDを決めずに例外にする。 */
+    private function consumeInsertId(string $call): int
+    {
+        $id = array_shift($this->tmswpInsertIds);
+
+        if ($id === null) {
+            throw new InvalidArgumentException("WpdbTestDouble cannot tell the insert_id of the row {$call} creates; call queueInsertId() before it");
+        }
+
+        return $id;
+    }
+
+    /** queueAffectedRows()で入れた、影響した行の数を取り出す。入れていなければ、黙って数を決めずに例外にする。 */
+    private function consumeAffectedRows(string $call): int
+    {
+        $rows = array_shift($this->tmswpAffectedRows);
+
+        if ($rows === null) {
+            throw new InvalidArgumentException("WpdbTestDouble cannot tell how many rows {$call} affects; call queueAffectedRows() before it");
+        }
+
+        return $rows;
+    }
+
+    /**
+     * 実wpdbのflush()と同じくlast_errorとrows_affectedを空にし、failNextWrite()の予約があれば消費して
+     * 失敗状態にする。
      */
     private function consumeWriteFailure(): bool
     {
         $this->last_error = '';
+        $this->rows_affected = 0;
 
         if ($this->tmswpNextWriteError === null) {
             return false;
@@ -652,17 +991,18 @@ final class WpdbTestDouble extends wpdb
 
         $this->last_error = $this->tmswpNextWriteError;
         $this->tmswpNextWriteError = null;
-        $this->rows_affected = 0;
 
         return true;
     }
 
     /**
-     * 実 wpdb の flush() と同じく直前の last_error を消し、failNextRead() の予約があれば消費して失敗状態にする。
+     * 実wpdbのflush()と同じくlast_errorとrows_affectedを空にし、failNextRead()の予約があれば消費して
+     * 失敗状態にする。
      */
     private function consumeReadFailure(): bool
     {
         $this->last_error = '';
+        $this->rows_affected = 0;
 
         if ($this->tmswpNextReadError === null) {
             return false;

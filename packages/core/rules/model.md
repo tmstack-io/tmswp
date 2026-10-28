@@ -459,7 +459,7 @@ final class CatalogDetailHook extends Hook
 PHPUnitの設定・`tests/bootstrap.php`・Brain Monkeyの使い方は`vendor/tmswp/testing/rules/testing.md`にある。この節はModelのテストに要ることだけを書く。
 
 - WordPressなしのユニットテストでは、tmswp/testing(`composer require --dev tmswp/testing`)の`WpdbTestDouble`をwpdbの代役にし、`Model::useConnection(new Connection(WpdbTestDouble::create()))`で接続を渡す。`tearDown()`で`Model::useConnection(null)`を呼んで解除する。Kernelのbootは要らない。
-- `WpdbTestDouble`の`prepare()`は、実際の`wpdb::prepare()`と同じSQLを返す。実行したSQLは`queries()`、`insert()`・`update()`・`delete()`の呼び出しは`insertCalls()`・`updateCalls()`・`deleteCalls()`で確かめる。読み取りの結果は、実行の前に`queueResultSet()`(行のlist)・`queueRow()`(1行)・`queueVar()`(1つの値)で入れておく。
+- `WpdbTestDouble`の`prepare()`は、実際の`wpdb::prepare()`と同じSQLを返す。実行したSQLは`queries()`、`insert()`・`update()`・`delete()`の呼び出しは`insertCalls()`・`updateCalls()`・`deleteCalls()`で確かめる。読み取りの結果は、実行の前に`queueResultSet()`(行のlist)・`queueRow()`(1行)・`queueVar()`(1つの値)で入れておく。代役は行を持たないため、`update()`・`delete()`(QueryBuilderの`update()`・`delete()`を含む)の前に、影響する行の数を`$wpdb->queueAffectedRows(<行の数>)`で入れ、`insert()`の前に、作る行のID(`insert()`の戻り値になる`insert_id`。AUTO_INCREMENTの列の無いテーブルなら0)を`$wpdb->queueInsertId(<ID>)`で入れる。
 - 行を読む呼び出し(`find()`・`first()`・`get()`・`value()`・`pluck()`)は、wpdbの定数`ARRAY_A`を使う。テストでは`WpdbTestDouble::defineOutputConstants()`で定義し、定数がほかのテストに漏れないよう、そのテストを`#[RunInSeparateProcess]`・`#[PreserveGlobalState(false)]`で別のプロセスにする。
 - `DateTimeImmutable`の列をDTOにするときは`wp_timezone()`を呼ぶため、Brain Monkeyで差し替える。
 - dbDeltaの適用・既定値・照合順序・実際のSQLの結果は、WordPressの上(wp-envの統合テスト等)で確かめる。
@@ -497,6 +497,8 @@ final class CatalogItemModelTest extends UnitTestCase
     {
         $wpdb = WpdbTestDouble::create();
         Model::useConnection(new Connection($wpdb));
+        // 代役は行を持たないため、作る行のIDをテストが決める
+        $wpdb->queueInsertId(1);
 
         CatalogItemModel::insert([
             'sku' => 'A-100',

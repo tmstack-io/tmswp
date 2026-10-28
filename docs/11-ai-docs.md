@@ -408,6 +408,8 @@ npm run build       # blocks/をbuild/blocks/にビルドし、続けて探索�
 
 - このプロジェクトの`composer test`はユニットテストだけを指す(統合テストは既定で持たない)。
 - スターターのユニットテストはBrain Monkey(`brain/monkey`)だけで書く構成で、`tmswp/testing`は入っていない。Kernelをbootするテスト(メタ・オプションのメモリのストレージ等を使うもの)を書くときは、`composer require --dev tmswp/testing`で入れ、`vendor/tmswp/testing/rules/testing.md`を読む。
+- ユニットテストは、`app/`のディレクトリの構成をミラーして`tests/Unit/`に置く(`app/Hook/ThemeSetupHook.php`のテストは`tests/Unit/Hook/ThemeSetupHookTest.php`で、名前空間は`TmswpStarterTheme\Tests\Unit\Hook\`)。例の`ThemeSetupHookTest`のとおり、`PHPUnit\Framework\TestCase`を継承して`MockeryPHPUnitIntegration`を使い(Brain Monkeyの期待をアサーションとして数える)、`setUp()`で`Brain\Monkey\setUp()`を、`tearDown()`で`Brain\Monkey\tearDown()`を呼ぶ。フックのメソッドを直接呼び、WordPressの関数の呼び出しを`Brain\Monkey\Functions\expect()`で、戻り値を`assertSame()`等で確かめる。
+- `phpunit.xml.dist`は、テストが1件も無いとき(`failOnEmptyTestSuite`)と、risky・警告・非推奨・Noticeを出したテストやテスト中の出力があるときに、`composer test`を失敗にする。
 - `composer qa`は探索結果ファイルの照合(`wp tmswp discover --check`)を含む。`composer discover`・`npm run build`とともに、WP-CLIの`wp`がこのテーマを有効にしたサイトに届く場所で実行する。
 - `npm run build`の前に一度`npm ci`でビルドの道具を入れる。
 
@@ -482,7 +484,7 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所だけを
 
 4. 「ロジックの置き場(配置決定木)」: theme版の1(前処理クラス)と、決定木の後の前処理クラスの段落を除く。最後の項を「**それ以外のWordPressのフックの処理**(ショートコード、テンプレートの外で要る前処理を含む) → `app/Hook/`の`#[AsHook]`クラス(hooks.md。ショートコードのフォームの駆動はform.md)」にする。
 5. 「クラス追加の基本手順」: 手順2の前処理クラスの記述を除いてフォームを呼ぶ場所を「フックのクラス等」にし(page.mdの参照も除く)、手順3の「functions.phpへの追記」を「本体ファイルへの追記」にし、手順4の探索結果ファイルの作り直しは`composer discover`だけにする(`npm run build`の記述を除く)。
-6. 「必須コマンド」: `npm run build`の行と、`npm ci`の注記を除く。
+6. 「必須コマンド」: `npm run build`の行と、`npm ci`の注記を除く。ユニットテストの置き場と例は`app/Hook/PluginSetupHook.php`・`tests/Unit/Hook/PluginSetupHookTest.php`・`PluginSetupHookTest`にし、例の`PluginSetupHookTest`は処理を持たない雛形のフックに対する出発点(Brain Monkeyの準備の形だけを示し、フックに処理を足したら`Functions\expect()`・`assertSame()`等で確かめる形に書き換える)と書く。
 7. 「コーディング規約」: テキストドメインを「本体ファイルのヘッダの`Text Domain`」にし、ブロックの名前の項を除き、lintの対象外を`templates/`にする。
 8. 「禁止事項」: テンプレート階層の迂回の項は「プラグインでも`template_include`でテンプレートを差し替えない」とし、ページの出し分けの文を除く。「独自のマイグレーション」(独自テーブルの定義は`wp tmswp migrate`で適用し、プラグインの有効化では適用しない。マイグレーションのために`register_activation_hook`を直接書かない)を足す。functions.phpの項は本体ファイルの項にし、生成物の項から`build/blocks/`を除く。
 9. 「デバッグ」: 探索結果ファイルとキャッシュの項のKernelの例示を「このプラグインと、TMSWPを使うテーマ・ほかのプラグイン」に、起動時のエラーの項の例示を「テーマ・ほかのプラグインが別の版の`tmswp/core`を入れている等」にし、起動時のエラーに「同じサイトの別のプラグインと名前空間が同じ場合も、Kernelが起動時のエラーにする」を足す。
@@ -609,7 +611,9 @@ starters/theme/
 │   └── Option/.gitkeep
 ├── tests/
 │   ├── bootstrap.php         # §8.6(require vendor/autoload のみ)
-│   └── Unit/.gitkeep
+│   └── Unit/
+│       └── Hook/
+│           └── ThemeSetupHookTest.php  # ThemeSetupHookの例のユニットテスト(Brain Monkey。利用者のテストの手本)
 ├── bin/
 │   └── setup.php             # §10.2(post-create-project-cmd。実行後に自己削除)
 ├── phpunit.xml.dist          # §8.6
@@ -879,7 +883,15 @@ return (new Config())
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          bootstrap="tests/bootstrap.php"
          colors="true"
-         failOnWarning="true">
+         failOnEmptyTestSuite="true"
+         failOnRisky="true"
+         failOnWarning="true"
+         failOnDeprecation="true"
+         failOnNotice="true"
+         beStrictAboutOutputDuringTests="true"
+         displayDetailsOnTestsThatTriggerDeprecations="true"
+         displayDetailsOnTestsThatTriggerNotices="true"
+         displayDetailsOnTestsThatTriggerWarnings="true">
     <testsuites>
         <testsuite name="unit">
             <directory>tests/Unit</directory>
@@ -887,6 +899,9 @@ return (new Config())
     </testsuites>
 </phpunit>
 ```
+
+- `failOnRisky`から`displayDetailsOnTestsThatTriggerWarnings`までの属性は、packages/*/phpunit.xml.dist(10-quality.md §4.3)と同じである。加えて`failOnEmptyTestSuite`で、テストが1件も無いときも失敗にする。
+- テストの例は`tests/Unit/Hook/ThemeSetupHookTest.php`(プラグインは`PluginSetupHookTest.php`)で、tmswp/testingを使わず、Brain MonkeyとPHPUnitの`TestCase`だけで書く。Brain Monkeyの準備(`Brain\Monkey\setUp()`・`tearDown()`)はテストのクラスの`setUp()`・`tearDown()`で行い、`tests/bootstrap.php`には要らない(Brain MonkeyとPatchworkは、Composerのオートローダが読み込む)。
 
 `tests/bootstrap.php`:
 
@@ -1126,7 +1141,9 @@ starters/plugin/
 │   └── SettingsPage/.gitkeep
 ├── tests/
 │   ├── bootstrap.php         # theme版と同一
-│   └── Unit/.gitkeep
+│   └── Unit/
+│       └── Hook/
+│           └── PluginSetupHookTest.php  # 雛形のPluginSetupHookの例のユニットテスト(Brain Monkeyの準備の形を示す出発点)
 ├── bin/
 │   └── setup.php             # theme版と同一スクリプト(§10.2)
 ├── phpunit.xml.dist          # theme版と同一
@@ -1323,13 +1340,14 @@ create-project完了時に`post-create-project-cmd`(`bin/setup.php`と、続け�
    - npmのパッケージの名前(テーマのみ。プラグインのスターターにはpackage.jsonが無い)を、スラッグにする。package.jsonには`name`が無いため先頭に足し、package-lock.jsonは先頭の`name`(スターターを作ったディレクトリの名前`theme`のまま残っている)と、ルートのパッケージ(`packages[""]`)の`name`を変える。npmが`name`のあるpackage.jsonから書くのと同じ形にするためである。スラッグの形(英小文字・数字・`-`・`_`で、英字で始まる)は、npmの名前の規則に合う。字下げは元のファイルのものを保つ。ルートのパッケージの無いpackage-lock.json(npm 6以前の形式)は、エラーで止まる。
 5. **本体リネーム**(プラグインのみ): `plugin.php` → `<slug>.php`。
 6. **探索結果ファイルの削除**:スターターの`tmswp-discovery.php`は、書き換える前の名前空間とブロック名で作ったものなので消す。
-7. **composer.json書き換え**:上の置き換えに加えて、`name`を`local/<slug>`、`description`を`<表示名> (WordPress theme)`(プラグインは`(WordPress plugin)`。スターターの説明`Starter theme for …`は作ったプロジェクトに当てはまらない)、`license`を`proprietary`に変更し、`config.autoloader-suffix`を生成した名前空間にし、`post-create-project-cmd`エントリを削除する。字下げは元のcomposer.jsonのものを保つ。`autoloader-suffix`は、Composerのオートローダのクラス名(`ComposerAutoloaderInit<suffix>`)の接尾辞である。既定の接尾辞は、create-projectが依存を入れた時点のcomposer.lockのハッシュで、同じ版のスターターから作ったプロジェクトどうしで同じになる。そのため、同じスターターから作ったプラグインを同じサイトで有効にすると、クラスの重複で止まる。スターター自身のlicenseはGPL-2.0-or-later(Packagistに公開してcreate-projectで使うため)で、作った案件のプロジェクトはクライアントの非公開のコードのため`proprietary`にする。スターターにLICENSEのファイルは置かない。
-8. **自己削除**: `bin/setup.php`と、空になった`bin/`を削除する(再実行事故の防止)。
-9. **composer.lockの更新**: create-projectが作った`composer.lock`があれば、Composer(`COMPOSER_BINARY`。Composerがスクリプトに渡す)で`composer update --lock --no-install`を実行し、書き換えたcomposer.jsonのハッシュを記録し直す(パッケージの版は変えない。`composer validate`がlockの古さを報告しないため)。`--no-install`で作った場合は`composer.lock`が無いため、何もしない。Composerから実行していない(手で実行した)場合は、`composer update --lock`の実行を案内する。
-10. 次の一手を標準出力に案内する。オートローダの作り直し(`composer dump-autoload`)、`WP_DEBUG`を有効にしたサイト(開発環境)でテーマ・プラグインを有効にしての探索結果ファイルの作成(テーマは`npm ci && npm run build`、プラグインは`composer discover`。どちらも`wp tmswp discover`を実行する)とコミット、`composer qa`、AGENTS.mdである。
-11. **オートローダの作り直し**: Composerは依存を入れてオートローダを作った後で`post-create-project-cmd`を実行するため、その時点のオートローダ(psr-4とclassmap)はスターターの名前空間のままである。`post-create-project-cmd`は、setup.phpに続けて`@composer dump-autoload`を実行し、書き換えた名前空間で作り直す。Composerはスクリプトの一覧を読み込み済みのため、setup.phpがcomposer.jsonから`post-create-project-cmd`を消しても、続きは実行される。
+7. **useの並びの整え**: プロジェクトの`vendor/bin/php-cs-fixer`があれば、プロジェクトの`.php-cs-fixer.dist.php`で`fix`を実行する(キャッシュは使わない)。名前空間を書き換えると、自分の名前空間と依存の名前空間の`use`の並び(`ordered_imports`の規則)が崩れることがあり(例: スターターの`TmswpStarterTheme\`を`ClientTheme\`にすると、`PHPUnit\`より前に並ぶ)、そのままでは`composer lint`が通らないためである。composer.jsonを書く前に行うため、php-cs-fixerが失敗してエラーで止まっても、直した後でもう一度実行できる。create-projectは依存を入れた後で`post-create-project-cmd`を実行するため、php-cs-fixerはある。`--no-install`で作った場合は無いため実行せず、依存を入れた後の`composer fix`の実行を案内する。
+8. **composer.json書き換え**:上の置き換えに加えて、`name`を`local/<slug>`、`description`を`<表示名> (WordPress theme)`(プラグインは`(WordPress plugin)`。スターターの説明`Starter theme for …`は作ったプロジェクトに当てはまらない)、`license`を`proprietary`に変更し、`config.autoloader-suffix`を生成した名前空間にし、`post-create-project-cmd`エントリを削除する。字下げは元のcomposer.jsonのものを保つ。`autoloader-suffix`は、Composerのオートローダのクラス名(`ComposerAutoloaderInit<suffix>`)の接尾辞である。既定の接尾辞は、create-projectが依存を入れた時点のcomposer.lockのハッシュで、同じ版のスターターから作ったプロジェクトどうしで同じになる。そのため、同じスターターから作ったプラグインを同じサイトで有効にすると、クラスの重複で止まる。スターター自身のlicenseはGPL-2.0-or-later(Packagistに公開してcreate-projectで使うため)で、作った案件のプロジェクトはクライアントの非公開のコードのため`proprietary`にする。スターターにLICENSEのファイルは置かない。
+9. **自己削除**: `bin/setup.php`と、空になった`bin/`を削除する(再実行事故の防止)。
+10. **composer.lockの更新**: create-projectが作った`composer.lock`があれば、Composer(`COMPOSER_BINARY`。Composerがスクリプトに渡す)で`composer update --lock --no-install`を実行し、書き換えたcomposer.jsonのハッシュを記録し直す(パッケージの版は変えない。`composer validate`がlockの古さを報告しないため)。`--no-install`で作った場合は`composer.lock`が無いため、何もしない。Composerから実行していない(手で実行した)場合は、`composer update --lock`の実行を案内する。
+11. 次の一手を標準出力に案内する。オートローダの作り直し(`composer dump-autoload`。php-cs-fixerを実行しなかった場合は`composer fix`も)、`WP_DEBUG`を有効にしたサイト(開発環境)でテーマ・プラグインを有効にしての探索結果ファイルの作成(テーマは`npm ci && npm run build`、プラグインは`composer discover`。どちらも`wp tmswp discover`を実行する)とコミット、`composer qa`、AGENTS.mdである。
+12. **オートローダの作り直し**: Composerは依存を入れてオートローダを作った後で`post-create-project-cmd`を実行するため、その時点のオートローダ(psr-4とclassmap)はスターターの名前空間のままである。`post-create-project-cmd`は、setup.phpに続けて`@composer dump-autoload`を実行し、書き換えた名前空間で作り直す。Composerはスクリプトの一覧を読み込み済みのため、setup.phpがcomposer.jsonから`post-create-project-cmd`を消しても、続きは実行される。
 
-探索結果ファイルは、setup.phpの中では作り直さず、作り直す手順を案内する。`wp tmswp discover`は、テーマ・プラグインを有効にしたWordPressのサイトとWP-CLIを要する(探索コマンドは起動中のKernelを走査する。02-kernel.md §6)が、create-projectの時点では、プロジェクトがサイトの中にあるとも、サイトのDBが動いているとも限らないためである。debug(開発環境)のbootは毎回`app/`と`build/blocks/`を走査するため、オートローダを作り直した後(手順11)は、探索結果ファイルを作り直す前でも動く。debugでないサイト(本番)は、作り直すまで探索結果ファイルが無いことを起動時のエラーで示す。`wp tmswp discover`は起動したKernelを走査するため、debugでないサイトでは作り直すこともできない。そのため、作り直しは`WP_DEBUG`を有効にしたサイトで行う。スターターの`composer qa`は探索結果ファイルの照合(`discover:check`。`wp tmswp discover --check`)を含むため、作り直すまで失敗する。
+探索結果ファイルは、setup.phpの中では作り直さず、作り直す手順を案内する。`wp tmswp discover`は、テーマ・プラグインを有効にしたWordPressのサイトとWP-CLIを要する(探索コマンドは起動中のKernelを走査する。02-kernel.md §6)が、create-projectの時点では、プロジェクトがサイトの中にあるとも、サイトのDBが動いているとも限らないためである。debug(開発環境)のbootは毎回`app/`と`build/blocks/`を走査するため、オートローダを作り直した後(手順12)は、探索結果ファイルを作り直す前でも動く。debugでないサイト(本番)は、作り直すまで探索結果ファイルが無いことを起動時のエラーで示す。`wp tmswp discover`は起動したKernelを走査するため、debugでないサイトでは作り直すこともできない。そのため、作り直しは`WP_DEBUG`を有効にしたサイトで行う。スターターの`composer qa`は探索結果ファイルの照合(`discover:check`。`wp tmswp discover --check`)を含むため、作り直すまで失敗する。
 
 `composer create-project --no-scripts`で作った場合と、setup.phpがエラーで止まった場合は、`php bin/setup.php --slug=<slug> --name=<name>`と`composer dump-autoload`を手で実行する(`composer.lock`があれば、`composer update --lock`も)。
 
@@ -1347,7 +1365,8 @@ declare(strict_types=1);
  * オートローダを作った後でこれを実行するため、post-create-project-cmdは続けて`composer dump-autoload`を実行し、
  * 書き換えた名前空間でオートローダを作り直す(Composerはスクリプトの一覧を読み込み済みのため、ここでcomposer.jsonから
  * post-create-project-cmdを消しても続きは実行される)。
- * テーマとプラグインのスターターで同じ内容で、Composerのvendor/には依存しない(PHPの標準関数だけを使う)。
+ * テーマとプラグインのスターターで同じ内容で、Composerのvendor/のクラスを読み込まない(PHPの標準関数だけを使う)。
+ * 書き換えの後に、vendor/bin/php-cs-fixerがあれば別のプロセスで実行し、名前空間が変わって崩れたuseの並びを整える。
  *
  * 値は、引数(--slug=・--name=)、環境変数(TMSWP_SETUP_SLUG・TMSWP_SETUP_NAME)、対話の入力の順に探す。
  * 対話の入力は標準入力が端末のときだけ使い、そうでなければ(CI・エージェント)、値が無い時点でエラーで止まる。
@@ -1494,6 +1513,8 @@ function setupProject(string $root, array $arguments): void
         throw new RuntimeException("cannot delete {$discoveryFile}");
     }
 
+    // composer.jsonを書く前に整える。php-cs-fixerが失敗しても、もう一度実行すれば整え直せる
+    $formatted = formatPhpFiles($root);
     writeTextFile($composerFile, $composerJson);
 
     if (!unlink(__FILE__)) {
@@ -1507,6 +1528,9 @@ function setupProject(string $root, array $arguments): void
     $lockStep = refreshLockFile($root)
         ? ''
         : "\n               Then run `composer update --lock`: composer.lock records the hash of the old composer.json.";
+    $fixStep = $formatted
+        ? ''
+        : "\n               Then run `composer fix`: the imports may be out of order after the namespace was rewritten.";
     $build = $kind === 'theme' ? 'npm ci && npm run build' : 'composer discover';
     fwrite(STDOUT, <<<TEXT
 
@@ -1515,7 +1539,7 @@ function setupProject(string $root, array $arguments): void
           Next steps:
             1. Run `composer dump-autoload` so that the autoloader uses the new namespace
                (`composer install` if the dependencies are not installed yet).
-               composer create-project runs `composer dump-autoload` right after this script.{$lockStep}
+               composer create-project runs `composer dump-autoload` right after this script.{$lockStep}{$fixStep}
             2. Work on a WordPress site with WP_DEBUG enabled (a development environment): tmswp-discovery.php
                does not exist yet, and without WP_DEBUG the kernel fails to boot until it exists.
                Activate this {$kind}, then run `{$build}` where WP-CLI can reach the site.
@@ -1759,6 +1783,35 @@ function rewriteContents(string $file, string $contents, array $replacements, ar
     }
 
     return $updated;
+}
+
+/**
+ * プロジェクトのvendor/bin/php-cs-fixerを、プロジェクトの.php-cs-fixer.dist.phpで実行する(lintの対象のPHPを整える)。
+ * 名前空間を書き換えると、useの並び(ordered_importsの規則)が崩れることがあるため。実行したかどうかを返す。
+ * php-cs-fixerが無い(create-projectの--no-installで依存を入れていない)場合は、実行せずにfalseを返す。
+ *
+ * @throws RuntimeException php-cs-fixerが失敗した場合
+ */
+function formatPhpFiles(string $root): bool
+{
+    $fixer = $root . '/vendor/bin/php-cs-fixer';
+
+    if (!is_file($fixer)) {
+        return false;
+    }
+
+    $process = proc_open(
+        [PHP_BINARY, $fixer, 'fix', '--config=' . $root . '/.php-cs-fixer.dist.php', '--using-cache=no'],
+        [0 => STDIN, 1 => STDOUT, 2 => STDERR],
+        $pipes,
+        $root,
+    );
+
+    if (!is_resource($process) || proc_close($process) !== 0) {
+        throw new RuntimeException('php-cs-fixer failed to format the rewritten PHP files; fix the error and run bin/setup.php again');
+    }
+
+    return true;
 }
 
 /**

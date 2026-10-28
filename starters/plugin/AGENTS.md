@@ -100,6 +100,8 @@ composer discover   # 探索結果ファイルを作り直す(wp tmswp discover)
 
 - このプロジェクトの`composer test`はユニットテストだけを指す(統合テストは既定で持たない)。
 - スターターのユニットテストはBrain Monkey(`brain/monkey`)だけで書く構成で、`tmswp/testing`は入っていない。Kernelをbootするテスト(メタ・オプションのメモリのストレージ等を使うもの)を書くときは、`composer require --dev tmswp/testing`で入れ、`vendor/tmswp/testing/rules/testing.md`を読む。
+- ユニットテストは、`app/`のディレクトリの構成をミラーして`tests/Unit/`に置く(`app/Hook/PluginSetupHook.php`のテストは`tests/Unit/Hook/PluginSetupHookTest.php`で、名前空間は`TmswpStarterPlugin\Tests\Unit\Hook\`)。例の`PluginSetupHookTest`は、処理を持たない雛形の`PluginSetupHook`に対する出発点で、Brain Monkeyの準備の形を示す。`PHPUnit\Framework\TestCase`を継承して`MockeryPHPUnitIntegration`を使い(Brain Monkeyの期待をアサーションとして数える)、`setUp()`で`Brain\Monkey\setUp()`を、`tearDown()`で`Brain\Monkey\tearDown()`を呼ぶ。フックに処理を足したら、テストもそのメソッドを直接呼び、WordPressの関数の呼び出しを`Brain\Monkey\Functions\expect()`で、戻り値を`assertSame()`等で確かめる形に書き換える。
+- `phpunit.xml.dist`は、テストが1件も無いとき(`failOnEmptyTestSuite`)と、risky・警告・非推奨・Noticeを出したテストやテスト中の出力があるときに、`composer test`を失敗にする。
 - `composer qa`は探索結果ファイルの照合(`wp tmswp discover --check`)を含む。`composer discover`とともに、WP-CLIの`wp`がこのプラグインを有効にしたサイトに届く場所で実行する。
 
 ## コーディング規約

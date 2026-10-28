@@ -995,8 +995,7 @@ final class FormRuntimeTest extends UnitTestCase
         self::assertSame(FormStep::Complete, $this->form($definition)->handle($request)->step);
         self::assertSame([], $this->tokenDirectories($storeDir));
 
-        // 完了の後始末でファイルは消えたが、jti は claim 済み(wp_options に行がある)
-        $this->wpdb->queueVar((string) (time() + 1800));
+        // 完了の後始末でファイルは消えたが、jtiはclaim済み(wpdbの代役が獲得済みの行を持つ)
         $reload = $this->form($definition)->handle($request);
 
         self::assertSame(FormStep::Input, $reload->step);
@@ -1052,9 +1051,8 @@ final class FormRuntimeTest extends UnitTestCase
         self::assertSame([['error', 'tmswp.form: failed to delete a temporary file of form {form} after completion', 'entry']], $this->logRecords());
         self::assertFalse((new TempFileStore($storeDir))->exists($fileToken));
 
-        // claim 済みの確認トークンの再送(完了画面のリロード)は、再送として拒否する
+        // claim済みの確認トークンの再送(完了画面のリロード)は、再送として拒否する(代役が獲得済みの行を持つ)
         $this->logger->records = [];
-        $this->wpdb->queueVar((string) (time() + 1800));
         $reload = $this->form($definition)->handle($request);
 
         self::assertSame(FormStep::Input, $reload->step);

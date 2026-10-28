@@ -26,7 +26,15 @@
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          bootstrap="tests/bootstrap.php"
          colors="true"
-         failOnWarning="true">
+         failOnEmptyTestSuite="true"
+         failOnRisky="true"
+         failOnWarning="true"
+         failOnDeprecation="true"
+         failOnNotice="true"
+         beStrictAboutOutputDuringTests="true"
+         displayDetailsOnTestsThatTriggerDeprecations="true"
+         displayDetailsOnTestsThatTriggerNotices="true"
+         displayDetailsOnTestsThatTriggerWarnings="true">
     <testsuites>
         <testsuite name="unit">
             <directory>tests/Unit</directory>
@@ -219,7 +227,7 @@ final class NewsletterOptionTest extends UnitTestCase
 
 | 名前 | 使いどころ |
 |---|---|
-| `WpdbTestDouble` | Model(独自テーブル)のユニットテストで、`Model::useConnection(new Connection(WpdbTestDouble::create()))`として渡すwpdbの代役。`queueResultSet()`・`queueRow()`・`queueVar()`で読み取りの結果を入れ、`queries()`・`insertCalls()`・`updateCalls()`・`deleteCalls()`で実行したSQLと呼び出しを確かめる。`tearDown()`で`Model::useConnection(null)`を呼ぶ。`Connection`の`select()`・`selectRow()`を通るテストは、wpdbの出力の形の定数(`ARRAY_A`等)が要るため、テストの中で`WpdbTestDouble::defineOutputConstants()`を呼び、そのテストに`#[RunInSeparateProcess]`を付ける(定数はプロセスに残るため) |
+| `WpdbTestDouble` | Model(独自テーブル)のユニットテストで、`Model::useConnection(new Connection(WpdbTestDouble::create()))`として渡すwpdbの代役。`queueResultSet()`・`queueRow()`・`queueVar()`で読み取りの結果を入れ(入れなければ行が無いのと同じで、`get_results()`は空の配列を返す)、`queries()`・`insertCalls()`・`updateCalls()`・`deleteCalls()`で実行したSQLと呼び出しを確かめる。代役は行を持たないため、`update()`・`delete()`(Modelの`update()`・`delete()`)の前に影響する行の数を`queueAffectedRows()`で、`insert()`(Modelの`insert()`)の前に作る行のIDを`queueInsertId()`で入れる(入れないと`InvalidArgumentException`になる)。`insert()`は1を返し、`query()`はDDL・INSERT・UPDATE・DELETE・REPLACEだけを受け付ける(SELECT等は例外。詳しくは`WpdbTestDouble`のdocblock)。`tearDown()`で`Model::useConnection(null)`を呼ぶ。`Connection`の`select()`・`selectRow()`を通るテストは、wpdbの出力の形の定数(`ARRAY_A`等)が要るため、テストの中で`WpdbTestDouble::defineOutputConstants()`を呼び、そのテストに`#[RunInSeparateProcess]`を付ける(定数はプロセスに残るため) |
 | `MetaStorageContract` | 自分で書いた`MetaStorageInterface`の実装が契約を満たすかを確かめるtrait。テストのクラスでuseし、`storage()`・`objectType()`・`createObject()`を実装する |
 | `IntegrationTestCase`・`MetaStorageContractTestCase`・`BootsKernelBeforeInit` | TMSWPのmonorepoの統合テスト(fixtureのテーマ・プラグイン)の基盤。利用側のプロジェクトのテストでは使わない |
 

@@ -9,7 +9,8 @@ declare(strict_types=1);
  * オートローダを作った後でこれを実行するため、post-create-project-cmdは続けて`composer dump-autoload`を実行し、
  * 書き換えた名前空間でオートローダを作り直す(Composerはスクリプトの一覧を読み込み済みのため、ここでcomposer.jsonから
  * post-create-project-cmdを消しても続きは実行される)。
- * テーマとプラグインのスターターで同じ内容で、Composerのvendor/には依存しない(PHPの標準関数だけを使う)。
+ * テーマとプラグインのスターターで同じ内容で、Composerのvendor/のクラスを読み込まない(PHPの標準関数だけを使う)。
+ * 書き換えの後に、vendor/bin/php-cs-fixerがあれば別のプロセスで実行し、名前空間が変わって崩れたuseの並びを整える。
  *
  * 値は、引数(--slug=・--name=)、環境変数(TMSWP_SETUP_SLUG・TMSWP_SETUP_NAME)、対話の入力の順に探す。
  * 対話の入力は標準入力が端末のときだけ使い、そうでなければ(CI・エージェント)、値が無い時点でエラーで止まる。
@@ -156,6 +157,8 @@ function setupProject(string $root, array $arguments): void
         throw new RuntimeException("cannot delete {$discoveryFile}");
     }
 
+    // composer.jsonを書く前に整える。php-cs-fixerが失敗しても、もう一度実行すれば整え直せる
+    $formatted = formatPhpFiles($root);
     writeTextFile($composerFile, $composerJson);
 
     if (!unlink(__FILE__)) {
@@ -169,6 +172,9 @@ function setupProject(string $root, array $arguments): void
     $lockStep = refreshLockFile($root)
         ? ''
         : "\n               Then run `composer update --lock`: composer.lock records the hash of the old composer.json.";
+    $fixStep = $formatted
+        ? ''
+        : "\n               Then run `composer fix`: the imports may be out of order after the namespace was rewritten.";
     $build = $kind === 'theme' ? 'npm ci && npm run build' : 'composer discover';
     fwrite(STDOUT, <<<TEXT
 
@@ -177,7 +183,7 @@ function setupProject(string $root, array $arguments): void
           Next steps:
             1. Run `composer dump-autoload` so that the autoloader uses the new namespace
                (`composer install` if the dependencies are not installed yet).
-               composer create-project runs `composer dump-autoload` right after this script.{$lockStep}
+               composer create-project runs `composer dump-autoload` right after this script.{$lockStep}{$fixStep}
             2. Work on a WordPress site with WP_DEBUG enabled (a development environment): tmswp-discovery.php
                does not exist yet, and without WP_DEBUG the kernel fails to boot until it exists.
                Activate this {$kind}, then run `{$build}` where WP-CLI can reach the site.
@@ -421,6 +427,35 @@ function rewriteContents(string $file, string $contents, array $replacements, ar
     }
 
     return $updated;
+}
+
+/**
+ * プロジェクトのvendor/bin/php-cs-fixerを、プロジェクトの.php-cs-fixer.dist.phpで実行する(lintの対象のPHPを整える)。
+ * 名前空間を書き換えると、useの並び(ordered_importsの規則)が崩れることがあるため。実行したかどうかを返す。
+ * php-cs-fixerが無い(create-projectの--no-installで依存を入れていない)場合は、実行せずにfalseを返す。
+ *
+ * @throws RuntimeException php-cs-fixerが失敗した場合
+ */
+function formatPhpFiles(string $root): bool
+{
+    $fixer = $root . '/vendor/bin/php-cs-fixer';
+
+    if (!is_file($fixer)) {
+        return false;
+    }
+
+    $process = proc_open(
+        [PHP_BINARY, $fixer, 'fix', '--config=' . $root . '/.php-cs-fixer.dist.php', '--using-cache=no'],
+        [0 => STDIN, 1 => STDOUT, 2 => STDERR],
+        $pipes,
+        $root,
+    );
+
+    if (!is_resource($process) || proc_close($process) !== 0) {
+        throw new RuntimeException('php-cs-fixer failed to format the rewritten PHP files; fix the error and run bin/setup.php again');
+    }
+
+    return true;
 }
 
 /**
