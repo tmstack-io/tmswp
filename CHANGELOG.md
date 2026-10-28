@@ -5,7 +5,7 @@
 
 ## Unreleased
 
-v0.8.0の途中の変更(T1〜T3)。
+v0.8.0の変更(独自ブロックの自動登録、スターター、配布物、sample-site、テストの構成、開発基盤、レシピ・AGENTS.md・README)。
 
 ### 追加
 
@@ -15,6 +15,8 @@ v0.8.0の途中の変更(T1〜T3)。
 - 置き場・npmのビルドと探索コマンドの連結・対象外(ブロックテーマとACF Blocks)を書いたpackages/core/rules/blocks.mdを新設した。
 - テストの支援コードのパッケージ`tmswp/testing`(packages/testing、名前空間`TMSWP\Testing\`)を新設し、`UnitTestCase`・`IntegrationTestCase`・`UsesTempDirectories`・`RecordingLogger`・`BootsKernelBeforeInit`・`MemoryMetaStorage`・`MemoryOptionStorage`・`StorageExtension`・`MetaStorageContract`・`MetaStorageContractTestCase`・`WpdbTestDouble`を`packages/core/tests/Support`(名前空間`TMSWP\Core\Tests\Support\`)から移した。各パッケージはrequire-devで使う。
 - 各パッケージ(packages/*)にLICENSE(GPL-2.0-or-later)・phpunit.xml.dist・.gitattributesと、composer.jsonのrequire-dev・`composer test`を置き、単独で取り出して`composer install && composer test`を実行できるようにした。.gitattributesのexport-ignoreで、各パッケージのtests/・phpunit.xml.dist・.gitattributes・.DS_Storeと、starters/theme・starters/pluginのnode_modules/・.DS_Storeを、配布物とpathリポジトリの写しから外す。
+- `wp tmswp discover`に`--kernels=<count>`を足した。起動中のKernelの数が指定と違えば、走査せずにエラーで終わる(起動しなかったテーマ・プラグインを見逃さないため)。
+- 拡張パッケージのレシピ(packages/ja-toolkit・settings-page・testing・thumbnailの`rules/*.md`)を置いた。
 
 ### 変更
 
@@ -25,16 +27,39 @@ v0.8.0の途中の変更(T1〜T3)。
 - テーマのスターターにブロックの例(`blocks/example`)とビルドした出力(`build/blocks`)を置き、package.jsonの`build`でビルドと探索コマンドを続けて実行する。各スターターの探索結果ファイルをコミットし、スターターの`composer qa`に`discover:check`を入れた。
 - `KernelConfig`のTMSWPの予約の判定と、Kernelの名前空間の重複・入れ子の判定を、大文字と小文字を区別しない比較にした。
 - packages/*とstarters/*の`tmswp/core`の制約を`^0.1`から`^0.2`にし(`Kernel::VERSION`は0.2.0)、各パッケージのbranch-aliasを`dev-main`→`0.2.x-dev`にした。
+- フォームがPOSTで送る項目の名前が、WordPressの公開のクエリ変数(`$wp->public_query_vars`に`query_vars`フィルタを通したもの。登録した投稿タイプ・タクソノミーのquery_varを含む)とぶつかると、`Form::open()`と`Form::handle()`がdebugに関係なく`FormConfigException`を投げる。ぶつかる名前の送信は、WordPressがクエリ変数として読み、テンプレートに届く前に404になるためである。ファイルの項目は`{name}__token`を照らす。管理画面(`is_admin()`。admin-ajax.phpを含む)では検査しない。利用側では、`name`・`year`等の公開のクエリ変数と同じ項目名を、`full_name`等の別の名前に変える。rulesとdocs/05の例の項目名も`full_name`にした。
+- スターターの`bin/setup.php`が、作ったプロジェクトのcomposer.jsonのdescriptionを`<表示名> (WordPress theme)`(プラグインは`(WordPress plugin)`)にし、テーマのpackage.jsonとpackage-lock.jsonの名前をスラッグにする。
+- スターターのphp-cs-fixerの設定を、monorepoと同じ規則(PER Coding Style 2.0と厳密性の規則)にし、`friendsofphp/php-cs-fixer`の制約を`^3.88`にした。プラグインのスターターの設定は、`bin/setup.php`の前後のどちらでも実在するファイルだけを参照する。
+- テーマのスターターのpackage.jsonの`allowScripts`で、ビルドと実行に要らない依存のインストールスクリプトを拒否した。
+- テーマのスターターとサンプルサイトの`@wordpress/scripts`を、36.1.0から37.0.0に上げた。破壊的な変更は`npm run start`の開発サーバー(webpack-dev-server 6)だけで、独自の`devServer`の設定がある場合に移行が要る。ビルドの出力は変わらない。`npm ci`の非推奨の警告は6件から4件に、`npm audit`は15件から12件に減った。残りは`@wordpress/scripts`の依存によるもの。
+- プラグインのスターターの本体ファイルのヘッダーに`Domain Path: /languages`を足した。
+- coreと拡張のレシピ(packages/*/rules/)・README、ルート・スターター・サンプルサイトのAGENTS.md・README.mdを、v0.8.0までに確定したAPIに合わせて書き直した。
+- examples/sample-siteを、テーマのスターターから作り直した。フォーム・設定ページ・サムネイル・日本語対応・ACF・ブロックの例を置き、`tmswp-kernel.php`の`KernelConfig`で拡張を登録する。専用のwp-env(ポート8882)で動かす。composer.lockはコミットしない。
 
 ### 削除
 
 - スターターのCLAUDE.mdを削除した。
+
+### 修正
+
+- 複合フィールドのビュー(`part()`を通さない`FieldView`)の`label()`が`FormConfigException`になり、確認画面が止まる不具合を直した。`label()`は、部品のビューなら部品のラベル、複合フィールドのビューなら複合フィールドのラベルを返す。`labelTag()`・`id()`・`name()`・入力部品・`hidden()`は、これまでどおり`part()`を求める。
 
 ### 開発
 
 - スターターから作ったテーマ1つとプラグイン2本が、同じサイトで別々のKernelとして起動し、フロントがHTTP 200を返すことを確かめる統合テスト(tests/Integration/、testsuite starters)を足した。
 - テストの一時ディレクトリを、テストごとに専用の親ディレクトリの下に作るようにした。探索結果ファイルが`sys_get_temp_dir()`の直下に残らず、PHP 8.3と8.5のユニットテストを並列に実行しても干渉しない。
 - split.yml・docs/RELEASING.mdの同期先を8つ(tmswp-testingを追加)にし、docs/RELEASING.mdのリリース手順を、`monorepo-builder release`が自らmainとタグをpushする動作に合わせた。CHANGELOG.mdを新設した。
+- unitとintegrationの合算カバレッジの全体の閾値(composer.jsonの`test:coverage:check`の第1引数)を、v0.8.0の値の82%に上げた(パッケージ別の80%は変えない)。
+- ユニットテストを、srcの`<Dir>/<Class>.php`に対応する`tests/Unit/<Dir>/<Class>Test.php`に置き直し、規則ごとのテストとデータプロバイダに分けた。アップロードしたファイルの実体の検査(FileExtension)のテストを足した。
+- CIの外部アクションをNode.js 24で動く版にしてSHAで固定し、全ジョブのrunnerを`ubuntu-24.04`に固定した。サンプルサイトの`composer qa`のジョブと、スターターから`composer create-project`で作ったプロジェクトの`composer qa`のジョブを足した。
+- `@wordpress/env`を12.0.0にし、ルートのpackage.jsonの`allowScripts`で、要らないインストールスクリプトを拒否した。
+- unitとintegrationの合算カバレッジを、全体に加えて、testingを含む6パッケージ別(各80%)にも判定する。`bin/coverage-check.php`は、丸める前の値で閾値と比べる。
+- `composer discover:build`・`discover:check`が、fixtureのKernelの数(2)を確かめる。fixtureのWP-CLIの読み込みは、site transientの`theme_roots`に左右されない。
+- tools/extract-rules-code.phpが、`final readonly class`等の修飾子の付いたクラス名を読む。PHPStanのワーカーごとのメモリの最大量を測るtools/phpstan-memory.phpを足した。
+- coreの訳ファイル(.pot・ja.po)の参照の行番号を、Form.phpの今の行に合わせて作り直した。
+- スターターのセットアップのテスト(端末の場合)で、標準出力・標準エラーを、ptyではなくパイプで受け取るようにした。Linuxでは、子プロセスの終了後にptyを読むとEIOになり、PHPがE_NOTICEを出すため、CIのユニットテストでNoticeが出ることがあった。
+- ユニットテストの設定(ルートのphpunit.unit.xml.distと各パッケージのphpunit.xml.dist)に、`failOnNotice`と`displayDetailsOnTestsThatTriggerNotices`を足した。Noticeは、テストの失敗になり、中身が表示される。
+- フォームの統合テストのHTTPの取得を、WordPressのHTTP API(`wp_remote_get`)に変え、PHP 8.5で非推奨の`$http_response_header`を使わないようにした。
 
 ## v0.7.0 — settings-page・thumbnail・ja-toolkit
 

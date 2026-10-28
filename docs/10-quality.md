@@ -183,7 +183,7 @@ packages/testing/src/UnitTestCase.php (TMSWP\Testing\UnitTestCase)
             "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/unit.xml"
         ],
         "test:coverage:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --coverage-clover=var/coverage/integration.xml",
-        "test:coverage:check": "php bin/coverage-check.php 78 --package=acf-bridge:80 --package=core:80 --package=ja-toolkit:80 --package=settings-page:80 --package=testing:80 --package=thumbnail:80 var/coverage/unit.xml var/coverage/integration.xml",
+        "test:coverage:check": "php bin/coverage-check.php 82 --package=acf-bridge:80 --package=core:80 --package=ja-toolkit:80 --package=settings-page:80 --package=testing:80 --package=thumbnail:80 var/coverage/unit.xml var/coverage/integration.xml",
         "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
         "test:integration:acf-pro": [
             "Composer\\Config::disableProcessTimeout",
@@ -647,8 +647,10 @@ WordPress コアテストスイート(wordpress-develop の `tests/phpunit/inclu
          failOnRisky="true"
          failOnWarning="true"
          failOnDeprecation="true"
+         failOnNotice="true"
          beStrictAboutOutputDuringTests="true"
          displayDetailsOnTestsThatTriggerDeprecations="true"
+         displayDetailsOnTestsThatTriggerNotices="true"
          displayDetailsOnTestsThatTriggerWarnings="true">
     <testsuites>
         <testsuite name="core">
@@ -701,8 +703,10 @@ WordPress コアテストスイート(wordpress-develop の `tests/phpunit/inclu
          failOnRisky="true"
          failOnWarning="true"
          failOnDeprecation="true"
+         failOnNotice="true"
          beStrictAboutOutputDuringTests="true"
          displayDetailsOnTestsThatTriggerDeprecations="true"
+         displayDetailsOnTestsThatTriggerNotices="true"
          displayDetailsOnTestsThatTriggerWarnings="true">
     <testsuites>
         <testsuite name="core">
@@ -861,7 +865,7 @@ testsuite `testing`(`packages/testing/tests/Integration/`)は、ユニット層�
 
 `<coverage>` の計測対象は、4.3 の `<source>` と同じ6パッケージのsrcである(4.8)。`--coverage-clover` を付けない通常の実行(`composer test:integration`)では計測しない。
 
-`convertDeprecationsToExceptions="true"` により、テスト中に出た非推奨(`E_DEPRECATED` / `E_USER_DEPRECATED`)はテストの失敗になる。ユニット層の `failOnDeprecation` と同じ方針である。発生元が FW か WordPress 本体かは区別しない。FW が WordPress や PHP の関数に不正な値を渡した結果の非推奨は、呼び出された側のファイルで報告されるため、発生元のパスでは FW 由来かどうかを判定できないからである。WordPress 本体や ACF が出す非推奨で失敗した場合は、その版の組み合わせと非推奨の内容を確かめてから対処を決める。
+`convertDeprecationsToExceptions="true"` により、テスト中に出た非推奨(`E_DEPRECATED` / `E_USER_DEPRECATED`)はテストの失敗になる。ユニット層の `failOnDeprecation` と同じ方針である。Notice(`E_NOTICE` / `E_USER_NOTICE`)は、PHPUnit 9.6の`convertNoticesToExceptions`の既定値(true)でテストのエラーになるため、ユニット層の`failOnNotice`に当たる設定は書かない。発生元が FW か WordPress 本体かは区別しない。FW が WordPress や PHP の関数に不正な値を渡した結果の非推奨は、呼び出された側のファイルで報告されるため、発生元のパスでは FW 由来かどうかを判定できないからである。WordPress 本体や ACF が出す非推奨で失敗した場合は、その版の組み合わせと非推奨の内容を確かめてから対処を決める。
 
 ### 4.6 tests/bootstrap-integration.php と fixture(完全版)
 
@@ -1648,7 +1652,7 @@ vendor/bin/monorepo-builder release vX.Y.Z             # mainとタグをpushす
 |---|---|---|---|---|
 | 1 | `bootstrap.php` | `tests/bootstrap-integration.php` | — | `tests_add_filter('muplugins_loaded')` でのロード方式のみ踏襲。install-wp-tests.sh 経路は廃止(wp-env の WP_TESTS_DIR へ) |
 | 2 | `test-sample.php` | — | — | 廃棄(scaffold 残骸) |
-| 3 | `TestCase/ArrTest.php` | `packages/core/tests/Unit/Support/ArrTest.php` | Unit | ドット記法 get/set のデータプロバイダ**全件**移植(ネスト配列・配列パス両形式) |
+| 3 | `TestCase/ArrTest.php` | `packages/core/tests/Unit/Support/ArrTest.php` | Unit | ドット記法 get/set のデータプロバイダ**全件**移植(ネスト配列)。キー配列を渡す形(配列パス)は廃止したため移植しない(07 §2.3。キーは`string\|int`だけで、一括取得は`only()`で代替) |
 | 4 | `TestCase/TextTest.php` | `packages/core/tests/Unit/Support/StrTest.php` | Unit | stringify(__toString / Iterator 対応)・ケース変換のうち、新 `Support\Str` API に存在するものを移植。新 API に対応がない検証は廃棄 |
 | 5 | `TestCase/UtilTest.php` | `packages/core/tests/Unit/Form/ValidatorTest.php` | Unit | `parse_phpdoc_tags` 系は廃棄(Attribute 化で機構ごと消滅)。`is_empty` の境界値(null / '' / [] / false / 空白 / 0 / '0' / Countable)は Form 層の空値判定テスト(`Validator::isEmpty()`)へ仕様移植。新しい空値は null / '' / [] だけで、旧 FW が空とした false・空白だけの文字列・要素数 0 の Countable は空ではない(05 §空値スルーセマンティクス)。`filter` / `namespace_split` は対応 API なしのため廃棄 |
 | 6 | `TestCase/OptionTest.php` | `packages/core/tests/Unit/Option/OptionRepositoryTest.php` + `packages/core/tests/Integration/OptionIntegrationTest.php` | 両方 | 定数ベースの option 読み書き仕様を移植。ユニット層はフェイク `OptionStorageInterface` 実装で、統合層は実 `wp_options` で検証 |

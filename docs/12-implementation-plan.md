@@ -973,7 +973,7 @@ v0.2.0〜v0.7.0
   - rules の検査が全パッケージの rules/ を対象にし、docs/11 §6.3 どおりの検証をする。sample-site と starters の `composer qa` が CI にある。
   - starters/pluginのphp-cs-fixerの設定(starters/plugin/.php-cs-fixer.dist.php)が、setup.phpの実行の前と後のどちらでも、実在するファイルだけを参照する。v0.6.0の時点では、starters/plugin/.php-cs-fixer.dist.phpが`__DIR__ . '/plugin.php'`をappendしているが、setup.phpが本体ファイルを`<slug>.php`に名前を変えるため、スラッグが`plugin`以外のプロジェクトでは無いファイルを参照する。
   - tools/extract-rules-code.php が、namespace 付きのコード例のクラス名を `final readonly class`・`readonly class` の宣言からも取り出す(v0.4.0 の時点では、クラス名の正規表現が `final class`・`class`・`enum` だけに一致し、`final readonly class` のコード例は「クラス名がありません」の例外になる。v0.4.0 の rules/form-mail.md は `final class` と `public readonly` のプロパティで回避している)。
-  - unit と integration の合算カバレッジが、5 パッケージ全体に加えてパッケージ別にも判定され(パッケージ別の基準値はこの版で決める)、docs/10 §4.8 がその方式に改訂されている。php-cs-fixer の設定が docs/10 §3.2・§7 項目4 どおり。
+  - unit と integration の合算カバレッジが、6パッケージ(testingを含む)全体に加えてパッケージ別にも判定され(パッケージ別の基準値はこの版で決める)、docs/10 §4.8 がその方式に改訂されている。php-cs-fixer の設定が docs/10 §3.2・§7 項目4 どおり。
   - qa.yml と split.yml の外部アクションが Node.js 24 で動く版になり(CI に Node.js 20 の非推奨の警告が出ない)、SHA で固定されている(docs/10 §5.3)。外部アクションの実行時に出る Node.js の非推奨の警告(DEP0040 の `punycode`、DEP0169 の `url.parse()`。v0.2.0 の時点では、actions/setup-node・actions/cache・actions/upload-artifact・ramsey/composer-install の実行時に全ジョブで出ている)が、更新後の版で出ないことを確かめる。最新の版でも出る場合は、そのアクションと版を受け入れ記録に書く。
   - CI の `npm ci` の警告を解消する。v0.2.0 の時点では、`npm ci` を実行するジョブ(Integration の 4 セルと Coverage)で、`npm warn deprecated` の @octokit/webhooks-types@7.6.1・glob@10.5.0 と、fs-ext-extra-prebuilt@2.2.7 のインストールスクリプトが allowScripts で許可されていないという `npm warn install-scripts` が出ている(いずれも @wordpress/env 11.17.0 の依存)。@wordpress/env の更新か、インストールスクリプトの扱いの決定で解消し、最新の版でも出る警告は、そのパッケージと版を受け入れ記録に書く。全ジョブの runner の版が固定され、`ubuntu-latest` を使っていない。docs/10 §5 と docs/01 §4.4 のワークフローの完全版が実ファイルと一致する。
   - `composer discover:check`が、開発用サイトのsite transient `theme_roots`の状態に左右されず、照合したKernelの数(fixtureのテーマとプラグインの2つ)を確かめる。v0.5.0の時点では、fixtureのテーマの置き場(tests/fixtures/themes)を含まない`theme_roots`が開発用サイトに残っていると、fixtureのテーマが見つからずテーマのKernelが起動しないため、2つのKernelのうちプラグインの1つだけを照合して成功する(照合したKernelの数を確かめていない)。このtransientは、`--require=tests/fixtures/_wp-cli.php`の無いWP-CLIの実行や、開発用サイトへの通常のリクエストの後に、fixtureのテーマの置き場を含まない形で作られうる。
@@ -1053,14 +1053,14 @@ v0.8.0
 
 #### v0.9.0-T4: 公開(push・split・Packagist 登録・タグ付け)
 
-- 対象ファイル領域: GitHub 上のリポジトリ(monorepo と split 先の 7 リポジトリ)、.github/workflows/split.yml、packages/*/.github/workflows/ と starters/*/.github/workflows/(同期先でプルリクエストを自動で閉じるワークフロー。新設)、Packagist
+- 対象ファイル領域: GitHub 上のリポジトリ(monorepo と split 先の8リポジトリ)、.github/workflows/split.yml、packages/*/.github/workflows/ と starters/*/.github/workflows/(同期先でプルリクエストを自動で閉じるワークフロー。新設)、Packagist
 - 完了条件:
-  - split 先の 7 リポジトリ(`tmstack-io/tmswp-core`、`tmswp-acf-bridge`、`tmswp-settings-page`、`tmswp-thumbnail`、`tmswp-ja-toolkit`、`tmswp-starter-theme`、`tmswp-starter-plugin`)が作成され、Issue と Wiki が無効で、説明文で monorepo へ案内している。アーカイブしていない(§1.16)。
+  - split 先の8リポジトリ(`tmstack-io/tmswp-core`、`tmswp-acf-bridge`、`tmswp-settings-page`、`tmswp-thumbnail`、`tmswp-ja-toolkit`、`tmswp-testing`、`tmswp-starter-theme`、`tmswp-starter-plugin`)が作成され、Issue と Wiki が無効で、説明文で monorepo へ案内している。アーカイブしていない(§1.16)。
   - 各パッケージ・スターターのディレクトリに置いたワークフローが split で同期先へ複製され、同期先で動いて、送られたプルリクエストを自動で閉じ、monorepo へ案内する(同期先に試しのプルリクエストを送って確認した)。
-  - 送り先への書き込み権限だけを持つトークンを発行し、monorepo の Secrets に `SPLIT_ACCESS_TOKEN` として登録した。トークンは fine-grained PAT。対象は送り先の 7 リポジトリ(`tmstack-io/tmswp-*`)だけ。権限は Contents: Read and write と Workflows: Read and write だけ(同期先の `.github/workflows/` を更新するため Workflows も要る)。トークンの発行と登録は、ユーザーに確認したうえで行った。
+  - 送り先への書き込み権限だけを持つトークンを発行し、monorepo の Secrets に `SPLIT_ACCESS_TOKEN` として登録した。トークンは fine-grained PAT。対象は送り先の8リポジトリ(`tmstack-io/tmswp-*`)だけ。権限は Contents: Read and write と Workflows: Read and write だけ(同期先の `.github/workflows/` を更新するため Workflows も要る)。トークンの発行と登録は、ユーザーに確認したうえで行った。
   - 各パッケージが Packagist に `tmswp/*` の名前で登録され、v0.9.0 のタグが付いている(§1.16)。main への push・split・Packagist 登録・タグ付けは、毎回ユーザーに確認したうえで、メンテナが `RELEASING.md` の手順で行った。
   - リリースの版と `Kernel::VERSION`(packages/core/src/Kernel/Kernel.php)が一致することを、タグ付けの前に検査している(`RELEASING.md` の手順、または自動の検査。§1.6)。食い違うと、そのタグの tmswp/core を入れたサイトは boot 時の版の照合で起動しない。
-- 検証コマンド: `composer show tmswp/core --available`(Packagist から取得できる)、`gh repo view tmstack-io/tmswp-core --json hasIssuesEnabled,hasWikiEnabled,isArchived,description`(7 リポジトリで実行)
+- 検証コマンド: `composer show tmswp/core --available`(Packagist から取得できる)、`gh repo view tmstack-io/tmswp-core --json hasIssuesEnabled,hasWikiEnabled,isArchived,description`(8リポジトリで実行)
 
 #### v0.9.0-T5: 利用者のプロジェクトからの導入確認と受け入れ記録
 
