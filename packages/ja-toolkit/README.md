@@ -5,7 +5,7 @@
 ## 動作環境
 
 - PHP 8.3〜8.5(`ext-mbstring`。composer.jsonの`require`)、WordPress 7.0以上
-- tmswp/core `^0.2`(composer.jsonの`require`)
+- tmswp/core `^0.9`(composer.jsonの`require`)
 
 ## 導入
 

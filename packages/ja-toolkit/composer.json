@@ -6,10 +6,10 @@
   "require": {
     "php": ">=8.3",
     "ext-mbstring": "*",
-    "tmswp/core": "^0.2"
+    "tmswp/core": "^0.9"
   },
   "require-dev": {
-    "tmswp/testing": "^0.2"
+    "tmswp/testing": "^0.9"
   },
   "autoload": {
     "psr-4": {
@@ -26,7 +26,7 @@
   },
   "extra": {
     "branch-alias": {
-      "dev-main": "0.2.x-dev"
+      "dev-main": "0.9.x-dev"
     }
   },
   "minimum-stability": "stable",

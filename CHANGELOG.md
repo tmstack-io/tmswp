@@ -1,11 +1,15 @@
 # 変更履歴
 
-新しい版を上に書く。v0.1.0〜v0.7.0は実装計画(docs/12-implementation-plan.md)の版で、タグを付けて公開していない。各版の詳細は、docs/acceptance/の受け入れ記録にある。
-先頭のUnreleasedの節の見出しは、次のリリースで`vendor/bin/monorepo-builder release`が「`<版> - <日付>`」に書き換える。monorepo-builderは見出しの文字列でこの節を探すため、見出しは英語のUnreleasedのまま変えない。また、ファイルの中の「##」と「Unreleased」を半角スペース1つでつないだ文字列はすべて書き換えられるため、見出し以外にその文字列を書かない。
+新しい版を上に書く。v0.1.0〜v0.8.0は実装計画(docs/12-implementation-plan.md)の版で、タグを付けて公開していない。各版の詳細は、docs/acceptance/の受け入れ記録にある。
+まだリリースしていない変更は、先頭のUnreleasedの節に書く。リリースの準備のコミットで、この節の見出しを手で`## vX.Y.Z — 題名`(下の各版の見出しと同じ形)に改める。
 
 ## Unreleased
 
-v0.8.0の変更(独自ブロックの自動登録、スターター、配布物、sample-site、テストの構成、開発基盤、レシピ・AGENTS.md・README)。
+### 変更
+
+- `Kernel::VERSION`を0.9.0にし、packages/*・starters/*・examples/sample-siteの`tmswp/*`の制約を`^0.2`から`^0.9`に、packages/*のbranch-aliasを`dev-main`→`0.9.x-dev`にした。
+
+## v0.8.0 — ブロック・スターター・配布導線・AI向け文書
 
 ### 追加
 

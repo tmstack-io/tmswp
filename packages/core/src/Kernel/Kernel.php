@@ -35,7 +35,7 @@ final class Kernel
      * この tmswp/core の版。boot 時に、読み込まれたすべての vendor の installed.php にある tmswp/core の版と照合する
      * (InstalledVersionCheck)。リリースのたびに、タグの版(先頭の v を除く)に合わせて更新する。
      */
-    public const string VERSION = '0.2.0';
+    public const string VERSION = '0.9.0';
 
     /** 対応する WordPress の下限の版(D-09) */
     private const string MIN_WORDPRESS_VERSION = '7.0';
