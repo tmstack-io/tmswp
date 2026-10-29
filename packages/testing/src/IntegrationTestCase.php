@@ -38,6 +38,9 @@ abstract class IntegrationTestCase extends WP_UnitTestCase
      */
     private array $kernelsAtSetUp = [];
 
+    /** useRealTables()で始めた、このテストの実際のテーブル */
+    private ?RealTables $realTables = null;
+
     /**
      * WP のテストライブラリは各テストの tear_down で登録済みメタキーをすべて解除する。boot した Kernel が
      * init で登録したメタキーを各テストで使えるよう、tests/fixtures/_boot.php が wp_loaded で控えた登録を戻す。
@@ -66,8 +69,37 @@ abstract class IntegrationTestCase extends WP_UnitTestCase
      */
     public function tear_down(): void
     {
-        self::replaceKernelRegistry($this->kernelsAtSetUp);
-        parent::tear_down();
+        $realTables = $this->realTables;
+        $this->realTables = null;
+
+        try {
+            $realTables?->tearDown();
+        } finally {
+            self::replaceKernelRegistry($this->kernelsAtSetUp);
+            parent::tear_down();
+        }
+    }
+
+    /**
+     * このテストの間、CREATE TABLE・DROP TABLEを一時テーブルに書き換えずに実際のテーブルを作り、テストの後(tear_down)に、
+     * $tablesのうち、この時点に無かったテーブルだけを消す(RealTables)。MySQLでMigratorを使うテストのように、一時テーブル
+     * では確かめられない処理のテストで、テーブルを作る前(set_up等)に呼ぶ。宣言していないテーブルは消さないため、
+     * テストが作るテーブルはすべて渡す。
+     *
+     * DDLは暗黙にコミットするため、DDLより前にこのテストが書いた行は、テストの後のロールバックで戻らない。そうした行は
+     * DDLの後に書くか、返り値のonTearDown()で、作ったIDや名前を控えて消す。tear_downの後始末は、ロールバックの後・
+     * テーブルの削除の前に動き、失敗しても残りを続ける。サブクラスのtear_downで、parent::tear_down()より前に後始末の
+     * 書き込みをしない(このロールバックで戻る)。
+     *
+     * @param string ...$tables このテストが作るテーブルの、接頭辞を除いた名前
+     */
+    protected function useRealTables(string ...$tables): RealTables
+    {
+        if ($this->realTables !== null) {
+            throw new LogicException('useRealTables() was already called in this test');
+        }
+
+        return $this->realTables = RealTables::start($this, self::wpdb(), ...$tables);
     }
 
     protected static function themeKernel(): Kernel

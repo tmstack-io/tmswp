@@ -83,6 +83,7 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 | Rules Code Examples | `packages/*/rules/`のコード例の抽出と検査(`tools/extract-rules-code.php`・`tools/verify-rules-code.php`) |
 | Unit | `composer test:unit`(PHP 8.3と8.5) |
 | Integration | `composer test:integration`(PHP 8.3と8.5 × WordPress 7.0と最新版の4セル) |
+| Integration (MySQL) | servicesのMySQL 8.4 LTSと9.7 LTS(2セル。PHP 8.3・WordPress 7.0)に、wp-envのcliから`WP_TESTS_DB_HOST`で接続した統合テスト。接続先の版を`SELECT VERSION()`で確かめる |
 | Coverage | 翻訳ファイルと探索結果ファイルの照合、合算カバレッジの閾値の判定(PHP 8.3・WordPress最新版) |
 | Sample Site QA | `examples/sample-site`の`composer qa`(専用のwp-env) |
 | Starter Projects | スターターからcreate-projectで作ったテーマ・プラグインの`composer qa`と、テーマのスターターのブロックのビルドと探索結果ファイルの照合 |

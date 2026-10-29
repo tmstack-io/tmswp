@@ -28,22 +28,17 @@ final class MigratorIntegrationTest extends IntegrationTestCase
     /** @var list<string> recordQueries()の後に発行されたSQL */
     private array $queries = [];
 
-    /** 保存済みのハッシュが無い状態から始める(ModelIntegrationTestと同じ)。 */
+    /**
+     * 保存済みのハッシュが無い状態から始める(ModelIntegrationTestと同じ)。テーブルは実際のテーブルで作り、tear_downで
+     * 消える。DDLでコミットされたハッシュのoptionは、ロールバックの後の後始末で消す。
+     */
     public function set_up(): void
     {
         parent::set_up();
         delete_option(self::OPTION);
-    }
-
-    public function tear_down(): void
-    {
-        // テスト中のCREATE TABLEはテストライブラリにより一時テーブルになり、接続が続く限り残るため削除する
-        foreach ([self::ALPHA_TABLE, self::BETA_TABLE] as $table) {
-            self::wpdb()->query('DROP TABLE IF EXISTS ' . self::wpdb()->prefix . $table);
-        }
-
-        delete_option(self::OPTION);
-        parent::tear_down();
+        $this->useRealTables(self::ALPHA_TABLE, self::BETA_TABLE)->onTearDown(static function (): void {
+            delete_option(self::OPTION);
+        });
     }
 
     /**

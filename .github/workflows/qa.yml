@@ -143,6 +143,96 @@ jobs:
         if: failure()
         run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
 
+  # MySQL 8.4 LTS・9.7 LTSでの統合テスト(D-56)。wp-env 12はDBをMariaDBに固定するため、servicesでMySQLを立て、
+  # wp-envのネットワークに別名mysql-under-testで参加させ、wp-envのcliからWP_TESTS_DB_HOSTで接続する。
+  # PHPとWordPressは8.3・7.0に固定する。http://wordpress/を叩くテストは、このジョブでも開発用サイト(wp-envのMariaDB)を使う。
+  mysql:
+    name: Integration (MySQL ${{ matrix.mysql }} / PHP 8.3 / WP 7.0)
+    runs-on: ubuntu-24.04
+    needs: [unit]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql: ['8.4', '9.7']
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql }}
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: wordpress
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ppassword"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+      - name: Create wp-env override
+        run: |
+          printf '{"core": "https://wordpress.org/wordpress-7.0.zip", "phpVersion": "8.3"}\n' > .wp-env.override.json
+      - name: Start wp-env
+        run: |
+          for attempt in 1 2 3; do
+            if composer wp:start; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+      # servicesのMySQLは別のネットワークにあるため、wp-envのネットワークに参加させる
+      - name: Connect MySQL to the wp-env network
+        run: |
+          containers=$(docker ps -q --filter label=com.docker.compose.service=wordpress)
+          if [ "$(printf '%s\n' "${containers}" | grep -c .)" -ne 1 ]; then
+            echo "::error::expected exactly one wp-env wordpress container: ${containers}"
+            exit 1
+          fi
+          networks=$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${containers}" | grep .)
+          if [ "$(printf '%s\n' "${networks}" | grep -c .)" -ne 1 ]; then
+            echo "::error::expected exactly one wp-env network: ${networks}"
+            exit 1
+          fi
+          docker network connect --alias mysql-under-test "${networks}" "${{ job.services.mysql.id }}"
+      # tests/wp-tests-config.phpと同じ設定で接続し、wp-envのMariaDBではなくこのセルのMySQLであることを確かめる
+      - name: Check the database version
+        run: |
+          # PHPのコードの$はシェルで展開しない
+          # shellcheck disable=SC2016
+          version=$(node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp \
+            env WP_TESTS_DB_HOST=mysql-under-test \
+            php -r 'require "tests/wp-tests-config.php"; $db = new mysqli(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); echo $db->query("SELECT VERSION()")->fetch_row()[0];')
+          echo "database version: ${version}"
+          case "${version}" in
+            "${{ matrix.mysql }}."*) ;;
+            *)
+              echo "::error::the tests would connect to ${version}, not MySQL ${{ matrix.mysql }}"
+              exit 1
+              ;;
+          esac
+      - name: Run integration tests
+        run: |
+          node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp \
+            env WP_TESTS_DB_HOST=mysql-under-test \
+            vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+          docker logs "${{ job.services.mysql.id }}"
+
   # 合算カバレッジ(unit と integration)の判定。PHP 8.3 / WordPress 最新版の 1 セルで行う。
   # unit は pcov、integration は wp-env の Xdebug(--xdebug=coverage)で計測し、clover を行単位で合算する。
   coverage:

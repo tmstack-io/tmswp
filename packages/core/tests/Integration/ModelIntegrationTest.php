@@ -22,6 +22,7 @@ use TMSWP\Core\Model\Model;
 use TMSWP\Core\Model\QueryBuilder;
 use TMSWP\Core\Model\TableDefinition;
 use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\RealTables;
 use WP_Error;
 use WP_Hook;
 
@@ -53,23 +54,41 @@ final class ModelIntegrationTest extends IntegrationTestCase
     /** @var list<string> recordQueries() の後に発行された SQL */
     private array $queries = [];
 
+    /** このテストの実際のテーブル(set_upで始める) */
+    private RealTables $realTables;
+
     /**
-     * ALTER TABLE は一時テーブルでも暗黙のコミットを起こすため、前のテストが保存したハッシュがトランザクションの
-     * 巻き戻しで消えずに残りうる。各テストは保存済みのハッシュが無い状態から始める。
+     * テーブルは実際のテーブルで作る(MySQLのSHOW TABLESは一時テーブルを返さず、Migratorの適用の後の照合を確かめられない
+     * ため。IntegrationTestCase::useRealTables())。このファイルのテストが作るテーブルを宣言し、tear_downで消す。DDLは暗黙にコミットするため、
+     * Migratorが保存したハッシュのoptionは、ロールバックの後の後始末で消す。各テストは保存済みのハッシュが無い状態から始める。
      */
     public function set_up(): void
     {
         parent::set_up();
         delete_option(self::OPTION);
+        $this->realTables = $this->useRealTables(
+            self::TABLE,
+            'tmswp_fixture_spied',
+            self::NOTES_TABLE,
+            self::FLAGS_TABLE,
+            self::BIG_TABLE,
+            self::DEC_TABLE,
+            'tmswp_it_words',
+            'tmswp_it_precise',
+            'tmswp_it_exponent',
+            'tmswp_it_rounded',
+            self::RECORDS_TABLE,
+            'tmswp_it_queue',
+            'tmswp_it_translation_group',
+            'tmswp_it_translation_relation',
+        );
+        $this->realTables->onTearDown(static function (): void {
+            delete_option(self::OPTION);
+        });
     }
 
     public function tear_down(): void
     {
-        // テスト中の CREATE TABLE はテストライブラリにより一時テーブルになり、接続が続く限り残るため削除する
-        foreach ([self::TABLE, 'tmswp_fixture_spied', self::NOTES_TABLE, self::FLAGS_TABLE, self::BIG_TABLE, self::DEC_TABLE, 'tmswp_it_words', 'tmswp_it_precise', 'tmswp_it_exponent', 'tmswp_it_rounded', self::RECORDS_TABLE, 'tmswp_it_queue', 'tmswp_it_translation_group', 'tmswp_it_translation_relation'] as $table) {
-            self::wpdb()->query('DROP TABLE IF EXISTS ' . self::wpdb()->prefix . $table);
-        }
-
         Model::useConnection(null);
         parent::tear_down();
     }
@@ -321,13 +340,29 @@ final class ModelIntegrationTest extends IntegrationTestCase
         // Kernel が登録した現在の定義は、保存済みのハッシュと食い違う
         self::assertFalse($migrator->status()[0]->current);
 
+        // 2人の利用者と、管理者の通知の表示でWordPressが保存する更新の確認のサイトのtransientは、後のmigrateAll()の
+        // ALTER(暗黙のコミット)で確定するため、テストの後に消す(transientは、テストの前に無かったものだけ)
         $subscriber = self::factory()->user->create(['role' => 'subscriber']);
         self::assertIsInt($subscriber);
+        $administrator = self::factory()->user->create(['role' => 'administrator']);
+        self::assertIsInt($administrator);
+        $newTransients = array_values(array_filter(
+            ['update_core', 'update_plugins', 'update_themes'],
+            static fn(string $transient): bool => !self::optionRowExists('_site_transient_' . $transient),
+        ));
+        $this->realTables->onTearDown(static function () use ($subscriber, $administrator, $newTransients): void {
+            require_once ABSPATH . 'wp-admin/includes/user.php';
+            self::assertTrue(wp_delete_user($subscriber));
+            self::assertTrue(wp_delete_user($administrator));
+
+            foreach ($newTransients as $transient) {
+                delete_site_transient($transient);
+            }
+        });
+
         wp_set_current_user($subscriber);
         self::assertStringNotContainsString(self::TABLE, $this->adminNotices());
 
-        $administrator = self::factory()->user->create(['role' => 'administrator']);
-        self::assertIsInt($administrator);
         wp_set_current_user($administrator);
         $notices = $this->adminNotices();
         self::assertStringContainsString('The database tables ' . self::TABLE . ' do not match their TMSWP table definitions. Run wp tmswp migrate to apply the definitions.', $notices);
@@ -1040,6 +1075,19 @@ final class ModelIntegrationTest extends IntegrationTestCase
         do_action('admin_notices');
 
         return (string) ob_get_clean();
+    }
+
+    /**
+     * optionの行があるか(オブジェクトキャッシュを通さずに読む)。読み取りの失敗を、行が無いことと取り違えないよう、
+     * SQLのエラーはテストの失敗にする。
+     */
+    private static function optionRowExists(string $name): bool
+    {
+        $wpdb = self::wpdb();
+        $count = $wpdb->get_var($wpdb->prepare('SELECT COUNT(*) FROM %i WHERE option_name = %s', $wpdb->options, $name));
+        self::assertSame('', $wpdb->last_error, "cannot read the option {$name}");
+
+        return $count !== '0';
     }
 
     /**

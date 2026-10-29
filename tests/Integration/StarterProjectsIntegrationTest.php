@@ -28,17 +28,44 @@ final class StarterProjectsIntegrationTest extends IntegrationTestCase
 {
     private const string WORKSPACE_DIR = 'var/starter-site';
 
+    /**
+     * 写しのテーマを動かすと、WordPressが開発用サイトに書くoption(テーマのtheme_mods。`get_theme_mods()`が無ければ作る)。
+     * テストの前の状態を控えて、テストの後に戻す。
+     */
+    private const array DEV_SITE_OPTIONS = ['theme_mods_tmswp-starter-theme', 'theme_mods_client-theme'];
+
     /** @var list<string> */
     private array $workspaces = [];
 
+    /**
+     * テストの前の開発用サイトのDEV_SITE_OPTIONSの状態(無ければnull)。控えられなかったときはnullで、戻さない。
+     *
+     * @var array<string, array{option_value: string, autoload: string}|null>|null
+     */
+    private ?array $devSiteOptions = null;
+
+    public function set_up(): void
+    {
+        parent::set_up();
+        $this->devSiteOptions = self::readDevSiteOptions();
+    }
+
     public function tear_down(): void
     {
-        foreach ($this->workspaces as $workspace) {
-            self::deleteDirectory($workspace);
-        }
+        try {
+            $this->deletePatternCaches();
+        } finally {
+            try {
+                $this->restoreDevSiteOptions();
+            } finally {
+                foreach ($this->workspaces as $workspace) {
+                    self::deleteDirectory($workspace);
+                }
 
-        $this->workspaces = [];
-        parent::tear_down();
+                $this->workspaces = [];
+                parent::tear_down();
+            }
+        }
     }
 
     /**
@@ -139,6 +166,126 @@ final class StarterProjectsIntegrationTest extends IntegrationTestCase
         $this->workspaces[] = $workspace;
 
         return $workspace;
+    }
+
+    /**
+     * 写しのテーマのpatternのキャッシュを、開発用サイトから消す。WordPressは、テーマのpatternのファイルの一覧を
+     * サイトのtransient`wp_theme_files_patterns-<md5(テーマの置き場/ディレクトリ名)>`に保存する(WP_Theme)。写しの置き場は
+     * テストごとに変わるため、消さないと実行のたびに開発用サイトのoptionが増える。このテストが作ったテーマの名前だけを消す。
+     */
+    private function deletePatternCaches(): void
+    {
+        $transients = [];
+
+        foreach ($this->workspaces as $workspace) {
+            $themes = glob($workspace . '/themes/*', GLOB_ONLYDIR);
+
+            if ($themes === false) {
+                throw new RuntimeException("cannot list the themes in {$workspace}/themes");
+            }
+
+            foreach ($themes as $theme) {
+                $transients[] = 'wp_theme_files_patterns-' . md5($workspace . '/themes/' . basename($theme));
+            }
+        }
+
+        if ($transients === []) {
+            return;
+        }
+
+        $result = self::runProcess(
+            ['wp', '--path=' . ABSPATH, 'eval', 'foreach (json_decode((string) getenv("TMSWP_STARTER_TRANSIENTS"), true, 512, JSON_THROW_ON_ERROR) as $name) { delete_site_transient($name); }'],
+            ['TMSWP_STARTER_TRANSIENTS' => json_encode($transients, JSON_THROW_ON_ERROR)],
+            self::repositoryRoot(),
+        );
+        self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+    }
+
+    /**
+     * 開発用サイトのDEV_SITE_OPTIONSの行(option_valueとautoload。無ければnull)を、オブジェクトキャッシュを通さずに読む。
+     * どれかの読み取りがSQLのエラーになれば、子プロセスが非0で終わり、テストを失敗させる(前の状態が分からないまま、
+     * tear_downで行を消したり戻したりしないため。set_upは、すべてのキーを読めたときだけ控えを保存する)。
+     *
+     * @return array<string, array{option_value: string, autoload: string}|null>
+     */
+    private static function readDevSiteOptions(): array
+    {
+        $result = self::runProcess(
+            ['wp', '--path=' . ABSPATH, 'eval', <<<'PHP'
+                global $wpdb;
+                $rows = [];
+                foreach (json_decode((string) getenv('TMSWP_STARTER_OPTIONS'), true, 512, JSON_THROW_ON_ERROR) as $name) {
+                    $rows[$name] = $wpdb->get_row($wpdb->prepare("SELECT option_value, autoload FROM {$wpdb->options} WHERE option_name = %s", $name), ARRAY_A);
+                    // 読み取りの失敗(null)を、行が無いことと取り違えない
+                    if ($wpdb->last_error !== '') {
+                        WP_CLI::error("cannot read the option {$name}: {$wpdb->last_error}");
+                    }
+                }
+                echo json_encode($rows, JSON_THROW_ON_ERROR);
+                PHP],
+            ['TMSWP_STARTER_OPTIONS' => json_encode(self::DEV_SITE_OPTIONS, JSON_THROW_ON_ERROR)],
+            self::repositoryRoot(),
+        );
+        self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
+        $rows = json_decode($result['stdout'], true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($rows);
+        $options = [];
+
+        foreach (self::DEV_SITE_OPTIONS as $name) {
+            $row = $rows[$name] ?? null;
+
+            if ($row === null) {
+                $options[$name] = null;
+                continue;
+            }
+
+            self::assertIsArray($row);
+            $value = $row['option_value'] ?? null;
+            $autoload = $row['autoload'] ?? null;
+            self::assertIsString($value);
+            self::assertIsString($autoload);
+            $options[$name] = ['option_value' => $value, 'autoload' => $autoload];
+        }
+
+        return $options;
+    }
+
+    /**
+     * 開発用サイトのDEV_SITE_OPTIONSを、テストの前の状態に戻す。前に無かった行は、その名前の行だけを消す。前にあった行は、
+     * 値とautoloadを戻す(消えていれば作り直す)。
+     */
+    private function restoreDevSiteOptions(): void
+    {
+        if ($this->devSiteOptions === null) {
+            return;
+        }
+
+        $options = $this->devSiteOptions;
+        $this->devSiteOptions = null;
+        $result = self::runProcess(
+            ['wp', '--path=' . ABSPATH, 'eval', <<<'PHP'
+                global $wpdb;
+                foreach (json_decode((string) getenv('TMSWP_STARTER_OPTIONS'), true, 512, JSON_THROW_ON_ERROR) as $name => $row) {
+                    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name = %s", $name)) === '1';
+                    if ($wpdb->last_error !== '') {
+                        WP_CLI::error("cannot read the option {$name}: {$wpdb->last_error}");
+                    }
+                    if ($row === null) {
+                        $done = $wpdb->delete($wpdb->options, ['option_name' => $name]);
+                    } elseif ($exists) {
+                        $done = $wpdb->update($wpdb->options, $row, ['option_name' => $name]);
+                    } else {
+                        $done = $wpdb->insert($wpdb->options, ['option_name' => $name] + $row);
+                    }
+                    if ($done === false) {
+                        WP_CLI::error("cannot restore the option {$name}: {$wpdb->last_error}");
+                    }
+                }
+                PHP],
+            ['TMSWP_STARTER_OPTIONS' => json_encode($options, JSON_THROW_ON_ERROR)],
+            self::repositoryRoot(),
+        );
+        self::assertSame(0, $result['code'], $result['stdout'] . $result['stderr']);
     }
 
     private static function repositoryRoot(): string

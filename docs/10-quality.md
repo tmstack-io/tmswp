@@ -970,7 +970,7 @@ fixtureとの共存は次のとおり。
 - `themeKernel()` / `pluginKernel()` で fixture の Kernel を得る。
 - fixture のクラスは PHPStan の解析対象外のため、テストからは FQCN の文字列で参照し、`fixtureClass($fqcn, $parent)` で親クラスを確かめた class-string として使う。
 - WP のテストライブラリは、各テストの `tear_down` で登録済みメタキーをすべて解除する(`unregister_all_meta_keys()`)。`IntegrationTestCase::set_up()` は、`_boot.php` が `wp_loaded` で控えた登録を毎回戻す。
-- DB の変更は `WP_UnitTestCase` がテストごとにロールバックする。テスト中の `CREATE TABLE` はテストライブラリが一時テーブルに書き換え、接続が続く限り残るため、作ったテーブルは `tear_down` で削除する。フックはテストライブラリが最初のテストの前の状態に戻すため、テスト中の `add_filter` / `remove_action` は後片付けが要らない。
+- DBの変更は`WP_UnitTestCase`がテストごとにロールバックする。テスト中の`CREATE TABLE`はテストライブラリが一時テーブルに書き換え、接続が続く限り残るため、作ったテーブルは`tear_down`で削除する。Migratorを使うテスト等、一時テーブルでは確かめられないテストは、`useRealTables()`に作るテーブルを宣言して、実際のテーブルを作る(宣言したテーブルは`tear_down`で消える。DDLの暗黙のコミットと後始末は4.11)。フックはテストライブラリが最初のテストの前の状態に戻すため、テスト中の`add_filter` / `remove_action`は後片付けが要らない。
 - WordPress の契機は WordPress の関数・フックで再現する。テーマの有効化は、`switch_theme()` が前のリクエストで残す `theme_switched` を置いてから `check_theme_switched()` を呼ぶ(`after_switch_theme` が発火する)。管理画面のリクエストは `wp-admin/includes/admin.php` を読み込み、`set_current_screen()` で管理画面にしてから `admin_init` を発火する。FW 自身のフック(`tmswp/activated` 等)を直接発火して契機を代用しない。
 
 ### 4.7 tests/wp-tests-config.php と .wp-env.json(完全版)
@@ -1000,7 +1000,7 @@ define('WP_PHP_BINARY', 'php');
 define('WP_DEBUG', true);
 ```
 
-- DB の接続先は wp-env の環境(mysql コンテナの `wordpress` データベース)を既定値とし、環境変数で上書きできる。テーブル接頭辞 `wptests_` で開発用サイトのテーブル(`wp_`)と分ける。
+- DBの接続先はwp-envの環境(mysqlコンテナの`wordpress`データベース。中身はMariaDB)を既定値とし、環境変数で上書きできる。MySQLでの実行は4.11のとおり`WP_TESTS_DB_HOST`で接続先を変える。テーブル接頭辞`wptests_`で開発用サイトのテーブル(`wp_`)と分ける。
 - `error_reporting()` はここで設定しない。`WP_DEBUG` が true のとき WordPress の `wp_debug_mode()` が `error_reporting(E_ALL)` に設定し直すため、ここでの設定はテストの実行時には効かない。非推奨の扱いは 4.5・4.6 のとおりである。
 
 `.wp-env.json`(リポジトリ既定。CI では `.wp-env.override.json` で core / phpVersion を差し替える):
@@ -1130,6 +1130,33 @@ composer test:e2e -- --grep Thumbnail
 
 - CIでは、`sample-site`ジョブ(5.1)が`composer qa`の後に、ブラウザを入れて(`node node_modules/@playwright/test/cli.js install --with-deps chromium`。キャッシュしない)`composer test:e2e`を実行する。失敗したときだけ、`var/e2e/test-results/`を成果物`e2e-traces`に保存する。
 - 対象のWordPressは、sample-siteの`.wp-env.json`の`core: null`(wp-envの既定の最新版)である。エディタの画面の変化(ボタンの名前等)で失敗したときは、補助かテストの要素の指定を直す。
+
+### 4.11 MySQLでの統合テスト(DBの構成)
+
+wp-env(12)は、開発用サイトのDB(`mysql`のサービス)をMariaDBに固定し、設定でMySQLにできない。統合テストの既定の接続先はこのMariaDBである(4.7)。MySQL 8.4 LTSと9.7 LTSでの確認は、MySQLのコンテナを別に立て、wp-envのcliから`WP_TESTS_DB_HOST`(tests/wp-tests-config.php)で接続して、統合テストの全体を実行する(D-56)。CIでは`mysql`ジョブ(5.1。2セル)が毎回行う。
+
+| 接続先 | 使う場面 | 版 |
+|---|---|---|
+| wp-envのMariaDB(ホスト`mysql`・DB`wordpress`) | `composer test:integration`、CIの`integration`・`coverage`、`http://wordpress/`を叩くテストのサイト側 | wp-envの既定(手元の確認では12.3.3) |
+| servicesのMySQL(別名`mysql-under-test`・DB`wordpress`) | CIの`mysql`ジョブの統合テスト(WordPressのテストライブラリと、テストのプロセスのwpdb) | `mysql:8.4`・`mysql:9.7`のイメージ(LTSの系列のタグ) |
+
+- `mysql`ジョブのPHPは8.3、WordPressは7.0に固定する(DBの違いを確かめるジョブのため、PHP・WordPressの版の軸は`integration`の4セルに任せる)。
+- `http://wordpress/`を叩くテスト(Formのページ・一時ファイルのURL等。`FormIntegrationTest`・`FormFileIntegrationTest`・`FormTempFileIntegrationTest`)のサイト側は、wp-envの`wordpress`のコンテナで動き、開発用サイトのMariaDBを使う。本物のWP-CLIを別のプロセスで実行するテスト(`MigrateCommandIntegrationTest`・`DiscoverCommandIntegrationTest`等。開発用サイトに対して実行する)も同じである。`mysql`ジョブでも、これらの部分はMySQLで確かめていない。テストのプロセス(cli)の側のwpdbだけがMySQLに接続する。
+- 一時テーブルとMySQLの違い: WordPressのテストライブラリは、テストの中のCREATE TABLE・DROP TABLEを一時テーブルの文に書き換える。MySQLのSHOW TABLES・SHOW TABLE STATUSは一時テーブルを返さず(MariaDBは11.2から返す)、MySQLは1つの文で同じ一時テーブルを2回参照できない。Migratorは適用の後にSHOW TABLESでテーブルの有無を確かめるため、Migratorを使う統合テスト(`ModelIntegrationTest`・`MigratorIntegrationTest`・`MigratorColumnTypeIntegrationTest`)は、`IntegrationTestCase::useRealTables()`(tmswp/testingの`RealTables`)で実際のテーブルを作る。作るテーブル(接頭辞を除いた名前)は`useRealTables()`に宣言し、そのテストのtear_downで、宣言したテーブルのうち`useRealTables()`の時点に無かったものだけを名前で消す。DB全体の差分は使わない(ほかの接続が作ったテーブルを消さないため)。
+- DDLは暗黙にコミットする。DDLより前にテストが書いた行(Migratorのハッシュのoption、利用者、WordPressが保存したtransient等)はロールバックで戻らないため、`useRealTables()`が返す`RealTables`の`onTearDown()`で、作ったIDや名前を控えて消す(ロールバックの後・テーブルの削除の前に動く)。統合テストの全体の実行で、各テストの前後に、別の接続で`wptests_`の主なテーブル(users・usermeta・terms・term_taxonomy・term_relationships・posts・postmeta・options・comments・termmeta)の件数・optionの名前・実際のテーブルの一覧が変わらないことを、MariaDBとMySQL 8.4・9.7で確かめた(v0.9.0-T3a)。
+- 接続先の取り違えを防ぐため、`mysql`ジョブは統合テストの前に、tests/wp-tests-config.phpと同じ設定で接続して`SELECT VERSION()`を実行し、版がそのセルのMySQL(`8.4.`・`9.7.`で始まる)でなければ失敗する。
+- MySQLのコンテナは、servicesのネットワークからwp-envのネットワークへ、`docker network connect --alias mysql-under-test`で参加させる。servicesで公開したポートへ`host.docker.internal`(wp-envの`extra_hosts`のhost-gateway)経由で接続する方法は、手元(macOSのDocker Desktop)では届くが、Linuxのrunnerでは届き方がDockerのネットワークの分離とファイアウォールの設定に依存し、手元で確かめられないため使わない。
+- MySQL 8.4・9.7の既定の認証(`caching_sha2_password`)で、wp-envのPHP(mysqli)から接続できる。9.7には`mysql_native_password`が無い。
+
+手元で再現する手順(ルートのwp-envを起動した状態。コンテナ名とポートは手元の他の環境と重ねない):
+
+```bash
+docker run -d --name tmswp-mysql84 -e MYSQL_ROOT_PASSWORD=password -e MYSQL_DATABASE=wordpress mysql:8.4
+docker network connect --alias mysql-under-test "<wp-envのネットワーク(docker network lsのwp-env-<名前>-<ハッシュ>_default)>" tmswp-mysql84
+node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp \
+  env WP_TESTS_DB_HOST=mysql-under-test vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist
+docker rm -f tmswp-mysql84   # 終わったら消す
+```
 
 ---
 
@@ -1282,6 +1309,96 @@ jobs:
       - name: Show wp-env logs on failure
         if: failure()
         run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+
+  # MySQL 8.4 LTS・9.7 LTSでの統合テスト(D-56)。wp-env 12はDBをMariaDBに固定するため、servicesでMySQLを立て、
+  # wp-envのネットワークに別名mysql-under-testで参加させ、wp-envのcliからWP_TESTS_DB_HOSTで接続する。
+  # PHPとWordPressは8.3・7.0に固定する。http://wordpress/を叩くテストは、このジョブでも開発用サイト(wp-envのMariaDB)を使う。
+  mysql:
+    name: Integration (MySQL ${{ matrix.mysql }} / PHP 8.3 / WP 7.0)
+    runs-on: ubuntu-24.04
+    needs: [unit]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql: ['8.4', '9.7']
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql }}
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: wordpress
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ppassword"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+      - name: Create wp-env override
+        run: |
+          printf '{"core": "https://wordpress.org/wordpress-7.0.zip", "phpVersion": "8.3"}\n' > .wp-env.override.json
+      - name: Start wp-env
+        run: |
+          for attempt in 1 2 3; do
+            if composer wp:start; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+      # servicesのMySQLは別のネットワークにあるため、wp-envのネットワークに参加させる
+      - name: Connect MySQL to the wp-env network
+        run: |
+          containers=$(docker ps -q --filter label=com.docker.compose.service=wordpress)
+          if [ "$(printf '%s\n' "${containers}" | grep -c .)" -ne 1 ]; then
+            echo "::error::expected exactly one wp-env wordpress container: ${containers}"
+            exit 1
+          fi
+          networks=$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${containers}" | grep .)
+          if [ "$(printf '%s\n' "${networks}" | grep -c .)" -ne 1 ]; then
+            echo "::error::expected exactly one wp-env network: ${networks}"
+            exit 1
+          fi
+          docker network connect --alias mysql-under-test "${networks}" "${{ job.services.mysql.id }}"
+      # tests/wp-tests-config.phpと同じ設定で接続し、wp-envのMariaDBではなくこのセルのMySQLであることを確かめる
+      - name: Check the database version
+        run: |
+          # PHPのコードの$はシェルで展開しない
+          # shellcheck disable=SC2016
+          version=$(node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp \
+            env WP_TESTS_DB_HOST=mysql-under-test \
+            php -r 'require "tests/wp-tests-config.php"; $db = new mysqli(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); echo $db->query("SELECT VERSION()")->fetch_row()[0];')
+          echo "database version: ${version}"
+          case "${version}" in
+            "${{ matrix.mysql }}."*) ;;
+            *)
+              echo "::error::the tests would connect to ${version}, not MySQL ${{ matrix.mysql }}"
+              exit 1
+              ;;
+          esac
+      - name: Run integration tests
+        run: |
+          node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp \
+            env WP_TESTS_DB_HOST=mysql-under-test \
+            vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+          docker logs "${{ job.services.mysql.id }}"
 
   # 合算カバレッジ(unit と integration)の判定。PHP 8.3 / WordPress 最新版の 1 セルで行う。
   # unit は pcov、integration は wp-env の Xdebug(--xdebug=coverage)で計測し、clover を行単位で合算する。
@@ -1498,11 +1615,12 @@ jobs:
 
 - マトリクスは D-09 のとおり、ユニットが PHP 8.3 / 8.5、統合が **PHP 8.3 / 8.5 × WP 7.0 / 最新版** の 4 セル。ユニットは WP 非依存のため PHP 軸のみ。
 - 統合の各セルは、検証する WP の版を先に確定し(WP 7.0 のセルは 7.0、最新版のセルは WordPress.org の版情報 API の最新版)、wp-env の `core` をその版の zip にする。テストライブラリは wp-env がその版と同じタグから取得する(§4.2)。API の取得に失敗したセルは、その時点で失敗する。
+- `mysql`ジョブは、MySQL 8.4 LTSと9.7 LTSの2セルで統合テストを実行する(D-56。4.11)。PHPは8.3、WordPressは7.0に固定する(DBの違いを確かめるジョブなので、PHP・WordPressの軸は`integration`に任せる)。MySQLはservicesのイメージ`mysql:8.4`・`mysql:9.7`(LTSの系列のタグ。`latest`は使わない)で立て、ヘルスチェック(`mysqladmin ping`)が通ってから段を始める。wp-envの起動の後に、MySQLのコンテナをwp-envのネットワークに別名`mysql-under-test`で参加させ(`docker network connect`)、wp-envのcliから`WP_TESTS_DB_HOST=mysql-under-test`で統合テストの全体を実行する。テストの前に、tests/wp-tests-config.phpと同じ設定で接続して`SELECT VERSION()`を実行し、版がそのセルのMySQL(`8.4.`・`9.7.`で始まる)でなければ失敗させる(wp-envのMariaDBに接続して成功してしまうことを防ぐ)。
 - wp-env は `npm ci` で package-lock.json どおりに導入し(`actions/setup-node` の npm キャッシュを使う)、composer スクリプト経由でローカルの wp-env だけを呼ぶ(§1.1 補足)。
 - npm(11.19以降)は、依存のインストールスクリプトを、package.jsonの`allowScripts`に無いかぎり実行せず、警告を出す。ルートのpackage.jsonは、@wordpress/envの依存の`fs-ext-extra-prebuilt`(@wp-playground/cliが使う)のインストールスクリプトを`false`で拒否する(`npm install-scripts deny fs-ext-extra-prebuilt`で書く)。このパッケージは各OS・Node.jsの版のビルド済みのバイナリを同梱し、インストールスクリプトはそのバイナリの確認かnode-gypでのビルドだけを行う。wp-envのDockerの実行環境はこのパッケージを使わない。@wordpress/envを更新して、インストールスクリプトを持つ依存が増えた場合は、中身を確かめてから`allowScripts`に許可か拒否を書く。
 - `lint` / `analyse` / `monorepo` / `rules-verify` は下限の PHP 8.3 で実行する(php-cs-fixer の推奨と依存解決の下限に合わせる。§1.1 補足)。PHP 8.5 での解析は PHPStan の `phpVersion`(8.3〜8.5。§2.1)が担う。
 - 全ジョブのrunnerを`ubuntu-24.04`に固定する(`ubuntu-latest`は使わない)。`ubuntu-latest`の指す版は予告のうえで新しいUbuntuへ移るため、名前で指定すると、ワークフローを変えなくてもrunnerの版が変わりうる。runnerの版を上げる場合は、全ジョブが新しい版で通ることを確かめてから、qa.yml・split.ymlの`runs-on`と5.1・5.2の完全版を同時に改訂する。
-- wp-envを起動するジョブは、`integration`・`coverage`・`starters`を`timeout-minutes: 20`、E2Eを含む`sample-site`を`timeout-minutes: 30`で打ち切る。wp-envの起動は、Dockerイメージの取得の一時的な失敗に備えて10秒の間隔で3回まで再試行し、3回目の失敗でジョブを失敗させる。失敗時はwp-envのログ(`logs development --no-watch`)を出力する。
+- wp-envを起動するジョブは、`integration`・`mysql`・`coverage`・`starters`を`timeout-minutes: 20`、E2Eを含む`sample-site`を`timeout-minutes: 30`で打ち切る。wp-envの起動は、Dockerイメージの取得の一時的な失敗に備えて10秒の間隔で3回まで再試行し、3回目の失敗でジョブを失敗させる。失敗時はwp-envのログ(`logs development --no-watch`)を出力する(`mysql`はMySQLのコンテナのログも出力する)。
 - `lint` ジョブが baseline ファイルの不存在を機械的に強制する。
 - `unit`ジョブと`coverage`ジョブのユニットテストの段は、`--testdox`(`composer test:unit -- --testdox`・`composer test:coverage:unit -- --testdox`)で実行し、ログにテストの名前を出す。
 - 合算カバレッジの判定は `coverage` ジョブ(PHP 8.3 / WordPress 最新版の 1 セル)だけで行う(4.8)。このジョブは pcov で unit を、`wp:start:coverage` で起動した wp-env の Xdebug で integration を計測し、2 つの clover を artifact `coverage-clover` に保存してから `test:coverage:check` で判定する。clover はジョブ内で生成して使うため、ジョブ間の受け渡しは無い。`unit` と `integration` の各セルはカバレッジを計測しない。
@@ -1513,7 +1631,7 @@ jobs:
   - `tmswp-starter-theme`: テーマのスターターをそのまま写したもの(`--no-scripts`)。テーマを有効にして`npm ci`と`npm run build`(wp-scriptsでblocks/をビルドし、`wp tmswp discover`で探索結果ファイルを作る)を実行し、ビルドの出力と探索結果ファイルが、コミット済みの`starters/theme/build/blocks/`・`starters/theme/tmswp-discovery.php`と同じかを`diff`で確かめる(§1.4・§1.11)。
   - `client-theme`・`shop-tools`: `bin/setup.php`(post-create-project-cmd)を、スラッグと表示名を環境変数で渡して非対話で実行したテーマとプラグイン。作った直後に、`{{`が残っていない(`grep -rn "{{" <プロジェクト> --exclude-dir=vendor --exclude-dir=node_modules`が一致なし)こと、`bin/setup.php`が消えていること、プラグインの本体ファイルが`shop-tools.php`になり`plugin.php`が無いことを確かめる。続けて各README.mdの「セットアップの後」の手順で探索結果ファイルを作り(テーマは`npm ci`と`npm run build`、プラグインは`composer discover`)、`composer qa`を実行する。
   - プロジェクトのスクリプトは、WP-CLIがサイトに届く場所で`wp`を実行する前提である。このジョブは`tools/ci/bin`をPATHの先頭に足し、`tools/ci/bin/wp`が引数をそのままwp-envのcliコンテナのWP-CLIへ渡す(wp-envの設定のあるディレクトリは環境変数`TMSWP_WP_ENV_DIR`で渡す)。lint・analyse・testはホストのPHP 8.3で実行する。
-- `integration`・`coverage`・`sample-site`・`starters`は`unit`の成功の後に起動し、失敗時にDockerの起動のコストを省く。
+- `integration`・`mysql`・`coverage`・`sample-site`・`starters`は`unit`の成功の後に起動し、失敗時にDockerの起動のコストを省く。
 - 外部アクションはコミットの SHA で固定する(5.3)。
 
 ### 5.2 .github/workflows/split.yml(完全版)

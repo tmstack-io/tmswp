@@ -459,7 +459,9 @@ final class WpdbTestDoubleParityTest extends IntegrationTestCase
             $result['ddlAfterInsert'] = $state($db->query("ALTER TABLE {$a} ADD COLUMN extra int NULL"));
             $result['queryInsert'] = $state($db->query("INSERT INTO {$a} (name) VALUES ('b')"));
             $result['readAfterInsert'] = $state($db->get_var("SELECT name FROM {$a} WHERE name = 'a'"));
-            $result['zeroRowInsert'] = $state($db->query("INSERT INTO {$a} (name) SELECT name FROM {$a} WHERE 1 = 0"));
+            // 0件のINSERT ... SELECTの戻り値・rows_affected・insert_idを比べる。選ぶ元は空の別のテーブルにする(MySQLは1つの文で
+            // 同じ一時テーブルを2回参照できない)
+            $result['zeroRowInsert'] = $state($db->query("INSERT INTO {$a} (name) SELECT k FROM {$b} WHERE 1 = 0"));
             $result['insertAfterZeroRows'] = $state($db->insert($a, ['name' => 'c']));
             $result['update'] = $state($db->update($a, ['name' => 'c2'], ['name' => 'c']));
             $fail('read', 'Table does not exist');

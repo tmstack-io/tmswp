@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use TMSWP\Core\Exception\SchemaException;
 use TMSWP\Core\Model\Connection;
 use TMSWP\Core\Model\TableDefinition;
+use TMSWP\Core\Tests\Support\RawColumnTypes;
 use TMSWP\Testing\UnitTestCase;
 use TMSWP\Testing\WpdbTestDouble;
 
@@ -81,21 +82,18 @@ final class TableDefinitionTypeAliasTest extends UnitTestCase
         TableDefinition::create('raw_notation')->id()->rawColumn('valuecol', $definition);
     }
 
-    /** @return iterable<string, array{string}> */
+    /**
+     * 統合テスト(MigratorColumnTypeIntegrationTest)が実物のDBで作成と再適用を確かめる定義と同じもの。
+     *
+     * @return iterable<string, array{string}>
+     */
     public static function canonicalTypes(): iterable
     {
-        yield 'int' => ['int(11) NOT NULL'];
-        yield 'decimal' => ['decimal(10,2) NOT NULL'];
-        yield 'double' => ['double NOT NULL'];
-        yield 'tinyint(1)' => ['tinyint(1) NOT NULL'];
-        yield 'char' => ['char(5) NOT NULL'];
-        yield 'longtext(別名の long で始まる型名)' => ['longtext NULL'];
-        yield 'double precision(DB は double と記録し、dbDelta も先頭の語だけを比べる)' => ['double precision NOT NULL'];
-        yield 'decimal(別名の dec で始まる型名)' => ['decimal(10,2) NOT NULL'];
-        yield 'timestamp' => ['timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP'];
-        yield 'float(10,2)(精度と桁の2つの引数)' => ['float(10,2) NOT NULL'];
-        yield 'int(10) unsigned' => ['int(10) unsigned NOT NULL'];
-        yield 'bigint(20) unsigned AUTO_INCREMENT' => ['bigint(20) unsigned NOT NULL AUTO_INCREMENT'];
+        foreach (RawColumnTypes::ACCEPTED as $label => $definition) {
+            yield $label => [$definition];
+        }
+
+        yield 'bigint(20) unsigned AUTO_INCREMENT' => [RawColumnTypes::ACCEPTED_AUTO_INCREMENT];
     }
 
     /** dbDelta は列名の後の1つの空白に続く語を型として読むため、定義の前後の空白は除いて書く。 */

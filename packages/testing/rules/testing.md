@@ -229,8 +229,44 @@ final class NewsletterOptionTest extends UnitTestCase
 |---|---|
 | `WpdbTestDouble` | Model(独自テーブル)のユニットテストで、`Model::useConnection(new Connection(WpdbTestDouble::create()))`として渡すwpdbの代役。`queueResultSet()`・`queueRow()`・`queueVar()`で読み取りの結果を入れ(入れなければ行が無いのと同じで、`get_results()`は空の配列を返す)、`queries()`・`insertCalls()`・`updateCalls()`・`deleteCalls()`で実行したSQLと呼び出しを確かめる。代役は行を持たないため、`update()`・`delete()`(Modelの`update()`・`delete()`)の前に影響する行の数を`queueAffectedRows()`で、`insert()`(Modelの`insert()`)の前に作る行のIDを`queueInsertId()`で入れる(入れないと`InvalidArgumentException`になる)。`insert()`は1を返し、`query()`はDDL・INSERT・UPDATE・DELETE・REPLACEだけを受け付ける(SELECT等は例外。詳しくは`WpdbTestDouble`のdocblock)。`tearDown()`で`Model::useConnection(null)`を呼ぶ。`Connection`の`select()`・`selectRow()`を通るテストは、wpdbの出力の形の定数(`ARRAY_A`等)が要るため、テストの中で`WpdbTestDouble::defineOutputConstants()`を呼び、そのテストに`#[RunInSeparateProcess]`を付ける(定数はプロセスに残るため) |
 | `MetaStorageContract` | 自分で書いた`MetaStorageInterface`の実装が契約を満たすかを確かめるtrait。テストのクラスでuseし、`storage()`・`objectType()`・`createObject()`を実装する |
-| `IntegrationTestCase`・`MetaStorageContractTestCase`・`BootsKernelBeforeInit` | TMSWPのmonorepoの統合テスト(fixtureのテーマ・プラグイン)の基盤。利用側のプロジェクトのテストでは使わない |
+| `RealTables` | WordPressのテストライブラリ(`WP_UnitTestCase`)で書いた統合テストで、実際のテーブルを作り、テストの後に、宣言したテーブルのうち`start()`の時点に無かったものだけを消す。MySQLでMigratorを使うテストに使う(下の「MySQLでMigratorを使う統合テスト」) |
+| `IntegrationTestCase`・`MetaStorageContractTestCase`・`BootsKernelBeforeInit` | TMSWPのmonorepoの統合テスト(fixtureのテーマ・プラグイン)の基盤。利用側のプロジェクトのテストでは使わない(`IntegrationTestCase::useRealTables()`は、monorepoの統合テストで`RealTables`を使うためのもの) |
 | `WpCliPharDeprecations` | TMSWPのmonorepoの統合テストで、本物のWP-CLIのプロセスの標準エラーから、WP-CLIのphar自身が出したPHPの非推奨の行(WP-CLI 2.12.0がPHP 8.5で出すもの)だけを取り除く(`strip()`は取り除いた後の出力と行の数を返す)。利用側のプロジェクトのテストでは使わない |
+
+### MySQLでMigratorを使う統合テスト
+
+スターターに統合テストは無い。プロジェクトで、WordPressのテストライブラリ(`WP_UnitTestCase`。PHPUnit 9.6)の統合テストを自分で用意して、Model・Migratorを実物のDBで確かめるときの注意である。
+
+- テストライブラリは、テストの中のCREATE TABLE・DROP TABLEを一時テーブルの文に書き換える。MySQLのSHOW TABLES・SHOW TABLE STATUSは一時テーブルを返さない(MariaDBは11.2から返す)。そのため、MySQLでは`Migrator::migrateAll()`が適用の後の照合で`MigrationException`(`table was not created: ...`)になる。MySQLは、1つの文で同じ一時テーブルを2回参照することもできない。
+- テーブルを作るテストは、`set_up()`で`RealTables::start($this, $wpdb, <テストが作るテーブルの、接頭辞を除いた名前>...)`を呼んで実際のテーブルを作り、`tear_down()`で`tearDown()`を呼ぶ。`tearDown()`は、ロールバックの後に`onTearDown()`の後始末を実行し、宣言したテーブルのうち`start()`の時点に実際のテーブルとして無かったものを、名前で1つずつ消してから、COMMITする。DB全体の差分は使わないため、ほかの接続が作ったテーブルは消さない。宣言していないテーブルも消さないため、テストが作るテーブル(Modelの`table()`のテーブル名)はすべて宣言する。ROLLBACK・後始末・DROP・COMMITのどれが失敗しても残りを続け、最後に、起きた順で最初の失敗を投げる。
+- DDL(CREATE TABLE・ALTER TABLE・DROP TABLE等。`migrateAll()`のdbDeltaを含む)は暗黙にコミットする。DDLより前にテストが書いた行(ユーザー・ターム・option等。Migratorが保存するハッシュのoption`tmswp_schema_hashes`を含む)は、テストの後のロールバックで戻らない。そうした行は、DDLの後に書くか、作ったIDや名前を控えて`onTearDown()`で消す。`tear_down()`で`parent::tear_down()`より前に書いた削除は、`tearDown()`のロールバックで戻るため、後始末は`onTearDown()`に登録する。
+
+```php
+use TMSWP\Testing\RealTables;
+
+final class ContactMigrationTest extends WP_UnitTestCase
+{
+    private RealTables $realTables;
+
+    public function set_up(): void
+    {
+        parent::set_up();
+        $this->realTables = RealTables::start($this, $GLOBALS['wpdb'], 'contacts');
+        $this->realTables->onTearDown(static function (): void {
+            delete_option('tmswp_schema_hashes');
+        });
+    }
+
+    public function tear_down(): void
+    {
+        try {
+            $this->realTables->tearDown();
+        } finally {
+            parent::tear_down();
+        }
+    }
+}
+```
 
 ## してはいけないこと
 
