@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Testing;
 
 use FilesystemIterator;
+use Patchwork\CodeManipulation\Stream as PatchworkStream;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
@@ -53,7 +54,37 @@ trait UsesTempDirectories
         return $dir;
     }
 
+    /**
+     * ディレクトリを中身ごと消す。Patchwork(Brain Monkeyが読み込む)のstream wrapperが有効な間は、
+     * それを外して消す。
+     *
+     * Patchworkのstream wrapperは、ファイル操作のたびに`stream_wrapper_restore()`でwrapperを外し、
+     * `stream_wrapper_register()`で付け直す。`stream_wrapper_restore()`は外したwrapperの登録
+     * (stream factoryのresource)を解放しないため、1回の操作ごとに約250バイトがプロセスの終わりまで残る
+     * (antecedent/patchwork 2.2.4まで。上流のPR #225)。多くのファイルを消すとこれが積み上がるため、
+     * 解放する`stream_wrapper_unregister()`で外してから標準のwrapperに戻し、消した後にPatchworkの
+     * wrapperを付け直す。消す間はPHPのファイルを読み込まないため、Patchworkのコードの書き換えは要らない。
+     */
     private function deleteDirectory(string $dir): void
+    {
+        if (!class_exists(PatchworkStream::class, false)) {
+            $this->deleteTree($dir);
+
+            return;
+        }
+
+        try {
+            if (!stream_wrapper_unregister('file') || !stream_wrapper_restore('file')) {
+                self::fail('Patchworkのstream wrapperを外せません');
+            }
+
+            $this->deleteTree($dir);
+        } finally {
+            PatchworkStream::wrap();
+        }
+    }
+
+    private function deleteTree(string $dir): void
     {
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),

@@ -200,6 +200,7 @@ composer qa:fast            # lint → analyse → test:unit。Docker不要。�
 composer test               # test:unit → test:integration(wp-envが必要: composer wp:start)
 composer test:unit          # ユニットテスト(PHPUnit 11・Brain Monkey。WordPress非依存。Docker不要)
 composer test:integration   # 統合テスト(wp-envのcliコンテナのPHPUnit 9.6。wp-envが必要: composer wp:start)
+composer test:e2e           # E2E(Playwright。tests/E2E/)。sample-siteのwp-env(ポート8882)が必要: cd examples/sample-site && composer wp:start && composer wp:setup。初回はnode node_modules/@playwright/test/cli.js install chromium
 composer test:coverage      # ユニット・統合の合算カバレッジの計測と閾値の判定(wp-envをcomposer wp:start:coverageで起動しておく)
 composer analyse            # PHPStan level max(baselineなし)
 composer lint               # コードスタイルの検査(php-cs-fixerのdry-run)
@@ -232,9 +233,11 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 | Rules Code Examples | `packages/*/rules/`のコード例の抽出と検査(`tools/extract-rules-code.php`・`tools/verify-rules-code.php`) |
 | Unit | `composer test:unit`(PHP 8.3と8.5) |
 | Integration | `composer test:integration`(PHP 8.3と8.5 × WordPress 7.0と最新版の4セル) |
+| Integration (MySQL) | servicesのMySQL 8.4 LTSと9.7 LTS(2セル。PHP 8.3・WordPress 7.0)に、wp-envのcliから`WP_TESTS_DB_HOST`で接続した統合テスト。接続先の版を`SELECT VERSION()`で確かめる |
 | Coverage | 翻訳ファイルと探索結果ファイルの照合、合算カバレッジの閾値の判定(PHP 8.3・WordPress最新版) |
 | Sample Site QA | `examples/sample-site`の`composer qa`(専用のwp-env) |
 | Starter Projects | スターターからcreate-projectで作ったテーマ・プラグインの`composer qa`と、テーマのスターターのブロックのビルドと探索結果ファイルの照合 |
+| Split Packages Check | `tools/ci/split-check.sh`。8つのパッケージをsplit相当で取り出し、配布物(`git archive`)の中身と、packages/*の6つの単独の`composer install && composer test`を確かめる |
 
 ## コーディング規約
 
@@ -255,6 +258,7 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 3. `composer qa`を通す。
 4. 利用者に見える変更は、`CHANGELOG.md`の先頭の節(見出しはUnreleased)の小見出し(追加・変更・削除・修正・開発)に書く。公開APIのシグネチャの変更・削除等の破壊的変更は、変更・削除に、利用側で直すことと一緒に書く。
 5. 公開APIを変えたら、`packages/*/rules/`・`starters/`・`examples/sample-site/`の規約とコード例を追従させる(`grep -rn <旧API> packages/*/rules starters examples/sample-site --exclude-dir=vendor --exclude-dir=node_modules`で追従の漏れを確かめる)。
+6. `docs/01-architecture.md` §5.3の表に無いWordPressのAPI(関数・クラス・フック・引数)を新しく使うときは、そのAPIが導入された版がWordPress 7.0以下であることを、WordPressの公式のリファレンス(developer.wordpress.org)の「Since」で確かめる。7.0より後に導入されたAPIは使わない(7.0未満のための分岐やフォールバックも書かない。§5.3)。
 
 ## 新しいパッケージを足す手順
 
@@ -278,8 +282,10 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 
 ## リリース
 
-- 手順の正本は`docs/RELEASING.md`である。`vendor/bin/monorepo-builder release vX.Y.Z`が、mainへのpushとタグのpushを自ら行い、`split.yml`が各読み取り専用リポジトリへ同期する。
-- mainへのpushとタグ付けは、毎回ユーザーに確認してから行う。
+- 手順の正本は`docs/RELEASING.md`である。mainへの反映は、PR(`rewrite/v0`→`main`)のマージで行う。`vendor/bin/monorepo-builder release vX.Y.Z`は、mainで`tools/release/`の2つのワーカーを実行し、リリースの前の検査(mainであること・origin/mainと同じであること・作業ツリーが空であること・タグが無いこと・版の一致・CHANGELOGの`## vX.Y.Z — 題名`の見出し)に通れば、注釈付きのタグを作ってそのタグだけをpushする。mainへのcommit・pushと版の書き換えはしない。`split.yml`がmainとタグを各読み取り専用リポジトリへ同期する(`SPLIT_ACCESS_TOKEN`が空なら失敗する)。
+- 版(`Kernel::VERSION`・`tmswp/*`の制約・branch-alias・sample-siteの版)は、版の最初のタスクで1つのコミットで手で上げる。リリースの後に次の版へ自動で上げない。
+- 同期先でプルリクエストを閉じるワークフローの正本は`.github/split/close-pull-request.yml`で、`split.yml`が同期の前に各パッケージの`.github/workflows/`へ写す。packages/*・starters/*には置かない。
+- PRのマージとタグ付けは、毎回ユーザーに確認してから行う。
 ````
 
 ---
@@ -985,13 +991,14 @@ composer qa
 `.gitattributes`:
 
 ```
-# create-projectの配布物(読み取り専用リポジトリのzipと、Composerのpathリポジトリの写し)から、ビルドの道具とOSのファイルを外す。
+# create-projectの配布物(読み取り専用リポジトリのzipと、Composerのpathリポジトリの写し)から、ビルドの道具とOSのファイルと、GitHubのワークフロー等(.github/)を外す。
 # build/blocks/と探索結果ファイル(tmswp-discovery.php)は、作ったプロジェクトがそのまま動くために要るので外さない
 /node_modules export-ignore
 .DS_Store export-ignore
+/.github export-ignore
 ```
 
-- plugin版のコメントは1行目だけで、末尾の「。」と、2行目(`build/blocks/`と探索結果ファイルを外さない理由)が無い。作ったプロジェクトが使う`tests/`・`build/blocks/`・探索結果ファイルは外さない(10-quality.md §6.2)。
+- plugin版のコメントは1行目だけで、末尾の「。」と、2行目(`build/blocks/`と探索結果ファイルを外さない理由)が無い。作ったプロジェクトが使う`tests/`・`build/blocks/`・探索結果ファイルは外さない(10-quality.md §6.2)。`/.github`は、split.ymlがスターターの同期先に置く、プルリクエストを閉じるワークフロー(01-architecture.md §4.4)を配布物から外す。この行は作ったプロジェクトにも残り、プロジェクトの`.github/`(CIの設定等)も配布物に入れない。`--prefer-source`で作ったプロジェクトに入るそのワークフロー(`.github/workflows/close-pull-request.yml`)は、`bin/setup.php`が消す(§10.2)。
 
 ### 8.8 ブロックのサンプルとpackage.json(全文)
 
@@ -1339,7 +1346,7 @@ create-project完了時に`post-create-project-cmd`(`bin/setup.php`と、続け�
    - README.mdの`<!-- tmswp-starter-setup -->`から`<!-- /tmswp-starter-setup -->`までの節(スターターからの作り方と、`bin/setup.php`の手順)を消す。作ったプロジェクトには`bin/setup.php`が無いためである。
    - npmのパッケージの名前(テーマのみ。プラグインのスターターにはpackage.jsonが無い)を、スラッグにする。package.jsonには`name`が無いため先頭に足し、package-lock.jsonは先頭の`name`(スターターを作ったディレクトリの名前`theme`のまま残っている)と、ルートのパッケージ(`packages[""]`)の`name`を変える。npmが`name`のあるpackage.jsonから書くのと同じ形にするためである。スラッグの形(英小文字・数字・`-`・`_`で、英字で始まる)は、npmの名前の規則に合う。字下げは元のファイルのものを保つ。ルートのパッケージの無いpackage-lock.json(npm 6以前の形式)は、エラーで止まる。
 5. **本体リネーム**(プラグインのみ): `plugin.php` → `<slug>.php`。
-6. **探索結果ファイルの削除**:スターターの`tmswp-discovery.php`は、書き換える前の名前空間とブロック名で作ったものなので消す。
+6. **探索結果ファイルの削除**:スターターの`tmswp-discovery.php`は、書き換える前の名前空間とブロック名で作ったものなので消す。あわせて、`.github/workflows/close-pull-request.yml`があれば消す。これはスターターの読み取り専用リポジトリでプルリクエストを閉じるワークフロー(monorepoのsplit.ymlが同期の前に置く。01-architecture.md §4.4)で、create-projectを`--prefer-source`で実行すると入る。`.github/`のほかのファイルとディレクトリには触れない。
 7. **useの並びの整え**: プロジェクトの`vendor/bin/php-cs-fixer`があれば、プロジェクトの`.php-cs-fixer.dist.php`で`fix`を実行する(キャッシュは使わない)。名前空間を書き換えると、自分の名前空間と依存の名前空間の`use`の並び(`ordered_imports`の規則)が崩れることがあり(例: スターターの`TmswpStarterTheme\`を`ClientTheme\`にすると、`PHPUnit\`より前に並ぶ)、そのままでは`composer lint`が通らないためである。composer.jsonを書く前に行うため、php-cs-fixerが失敗してエラーで止まっても、直した後でもう一度実行できる。create-projectは依存を入れた後で`post-create-project-cmd`を実行するため、php-cs-fixerはある。`--no-install`で作った場合は無いため実行せず、依存を入れた後の`composer fix`の実行を案内する。
 8. **composer.json書き換え**:上の置き換えに加えて、`name`を`local/<slug>`、`description`を`<表示名> (WordPress theme)`(プラグインは`(WordPress plugin)`。スターターの説明`Starter theme for …`は作ったプロジェクトに当てはまらない)、`license`を`proprietary`に変更し、`config.autoloader-suffix`を生成した名前空間にし、`post-create-project-cmd`エントリを削除する。字下げは元のcomposer.jsonのものを保つ。`autoloader-suffix`は、Composerのオートローダのクラス名(`ComposerAutoloaderInit<suffix>`)の接尾辞である。既定の接尾辞は、create-projectが依存を入れた時点のcomposer.lockのハッシュで、同じ版のスターターから作ったプロジェクトどうしで同じになる。そのため、同じスターターから作ったプラグインを同じサイトで有効にすると、クラスの重複で止まる。スターター自身のlicenseはGPL-2.0-or-later(Packagistに公開してcreate-projectで使うため)で、作った案件のプロジェクトはクライアントの非公開のコードのため`proprietary`にする。スターターにLICENSEのファイルは置かない。
 9. **自己削除**: `bin/setup.php`と、空になった`bin/`を削除する(再実行事故の防止)。
@@ -1511,6 +1518,14 @@ function setupProject(string $root, array $arguments): void
 
     if (is_file($discoveryFile) && !unlink($discoveryFile)) {
         throw new RuntimeException("cannot delete {$discoveryFile}");
+    }
+
+    // スターターの読み取り専用リポジトリでプルリクエストを閉じるワークフロー(monorepoのsplit.ymlが同期の前に置く)。
+    // create-projectを--prefer-sourceで実行すると入るため消す。.github/のほかのファイルとディレクトリには触れない
+    $closePullRequestWorkflow = $root . '/.github/workflows/close-pull-request.yml';
+
+    if (is_file($closePullRequestWorkflow) && !unlink($closePullRequestWorkflow)) {
+        throw new RuntimeException("cannot delete {$closePullRequestWorkflow}");
     }
 
     // composer.jsonを書く前に整える。php-cs-fixerが失敗しても、もう一度実行すれば整え直せる

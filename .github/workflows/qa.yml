@@ -442,3 +442,19 @@ jobs:
         if: failure()
         working-directory: ${{ env.TMSWP_WP_ENV_DIR }}
         run: node "${GITHUB_WORKSPACE}/node_modules/@wordpress/env/bin/wp-env" logs development --no-watch
+
+  # packages/*・starters/*の8つを、split.ymlの同期と同じ形の一時のリポジトリへ取り出して確かめる(tools/ci/split-check.sh)。
+  # packages/*の6つは配布物(git archive)から開発用のファイルと.github/が外れることと、単独のcomposer install・composer test、
+  # starters/*の2つは配布物から.github/・.DS_Store・node_modules/が外れ、tests/とphpunit.xml.distが入ることを確かめる。
+  split-check:
+    name: Split Packages Check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: none
+      - name: Check the split packages
+        run: tools/ci/split-check.sh

@@ -29,10 +29,10 @@ final class PackageManifestTest extends UnitTestCase
      * PSR-4が`TMSWP\<Pascal>\` → `src/`の1つだけである。
      *
      * tmswp/coreの今の版は、packages/core/composer.jsonのbranch-alias(`X.Y.x-dev`)から求め、`^X.Y`か`^X.Y.Z`を正とする。
-     * monorepo-builderのreleaseが、packages/*のtmswp/*の制約をリリースの版(`^X.Y`、PATCHが0より大きければ`^X.Y.Z`)にし、
-     * 次の開発の版で制約を`^X.(Y+1)`に、branch-aliasを`X.(Y+1).x-dev`にそろえて上げる(monorepo-builder.php)ため、
-     * 固定の`^0.9`を書くとリリースのたびにこのテストが失敗する。Kernel::VERSIONは次の開発の版を開いた後も手で上げるまで
-     * 前の版のままのため、照らす相手にしない。
+     * 制約・branch-alias・Kernel::VERSIONは、版の最初のタスクで1つのコミットで手で上げ、リリースの道具は書き換えない
+     * (リリースの後に次の版へ自動で上げない。D-54)。固定の`^0.9`を書くと版を上げるたびにこのテストも直すことになるため、
+     * 版はbranch-aliasから求める。制約・branch-alias・Kernel::VERSIONとタグの版との一致は、リリースの前の検査
+     * (tools/release/CheckReleaseReadinessReleaseWorker.php)が確かめる。
      */
     #[DataProvider('conventionalExtensions')]
     public function testExtensionManifestFollowsCommonConvention(string $package, string $namespace): void

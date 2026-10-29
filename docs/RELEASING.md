@@ -1,37 +1,45 @@
 # リリース手順
 
-TMSWPは全パッケージlockstepバージョニングでリリースする(docs/01 §4.1)。リリースの操作は`vendor/bin/monorepo-builder release`で行い、このコマンドがmainとタグを自らpushする(手順4)。mainへのpushとタグ付けは、毎回ユーザーに確認してから行う。
+TMSWPは全パッケージlockstepバージョニングでリリースする(docs/01 §4.1)。mainへの反映は、PR(`rewrite/v0`→`main`)のマージで行う。リリースの操作`vendor/bin/monorepo-builder release vX.Y.Z`は、リリースの前の検査に通れば注釈付きのタグを作り、そのタグだけをpushする(mainへのcommit・pushと版の書き換えはしない。D-54)。PRのマージとタグ付けは、毎回ユーザーに確認してから行う。
 
 ## 手順
 
-1. **mainで検査を通す。** `composer qa`と`composer monorepo:validate`を通す。各パッケージをsplit相当で取り出して確かめる(下の「split相当の確認」)。
-2. **版の準備をmainに入れる。**次の2つを、リリースの前のコミットでmainに入れる。
-   - `CHANGELOG.md`の`## Unreleased`の節に、今回の版の変更を書く。見出しの文字列は変えない(手順4で`AddTagToChangelogReleaseWorker`が`## Unreleased`を探して書き換える)。
-   - `packages/core/src/Kernel/Kernel.php`の`Kernel::VERSION`を、リリースの版(`vX.Y.Z`の`X.Y.Z`)にする。食い違うと、そのタグのtmswp/coreを入れたサイトはboot時の版の照合で起動しない(docs/02 §3.9)。
-3. **作業ツリーを確かめる。** mainをcheckoutし、origin/mainと同じで、作業ツリーに変更が無いこと(`git status --short`が空)を確かめる。手順4の`TagVersionReleaseWorker`は`git add .`で作業ツリーのすべての変更をリリースのコミットに含めるためである。手元にだけあるタグが無いこと(`git push --tags --dry-run`が新しいタグを送らないこと)も確かめる。`PushTagReleaseWorker`は`git push --tags`で手元のすべてのタグを送るためである。
-4. **`monorepo-builder release`を実行する。**まず`vendor/bin/monorepo-builder release vX.Y.Z --dry-run`で実行する内容を表示し、ユーザーの確認を取ってから`vendor/bin/monorepo-builder release vX.Y.Z`を実行する。monorepo-builder.phpのワーカーが、次の順に実行する。手で`git push`する手順は無い。
-   1. packages/*・starters/*のcomposer.jsonのtmswp/*の制約(`require`と`require-dev`)を`^X.Y`にする。PATCHが0より大きい版では`^X.Y.Z`にする(`SetCurrentMutualDependenciesReleaseWorker`)。
-   2. `CHANGELOG.md`の`## Unreleased`を`## X.Y.Z - <日付>`にする(`AddTagToChangelogReleaseWorker`)。
-   3. `git add .`・`git commit -m "prepare release"`・**`git push origin main`**を行い、`git tag vX.Y.Z`で軽量タグを作る(`TagVersionReleaseWorker`)。
-   4. **`git push --tags`**でタグを送る(`PushTagReleaseWorker`)。
-   5. tmswp/*の制約を`^X.(Y+1)`にする(`SetNextMutualDependenciesReleaseWorker`)。branch-aliasを`X.(Y+1).x-dev`にする(`UpdateBranchAliasReleaseWorker`)。branch-aliasを更新するのは、`extra.branch-alias`を既に持つcomposer.json(packages/*の6つ)だけで、スターターには足さない。
-   6. `git add .`・`git commit --allow-empty -m "open X.(Y+1).x-dev"`・**`git push origin main`**を行う(`PushNextDevReleaseWorker`)。
+1. **開発のブランチで検査を通す。** PRの元のブランチ(`rewrite/v0`)で`composer qa`と`composer monorepo:validate`を通し、CI(`.github/workflows/qa.yml`)の全ジョブが成功していることを確かめる。各パッケージのsplit相当の確認は、CIのSplit Packages Checkのジョブが行う(手元で行う場合は下の「split相当の確認」)。
+2. **版がそろっていることを確かめる。** `packages/core/src/Kernel/Kernel.php`の`Kernel::VERSION`、packages/*・starters/*のcomposer.jsonのtmswp/*の制約(`require`と`require-dev`)とbranch-alias、examples/sample-siteのcomposer.jsonのtmswp/*の制約とpathリポジトリの`versions`は、版の最初のタスクで1つのコミットで上げてある(制約は`^X.Y`、PATCHが0より大きい版では`^X.Y.Z`。branch-aliasは`X.Y.x-dev`)。リリースの道具は版を書き換えず、リリースの後に次の版へも上げない。食い違いは手順5の検査が止める。`Kernel::VERSION`が食い違ったまま公開すると、そのタグのtmswp/coreを入れたサイトはboot時の版の照合で起動しない(docs/02 §3.9)。
+3. **リリースの準備のコミットを置く。** `CHANGELOG.md`の`## Unreleased`の見出しを、手で`## vX.Y.Z — 題名`(過去の版の見出しと同じ形。区切りは全角のダッシュ`—`)に改めるコミットを、開発のブランチに置く。次の版のUnreleasedの節は、次の版の最初のタスクで開く。
+4. **mainへ反映する。** ユーザーの確認を経て、PR(`rewrite/v0`→`main`)をマージする。マージの方法(マージコミット・squash等)もユーザーに確かめる。mainへのpushで、`.github/workflows/split.yml`が8つの同期先のmainを更新する。
+5. **タグを作る。** mainをcheckoutしてorigin/mainにそろえ(`git checkout main && git pull --ff-only origin main`)、`vendor/bin/monorepo-builder release vX.Y.Z --dry-run`で実行するワーカーを表示し、ユーザーの確認を取ってから`vendor/bin/monorepo-builder release vX.Y.Z`を実行する。monorepo-builder.phpに登録した`tools/release/`の2つのワーカーが、次の順に実行する。手で`git tag`・`git push`する手順は無い。
+   1. **リリースの前の検査**(`CheckReleaseReadinessReleaseWorker`)。次のどれか1つでも満たさなければ、満たさない項目をすべて並べて止まり、タグを作らない。
+      - 今のブランチが`main`である。
+      - originにmainのブランチがあり、`git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main`で取り直した`origin/main`と、HEADが同じコミットである(設定のfetchのrefspecと、手元に残った古い追跡refには頼らない)。
+      - 作業ツリーが空である(`git status --porcelain --untracked-files=all`が空)。
+      - タグ`vX.Y.Z`が手元にも`origin`にも無い。
+      - 手順2の版が、すべてタグの版と一致する。
+      - `CHANGELOG.md`に`## vX.Y.Z — 題名`の見出しがある。
+   2. **注釈付きのタグ**(`CreateAnnotatedTagReleaseWorker`)。`git tag -a vX.Y.Z -m vX.Y.Z`でHEADに注釈付きのタグを作り、`git push origin refs/tags/vX.Y.Z`でそのタグだけを送る(手元のほかのタグは送らない)。pushが失敗すると、手元のタグを残したまま止まる。原因を直してから`git push origin refs/tags/vX.Y.Z`で送るか、`git tag -d vX.Y.Z`で消してから手順5をやり直す。
 
-   コミットのメッセージ(`prepare release`・`open X.(Y+1).x-dev`)はmonorepo-builderが決めるもので、変えられない。
-5. **splitを確かめる。** `.github/workflows/split.yml`が、mainへのpushで各splitリポジトリのmainを、タグのpushで同名のタグを、8つのread-onlyリポジトリ(packagesのcore・thumbnail・settings-page・acf-bridge・ja-toolkit・testingと、startersのtheme・plugin)へ複製する。GitHub Actionsで8つのジョブが成功したことを確かめる。
-6. **Packagistを確かめる。** Packagistが各splitリポジトリのタグを認識していることを確かめる。
+   `--dry-run`は、ワーカーの説明を表示するだけで、検査も実行しない(monorepo-builderの`release`は、`--dry-run`のときワーカーの処理を呼ばない)。検査は`--dry-run`を付けない実行の最初に行われ、通らなければタグを作らずに止まる。
+6. **splitを確かめる。** split.ymlが、タグのpushで同名のタグを8つのread-onlyリポジトリ(packagesのcore・thumbnail・settings-page・acf-bridge・ja-toolkit・testingと、startersのtheme・plugin)へ複製する。GitHub Actionsで8つのジョブが成功したことを確かめる。
+7. **Packagistを確かめる。** Packagistが各splitリポジトリのタグを認識していることを確かめる。
 
 ## split相当の確認
 
-各パッケージが、splitで取り出した単独の状態で`composer install && composer test`を通すことを、リリースの前に確かめる。リポジトリの外の一時ディレクトリで行い、終わったら消す。
+各パッケージを、split.ymlの同期と同じ形で取り出し、配布物の中身と、ライブラリの単独の`composer install && composer test`を確かめる。CIのSplit Packages Checkのジョブが、すべてのプルリクエストとmainへのpushで実行する。手元では、確かめたいコミットをcheckoutして次を実行する(作業ツリーのコミットしていない変更は対象にならない)。
 
-1. 作業ツリーの内容でコミットしたリポジトリ(mainのcloneなど)で、パッケージごとに`git subtree split --prefix=packages/<pkg> -b split-<pkg>`を実行し、そのブランチを一時ディレクトリにcloneして、ブランチの名前を`main`にする(composerがこのパッケージの版を`dev-main`、branch-aliasで`X.Y.x-dev`とみなす)。
-2. tmswp/coreとtmswp/testingは、リリースの前はPackagistに無い。tmswp/core・tmswp/testingを要るパッケージでは、cloneのcomposer.jsonに、同じくsplitで取り出したcore・testingを指すpathリポジトリ(`"options": {"symlink": false, "versions": {"tmswp/core": "X.Y.Z"}}`。版は`Kernel::VERSION`)を足す。リポジトリのpackages/*/composer.jsonにはpathリポジトリを足さない。
-3. cloneで`composer install && composer test`を実行する。`composer test`は、そのパッケージの`phpunit.xml.dist`で`tests/Unit/`を走らせる。
-4. スターター(`starters/theme`・`starters/plugin`)は、同じく取り出してcoreのpathリポジトリを足し、`composer validate`と`composer install`を確かめる。
+```bash
+tools/ci/split-check.sh
+```
 
-配布物から開発用のファイルが外れていることは、`git archive HEAD packages/<pkg> | tar -t`に`tests/`・`phpunit.xml.dist`・`.gitattributes`・`.DS_Store`が無いことで確かめる(各パッケージの`.gitattributes`の`export-ignore`)。
+このスクリプトは、一時ディレクトリで次を行い、終わったら一時ディレクトリを消す。どれかが失敗すれば非0で終わる。
+
+1. パッケージごとに、HEADのそのディレクトリ(`packages/<pkg>`・`starters/<name>`)の中身だけを持つコミットを作り、一時のリポジトリのmainにする(composerがこのパッケージの版を`dev-main`、branch-aliasで`X.Y.x-dev`とみなす)。split.ymlと同じく、正本の`.github/split/close-pull-request.yml`を`.github/workflows/close-pull-request.yml`に置いてコミットする。
+2. packages/*の6つは、`git archive HEAD`に`tests/`・`phpunit.xml.dist`・`.gitattributes`・`.DS_Store`・`.github/`が入らないこと(各パッケージの`.gitattributes`の`export-ignore`)を確かめる。starters/*の2つは、`.github/`・`.DS_Store`・`node_modules/`が入らず、作ったプロジェクトが使う`tests/`と`phpunit.xml.dist`が入ることを確かめる。
+3. packages/*の6つは、tmswp/core・tmswp/testingを、同じく取り出したcore・testingを指すpathリポジトリ(`"options": {"symlink": false, "versions": {"tmswp/core": "X.Y.Z"}}`。版は`Kernel::VERSION`)で入れ、`composer install && composer test`を実行する。`composer test`は、そのパッケージの`phpunit.xml.dist`で`tests/Unit/`を走らせる。tmswp/coreとtmswp/testingは、リリースの前はPackagistに無いためである。リポジトリのpackages/*/composer.jsonにはpathリポジトリを足さない。スターターはinstall・testを行わない(スターターから作ったプロジェクトはCIのStarter Projectsのジョブが確かめる)。
 
 ## SPLIT_ACCESS_TOKEN
 
-`SPLIT_ACCESS_TOKEN`はsplit先へのpushに使うトークンで、fine-grained PAT。対象は送り先の8リポジトリ(`tmstack-io/tmswp-*`)だけ。権限はContents: Read and writeとWorkflows: Read and writeだけ。monorepoのGitHub Secretsに登録する。
+`SPLIT_ACCESS_TOKEN`はsplit先へのpushに使うトークンで、fine-grained PAT。対象は送り先の8リポジトリ(`tmstack-io/tmswp-*`)だけ。権限はContents: Read and writeとWorkflows: Read and writeだけ(同期先の`.github/workflows/`を更新するため)。monorepoのGitHub Secretsに登録する。未登録(空)のとき、split.ymlのジョブは同期せずに失敗する。mainへのpushでも失敗するため、PRのマージの前に登録する。
+
+## 同期先のプルリクエスト
+
+同期先(read-onlyリポジトリ)に送られたプルリクエストは、`.github/workflows/close-pull-request.yml`が自動で閉じ、英語の文面でmonorepo(https://github.com/tmstack-io/tmswp)へ案内する。正本はmonorepoの`.github/split/close-pull-request.yml`で、split.ymlが同期の前に各パッケージの`.github/workflows/`へ写す。文面を変えるときは正本を直し、PRのマージでmainへ反映する(次の同期で8つの同期先へ入る)。

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Tests\Unit;
 
 use FilesystemIterator;
+use Patchwork\CodeManipulation\Stream as PatchworkStream;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RecursiveCallbackFilterIterator;
 use RecursiveDirectoryIterator;
@@ -383,6 +384,44 @@ final class StarterSetupTest extends UnitTestCase
     }
 
     /**
+     * create-projectを--prefer-sourceで実行すると、読み取り専用リポジトリのclose-pull-request.yml(monorepoのsplit.ymlが
+     * 同期の前に置く)が作ったプロジェクトに入る。setup.phpはそのファイルだけを消し、.github/のほかのファイルは残す。
+     */
+    #[DataProvider('starterKinds')]
+    public function testRemovesOnlyTheWorkflowThatClosesPullRequests(string $kind): void
+    {
+        $project = $this->copyStarter($kind, 'client-' . $kind);
+        $workflows = $project . '/.github/workflows';
+        $written = self::withoutPatchworkStreamWrapper(static fn(): bool => mkdir($workflows, 0775, true)
+            && file_put_contents($workflows . '/close-pull-request.yml', "name: Close Pull Request\n") !== false
+            && file_put_contents($workflows . '/ci.yml', "name: CI\n") !== false
+            && file_put_contents($project . '/.github/dependabot.yml', "version: 2\n") !== false);
+        self::assertTrue($written);
+
+        $result = $this->runSetup($project, ['--slug=client-' . $kind, '--name=Client']);
+
+        self::assertSame(0, $result['code'], $result['stderr']);
+        self::assertFileDoesNotExist($workflows . '/close-pull-request.yml');
+        self::assertSame("name: CI\n", $this->read($workflows . '/ci.yml'));
+        self::assertSame("version: 2\n", $this->read($project . '/.github/dependabot.yml'));
+    }
+
+    /**
+     * スターター(monorepo)と、--prefer-distで作ったプロジェクトには.github/が無い。setup.phpは失敗せず、.github/を作らない。
+     */
+    #[DataProvider('starterKinds')]
+    public function testSucceedsWithoutTheWorkflowThatClosesPullRequests(string $kind): void
+    {
+        $project = $this->copyStarter($kind, 'client-' . $kind);
+        self::assertDirectoryDoesNotExist($project . '/.github');
+
+        $result = $this->runSetup($project, ['--slug=client-' . $kind, '--name=Client']);
+
+        self::assertSame(0, $result['code'], $result['stderr']);
+        self::assertDirectoryDoesNotExist($project . '/.github');
+    }
+
+    /**
      * Composerは依存を入れてオートローダを作った後でpost-create-project-cmdを実行するため、setup.phpの後で
      * 書き換えた名前空間のオートローダを作り直す。
      */
@@ -424,29 +463,32 @@ final class StarterSetupTest extends UnitTestCase
     {
         $source = \dirname(__DIR__, 2) . '/starters/' . $kind;
         $destination = $this->createTempDirectory('starter-setup') . '/' . $name;
-        $iterator = new RecursiveIteratorIterator(
-            new RecursiveCallbackFilterIterator(
-                new RecursiveDirectoryIterator($source, FilesystemIterator::SKIP_DOTS),
-                static fn(SplFileInfo $current): bool => !\in_array($current->getFilename(), ['vendor', 'node_modules'], true),
-            ),
-            RecursiveIteratorIterator::SELF_FIRST,
-        );
 
-        mkdir($destination);
+        self::withoutPatchworkStreamWrapper(static function () use ($source, $destination): void {
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveCallbackFilterIterator(
+                    new RecursiveDirectoryIterator($source, FilesystemIterator::SKIP_DOTS),
+                    static fn(SplFileInfo $current): bool => !\in_array($current->getFilename(), ['vendor', 'node_modules'], true),
+                ),
+                RecursiveIteratorIterator::SELF_FIRST,
+            );
 
-        foreach ($iterator as $file) {
-            if (!$file instanceof SplFileInfo) {
-                continue;
+            mkdir($destination);
+
+            foreach ($iterator as $file) {
+                if (!$file instanceof SplFileInfo) {
+                    continue;
+                }
+
+                $target = $destination . substr($file->getPathname(), \strlen($source));
+
+                if ($file->isDir()) {
+                    mkdir($target);
+                } elseif (!copy($file->getPathname(), $target)) {
+                    throw new RuntimeException("cannot copy {$file->getPathname()}");
+                }
             }
-
-            $target = $destination . substr($file->getPathname(), \strlen($source));
-
-            if ($file->isDir()) {
-                mkdir($target);
-            } elseif (!copy($file->getPathname(), $target)) {
-                throw new RuntimeException("cannot copy {$file->getPathname()}");
-            }
-        }
+        });
 
         return $destination;
     }
@@ -565,13 +607,12 @@ final class StarterSetupTest extends UnitTestCase
      */
     private function snapshot(string $project): array
     {
-        $files = [];
+        $paths = $this->files($project);
 
-        foreach ($this->files($project) as $relativePath => $path) {
-            $files[$relativePath] = (string) hash_file('sha256', $path);
-        }
-
-        return $files;
+        return self::withoutPatchworkStreamWrapper(static fn(): array => array_map(
+            static fn(string $path): string => (string) hash_file('sha256', $path),
+            $paths,
+        ));
     }
 
     /**
@@ -614,13 +655,17 @@ final class StarterSetupTest extends UnitTestCase
      */
     private function files(string $project): array
     {
-        $files = [];
+        $files = self::withoutPatchworkStreamWrapper(static function () use ($project): array {
+            $files = [];
 
-        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($project, FilesystemIterator::SKIP_DOTS)) as $file) {
-            if ($file instanceof SplFileInfo && $file->isFile()) {
-                $files[substr($file->getPathname(), \strlen($project) + 1)] = $file->getPathname();
+            foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($project, FilesystemIterator::SKIP_DOTS)) as $file) {
+                if ($file instanceof SplFileInfo && $file->isFile()) {
+                    $files[substr($file->getPathname(), \strlen($project) + 1)] = $file->getPathname();
+                }
             }
-        }
+
+            return $files;
+        });
 
         ksort($files);
 
@@ -629,12 +674,45 @@ final class StarterSetupTest extends UnitTestCase
 
     private function read(string $path): string
     {
-        $contents = file_get_contents($path);
+        $contents = self::withoutPatchworkStreamWrapper(static fn(): string|false => file_get_contents($path));
 
         if ($contents === false) {
             throw new RuntimeException("cannot read {$path}");
         }
 
         return $contents;
+    }
+
+    /**
+     * $actionを、Patchworkのstream wrapperを外した標準のファイルのstream wrapperで実行する。
+     *
+     * Patchwork(Brain Monkeyが読み込む)のstream wrapperは、ファイル操作のたびにstream factoryのresourceを
+     * プロセスの終わりまで残す(tmswp/testingのUsesTempDirectories::deleteDirectory()を参照)。スターターを
+     * 複製して読むこのテストではそれが積み上がるため、その間だけ、resourceを解放する手順で標準のwrapperに戻す。
+     * $actionの中ではPHPのファイルを読み込まない(読み込んだファイルはPatchworkの書き換えを受けない)。ファイル・
+     * ディレクトリのハンドルは$actionの中で開く(外で開いたハンドルを読むと、Patchworkがwrapperを付け直す)。
+     *
+     * @template T
+     *
+     * @param callable(): T $action
+     *
+     * @return T
+     */
+    private static function withoutPatchworkStreamWrapper(callable $action): mixed
+    {
+        // PatchworkはUnitTestCaseのsetUp()(Brain Monkey)が読み込む
+        if (!class_exists(PatchworkStream::class, false)) {
+            self::fail('Patchwork is not loaded');
+        }
+
+        try {
+            if (!stream_wrapper_unregister('file') || !stream_wrapper_restore('file')) {
+                self::fail('cannot remove the stream wrapper of Patchwork');
+            }
+
+            return $action();
+        } finally {
+            PatchworkStream::wrap();
+        }
     }
 }

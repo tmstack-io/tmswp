@@ -7,12 +7,16 @@ on:
 
 env:
   GITHUB_ORG: tmstack-io
-  SPLIT_ACCESS_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
 
 jobs:
   split:
     name: Split ${{ matrix.package.local }}
     runs-on: ubuntu-24.04
+    # 同じ同期先への同期(mainとタグ)を並行させない。先の実行は取り消さず、後の実行は待たせる(queue: maxで待ちを1つに限らない)
+    concurrency:
+      group: split-${{ matrix.package.repo }}
+      cancel-in-progress: false
+      queue: max
     strategy:
       fail-fast: false
       matrix:
@@ -26,11 +30,25 @@ jobs:
           - { local: 'starters/theme', repo: 'tmswp-starter-theme' }
           - { local: 'starters/plugin', repo: 'tmswp-starter-plugin' }
     steps:
+      # トークンが無ければ同期できないため、成功で終わらせずに失敗にする
+      - name: Require SPLIT_ACCESS_TOKEN
+        env:
+          SPLIT_ACCESS_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
+        run: |
+          if [ -z "${SPLIT_ACCESS_TOKEN}" ]; then
+            echo "::error::SPLIT_ACCESS_TOKEN is not set; cannot split ${{ matrix.package.local }} to ${GITHUB_ORG}/${{ matrix.package.repo }}"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate split source
         run: test -d "${{ matrix.package.local }}"
+      # 同期先でプルリクエストを閉じるワークフローの正本(.github/split/close-pull-request.yml)を、同期するディレクトリへ写す
+      - name: Add the workflow that closes pull requests
+        run: |
+          mkdir -p "${{ matrix.package.local }}/.github/workflows"
+          cp .github/split/close-pull-request.yml "${{ matrix.package.local }}/.github/workflows/close-pull-request.yml"
       - name: Split branch
-        if: "!startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
+        if: "!startsWith(github.ref, 'refs/tags/')"
         uses: danharrin/monorepo-split-github-action@14e42e2437f674b8987c1f50ca3689116aea1893 # v2.4.5
         # このアクションに access_token 入力は無く、push 用トークンは環境変数 GITHUB_TOKEN から読む
         env:
@@ -42,7 +60,7 @@ jobs:
           user_name: tmstack-io
           user_email: tommy@tmstack.io
       - name: Split tag
-        if: "startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
+        if: startsWith(github.ref, 'refs/tags/')
         uses: danharrin/monorepo-split-github-action@14e42e2437f674b8987c1f50ca3689116aea1893 # v2.4.5
         env:
           GITHUB_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
@@ -53,6 +71,3 @@ jobs:
           repository_name: ${{ matrix.package.repo }}
           user_name: tmstack-io
           user_email: tommy@tmstack.io
-      - name: Dry-run notice
-        if: env.SPLIT_ACCESS_TOKEN == ''
-        run: echo "SPLIT_ACCESS_TOKEN is not set; validated split source only."

@@ -87,6 +87,7 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 | Coverage | 翻訳ファイルと探索結果ファイルの照合、合算カバレッジの閾値の判定(PHP 8.3・WordPress最新版) |
 | Sample Site QA | `examples/sample-site`の`composer qa`(専用のwp-env) |
 | Starter Projects | スターターからcreate-projectで作ったテーマ・プラグインの`composer qa`と、テーマのスターターのブロックのビルドと探索結果ファイルの照合 |
+| Split Packages Check | `tools/ci/split-check.sh`。8つのパッケージをsplit相当で取り出し、配布物(`git archive`)の中身と、packages/*の6つの単独の`composer install && composer test`を確かめる |
 
 ## コーディング規約
 
@@ -131,5 +132,7 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 
 ## リリース
 
-- 手順の正本は`docs/RELEASING.md`である。`vendor/bin/monorepo-builder release vX.Y.Z`が、mainへのpushとタグのpushを自ら行い、`split.yml`が各読み取り専用リポジトリへ同期する。
-- mainへのpushとタグ付けは、毎回ユーザーに確認してから行う。
+- 手順の正本は`docs/RELEASING.md`である。mainへの反映は、PR(`rewrite/v0`→`main`)のマージで行う。`vendor/bin/monorepo-builder release vX.Y.Z`は、mainで`tools/release/`の2つのワーカーを実行し、リリースの前の検査(mainであること・origin/mainと同じであること・作業ツリーが空であること・タグが無いこと・版の一致・CHANGELOGの`## vX.Y.Z — 題名`の見出し)に通れば、注釈付きのタグを作ってそのタグだけをpushする。mainへのcommit・pushと版の書き換えはしない。`split.yml`がmainとタグを各読み取り専用リポジトリへ同期する(`SPLIT_ACCESS_TOKEN`が空なら失敗する)。
+- 版(`Kernel::VERSION`・`tmswp/*`の制約・branch-alias・sample-siteの版)は、版の最初のタスクで1つのコミットで手で上げる。リリースの後に次の版へ自動で上げない。
+- 同期先でプルリクエストを閉じるワークフローの正本は`.github/split/close-pull-request.yml`で、`split.yml`が同期の前に各パッケージの`.github/workflows/`へ写す。packages/*・starters/*には置かない。
+- PRのマージとタグ付けは、毎回ユーザーに確認してから行う。

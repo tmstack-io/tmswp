@@ -154,7 +154,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 └── starters/
     ├── theme/                            # tmswp/starter-theme(composer create-project 用)
     │   ├── composer.json
-    │   ├── .gitattributes                # node_modules/と.DS_Storeを配布物から外す(§2.2)
+    │   ├── .gitattributes                # node_modules/・.DS_Store・.github/を配布物から外す(§2.2)
     │   ├── style.css
     │   ├── functions.php                 # Kernel::boot() 1 行ブート
     │   ├── AGENTS.md                     # 利用側プロジェクト向け AI 指示書(vendor 内 rules/ を参照)
@@ -182,7 +182,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 - PSR-4 ルートは常に `src/`。1 パッケージ = 1 名前空間ルート。`src/` 直下のサブディレクトリ = サブ名前空間。
 - `tests/Unit/` は WP 関数に依存しない(Brain Monkey でスタブ)。`tests/Integration/` のみ WordPress のテストライブラリ(wp-env が提供する WP_TESTS_DIR)を使う。テスト名前空間は `TMSWP\<Pkg>\Tests\`(autoload-dev)。
 - `languages/` には翻訳ファイル(gettext の .pot / .po / .mo と、.po から生成する .l10n.php)のみを置く(§7)。
-- 配布物(splitリポジトリのタグのzipと、Composerのpathリポジトリの写し)から、開発用のファイルを各パッケージの`.gitattributes`の`export-ignore`で外す。packages/*は`tests/`(fixtureを含む)・`phpunit.xml.dist`・`.gitattributes`・`.DS_Store`を外し、`src/`・`rules/`・`languages/`・`LICENSE`・`README.md`・`composer.json`(coreは`phpstan/`も)を配布する。starters/*は作ったプロジェクトがそのまま動くための`tests/`・`build/blocks/`・探索結果ファイル(`tmswp-discovery.php`)を外さず、`node_modules/`(テーマ)と`.DS_Store`だけを外す。Composerのpathリポジトリ(`symlink: false`)の写しが従うのは`.gitattributes`の`export-ignore`だけで、composer.jsonの`archive.exclude`は効かないため、除外は`export-ignore`で行う。
+- 配布物(splitリポジトリのタグのzipと、Composerのpathリポジトリの写し)から、開発用のファイルを各パッケージの`.gitattributes`の`export-ignore`で外す。packages/*は`tests/`(fixtureを含む)・`phpunit.xml.dist`・`.gitattributes`・`.DS_Store`・`.github/`(split.ymlが同期の前に置く、同期先でプルリクエストを閉じるワークフロー。§4.4)を外し、`src/`・`rules/`・`languages/`・`LICENSE`・`README.md`・`composer.json`(coreは`phpstan/`も)を配布する。starters/*は作ったプロジェクトがそのまま動くための`tests/`・`build/blocks/`・探索結果ファイル(`tmswp-discovery.php`)を外さず、`node_modules/`・`.DS_Store`・`.github/`だけを外す。Composerのpathリポジトリ(`symlink: false`)の写しが従うのは`.gitattributes`の`export-ignore`だけで、composer.jsonの`archive.exclude`は効かないため、除外は`export-ignore`で行う。
 - 各パッケージは、splitで単独で取り出した状態で`composer install && composer test`が通る(§3.2の3)。`composer test`はそのパッケージの`phpunit.xml.dist`の`tests/Unit/`を走らせる。統合テスト(`tests/Integration/`)はmonorepoのルートのfixtureとwp-envを使うため、monorepoでだけ走らせる。
 
 ---
@@ -204,7 +204,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 
 スターターの名前空間は、create-projectの`bin/setup.php`がスラッグから生成した名前空間に書き換える(実装計画§1.6。プラグインごとに名前空間が違うため、同じサイトの複数のプラグインでクラスが衝突しない。詳細はAI資料設計書§10)。
 
-`^X.Y`はmonorepo-builderがリリース時に現行バージョンへ自動同期する(§4.3)。全パッケージのライセンスは**GPL-2.0-or-later**(WordPress互換。旧iwf2bと同一)。packages/*はそれぞれ`LICENSE`のファイルを持つ(splitの配布物にライセンスの本文が入るように)。スターターは`LICENSE`のファイルを置かず、composer.jsonの`license`だけで示す(create-projectで作ったプロジェクトは`bin/setup.php`が`proprietary`に書き換えるため)。
+`^X.Y`は、版の最初のタスクで`Kernel::VERSION`と同じコミットで手で上げ、リリースの前の検査(§4.3)がタグの版との一致を確かめる(D-54)。全パッケージのライセンスは**GPL-2.0-or-later**(WordPress互換。旧iwf2bと同一)。packages/*はそれぞれ`LICENSE`のファイルを持つ(splitの配布物にライセンスの本文が入るように)。スターターは`LICENSE`のファイルを置かず、composer.jsonの`license`だけで示す(create-projectで作ったプロジェクトは`bin/setup.php`が`proprietary`に書き換えるため)。
 
 ### 3.2 依存ポリシー(規範)
 
@@ -291,7 +291,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 
 - PSR-4 で `TMSWP\Core\PHPStan\` を先に書いても、composer は最長一致で解決するため `src/` 側と衝突しない。
 - PHPStan 拡張の設定ファイルは `phpstan/extension.neon` の 1 枚だけを置く(§3.4)。`extra.phpstan.includes` とルートの phpstan.neon.dist はどちらもこのファイルを直接指す。
-- `branch-alias`はmonorepo-builderの`UpdateBranchAliasReleaseWorker`がリリースごとに`<major>.<minor>.x-dev`形式で更新する(§4.3)。更新するのは`extra.branch-alias`を既に持つcomposer.json(packages/*)だけで、スターターには無い。上の値は`Kernel::VERSION`が0.9.0の間のもので、`tmswp/core`・`tmswp/testing`の制約(`^0.9`)はこの版を満たす。
+- `branch-alias`は`<major>.<minor>.x-dev`の形で、版の最初のタスクで`Kernel::VERSION`・制約と同じコミットで手で上げ、リリースの前の検査(§4.3)がタグの版との一致を確かめる(D-54)。リリースの後に次の版へ自動で上げない。branch-aliasを持つのはpackages/*のcomposer.jsonだけで、スターターには無い。上の値は`Kernel::VERSION`が0.9.0の間のもので、`tmswp/core`・`tmswp/testing`の制約(`^0.9`)はこの版を満たす。
 - `scripts.test`は、パッケージに置いた`phpunit.xml.dist`(`tests/Unit/`)を走らせる。coreの`phpunit.xml.dist`のbootstrap(`tests/bootstrap.php`)は、Brain MonkeyのPatchworkが`phar://`のストリームを差し替える前にPHPStanのテストのコンテナを作る(PHPStan 2.3のpharは、差し替えた後に初めて読み込むと、同じファイルを別のパスで二度読み込んでクラスの再宣言で止まるため)。
 - `files` オートロードは `src/functions.php` の 1 ファイルのみ(§6)。拡張パッケージがヘルパを持つ場合も同形式(各 1 ファイル)とする。
 - 拡張パッケージのcomposer.jsonは本形式から`require`に`"tmswp/core": "^X.Y"`を加え、`require-dev`を`"tmswp/testing": "^X.Y"`だけにし、psr-4・phpstanエントリを各自のものに差し替えた形とする(thumbnailのみ`"ext-gd": "*"`を追加)。`tmswp/testing`は`require`に`tmswp/core`・PHPUnit・Brain Monkey・Mockery・psr/logを持ち、`require-dev`を持たない。
@@ -374,13 +374,11 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 `symplify/monorepo-builder ^12`を次の2用途に限定して使う(`merge`は使わない。§4.2):
 
 1. **validate**:パッケージ間の依存バージョン矛盾、ルートとの乖離検出(CIで実行)。
-2. **releaseワーカー**: `vendor/bin/monorepo-builder release vX.Y.Z`で、monorepo-builder.phpに登録した次のワーカーを順に実行する。mainへのpushとタグのpushをこのコマンドが自ら行う(手順は`docs/RELEASING.md`)。
-   1. 相互依存の固定(`SetCurrentMutualDependenciesReleaseWorker`): packages/*・starters/*のcomposer.jsonの`require`・`require-dev`のtmswp/*の制約を、今回の版の`^X.Y`(PATCHが0より大きければ`^X.Y.Z`)にする。
-   2. CHANGELOGの見出し(`AddTagToChangelogReleaseWorker`): `CHANGELOG.md`の`## Unreleased`を`## X.Y.Z - <日付>`に書き換える。
-   3. コミットとタグ(`TagVersionReleaseWorker`): `git add .`・`git commit -m "prepare release"`・`git push origin main`を行い、`git tag vX.Y.Z`(軽量タグ)を作る。`git add .`は作業ツリーのすべての変更を含めるため、作業ツリーをきれいにしてから実行する。
-   4. タグのpush(`PushTagReleaseWorker`): `git push --tags`(手元のすべてのタグ)。
-   5. 次の開発版への戻し(`SetNextMutualDependenciesReleaseWorker`・`UpdateBranchAliasReleaseWorker`): tmswp/*の制約を`^X.(Y+1)`にし、`extra.branch-alias`を既に持つcomposer.json(packages/*)のbranch-aliasを`X.(Y+1).x-dev`にする。
-   6. 次の開発版のpush(`PushNextDevReleaseWorker`): `git add .`・`git commit --allow-empty -m "open X.(Y+1).x-dev"`・`git push origin main`。
+2. **releaseワーカー**: `vendor/bin/monorepo-builder release vX.Y.Z`で、monorepo-builder.phpに登録した`tools/release/`の次の2つのワーカーだけを順に実行する(D-54。手順は`docs/RELEASING.md`)。monorepo-builderが既定で持つワーカー(`TagVersionReleaseWorker`・`PushTagReleaseWorker`)は`MBConfig::disableDefaultWorkers()`で外し、標準のワーカーは1つも登録しない。版の書き換え、mainへのcommit・push、リリースの後の次の版(`^X.(Y+1)`・`X.(Y+1).x-dev`)への引き上げは行わない。mainへの反映は、このコマンドではなく、PR(`rewrite/v0`→`main`)のマージでユーザーの確認を経て行う。
+   1. リリースの前の検査(`CheckReleaseReadinessReleaseWorker`): 次のどれか1つでも満たさなければ、満たさない項目をすべて並べた例外で止まり、タグを作らない。今のブランチが`main`である。originにmainのブランチがあり、`git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main`で取り直した`origin/main`と、HEADが同じコミットである(設定のfetchのrefspecと、手元に残った古い追跡refには頼らない)。作業ツリーが空である(追跡していないファイルも無い)。タグ`vX.Y.Z`が手元にも`origin`にも無い。`Kernel::VERSION`、packages/*とstarters/*のcomposer.jsonの`require`・`require-dev`のtmswp/*の制約とbranch-alias、examples/sample-siteのcomposer.jsonのtmswp/*の制約とpathリポジトリの`versions`が、タグの版と一致する(制約は`^X.Y`、PATCHが0より大きければ`^X.Y.Z`。branch-aliasは`X.Y.x-dev`)。CHANGELOG.mdに`## vX.Y.Z — 題名`の見出しがある。
+   2. 注釈付きのタグ(`CreateAnnotatedTagReleaseWorker`): `git tag -a vX.Y.Z -m vX.Y.Z`でHEADに注釈付きのタグを作り、`git push origin refs/tags/vX.Y.Z`でそのタグだけを送る(手元のほかのタグは送らない)。gitのコマンドが失敗すれば例外で止まる。
+
+版(`Kernel::VERSION`・制約・branch-alias・sample-siteの版)は、版の最初のタスクで1つのコミットで手で上げ(D-54)、リリースの道具は書き換えない。
 
 ### 4.4 read-only split 配布
 
@@ -398,9 +396,9 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 ```
 
 - 開発はmonorepo(`tmstack-io/tmswp`)で行う。split対象はpackages/配下6 + starters/配下2の**計8リポジトリ**で、送り先は`tmstack-io/tmswp-{パッケージ名}`(tmswp-core、tmswp-acf-bridge、tmswp-settings-page、tmswp-thumbnail、tmswp-ja-toolkit、tmswp-testing、tmswp-starter-theme、tmswp-starter-plugin)である。Packagistの名前は`tmswp/*`のまま。
-- split リポジトリは読み取り専用として運用する。Issue と Wiki を無効にし、リポジトリの説明文で monorepo へ案内する。誤って送られたプルリクエストは、各パッケージのディレクトリに置くワークフロー(split で同期先へ複製され、同期先で動く)が自動で閉じ、monorepo へ案内する。アーカイブは使わない(アーカイブしたリポジトリには split が書き込めないため)。
+- splitリポジトリは読み取り専用として運用する。IssueとWikiを無効にし、リポジトリの説明文でmonorepoへ案内する。誤って送られたプルリクエストは、同期先で動くワークフローが自動で閉じ、monorepoへ案内する(文面は英語)。このワークフローの正本はmonorepoの`.github/split/close-pull-request.yml`で、split.ymlが同期の前に各パッケージの`.github/workflows/close-pull-request.yml`へ写す(monorepoのpackages/*・starters/*には置かない)。`pull_request_target`で動き、プルリクエストのコードをcheckoutせず、権限は`pull-requests: write`だけである。配布物には入れない(各パッケージの`.gitattributes`の`/.github export-ignore`)。アーカイブは使わない(アーカイブしたリポジトリにはsplitが書き込めないため)。
 - 送り先のリポジトリの作成と、送り先への書き込み権限だけを持つトークン(`SPLIT_ACCESS_TOKEN`。fine-grained PAT。対象は送り先の8リポジトリ(`tmstack-io/tmswp-*`)だけ。権限はContents: Read and writeとWorkflows: Read and writeだけ)の登録は、公開の作業で行う。
-- 実装: `.github/workflows/split.yml` で `danharrin/monorepo-split-github-action` の v2.4.5 をコミットの SHA で固定して使用する(`10-quality.md` §5.3。同等機能の action への差し替えは PATCH 扱いで可。ただし「main への push で HEAD を、タグ push で同名タグを各 split リポジトリへ複製する」挙動は不変条件)。
+- 実装: `.github/workflows/split.yml`で`danharrin/monorepo-split-github-action`のv2.4.5をコミットのSHAで固定して使用する。`SPLIT_ACCESS_TOKEN`が空なら、ジョブは同期せずに失敗する。同じ同期先への同期はジョブの`concurrency`(同期先ごとのグループ。先の実行を取り消さず、後の実行は`queue: max`で待たせる)で並行させない(`10-quality.md` §5.3。同等機能のactionへの差し替えはPATCH扱いで可。ただし「mainへのpushでHEADを、タグpushで同名タグを各splitリポジトリへ複製する」挙動は不変条件)。
 - ワークフロー(`10-quality.md` §5.2 の完全版と同じ):
 
 ```yaml
@@ -413,12 +411,16 @@ on:
 
 env:
   GITHUB_ORG: tmstack-io
-  SPLIT_ACCESS_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
 
 jobs:
   split:
     name: Split ${{ matrix.package.local }}
     runs-on: ubuntu-24.04
+    # 同じ同期先への同期(mainとタグ)を並行させない。先の実行は取り消さず、後の実行は待たせる(queue: maxで待ちを1つに限らない)
+    concurrency:
+      group: split-${{ matrix.package.repo }}
+      cancel-in-progress: false
+      queue: max
     strategy:
       fail-fast: false
       matrix:
@@ -432,11 +434,25 @@ jobs:
           - { local: 'starters/theme', repo: 'tmswp-starter-theme' }
           - { local: 'starters/plugin', repo: 'tmswp-starter-plugin' }
     steps:
+      # トークンが無ければ同期できないため、成功で終わらせずに失敗にする
+      - name: Require SPLIT_ACCESS_TOKEN
+        env:
+          SPLIT_ACCESS_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
+        run: |
+          if [ -z "${SPLIT_ACCESS_TOKEN}" ]; then
+            echo "::error::SPLIT_ACCESS_TOKEN is not set; cannot split ${{ matrix.package.local }} to ${GITHUB_ORG}/${{ matrix.package.repo }}"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate split source
         run: test -d "${{ matrix.package.local }}"
+      # 同期先でプルリクエストを閉じるワークフローの正本(.github/split/close-pull-request.yml)を、同期するディレクトリへ写す
+      - name: Add the workflow that closes pull requests
+        run: |
+          mkdir -p "${{ matrix.package.local }}/.github/workflows"
+          cp .github/split/close-pull-request.yml "${{ matrix.package.local }}/.github/workflows/close-pull-request.yml"
       - name: Split branch
-        if: "!startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
+        if: "!startsWith(github.ref, 'refs/tags/')"
         uses: danharrin/monorepo-split-github-action@14e42e2437f674b8987c1f50ca3689116aea1893 # v2.4.5
         # このアクションに access_token 入力は無く、push 用トークンは環境変数 GITHUB_TOKEN から読む
         env:
@@ -448,7 +464,7 @@ jobs:
           user_name: tmstack-io
           user_email: tommy@tmstack.io
       - name: Split tag
-        if: "startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
+        if: startsWith(github.ref, 'refs/tags/')
         uses: danharrin/monorepo-split-github-action@14e42e2437f674b8987c1f50ca3689116aea1893 # v2.4.5
         env:
           GITHUB_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
@@ -459,9 +475,6 @@ jobs:
           repository_name: ${{ matrix.package.repo }}
           user_name: tmstack-io
           user_email: tommy@tmstack.io
-      - name: Dry-run notice
-        if: env.SPLIT_ACCESS_TOKEN == ''
-        run: echo "SPLIT_ACCESS_TOKEN is not set; validated split source only."
 ```
 
 - Packagistにはsplitリポジトリ8件を`tmswp/core`等の名前で登録し、GitHub webhookで自動更新する。monorepo本体は登録しない。
@@ -470,12 +483,12 @@ jobs:
 
 | 対象 | 規約 |
 |---|---|
-| `main` | 次期リリースの開発ブランチ。常に green(composer qa が通る)。split により各 split リポジトリの `main` と同期 |
+| `main` | 次期リリースの開発ブランチ。常にgreen(composer qaが通る)。splitにより各splitリポジトリの`main`と同期。mainへの反映はPRのマージで行い、直接pushしない(v0.9.0の公開までは`rewrite/v0`→`main`のPR) |
 | トピックブランチ | `feature/<topic>` / `fix/<topic>`。main へ squash merge |
-| タグ | `vX.Y.Z`。main上のコミットにのみ打つ。monorepo-builder release経由でのみ作成する(`TagVersionReleaseWorker`は軽量タグを作る。§4.3) |
+| タグ | `vX.Y.Z`の注釈付きのタグ。origin/mainと同じコミットにのみ打つ。monorepo-builder release経由でのみ作成し、そのタグだけをpushする(`CreateAnnotatedTagReleaseWorker`。§4.3) |
 | メンテナンスブランチ | メジャーが進んだ後の旧系列修正用に `1.x` 等を必要時に作成(先行作成しない) |
 | ホットフィックス | 最新タグから `fix/` ブランチ → main へ merge → PATCH リリース。旧系列が必要な場合のみメンテナンスブランチへ cherry-pick |
-| リリース手順 | (1) mainで`composer qa` greenを確認 → (2) CHANGELOG.mdの更新と、`packages/core/src/Kernel/Kernel.php`の`Kernel::VERSION`をリリースの版(`vX.Y.Z`の`X.Y.Z`)へ更新するPR → (3)リリースの版と`Kernel::VERSION`が一致することを確かめてから`vendor/bin/monorepo-builder release vX.Y.Z`(mainとタグのpushをこのコマンドが行う。§4.3。mainへのpushとタグ付けは毎回ユーザーに確認してから実行する) → (4) split.ymlがタグを複製 → (5) Packagist反映を確認。手順の詳細は`docs/RELEASING.md`。`Kernel::VERSION`の更新を忘れると、そのタグのtmswp/coreを入れたサイトはboot時の版の照合(Kernel設計書§3.9)が食い違い、起動しなくなる |
+| リリース手順 | (1) `rewrite/v0`等の開発のブランチで`composer qa` greenを確認 → (2) CHANGELOG.mdのUnreleasedを`## vX.Y.Z — 題名`に改めるリリースの準備のコミットを置く(`Kernel::VERSION`・制約・branch-alias・sample-siteの版は、版の最初のタスクで上げ済み。D-54) → (3) ユーザーの確認を経て、PR(`rewrite/v0`→`main`)をマージする(mainへの反映はPRのマージだけで行う) → (4) mainをcheckoutし、`vendor/bin/monorepo-builder release vX.Y.Z --dry-run`の後、ユーザーの確認を経て`vendor/bin/monorepo-builder release vX.Y.Z`(リリースの前の検査に通れば、注釈付きのタグを作ってそのタグだけをpushする。§4.3) → (5) split.ymlがタグを複製 → (6) Packagist反映を確認。手順の詳細は`docs/RELEASING.md`。`Kernel::VERSION`がタグの版と違うと、リリースの前の検査が止める(食い違ったまま公開すると、そのタグのtmswp/coreを入れたサイトはboot時の版の照合(Kernel設計書§3.9)で起動しない) |
 
 ---
 

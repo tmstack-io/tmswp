@@ -57,7 +57,8 @@
       "TMSWP\\SettingsPage\\Tests\\": "packages/settings-page/tests/",
       "TMSWP\\Testing\\": "packages/testing/src/",
       "TMSWP\\Testing\\Tests\\": "packages/testing/tests/",
-      "TMSWP\\Thumbnail\\Tests\\": "packages/thumbnail/tests/"
+      "TMSWP\\Thumbnail\\Tests\\": "packages/thumbnail/tests/",
+      "TMSWP\\Tools\\Release\\": "tools/release/"
     }
   },
   "scripts": {

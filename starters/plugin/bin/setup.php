@@ -157,6 +157,14 @@ function setupProject(string $root, array $arguments): void
         throw new RuntimeException("cannot delete {$discoveryFile}");
     }
 
+    // スターターの読み取り専用リポジトリでプルリクエストを閉じるワークフロー(monorepoのsplit.ymlが同期の前に置く)。
+    // create-projectを--prefer-sourceで実行すると入るため消す。.github/のほかのファイルとディレクトリには触れない
+    $closePullRequestWorkflow = $root . '/.github/workflows/close-pull-request.yml';
+
+    if (is_file($closePullRequestWorkflow) && !unlink($closePullRequestWorkflow)) {
+        throw new RuntimeException("cannot delete {$closePullRequestWorkflow}");
+    }
+
     // composer.jsonを書く前に整える。php-cs-fixerが失敗しても、もう一度実行すれば整え直せる
     $formatted = formatPhpFiles($root);
     writeTextFile($composerFile, $composerJson);

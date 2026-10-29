@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Tests\Unit;
 
 use FilesystemIterator;
+use Patchwork\CodeManipulation\Stream as PatchworkStream;
 use PhpToken;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RecursiveCallbackFilterIterator;
@@ -27,11 +28,20 @@ use TMSWP\Thumbnail\Thumbnail;
  * - 文書・設定は行単位の正規表現で調べる。
  * - 走査はvendor/・node_modules/・.git/を除き、gitのコマンドには依存しない(作業ツリーのファイルをそのまま読む)。
  * - このファイル自身は禁止の語を文字列で持つため、走査の対象から外す。
+ * - ディレクトリの走査の結果はクラスの中でキャッシュし、テストの間で同じ走査を繰り返さない。走査とファイルの読み込みは、
+ *   Patchworkのstream wrapperを外して行う(withoutPatchworkStreamWrapper())。
  */
 final class RepositoryScanTest extends UnitTestCase
 {
     /** 走査で下りないディレクトリの名前 */
     private const array SKIPPED_DIRECTORIES = ['vendor', 'node_modules', '.git'];
+
+    /**
+     * filesUnder()の走査の結果。ルートからの相対のディレクトリ => その下のファイルの絶対パス(昇順。このファイル自身を除く)。
+     *
+     * @var array<string, list<string>>
+     */
+    private static array $filesUnderCache = [];
 
     /** 「使わない」旨の注記の行。npx等を、禁止の対象として名前に挙げている行で、呼び出しではない */
     private const string NEGATION_LINE = '/使いません|使わない|使用しない|解決しない/u';
@@ -177,11 +187,23 @@ final class RepositoryScanTest extends UnitTestCase
         $found = [];
 
         foreach (['packages', 'starters', 'examples', 'tests', 'tools', 'bin', 'docs'] as $directory) {
-            $iterator = new RecursiveIteratorIterator(self::directoryIterator(self::root() . '/' . $directory), RecursiveIteratorIterator::SELF_FIRST);
+            $path = self::root() . '/' . $directory;
+            self::assertDirectoryExists($path);
+            $directories = self::withoutPatchworkStreamWrapper(static function () use ($path): array {
+                $directories = [];
 
-            foreach ($iterator as $entry) {
-                if ($entry instanceof SplFileInfo && $entry->isDir() && strtolower($entry->getFilename()) === 'actions') {
-                    $found[] = self::relative($entry->getPathname());
+                foreach (new RecursiveIteratorIterator(self::directoryIterator($path), RecursiveIteratorIterator::SELF_FIRST) as $entry) {
+                    if ($entry instanceof SplFileInfo && $entry->isDir()) {
+                        $directories[] = $entry->getPathname();
+                    }
+                }
+
+                return $directories;
+            });
+
+            foreach ($directories as $entry) {
+                if (strtolower(basename($entry)) === 'actions') {
+                    $found[] = self::relative($entry);
                 }
             }
         }
@@ -930,7 +952,8 @@ final class RepositoryScanTest extends UnitTestCase
 
     /**
      * ルートからの相対のディレクトリの下で、$acceptが真を返すファイルの絶対パス(昇順)。vendor/・node_modules/・.git/には
-     * 下りず、このファイル自身を除く。
+     * 下りず、このファイル自身を除く。ディレクトリの走査は、ディレクトリごとに1回だけ行う(テストの実行の間にリポジトリの
+     * ファイルは変わらない)。
      *
      * @param callable(string): bool $accept
      *
@@ -938,17 +961,34 @@ final class RepositoryScanTest extends UnitTestCase
      */
     private static function filesUnder(string $directory, callable $accept): array
     {
-        $files = [];
-        $self = realpath(__FILE__);
+        self::$filesUnderCache[$directory] ??= self::scanFilesUnder($directory);
 
-        foreach (new RecursiveIteratorIterator(self::directoryIterator(self::root() . '/' . $directory)) as $file) {
-            // .DS_Store等の追跡外のファイルでアサーションの数が変わらないよう、絞り込みはアサーションにしない
-            if (!$file instanceof SplFileInfo || !$file->isFile() || $file->getRealPath() === $self || !$accept($file->getPathname())) {
-                continue;
+        // .DS_Store等の追跡外のファイルでアサーションの数が変わらないよう、絞り込みはアサーションにしない
+        return array_values(array_filter(self::$filesUnderCache[$directory], $accept));
+    }
+
+    /**
+     * ルートからの相対のディレクトリの下のファイルの絶対パス(昇順)。vendor/・node_modules/・.git/には下りず、
+     * このファイル自身を除く。
+     *
+     * @return list<string>
+     */
+    private static function scanFilesUnder(string $directory): array
+    {
+        $path = self::root() . '/' . $directory;
+        self::assertDirectoryExists($path);
+        $self = realpath(__FILE__);
+        $files = self::withoutPatchworkStreamWrapper(static function () use ($path, $self): array {
+            $files = [];
+
+            foreach (new RecursiveIteratorIterator(self::directoryIterator($path)) as $file) {
+                if ($file instanceof SplFileInfo && $file->isFile() && $file->getRealPath() !== $self) {
+                    $files[] = $file->getPathname();
+                }
             }
 
-            $files[] = $file->getPathname();
-        }
+            return $files;
+        });
 
         sort($files);
 
@@ -956,14 +996,14 @@ final class RepositoryScanTest extends UnitTestCase
     }
 
     /**
-     * vendor/・node_modules/・.git/に下りない、ディレクトリの再帰の反復子。
+     * vendor/・node_modules/・.git/に下りない、ディレクトリの再帰の反復子。作った時点でディレクトリを開くため、
+     * withoutPatchworkStreamWrapper()の中で作る(Patchworkのwrapperで開いたディレクトリを読むと、Patchworkが
+     * wrapperを付け直す)。
      *
      * @return RecursiveCallbackFilterIterator<mixed, mixed, RecursiveDirectoryIterator>
      */
     private static function directoryIterator(string $directory): RecursiveCallbackFilterIterator
     {
-        self::assertDirectoryExists($directory);
-
         return new RecursiveCallbackFilterIterator(
             new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS),
             static fn(SplFileInfo $entry): bool => !($entry->isDir() && \in_array($entry->getFilename(), self::SKIPPED_DIRECTORIES, true)),
@@ -1048,10 +1088,43 @@ final class RepositoryScanTest extends UnitTestCase
 
     private static function read(string $file): string
     {
-        $contents = file_get_contents($file);
+        $contents = self::withoutPatchworkStreamWrapper(static fn(): string|false => file_get_contents($file));
         self::assertIsString($contents, $file);
 
         return $contents;
+    }
+
+    /**
+     * $actionを、Patchworkのstream wrapperを外した標準のファイルのstream wrapperで実行する。
+     *
+     * Patchwork(Brain Monkeyが読み込む)のstream wrapperは、ファイル操作のたびにstream factoryのresourceを
+     * プロセスの終わりまで残す(tmswp/testingのUsesTempDirectories::deleteDirectory()を参照)。多くのファイルを
+     * 走査して読むこのテストではそれが積み上がるため、その間だけ、resourceを解放する手順で標準のwrapperに戻す。
+     * $actionの中ではPHPのファイルを読み込まない(読み込んだファイルはPatchworkの書き換えを受けない)。ファイル・
+     * ディレクトリのハンドルは$actionの中で開く(外で開いたハンドルを読むと、Patchworkがwrapperを付け直す)。
+     *
+     * @template T
+     *
+     * @param callable(): T $action
+     *
+     * @return T
+     */
+    private static function withoutPatchworkStreamWrapper(callable $action): mixed
+    {
+        // PatchworkはUnitTestCaseのsetUp()(Brain Monkey)が読み込む
+        if (!class_exists(PatchworkStream::class, false)) {
+            self::fail('Patchwork is not loaded');
+        }
+
+        try {
+            if (!stream_wrapper_unregister('file') || !stream_wrapper_restore('file')) {
+                self::fail('cannot remove the stream wrapper of Patchwork');
+            }
+
+            return $action();
+        } finally {
+            PatchworkStream::wrap();
+        }
     }
 
     /** ルートからの相対パス */

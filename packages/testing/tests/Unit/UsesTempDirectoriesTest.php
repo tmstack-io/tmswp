@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace TMSWP\Testing\Tests\Unit;
 
+use Patchwork\CodeManipulation\Stream as PatchworkStream;
 use PHPUnit\Framework\AssertionFailedError;
 use TMSWP\Core\Kernel\Discovery;
 use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Testing\UnitTestCase;
+use UnexpectedValueException;
 
 /**
  * テストごとの一時ディレクトリ(UsesTempDirectories)が、テストごとの親ディレクトリの下に作られ、探索結果ファイルを
@@ -105,6 +107,57 @@ final class UsesTempDirectoriesTest extends UnitTestCase
         self::assertDirectoryDoesNotExist(\dirname($next));
     }
 
+    /**
+     * 片付けは、Patchworkのstream wrapperを通さずに消すため、消したファイルの数に比例する
+     * stream factoryのresourceを残さない。片付けの後は、Patchworkのstream wrapperが戻っている。
+     */
+    public function testCleanupLeavesNoStreamFactoryResourcesAndRestoresPatchwork(): void
+    {
+        $root = $this->createTempDirectory('many');
+
+        for ($i = 0; $i < 20; $i++) {
+            self::assertTrue(mkdir($root . "/dir{$i}"));
+            self::assertNotFalse(file_put_contents($root . "/dir{$i}/file.txt", 'x'));
+        }
+
+        self::assertTrue(self::fileStreamIsPatchwork());
+        $before = \count(get_resources('stream factory'));
+
+        $this->cleanupTempDirectories();
+
+        // 残るのは、片付けの前のis_dir()の判定1回がPatchworkを通る分(2個)だけで、消したファイルの数に比例しない
+        self::assertLessThanOrEqual($before + 2, \count(get_resources('stream factory')));
+        self::assertDirectoryDoesNotExist(\dirname($root));
+        self::assertTrue(self::fileStreamIsPatchwork());
+    }
+
+    /**
+     * 消す途中で失敗しても、Patchworkのstream wrapperを戻してから失敗を伝える(Patchworkを通して消すと、
+     * Patchworkが外したwrapperを付け直さないまま例外が伝わり、以後のincludeが書き換えられなくなる)。
+     */
+    public function testCleanupRestoresPatchworkWhenDeletionFails(): void
+    {
+        $root = $this->createTempDirectory('unreadable');
+        self::assertTrue(mkdir($root . '/locked'));
+        self::assertTrue(chmod($root . '/locked', 0));
+        $failure = null;
+
+        try {
+            $this->cleanupTempDirectories();
+        } catch (UnexpectedValueException $exception) {
+            $failure = $exception;
+        } finally {
+            self::assertTrue(chmod($root . '/locked', 0775));
+        }
+
+        self::assertInstanceOf(UnexpectedValueException::class, $failure, 'cleanupTempDirectories() did not fail');
+        self::assertTrue(self::fileStreamIsPatchwork());
+        self::assertDirectoryExists($root);
+        // 失敗した片付けは親ディレクトリを覚えたままなので、権限を戻せば次の片付けで消える
+        $this->cleanupTempDirectories();
+        self::assertDirectoryDoesNotExist(\dirname($root));
+    }
+
     /** テストが親ディレクトリを自分で消していても、片付けは失敗しない。 */
     public function testCleanupToleratesAParentAlreadyRemovedByTheTest(): void
     {
@@ -146,5 +199,24 @@ final class UsesTempDirectoriesTest extends UnitTestCase
         self::assertStringStartsWith("一時ディレクトリを作成できません: {$parent}/blocker/inner-", $failure);
         self::assertCount(1, $warnings);
         self::assertStringStartsWith('mkdir(): ', $warnings[0]);
+    }
+
+    /** 標準のファイルのstream wrapperが、Patchworkのstream wrapperに置き換わっているか。 */
+    private static function fileStreamIsPatchwork(): bool
+    {
+        // PatchworkはUnitTestCaseのsetUp()(Brain Monkey)が読み込む
+        if (!class_exists(PatchworkStream::class, false)) {
+            self::fail('Patchwork is not loaded');
+        }
+
+        $handle = fopen(__FILE__, 'r');
+        self::assertIsResource($handle);
+
+        try {
+            // 標準のwrapperのstreamは、wrapper_dataのキーを持たない
+            return (stream_get_meta_data($handle)['wrapper_data'] ?? null) instanceof PatchworkStream;
+        } finally {
+            fclose($handle);
+        }
     }
 }
