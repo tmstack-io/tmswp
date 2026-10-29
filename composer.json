@@ -96,7 +96,7 @@
       "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/unit.xml"
     ],
     "test:coverage:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --coverage-clover=var/coverage/integration.xml",
-    "test:coverage:check": "php bin/coverage-check.php 82 --package=acf-bridge:80 --package=core:80 --package=ja-toolkit:80 --package=settings-page:80 --package=testing:80 --package=thumbnail:80 var/coverage/unit.xml var/coverage/integration.xml",
+    "test:coverage:check": "php bin/coverage-check.php 85 --package=acf-bridge:80 --package=core:80 --package=ja-toolkit:80 --package=settings-page:80 --package=testing:80 --package=thumbnail:80 var/coverage/unit.xml var/coverage/integration.xml",
     "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
     "test:integration:acf-pro": [
       "Composer\\Config::disableProcessTimeout",
