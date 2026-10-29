@@ -11,6 +11,7 @@ use RuntimeException;
 use SplFileInfo;
 use TMSWP\Testing\IntegrationTestCase;
 use TMSWP\Testing\UsesTempDirectories;
+use TMSWP\Testing\WpCliPharDeprecations;
 use TMSWP\Thumbnail\ThumbCache;
 
 /**
@@ -205,7 +206,7 @@ final class ThumbCommandIntegrationTest extends IntegrationTestCase
      *
      * @param list<string> $arguments `tmswp thumb`に続く引数
      *
-     * @return array{code: int, stdout: string, stderr: string}
+     * @return array{code: int, stdout: string, stderr: string, removedDeprecations: int}
      */
     private function wpThumb(array $arguments, int $redirectMaxAge = 3600): array
     {
@@ -277,7 +278,7 @@ final class ThumbCommandIntegrationTest extends IntegrationTestCase
     /**
      * @param list<string> $command
      *
-     * @return array{code: int, stdout: string, stderr: string}
+     * @return array{code: int, stdout: string, stderr: string, removedDeprecations: int}
      */
     private static function runProcess(array $command, string $cwd): array
     {
@@ -293,6 +294,9 @@ final class ThumbCommandIntegrationTest extends IntegrationTestCase
         fclose($pipes[1]);
         fclose($pipes[2]);
 
-        return ['code' => proc_close($process), 'stdout' => $stdout, 'stderr' => $stderr];
+        // PHP 8.5でWP-CLI 2.12.0のphar自身が出す非推奨の行だけを除く(WpCliPharDeprecations。WP-CLIが対応したら外す)
+        $stripped = WpCliPharDeprecations::strip($stderr);
+
+        return ['code' => proc_close($process), 'stdout' => $stdout, 'stderr' => $stripped['output'], 'removedDeprecations' => $stripped['removed']];
     }
 }

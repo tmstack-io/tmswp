@@ -6,6 +6,7 @@ namespace TMSWP\Core\Tests\Integration;
 
 use RuntimeException;
 use TMSWP\Testing\IntegrationTestCase;
+use TMSWP\Testing\WpCliPharDeprecations;
 
 /**
  * `wp tmswp migrate`を、実物のWP-CLIのプロセスでwp-envの開発用サイトに対して実行して確かめる
@@ -215,7 +216,7 @@ final class MigrateCommandIntegrationTest extends IntegrationTestCase
     /**
      * fixtureを有効にしたWordPressで、指定した利用者として`admin_notices`を発火し、その出力を返す。
      *
-     * @return array{code: int, stdout: string, stderr: string}
+     * @return array{code: int, stdout: string, stderr: string, removedDeprecations: int}
      */
     private static function adminNotices(?string $user): array
     {
@@ -277,7 +278,7 @@ final class MigrateCommandIntegrationTest extends IntegrationTestCase
      *
      * @param list<string> $arguments
      *
-     * @return array{code: int, stdout: string, stderr: string}
+     * @return array{code: int, stdout: string, stderr: string, removedDeprecations: int}
      */
     private static function wp(array $arguments, bool $fixtures = true): array
     {
@@ -290,7 +291,7 @@ final class MigrateCommandIntegrationTest extends IntegrationTestCase
     /**
      * @param list<string> $command
      *
-     * @return array{code: int, stdout: string, stderr: string}
+     * @return array{code: int, stdout: string, stderr: string, removedDeprecations: int}
      */
     private static function runProcess(array $command, string $cwd): array
     {
@@ -306,6 +307,9 @@ final class MigrateCommandIntegrationTest extends IntegrationTestCase
         fclose($pipes[1]);
         fclose($pipes[2]);
 
-        return ['code' => proc_close($process), 'stdout' => $stdout, 'stderr' => $stderr];
+        // PHP 8.5でWP-CLI 2.12.0のphar自身が出す非推奨の行だけを除く(WpCliPharDeprecations。WP-CLIが対応したら外す)
+        $stripped = WpCliPharDeprecations::strip($stderr);
+
+        return ['code' => proc_close($process), 'stdout' => $stdout, 'stderr' => $stripped['output'], 'removedDeprecations' => $stripped['removed']];
     }
 }
