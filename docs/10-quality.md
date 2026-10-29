@@ -1091,8 +1091,9 @@ TMSWP_ACF_PRO_ZIP=/path/to/advanced-custom-fields-pro.zip composer test:integrat
 ```
 
 - `tools/acf-pro-integration.sh`が行う。`TMSWP_ACF_PRO_ZIP`が無い・ファイルでない・読めない・`advanced-custom-fields-pro/acf.php`の版のヘッダを持たない場合は、理由を出してexit 1で止まる。
-- zipは、リポジトリの外の作業ディレクトリ(`${TMPDIR}/tmswp-acf-pro/`)に展開し、成功しても失敗しても終了時に消す。リポジトリにはProの本体もそのパスも残らない。
-- wp-envは、作業ディレクトリに書いた別の設定ファイル(`wp-env --config=...`)で起動する。wp-envの作業ディレクトリ(`~/.wp-env/`の下)・コンテナ・DBは設定ファイルのパスごとに分かれるため、本体の環境(`.wp-env.json`)と共有しない。ポートは8898にする。WordPressとPHPの版は`.wp-env.json`と同じにする。
+- リポジトリの外に、実行ごとに一意の作業ディレクトリ(`${TMPDIR}/tmswp-acf-pro.XXXXXXXX/`。`mktemp -d`で作り、シンボリックリンク等を解いた絶対パスで使う)を作り、zipの展開・wp-envの設定ファイル・`WP_ENV_HOME`を置く。リポジトリにはProの本体もそのパスも残らない。
+- wp-envは、作業ディレクトリに書いた別の設定ファイル(`wp-env --config=...`)と、作業ディレクトリの下の`WP_ENV_HOME`で起動する。wp-envのプロジェクト名(コンテナ・ボリューム・ネットワーク・イメージの名前)は設定ファイルのパスから決まるため、本体の環境(`.wp-env.json`)とも、同じ道具のほかの実行とも共有しない。ポートは8898にする(同じ道具を同時に走らせると、後から起動した方はポートの競合で起動に失敗し、自分の環境だけを消す)。WordPressとPHPの版は`.wp-env.json`と同じにする。
+- 終了時(成功・失敗・SIGINT・SIGTERMでの中断)に、その実行の作業ディレクトリ(展開したProを含む)を消す。wp-envの環境は、起動の前にその環境の資源が無いことを確かめて引き受けた後だけ消し、既に資源があれば、それに触れずに作業ディレクトリだけを消して止まる。消す前に、作業ディレクトリと設定ファイルのパスが、この実行が作った形(正規化したパス・シンボリックリンクでない・設定ファイルが作業ディレクトリの中)であることを確かめ、違えば何も消さない。消す対象は完全一致で選ぶ。コンテナ・ボリューム・ネットワークはDocker composeのラベル`com.docker.compose.project=<プロジェクト名>`で、イメージはwp-envがビルドする完全な名前(`<プロジェクト名>-wordpress:latest`等)で選ぶ。ほかの環境と共有するイメージ(`mariadb`等)は消さない(`wp-env destroy`の`--rmi all`は使わない)。開始時に前回の残りを消すことはしない。Dockerの列挙や削除が失敗したとき、または資源が残ったときは、終了コードを1にする。SIGKILL等で片付けが走らなかったときの手で消す手順は、スクリプトの先頭のコメントにある。片付けの処理は`tools/lib/isolated-wp-env.sh`にあり、sample-siteをACF Proで確かめる`tools/sample-site-acf-pro.sh`と共通である。
 - Proは無料版のスラッグ(`wp-content/plugins/advanced-custom-fields`)にマウントするため、fixtureの有効化(`tests/fixtures/_activate.php`)はそのまま使える。
 - 走らせるのはacf-bridgeの統合テストの全体で、グループ`acf-free`(無料版であることを確かめるテスト)を外す。Pro専用のテストはグループ`acf-pro`とし、`acf_is_pro()`が偽なら失敗にする(skipにしない)。通常の`composer test:integration`は4.5のXMLでこのグループを除外する。
 - ライセンスキーは使わない。Proのzipは、ACFの公式のcomposerリポジトリ(`connect.advancedcustomfields.com`。ライセンスキーをusernameにしたHTTP basic認証)からも取得できる。スクリプトはこの取得を行わない。

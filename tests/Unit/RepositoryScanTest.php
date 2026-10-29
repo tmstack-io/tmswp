@@ -623,6 +623,9 @@ final class RepositoryScanTest extends UnitTestCase
      * ルートのtests/Unit)の、ファイルの名前と同じ名前のテストのクラスを調べる。PHPStanのテストは、PHPStanの基底が要るため、
      * 下の一覧のクラスだけを例外として許し、その基底がRuleTestCaseかTypeInferenceTestCaseであることも確かめる。
      * スターター(starters/*\/tests)は利用側のプロジェクトの雛形で、FWのテストではないため対象にしない。
+     * ルートのtests/Unitの名前空間(`TMSWP\Tests\`)はautoload-devの対象外で、PHPUnitがファイルを直接読み込むため、
+     * ファイルを読み込んでから調べる(このテストだけを走らせても、全体で走らせても同じ結果にするため)。packages/*\/tests/Unitは
+     * autoload-devのPSR-4で読み込めることを確かめる。
      */
     public function testEveryUnitTestExtendsUnitTestCaseExceptThePhpStanTests(): void
     {
@@ -641,7 +644,13 @@ final class RepositoryScanTest extends UnitTestCase
         foreach ($directories as $directory) {
             foreach (self::filesUnder(self::relative($directory), static fn(string $path): bool => str_ends_with($path, 'Test.php')) as $file) {
                 $class = self::declaredClass($file, basename($file, '.php'));
-                self::assertTrue(class_exists($class), "{$class} must be autoloadable from " . self::relative($file));
+
+                if ($directory === self::root() . '/tests/Unit') {
+                    require_once $file;
+                    self::assertTrue(class_exists($class, false), "{$class} must be declared in " . self::relative($file));
+                } else {
+                    self::assertTrue(class_exists($class), "{$class} must be autoloadable from " . self::relative($file));
+                }
 
                 if (\array_key_exists($class, $phpStanTests)) {
                     $exceptions[$class] = (new ReflectionClass($class))->isSubclassOf($phpStanTests[$class]);

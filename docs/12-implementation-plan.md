@@ -1083,7 +1083,7 @@ v0.8.0
 
 #### v0.9.0-T1: 実物のACF Proでの確認
 
-- 対象ファイル領域: tools/(sample-siteをACF Proで起動する手順のスクリプト。道具にする場合に新設し、使い方はスクリプトの先頭のコメントに書く)。docs/10とexamples/sample-site/README.mdは、並列のT2が触るため、T1では触らない。確認作業で不具合が見つかった場合は、該当パッケージの修正タスクを追加する
+- 対象ファイル領域: tools/(sample-siteをACF Proで起動する手順のスクリプト。道具にする場合に新設し、使い方はスクリプトの先頭のコメントに書く)。あわせて、tools/lib/(ACF Proの確認の環境の作成と片付けの共通の関数。新設)、tools/acf-pro-integration.sh(片付けの変更)、docs/10 §4.9(tools/acf-pro-integration.shの動作の記述)、tests/Unit/RepositoryScanTest.php(そのテストだけを走らせると失敗する件の修正)、CHANGELOG.md、本書のv0.9.0-T1(対象ファイル領域の改訂)も対象にする。docs/10の§4.9以外とexamples/sample-site/README.mdは、並列のT2が触るため、T1では触らない。確認作業で不具合が見つかった場合は、該当パッケージの修正タスクを追加する
 - 完了条件:
   - ACF Proのzipのパスを環境変数`TMSWP_ACF_PRO_ZIP`で渡し、v0.6.0で手元確認したPro専用の型とPro限定機能のテストを含むacf-bridgeの統合テストが、実物のACF Proで通る(§1.2)。
   - sample-siteを、同じ`TMSWP_ACF_PRO_ZIP`のACF Proで起動し、sample-siteのACFの機能(製品の詳細の価格と仕様の表示と、管理画面での値の変更の反映)が動く。並列のT2がsample-siteの専用のwp-env(ポート8882)をE2Eで使うため、T1はその環境を使わず、`examples/sample-site/.wp-env.override.json`も使わない。T1は、examples/sample-site/.wp-env.jsonを写した別の設定ファイルをリポジトリの外に作り(`plugins`は`[]`にし、Proを展開したディレクトリを`mappings`で`wp-content/plugins/advanced-custom-fields`に載せる。themes・mappingsのパスは絶対パスにする)、`wp-env --config`と別の`WP_ENV_HOME`と別のポートで、別のプロジェクトとして起動する(tools/acf-pro-integration.shと同じ隔離の方法)。examples/sample-site/のファイルは読むだけで変えない。zipの展開はリポジトリの外で行い、確認の後に、展開したProと作った設定ファイルと、そのwp-envの環境を消す。ライセンスキーは使わない。
