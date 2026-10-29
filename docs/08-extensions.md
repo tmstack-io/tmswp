@@ -685,7 +685,8 @@ admin_menu:
   definition()を読み、parent有無で add_menu_page / add_submenu_page。
   add_submenu_pageがfalseを返したら(今のユーザーがcapabilityを持たないためWordPressが登録しなかった)、
   正常な結果として何もしない(load-{hook_suffix}も接続しない)。
-  戻り値hook_suffixを保持し add_action("load-{$hookSuffix}", handleRequest)
+  戻り値hook_suffixを保持し add_action("load-{$hookSuffix}", handleRequest)。
+  登録したときは、removable_query_argsに'tmswp-settings-saved'を足す(表示の後に、WordPressがアドレスバーのURLから除く)
 
 load-{hook_suffix}(画面出力前):
   1. current_user_can(capability) を再確認(失敗は wp_die(..., '', ['response' => 403]))
@@ -695,13 +696,13 @@ load-{hook_suffix}(画面出力前):
       nonce不一致はForm層の仕様に従いエラー終了し、onSubmitへは到達しない)
   4. $result->step === FormStep::Complete のとき:
      a. onSubmit($result) を呼ぶ(保存処理)
-     b. wp_safe_redirect(url(['updated' => '1'])); exit  — PRGで再POST防止
+     b. wp_safe_redirect(url(['tmswp-settings-saved' => '1'])); exit  — PRGで再POST防止
         (このexitは設計原則1のexit禁止の例外。00-overview.md §3、D-35)
   5. Formをインスタンスに保持し output() へ引き継ぐ
 
 output():
   1. <div class="wrap"><h1>{pageTitle}</h1> を出力する
-  2. $_GET['updated'] === '1' で、POSTでないなら成功notice(.notice-success)を出力
+  2. $_GET['tmswp-settings-saved'] === '1' で、POSTでないなら成功notice(.notice-success)を出力
   3. フォームが無ければrender(null)を呼び</div>を閉じる
   4. フォームがあれば:
      a. Formのフォームエラー(formErrors()。nonceの失効等)を1件ずつエラーnotice(.notice-error)で出力
@@ -710,6 +711,7 @@ output():
         保存ボタン(<button type="submit" name="_step" value="submit">)、$form->close()の順に出力し</div>を閉じる
 ```
 
+- 保存の後のURLのクエリ変数は、FW独自の`tmswp-settings-saved`にし、WordPressの`updated`を使わない。本体の`wp-admin/options-head.php`は、親が`options-general.php`のページで`$_GET['updated']`(と`page`)を見て「Settings saved.」を出すため、`updated`を使うとFWの通知と二重になる。親が何であっても、成功の通知はFWの1つだけになる。
 - 外枠(wrap・見出し・通知・`<form>`の開始タグと必須のhidden・`_step=submit`の保存ボタン・終了タグ)はFWが描画し、render()は項目だけを描画する。`_step`の値は文書05の予約POSTキーのとおり、確認画面の無いフォームの送信(`submit`)である。
 - 設定フォームは確認画面を使えない。`createForm()`が確認画面の有効なフォーム(`Form::isConfirmEnabled()`がtrue)を返すと、`handle()`の前に`LogicException`になる(設定の誤り。debugに関係なく投げる)。保存ボタンは`_step=submit`だけを送り、確認画面の有効なフォームは保存できないためである。
 - GET時(`handle()` が `FormStep::Input` を返す)は `OptionFormBridge::applyDefaults()`(下記)等で初期値を与える。

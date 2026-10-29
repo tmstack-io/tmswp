@@ -56,6 +56,31 @@ final class AcfMetaStorageTest extends UnitTestCase
         $call($storage);
     }
 
+    /**
+     * ACFが有効でないときの例外のメッセージは、docs/09 §10の正準形の全文(`{callable}`は`AcfMetaStorage::{メソッド}`)と
+     * 一致する(受け入れ基準「ACF不在環境で…AcfMetaStorageへのアクセスがAcfNotActiveException(正準メッセージ)になる」)。
+     *
+     * @param Closure(AcfMetaStorage): mixed $call
+     */
+    #[DataProvider('storageCalls')]
+    public function testAcfNotActiveMessageIsTheCanonicalFullText(string $method, Closure $call): void
+    {
+        $appDir = $this->createTempDirectory('acf-meta-storage-message') . '/app';
+        self::assertTrue(mkdir($appDir));
+        $storage = Kernel::boot(KernelConfig::theme($appDir, 'Example\Tests\AcfMetaStorageMessage' . uniqid(), true))->container()->get(AcfMetaStorage::class);
+        self::assertInstanceOf(AcfMetaStorage::class, $storage);
+
+        try {
+            $call($storage);
+            self::fail('AcfNotActiveException was not thrown');
+        } catch (AcfNotActiveException $exception) {
+            self::assertSame(
+                AcfMetaStorage::class . "::{$method} requires Advanced Custom Fields (ACF) 6.2+ to be installed and active. Install/activate the ACF plugin, or remove tmswp/acf-bridge usages.",
+                $exception->getMessage(),
+            );
+        }
+    }
+
     /** @return iterable<string, array{string, Closure(AcfMetaStorage): mixed}> */
     public static function storageCalls(): iterable
     {

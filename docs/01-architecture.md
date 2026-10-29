@@ -197,7 +197,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 | `tmswp/thumbnail` | `TMSWP\Thumbnail\` | library | 署名付き URL + `WP_Image_Editor` による動的サムネイル(timthumb 全面置換) | `tmswp/core ^X.Y`, `ext-gd *` |
 | `tmswp/settings-page` | `TMSWP\SettingsPage\` | library | 管理画面設定ページ生成(コアの Form 層ベース、nonce 自動) | `tmswp/core ^X.Y` |
 | `tmswp/acf-bridge` | `TMSWP\AcfBridge\` | library | acf-json を真実源とした型付きアクセサ生成(`app/Acf/*Fields.php`)、`AcfMetaStorage`、CI ドリフト検知 | `tmswp/core ^X.Y`(ACF 本体は実行時検出) |
-| `tmswp/ja-toolkit` | `TMSWP\JaToolkit\` | library | 日本語サイト対応(日本語スラッグ・全角スペース検索正規化・wptexturize 無効化)のオプトインモジュール群 | `tmswp/core ^X.Y` |
+| `tmswp/ja-toolkit` | `TMSWP\JaToolkit\` | library | 日本語サイト対応(日本語スラッグ・全角スペース検索正規化・wptexturize無効化)のオプトインモジュール群 | `tmswp/core ^X.Y`, `ext-mbstring *` |
 | `tmswp/testing` | `TMSWP\Testing\` | library | 各パッケージと利用側のテストの支援コード(`UnitTestCase`・`IntegrationTestCase`・`UsesTempDirectories`・`RecordingLogger`・メモリのストレージ・`WpdbTestDouble`等)。require-devでだけ使う | `tmswp/core ^X.Y`, `phpunit/phpunit ^11.5`, `brain/monkey ^2.6`, `mockery/mockery ^1.6`, `psr/log ^3.0` |
 | `tmswp/starter-theme` | `TmswpStarterTheme\`(create-projectでスラッグから生成した名前空間に書き換える) | project | `composer create-project`用テーマ雛形 | `tmswp/core ^X.Y` |
 | `tmswp/starter-plugin` | `TmswpStarterPlugin\`(create-projectでスラッグから生成した名前空間に書き換える) | project | `composer create-project`用プラグイン雛形 | `tmswp/core ^X.Y` |
@@ -813,8 +813,8 @@ my-plugin/
 
 下限・互換:
 
-- [ ] 全 PHP ファイルが `declare(strict_types=1)` を持ち、PHP 8.3 でパース可能(8.4 以降の専用構文なし)
-- [ ] §5.3 の表にない WP API を新規使用する場合、導入バージョンが 7.0 以下であることを確認するレビュー手順が rules/ に記載されている
+- [ ] 手で書いた全PHPファイル(生成物の、wp-scriptsが`build/`に書く`*.asset.php`と、`wp i18n make-php`が`languages/`に書く`*.l10n.php`を除く)が`declare(strict_types=1)`を持ち、PHP 8.3でパース可能(8.4以降の専用構文なし)
+- [ ] §5.3の表にないWP APIを新規使用する場合、導入バージョンが7.0以下であることを確認するレビュー手順がAGENTS.mdに記載されている
 - [ ] WP 7.0 未満のためのフォールバック分岐がコードベースに存在しない
 - [ ] FW 内に init フック前の `__()` 等の呼び出しが存在しない(WP 6.7 JIT 翻訳対応)
 

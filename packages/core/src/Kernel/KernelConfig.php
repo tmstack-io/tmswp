@@ -104,8 +104,8 @@ final readonly class KernelConfig
 
     /**
      * KernelConfigを返すPHPファイル(テーマ・プラグインのルートのtmswp-kernel.php)を読み込み、そのKernelConfigを返す。
-     * functions.php・プラグインの本体ファイルのbootと、WordPressを起動しないtms-acf(tmswp/acf-bridge)が同じこの関数で
-     * 読むため、ファイルの中ではWordPressの関数を呼ばない。
+     * functions.php・プラグインの本体ファイルのbootと、拡張のパッケージがWordPressを起動せずに実行するコマンドが同じ
+     * この関数で読むため、ファイルの中ではWordPressの関数を呼ばない。
      *
      * 相対パスはカレントディレクトリを基準にした絶対パス(realpath())に確定し、検査したそのファイルを読み込む。相対パスの
      * まま読み込むと、PHPがinclude_pathを先に探し、別の同じ名前のファイルを読みうるためである。

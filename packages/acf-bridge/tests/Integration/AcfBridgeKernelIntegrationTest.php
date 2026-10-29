@@ -146,6 +146,46 @@ final class AcfBridgeKernelIntegrationTest extends IntegrationTestCase
     }
 
     /**
+     * docs/12 v0.6.0「テーマとプラグインの両方でacf-bridgeを使える」。プラグインのKernelの名前空間へ生成した
+     * アクセサ(TmswpFixturePlugin\Acf\PostFields)で、実物のACFの値を読み書き・削除できる。書いた値はACFの保存規約
+     * (値のメタと参照のメタ)で保存され、ACFの読み出し(get_field())でも同じ値になる。
+     */
+    public function testPluginGeneratedAccessorReadsWritesAndDeletesThroughAcf(): void
+    {
+        $postId = self::createPost('post');
+        $of = [self::PLUGIN_NAMESPACE . '\Acf\PostFields', 'of'];
+        self::assertIsCallable($of);
+        $fields = $of($postId);
+        self::assertIsObject($fields);
+        $get = [$fields, 'tmswpPluginNote'];
+        $set = [$fields, 'setTmswpPluginNote'];
+        $has = [$fields, 'hasTmswpPluginNote'];
+        $delete = [$fields, 'deleteTmswpPluginNote'];
+        self::assertIsCallable($get);
+        self::assertIsCallable($set);
+        self::assertIsCallable($has);
+        self::assertIsCallable($delete);
+
+        self::assertFalse($has());
+        self::assertSame('', $get());
+
+        $set('written by the plugin accessor');
+
+        self::assertTrue($has());
+        self::assertSame('written by the plugin accessor', $get());
+        self::assertSame('written by the plugin accessor', get_field('tmswp_plugin_note', $postId, false));
+        self::assertSame('written by the plugin accessor', get_post_meta($postId, 'tmswp_plugin_note', true));
+        self::assertSame('field_tmswp_plugin_post_note', get_post_meta($postId, '_tmswp_plugin_note', true));
+
+        self::assertTrue($delete());
+
+        self::assertFalse($has());
+        self::assertSame('', $get());
+        self::assertFalse(metadata_exists('post', $postId, 'tmswp_plugin_note'));
+        self::assertFalse(metadata_exists('post', $postId, '_tmswp_plugin_note'));
+    }
+
+    /**
      * テーマとプラグインのacf-jsonに同じkeyのJSONがあるとき、保存先は、ACFが実際に読み込んだファイルのディレクトリに
      * なり、もう一方のKernelのファイルを上書きしない。load_jsonの並びは、後にAcfBridgeを登録したテーマのKernelの
      * jsonDirsが後になるため、ACFはテーマのものを読み込む。

@@ -720,6 +720,49 @@ final class GeneratorTest extends UnitTestCase
     }
 
     /**
+     * 日本語のフィールド名は、methodNameMapが無ければW009になり、アクセサも定数も生成しない(docs/09 §5.5の1。受け入れ
+     * 基準「日本語等非ASCIIフィールド名がW009になり」。methodNameMapで生成できることは
+     * testItGeneratesDeterministicAccessorClassesAndManifestが確かめる)。
+     */
+    public function testJapaneseFieldNameWithoutMethodNameMapIsSkippedWithW009(): void
+    {
+        $report = (new Generator())->generate([$this->group('group_shop', 'product', [
+            ['key' => 'field_store_name', 'name' => '店舗名', 'label' => '店舗名', 'type' => 'text'],
+            self::text('price'),
+        ])], $this->context());
+        $product = $this->filesByPath($report->files())['ProductFields.php'];
+
+        self::assertSame([], $report->errors());
+        self::assertSame([
+            "W009: ACF field '店舗名' in group 'group_shop' is not ASCII snake_case; accessor was skipped; set BridgeConfig::\$methodNameMap['group_shop.店舗名'] to an ASCII method name to generate it",
+        ], $report->warnings());
+        self::assertStringNotContainsString('店舗名', $product);
+        self::assertStringNotContainsString('field_store_name', $product);
+        self::assertStringContainsString('public function price(): string', $product);
+    }
+
+    /**
+     * 同じターゲット(post_type==product)の複数のグループは、グループのkeyの昇順で1つのクラスにマージし、マージ後に
+     * 同じ名前のフィールドがあればE001にする(docs/09 §4.3。受け入れ基準「同一ターゲットへの複数グループがマージされ、
+     * フィールド名重複がE001になる」)。fixtureのファイル名の順(a-spec・b-basic)はkeyの順(group_basic・group_spec)と
+     * 逆にしてある。
+     */
+    public function testGroupsOfOneTargetAreMergedInKeyOrderAndADuplicateFieldNameIsE001(): void
+    {
+        $json = (new AcfJsonRepository([__DIR__ . '/../../fixtures/acf-json-duplicate-field']))->load();
+        $report = (new Generator())->generate($json->fieldGroups, $this->context());
+        $files = $this->filesByPath($report->files());
+
+        self::assertSame(["E001: duplicate ACF field 'price' for post:product in groups group_basic and group_spec"], $report->errors());
+        self::assertSame(['AcfManifest.php', 'ProductFields.php'], array_keys($files));
+        preg_match_all("/public const KEY_[A-Z_]+ = '[a-z_]+';/", $files['ProductFields.php'], $matches);
+        self::assertSame(
+            ["public const KEY_PRICE = 'field_price';", "public const KEY_COLOR = 'field_color';", "public const KEY_WEIGHT = 'field_weight';"],
+            $matches[0],
+        );
+    }
+
+    /**
      * PHPの予約語(list・function・match等)は、PHPがメソッド名として受け付けるため、接尾辞を付けずにそのまま生成する。
      * 衝突した名前は、methodNameMapで別の名前にすれば生成でき、定数もその名前から作る。
      */

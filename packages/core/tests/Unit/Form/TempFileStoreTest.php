@@ -7,8 +7,10 @@ namespace TMSWP\Core\Tests\Unit\Form;
 use Brain\Monkey\Functions;
 use Closure;
 use Exception;
+use FilesystemIterator;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
+use SplFileInfo;
 use TMSWP\Core\Exception\Form\TempFileException;
 use TMSWP\Core\Form\StoredFile;
 use TMSWP\Core\Form\TempFileGc;
@@ -310,6 +312,12 @@ final class TempFileStoreTest extends UnitTestCase
         $stored->delete();
     }
 
+    /**
+     * gc() が削除の失敗を最後に1つの例外で報告することを確かめる。ただし、削除に失敗するディレクトリが最初に列挙される
+     * かどうかはファイルシステムの列挙の順しだいで、最初の失敗で止まる実装でも通る場合がある。失敗の後も続けることは、
+     * 列挙の順に依存しないtestGarbageCollectionDeletesExpiredDirectoriesBeforeAndAfterAFailedOneAndThenReportsTheFailure
+     * が確かめる。
+     */
     #[DataProvider('undeletableDirectories')]
     public function testGarbageCollectionContinuesAfterAFailedDeletionAndReportsTheFailureAtTheEnd(int $mode, string $message): void
     {
@@ -350,6 +358,69 @@ final class TempFileStoreTest extends UnitTestCase
         self::assertTrue(touch($baseDir . DIRECTORY_SEPARATOR . $locked, time() - 86401));
         self::assertSame(1, $store->gc(86400));
         self::assertDirectoryDoesNotExist($baseDir . DIRECTORY_SEPARATOR . $locked);
+    }
+
+    /**
+     * gc() は、削除に失敗したディレクトリより前と後に列挙される期限切れのディレクトリをすべて消してから、失敗を最後に
+     * 1つの例外で報告する(docs/05 §一時ファイルの削除の失敗。受け入れ基準「削除の失敗があっても残りを続ける」)。
+     * 列挙の順はファイルシステムしだいのため、期限切れのディレクトリを5つ作り、名前の順でも実際の列挙の順でも先頭と末尾で
+     * ないものを、削除に失敗させるディレクトリに選ぶ。
+     *
+     * @param non-empty-string $message
+     */
+    #[DataProvider('undeletableDirectories')]
+    public function testGarbageCollectionDeletesExpiredDirectoriesBeforeAndAfterAFailedOneAndThenReportsTheFailure(int $mode, string $message): void
+    {
+        $baseDir = $this->createTempDirectory('gc-failure-order');
+        $store = new TempFileStore($baseDir);
+        $expired = [];
+
+        foreach (['1', '4', '7', 'a', 'e'] as $digit) {
+            $token = str_repeat($digit, 32);
+            $this->createStoredFile($baseDir, $token, "{$digit}.txt", 'text/plain', $digit, time() - 86401);
+            $expired[] = $token;
+        }
+
+        $fresh = str_repeat('c', 32);
+        $this->createStoredFile($baseDir, $fresh, 'fresh.txt', 'text/plain', 'fresh', time() - 60);
+        $listed = [];
+
+        foreach (new FilesystemIterator($baseDir, FilesystemIterator::SKIP_DOTS) as $fileInfo) {
+            self::assertInstanceOf(SplFileInfo::class, $fileInfo);
+
+            if (\in_array($fileInfo->getFilename(), $expired, true)) {
+                $listed[] = $fileInfo->getFilename();
+            }
+        }
+
+        $edges = [$expired[0], $expired[4], $listed[0] ?? '', $listed[4] ?? ''];
+        $candidates = array_values(array_filter($expired, static fn(string $token): bool => !\in_array($token, $edges, true)));
+        self::assertCount(5, $listed);
+        self::assertNotSame([], $candidates);
+        $locked = $candidates[0];
+
+        $exception = $this->withReadOnlyDirectory($baseDir . DIRECTORY_SEPARATOR . $locked, $mode, static function () use ($store): ?TempFileException {
+            try {
+                $store->gc(86400);
+            } catch (TempFileException $exception) {
+                return $exception;
+            }
+
+            return null;
+        });
+
+        self::assertInstanceOf(TempFileException::class, $exception);
+        self::assertStringStartsWith('1 expired temporary file directories could not be deleted (4 deleted): ' . $message . $baseDir . DIRECTORY_SEPARATOR . $locked, $exception->getMessage());
+        self::assertInstanceOf(TempFileException::class, $exception->getPrevious());
+        self::assertDirectoryExists($baseDir . DIRECTORY_SEPARATOR . $locked);
+
+        foreach ($expired as $token) {
+            if ($token !== $locked) {
+                self::assertDirectoryDoesNotExist($baseDir . DIRECTORY_SEPARATOR . $token, "expired directory {$token} was not deleted");
+            }
+        }
+
+        self::assertTrue($store->exists($fresh));
     }
 
     /**

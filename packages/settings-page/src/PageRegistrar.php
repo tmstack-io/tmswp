@@ -16,6 +16,12 @@ use TMSWP\Core\Form\FormStep;
  */
 final class PageRegistrar
 {
+    /**
+     * 保存の後のリダイレクト先に付けるクエリ変数。WordPressの`updated`は使わない。本体のoptions-head.phpは、親が
+     * options-general.phpのページで`updated`を見て「Settings saved.」を出すため、FWの通知と二重になる。
+     */
+    public const string SAVED_QUERY_ARG = 'tmswp-settings-saved';
+
     private ?SettingsPage $page = null;
 
     private ?Form $form = null;
@@ -25,7 +31,9 @@ final class PageRegistrar
 
     /**
      * definition()を読み、parentの有無でadd_menu_page()かadd_submenu_page()を呼び、load-{hook_suffix}に
-     * handleRequest()を接続する。admin_menuで呼ぶ。
+     * handleRequest()を接続する。admin_menuで呼ぶ。登録したときは、保存の後のクエリ変数(SAVED_QUERY_ARG)を
+     * removable_query_argsに足し、表示の後にWordPressがアドレスバーのURLから除くようにする(再読み込みで通知を
+     * もう一度出さない。本体の`updated`と同じ扱い)。
      *
      * add_submenu_page()は、今のユーザーがcapabilityを持たなければページを登録せずにfalseを返す。これは登録の失敗では
      * なく「権限が無いため登録しない」という正常な結果なので、何もしない(handleRequest()も接続しない)。
@@ -67,6 +75,21 @@ final class PageRegistrar
         }
 
         add_action("load-{$hookSuffix}", [$this, 'handleRequest'], 10, 0);
+        add_filter('removable_query_args', [self::class, 'removableQueryArgs']);
+    }
+
+    /**
+     * removable_query_argsのフィルタ。SAVED_QUERY_ARGを足す。
+     *
+     * @param array<int, string> $args
+     *
+     * @return array<int, string>
+     */
+    public static function removableQueryArgs(array $args): array
+    {
+        $args[] = self::SAVED_QUERY_ARG;
+
+        return $args;
     }
 
     /**
@@ -105,7 +128,7 @@ final class PageRegistrar
         }
 
         $page->frameworkSubmit($result);
-        wp_safe_redirect($page->url(['updated' => '1']));
+        wp_safe_redirect($page->url([self::SAVED_QUERY_ARG => '1']));
         // 原則1(docs/00 §3)のexit禁止の例外。設定ページの保存の後のリダイレクトの応答をここで確定させる(D-35)
         exit;
     }
@@ -123,8 +146,8 @@ final class PageRegistrar
         echo '<div class="wrap">';
         echo '<h1>' . esc_html($definition->pageTitle) . '</h1>';
 
-        // 保存後のURL(updated=1)のままもう一度送信したPOSTには出さない
-        if (($_GET['updated'] ?? null) === '1' && ($_SERVER['REQUEST_METHOD'] ?? null) !== 'POST') {
+        // 保存後のURL(SAVED_QUERY_ARG=1)のままもう一度送信したPOSTには出さない
+        if (($_GET[self::SAVED_QUERY_ARG] ?? null) === '1' && ($_SERVER['REQUEST_METHOD'] ?? null) !== 'POST') {
             echo self::notice('notice-success is-dismissible', __('Settings saved.', 'tmswp'));
         }
 

@@ -1093,7 +1093,7 @@ v0.8.0
 
 #### v0.9.0-T2: E2Eの自動化と統合テストの網羅確認
 
-- 対象ファイル領域: ルートのpackage.json・package-lock.json(`@playwright/test`を版の完全一致で追加)、tests/E2E/(新設)、playwright.config(新設)、.github/workflows/qa.yml(Sample Site QAのE2Eの段、UnitとCoverageのユニットの段の`--testdox`)、ルートのcomposer.json(E2Eの実行のスクリプトを足す場合と、`test:coverage:unit`に`--testdox`を渡すためにスクリプトを変える場合)、docs/10 §1.1(package.jsonとcomposer.jsonの写し)・§4(E2Eの節。新設)・§5.1(qa.ymlの完全版)、packages/*/tests/Integration/(網羅の確認で足す統合テスト)、docs/acceptance/v0.9.0.md(新設。網羅の対応表の節)、examples/sample-site/README.md(サムネイルのURLの説明)
+- 対象ファイル領域: ルートのpackage.json・package-lock.json(`@playwright/test`を版の完全一致で追加)、tests/E2E/(新設)、playwright.config(新設)、.github/workflows/qa.yml(Sample Site QAのE2Eの段、UnitとCoverageのユニットの段の`--testdox`)、ルートのcomposer.json(E2Eの実行のスクリプトを足す場合と、`test:coverage:unit`に`--testdox`を渡すためにスクリプトを変える場合)、docs/10 §1.1(package.jsonとcomposer.jsonの写し)・§4(E2Eの節。新設)・§5.1(qa.ymlの完全版)、packages/*/tests/Integration/(網羅の確認で足す統合テスト)、docs/acceptance/v0.9.0.md(新設。網羅の対応表の節)、examples/sample-site/README.md(サムネイルのURLの説明)。網羅の確認で見つけた不足と食い違いの修正のために、次も対象にする: packages/*/tests/Unit/・packages/*/tests/fixtures/・tests/Unit/(足すユニットテストとfixture)、tests/fixtures/http/form-file.php(統合テストのモード)、phpunit.integration.xml.dist(`failOnRisky`等の属性)、packages/acf-bridge/src(AcfBridge.php・WpCliProcess.php。照合のコマンドのE101。D-57)とdocs/09 §1.4・§7.2・§7.3、packages/core/rules/meta.md、packages/core/src(コメントの4件。docs/09の受け入れ基準)、docs/01 §3.1と受け入れ基準、docs/10 §2.1・§4.2・§4.5・§4.7(実物の写し)と受け入れ基準、AGENTS.md(変更の手順)、本書のv0.9.0-T4a・並列化(CIのsplit相当の確認)、CHANGELOG.md。あわせて、packages/settings-page/src・languages・rulesとdocs/08(設定ページの保存の後の通知の重複の修正)、AGENTS.md(必須コマンドの`composer test:e2e`)、本書のv0.9.0-T2(対象ファイル領域)・T3(CIの全ジョブの一覧)も対象にする
 - 完了条件:
   - E2Eは`@playwright/test`でルートのtests/E2E/に置き、sample-site(専用のwp-env、ポート8882)に対して走らせる。webServerを使わず(wp-envの起動はcomposerのスクリプトで行う)、workersは1、CIでもretriesは0にする。`@wordpress/e2e-test-utils-playwright`は入れず、ログインとwp-envのcliの呼び出しは小さな補助で書く。
   - E2Eが次の機能を確かめる(sample-siteのREADMEの「確認の方法」の1〜5に対応する)。
@@ -1124,7 +1124,7 @@ v0.8.0
 
 #### v0.9.0-T4a: リリースの道具
 
-- 対象ファイル領域: monorepo-builder.php、tools/release/(新設。2つのワーカー)、tests/Unit/(ワーカーのユニットテスト。新設)、ルートのcomposer.json(tools/release/のオートロード)、.github/workflows/split.yml、.github/split/close-pull-request.yml(新設)、packages/*/.gitattributes・starters/*/.gitattributes(8つ)、docs/RELEASING.md、docs/01 §4.3(monorepo-builderの利用範囲)・§4.4(split.ymlの写し)・§4.5(ブランチ・タグ運用とリリース手順)、docs/10 §1.1(composer.jsonの写し)・§5.2(split.ymlの完全版)・§6(monorepo-builderの設定・制約の同期・リリース手順)、AGENTS.md(リリースの節)。外部への書き込み(push・タグ・GitHubの設定)は行わない
+- 対象ファイル領域: monorepo-builder.php、tools/release/(新設。2つのワーカー)、tests/Unit/(ワーカーのユニットテスト。新設)、ルートのcomposer.json(tools/release/のオートロード)、.github/workflows/split.yml、.github/workflows/qa.yml(split相当の確認のジョブ。新設)、.github/split/close-pull-request.yml(新設)、packages/*/.gitattributes・starters/*/.gitattributes(8つ)、docs/RELEASING.md、docs/01 §4.3(monorepo-builderの利用範囲)・§4.4(split.ymlの写し)・§4.5(ブランチ・タグ運用とリリース手順)、docs/10 §1.1(composer.jsonの写し)・§5.1(qa.ymlの完全版)・§5.2(split.ymlの完全版)・§6(monorepo-builderの設定・制約の同期・リリース手順)、AGENTS.md(リリースの節)。外部への書き込み(push・タグ・GitHubの設定)は行わない
 - 完了条件:
   - monorepo-builder.phpから標準のリリースのワーカー7つ(SetCurrentMutualDependencies・AddTagToChangelog・TagVersion・PushTag・SetNextMutualDependencies・UpdateBranchAlias・PushNextDev)がすべて外れ、tools/release/の2つのワーカーだけが登録されている。リリースの後に次の版(`^0.10`等)へ自動で上げない。
   - 1つ目のワーカー(リリースの前の検査)は、次のどれか1つでも満たさなければ例外で止まる: 今のブランチが`main`である、`origin/main`と同じコミットである、作業ツリーが空である、そのタグが手元にも`origin`にも無い、`Kernel::VERSION`・packages/*とstarters/*の`tmswp/*`の制約・branch-alias・sample-siteのpathリポジトリの`versions`とrequireがタグの版と一致する、CHANGELOG.mdに`## vX.Y.Z — 題名`の見出しがある。
@@ -1133,8 +1133,9 @@ v0.8.0
   - split.ymlで、`SPLIT_ACCESS_TOKEN`が空のとき、mainとタグのpushのジョブが失敗する(成功で終わる今の空実行の段を残さない)。matrixの同期先のリポジトリごとに`concurrency`があり、同じ同期先への同期が並行して走らない(先の実行を取り消さない)。
   - 同期先でプルリクエストを自動で閉じてmonorepoへ案内するワークフローの正本が`.github/split/close-pull-request.yml`にあり、split.ymlが同期の前に各パッケージの`.github/workflows/`へ写す(monorepoのpackages/*・starters/*には置かない)。このワークフローは`pull_request_target`で動き、プルリクエストのコードをcheckoutせず、権限は`pull-requests: write`だけにする。外部アクションを使う場合はSHAで固定する。閉じるときの文面は英語だけとし(ユーザーの決定)、その文面を正本に入れる。
   - packages/*・starters/*の8つの`.gitattributes`に`/.github export-ignore`がある。8つのそれぞれについて、パッケージのディレクトリを写して正本のワークフローを`.github/workflows/close-pull-request.yml`に置いた、split相当の一時のgitのツリーを作り、その`git archive HEAD`(またはそのツリーをpathリポジトリにしてcreate-projectで作った先)に`.github`が入らないことを確かめている。対照として、一時のツリーの`.gitattributes`から`/.github export-ignore`を外すと、archiveに`.github/workflows/close-pull-request.yml`が入ることも確かめている(除外の検査が空振りしないことの確認)。
-  - docs/RELEASING.md・docs/01 §4.3〜§4.5・docs/10 §5.2・§6・AGENTS.mdのリリースの節が、新しいワーカーとsplit.yml・mainへの反映の方法(PRのマージ)と一致する。
-- 検証コマンド: `composer qa:fast`、`vendor/bin/monorepo-builder release v0.9.0 --dry-run`(登録したワーカーだけが表示され、外部への書き込みが無い)、`grep -nE 'SetCurrentMutualDependencies|AddTagToChangelog|TagVersion|PushTag|SetNextMutualDependencies|UpdateBranchAlias|PushNextDev' monorepo-builder.php`(一致なし)、8つのsplit相当の一時のgitのツリー(正本のワークフローを置いたもの)での`git archive HEAD | tar -t | grep '^\.github'`(一致なし)と、`/.github export-ignore`を外した対照での同じコマンド(一致あり)
+  - qa.ymlに、split相当の確認のジョブ(1セル)がある。packages/*の6つのそれぞれを、`git subtree split`等でsplit相当に取り出し、tmswp/core・tmswp/testingを要るパッケージには、同じく取り出したcore・testingを指すpathリポジトリを足して、`composer install && composer test`を実行する(docs/RELEASING.mdの「split相当の確認」と同じ手順)。配布物の中身は、ライブラリとスターターで分けて`git archive HEAD`で確かめる。packages/*の6つは、`tests/`・`phpunit.xml.dist`・`.gitattributes`・`.DS_Store`・`.github`が入らないこと(開発用のファイルの除外)を確かめる。starters/*の2つは、install・testを行わずarchiveの中身だけを確かめ、`.github`・`.DS_Store`・`node_modules`が入らないことと、作ったプロジェクトが使う`tests/`(例のユニットテスト)と`phpunit.xml.dist`が入ること(docs/10 §6.2・§7)を確かめる。取り出しや照合の失敗はジョブの失敗にする。これにより、v0.8.0で手作業で確かめた各パッケージの単独のinstall・testと配布物の中身(v0.8.0の受け入れ条件2、docs/01・docs/10の受け入れ基準)を、v0.9.0のCIで確かめ直す。
+  - docs/RELEASING.md・docs/01 §4.3〜§4.5・docs/10 §5.1・§5.2・§6・AGENTS.mdのリリースの節が、新しいワーカーとsplit.yml・mainへの反映の方法(PRのマージ)と一致する。
+- 検証コマンド: `composer qa:fast`、`vendor/bin/monorepo-builder release v0.9.0 --dry-run`(登録したワーカーだけが表示され、外部への書き込みが無い)、`grep -nE 'SetCurrentMutualDependencies|AddTagToChangelog|TagVersion|PushTag|SetNextMutualDependencies|UpdateBranchAlias|PushNextDev' monorepo-builder.php`(一致なし)、8つのsplit相当の一時のgitのツリー(正本のワークフローを置いたもの)での`git archive HEAD | tar -t | grep '^\.github'`(一致なし)と、`/.github export-ignore`を外した対照での同じコマンド(一致あり)、CIのsplit相当の確認のジョブの成功
 
 #### v0.9.0-T3: 全マトリクスのqaとcritical / highの解消確認
 
@@ -1142,7 +1143,7 @@ v0.8.0
 - 完了条件:
   - 既知のcritical / highの不具合がすべて解消している。
   - composer.jsonの`test:coverage:check`の全体の閾値を85にしている(§0.7。タグ`v0.9.0`に入れるため、公開の前のこのタスクで上げる)。docs/10 §1.1の写しも同じ値にしている。
-  - 閾値を85にしたコミットで、CIの全ジョブが成功する。全ジョブは、Coding Standards・Static Analysis・Monorepo Validate・Rules Code Examples・Unit(2セル)・Integration(PHP 8.3と8.5 × WordPress 7.0と最新版の4セル)・Coverage・Sample Site QA(T2のE2Eを含む1セル)・Starter Projects・T3aのMySQLのジョブ(MySQL 8.4 LTSと9.7 LTSの2セル)である。Coverageのジョブの合算カバレッジが85%以上である(§0.7)。
+  - 閾値を85にしたコミットで、CIの全ジョブが成功する。全ジョブは、Coding Standards・Static Analysis・Monorepo Validate・Rules Code Examples・Unit(2セル)・Integration(PHP 8.3と8.5 × WordPress 7.0と最新版の4セル)・Coverage・Sample Site QA(T2のE2Eを含む1セル)・Starter Projects・T3aのMySQLのジョブ(MySQL 8.4 LTSと9.7 LTSの2セル)・T4aのsplit相当の確認のジョブである。Coverageのジョブの合算カバレッジが85%以上である(§0.7)。
   - Modelの予約語の一覧(packages/core/src/Model/Identifier.php)と、MigratorのdbDeltaの後の実際の構造の照合を、MySQL 8.4 LTSと9.7 LTSでも確かめている(T3aのジョブの成功で確かめる)。v0.5.0の時点では、予約語の一覧(283語)はMySQL 8.0.44とMariaDB 10.11・12.3の実測にもとづき、Migratorの照合もこの3つのDBで確かめた。
   - E2Eの依存を足した後に、ルート・examples/sample-site・starters/themeの`npm audit`を測り直し、件数・重大度・経路を、T5が受け入れ記録に書けるよう、タスクの報告に残す(v0.8.0の時点の残りは12件。docs/acceptance/v0.8.0.mdの6章の5)。
 - 検証コマンド: `gh run view <run id>`(全ジョブの成功と、Coverageの合算カバレッジの値)、`npm audit`(ルート・examples/sample-site・starters/theme)
@@ -1179,7 +1180,7 @@ v0.8.0
 - T0(docs/12だけ)とT0b(docs/12を触らない)は、ファイル領域が重ならない。
 - T0cはT0bの後にする。docs/11(T0bの版の例と、T0cの§5・§10.2)と、スターターの設定(T0bのstarters/*/composer.jsonと、T0cのstarters/*のphpunit・テスト・setup.php)が、同じファイルか同じプロジェクトの検証に関わる。
 - T1とT2は、ファイル領域が重ならない。T1はtools/のスクリプトだけを足し、docs/10とexamples/sample-site/README.mdはT2だけが触る。実行の環境も重ならない。T2はsample-siteの専用のwp-env(ポート8882)を使い、T1は別の設定ファイル・別の`WP_ENV_HOME`・別のポートのwp-envを使う(T2のCIのACFは無料版のまま)。
-- docs/10は、T0c(§7)・T2(§1.1・§4・§5.1)・T3a(§4・§5.1)・T4a(§1.1・§5.2・§6)・T3(§1.1)が触る。.github/workflows/qa.ymlは、T2(E2Eと`--testdox`)とT3a(MySQLのジョブ)が触る(T4aが触るsplit.ymlは別のファイル)。ルートのcomposer.jsonは、T2(E2Eと`--testdox`のスクリプトを変える場合)・T4a(オートロード)・T3(閾値)が触る。このため、T0c → T2 → T3a → T4a → T3を逐次にする(§0.4)。
+- docs/10は、T0c(§7)・T2(§1.1・§4・§5.1)・T3a(§4・§5.1)・T4a(§1.1・§5.1・§5.2・§6)・T3(§1.1)が触る。.github/workflows/qa.ymlは、T2(E2Eと`--testdox`)・T3a(MySQLのジョブ)・T4a(split相当の確認のジョブ)が触る(T4aはsplit.ymlも触る)。ルートのcomposer.jsonは、T2(E2Eと`--testdox`のスクリプトを変える場合)・T4a(オートロード)・T3(閾値)が触る。このため、T0c → T2 → T3a → T4a → T3を逐次にする(§0.4)。
 - T3は、T2とT3aで足したジョブを含むCIの全ジョブと、T4aで変えたリリースの道具を含む、公開の直前のコミットで確かめるため、T4aの後にする。T4はT4aの道具とT3の確認を前提にし、T5はT4の公開を前提にする。
 
 ### 受け入れ条件

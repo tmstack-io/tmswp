@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\AcfBridge\Tests\Unit;
 
+use App\Acf\ProductFields;
 use App\FieldAccess\AcfFieldAccessFixture;
 use ArrayObject;
 use Closure;
@@ -71,6 +72,41 @@ final class AcfFieldAccessTest extends UnitTestCase
         $this->expectExceptionMessage(AcfFieldAccessFixture::class . "::{$method} requires Advanced Custom Fields (ACF) 6.2+");
 
         $call(AcfFieldAccessFixture::make(10));
+    }
+
+    /**
+     * ACFが有効でないときの例外のメッセージは、docs/09 §10の正準形の全文(`{callable}`は`{呼び出したクラス}::{メソッド}`)
+     * と一致する(受け入れ基準「ACF不在環境で生成クラス…へのアクセスがAcfNotActiveException(正準メッセージ)になる」)。
+     *
+     * @param Closure(AcfFieldAccessFixture): mixed $call
+     */
+    #[DataProvider('acfCalls')]
+    public function testAcfNotActiveMessageIsTheCanonicalFullText(string $method, Closure $call): void
+    {
+        try {
+            $call(AcfFieldAccessFixture::make(10));
+            self::fail('AcfNotActiveException was not thrown');
+        } catch (AcfNotActiveException $exception) {
+            self::assertSame(self::canonicalAcfNotActiveMessage(AcfFieldAccessFixture::class . "::{$method}"), $exception->getMessage());
+        }
+    }
+
+    /**
+     * 生成したクラス(fixtures/expected-appのProductFields)のアクセサも、ACFが有効でなければ`of()`では投げず、値への
+     * アクセスで正準形のメッセージのAcfNotActiveExceptionを投げる(docs/09 §10)。`{callable}`は生成クラスと、アクセサが
+     * 呼ぶtraitのメソッドの名前になる。
+     */
+    public function testGeneratedClassAccessorThrowsTheCanonicalAcfNotActiveMessage(): void
+    {
+        require_once __DIR__ . '/../fixtures/expected-app/Acf/ProductFields.php';
+        $product = ProductFields::of(10);
+
+        try {
+            $product->price();
+            self::fail('AcfNotActiveException was not thrown');
+        } catch (AcfNotActiveException $exception) {
+            self::assertSame(self::canonicalAcfNotActiveMessage(ProductFields::class . '::acfNumber'), $exception->getMessage());
+        }
     }
 
     /** @return iterable<string, array{string, Closure(AcfFieldAccessFixture): mixed}> */
@@ -256,6 +292,12 @@ final class AcfFieldAccessTest extends UnitTestCase
         Kernel::boot($config);
 
         return $logger;
+    }
+
+    /** docs/09 §10のAcfNotActiveExceptionのメッセージの正準形 */
+    private static function canonicalAcfNotActiveMessage(string $callable): string
+    {
+        return "{$callable} requires Advanced Custom Fields (ACF) 6.2+ to be installed and active. Install/activate the ACF plugin, or remove tmswp/acf-bridge usages.";
     }
 
     /** @return array<string, mixed> */

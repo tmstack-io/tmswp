@@ -73,9 +73,9 @@ composer wp:setup     # テーマを有効にし、dev/seed.phpで固定ペー�
 
 ## 確認の方法
 
-`composer wp:start`と`composer wp:setup`の後に、次を確かめます。
+`composer wp:start`と`composer wp:setup`の後に、次を確かめます。monorepoのルートの`composer test:e2e`(`tests/E2E/`。Playwright)が、同じ項目を自動で確かめます(`docs/10-quality.md` §4.10)。
 
-1. トップページ(<http://localhost:8882/>)が200を返し、設定ページの説明文と、製品のカード(アイキャッチは`/wp-json/tmswp/v1/thumb?...`のURL)が出る。
+1. トップページ(<http://localhost:8882/>)が200を返し、設定ページの説明文と、製品のカードが出る。カードのアイキャッチのURLは、サムネイルの生成の前はRESTのURL(`/wp-json/tmswp/v1/thumb?...`。302で生成したファイルへ移る)、生成の後はキャッシュの静的なURL(`/wp-content/uploads/tmswp-thumb/...`)になる。
 2. 製品の詳細(トップページのカードから開く。URLは`/product/product-<ID>/`で、日本語のタイトルのスラッグが置き換わっている)に、価格と仕様(ACFの値)が出る。管理画面の製品の編集画面で値を変えると、表示が変わる。
 3. <http://localhost:8882/blocks/>に、ブロック`sample-site/latest-products`の製品の一覧が出る。固定ページの編集画面で、カテゴリ「Sample Site」からこのブロックを挿入できる。製品の編集画面では、`allowedBlocks()`で許したブロックだけを使える。
 4. 管理画面の「設定 > Sample Site」で、通知先と説明文を保存できる。メールアドレスの形でない通知先は保存されずにエラーになる。

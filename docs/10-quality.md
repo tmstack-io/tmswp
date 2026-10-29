@@ -72,6 +72,7 @@ packages/testing/src/UnitTestCase.php (TMSWP\Testing\UnitTestCase)
 | `composer test:coverage:check` | 2つのcloverを行単位で合算し、全体とパッケージ別の閾値を判定(`bin/coverage-check.php`。4.8) | 不要 |
 | `composer test:integration` | 統合テスト(wp-env の `cli` コンテナ内で PHPUnit 9.6 実行) | **必要** |
 | `composer test` | `test:unit` → `test:integration` | 必要 |
+| `composer test:e2e` | E2E(Playwright。`tests/E2E/`)。examples/sample-siteのwp-env(ポート8882)を、sample-siteの`composer wp:start`・`composer wp:setup`で用意しておく(4.10) | **必要** |
 | `composer discover:build` | fixtureのテーマ・プラグインの探索結果ファイルを`wp tmswp discover --kernels=2`で生成する(wp-envの`cli`コンテナ内。起動したKernelが2つでなければ非0。4.6) | **必要** |
 | `composer discover:check` | fixtureの探索結果ファイルが最新かを`wp tmswp discover --check --kernels=2`で照合する(古い、または起動したKernelが2つでなければ非0) | **必要** |
 | `composer qa:fast` | `lint` → `analyse` → `test:unit`(Docker 不要の全 QA) | 不要 |
@@ -87,150 +88,154 @@ packages/testing/src/UnitTestCase.php (TMSWP\Testing\UnitTestCase)
 
 ```json
 {
-    "name": "tmswp/tmswp",
-    "description": "TMStack WordPress Framework (monorepo)",
-    "license": "GPL-2.0-or-later",
-    "type": "library",
-    "require": {
-        "php": ">=8.3",
-        "ext-gd": "*",
-        "ext-intl": "*",
-        "ext-mbstring": "*",
-        "psr/container": "^2.0",
-        "psr/log": "^3.0"
+  "name": "tmswp/tmswp",
+  "description": "TMStack WordPress Framework (monorepo)",
+  "license": "GPL-2.0-or-later",
+  "type": "library",
+  "require": {
+    "php": ">=8.3",
+    "ext-gd": "*",
+    "ext-intl": "*",
+    "ext-mbstring": "*",
+    "psr/container": "^2.0",
+    "psr/log": "^3.0"
+  },
+  "require-dev": {
+    "bamarni/composer-bin-plugin": "^1.8",
+    "brain/monkey": "^2.6",
+    "friendsofphp/php-cs-fixer": "^3.88",
+    "mikey179/vfsstream": "^1.6.12",
+    "mockery/mockery": "^1.6",
+    "php-stubs/acf-pro-stubs": "^6.0",
+    "php-stubs/wordpress-tests-stubs": "7.1.0",
+    "phpstan/phpstan": "^2.1",
+    "phpstan/phpstan-deprecation-rules": "^2.0",
+    "phpstan/phpstan-phpunit": "^2.0",
+    "phpstan/phpstan-strict-rules": "^2.0",
+    "phpunit/phpunit": "^11.5",
+    "symplify/monorepo-builder": "^12.7",
+    "szepeviktor/phpstan-wordpress": "^2.0"
+  },
+  "replace": {
+    "tmswp/acf-bridge": "self.version",
+    "tmswp/core": "self.version",
+    "tmswp/ja-toolkit": "self.version",
+    "tmswp/settings-page": "self.version",
+    "tmswp/testing": "self.version",
+    "tmswp/thumbnail": "self.version"
+  },
+  "autoload": {
+    "psr-4": {
+      "TMSWP\\AcfBridge\\": "packages/acf-bridge/src/",
+      "TMSWP\\Core\\": "packages/core/src/",
+      "TMSWP\\Core\\PHPStan\\": "packages/core/phpstan/src/",
+      "TMSWP\\JaToolkit\\": "packages/ja-toolkit/src/",
+      "TMSWP\\SettingsPage\\": "packages/settings-page/src/",
+      "TMSWP\\Thumbnail\\": "packages/thumbnail/src/"
     },
-    "require-dev": {
-        "bamarni/composer-bin-plugin": "^1.8",
-        "brain/monkey": "^2.6",
-        "friendsofphp/php-cs-fixer": "^3.88",
-        "mikey179/vfsstream": "^1.6.12",
-        "mockery/mockery": "^1.6",
-        "php-stubs/acf-pro-stubs": "^6.0",
-        "php-stubs/wordpress-tests-stubs": "7.1.0",
-        "phpstan/phpstan": "^2.1",
-        "phpstan/phpstan-deprecation-rules": "^2.0",
-        "phpstan/phpstan-phpunit": "^2.0",
-        "phpstan/phpstan-strict-rules": "^2.0",
-        "phpunit/phpunit": "^11.5",
-        "symplify/monorepo-builder": "^12.7",
-        "szepeviktor/phpstan-wordpress": "^2.0"
+    "files": [
+      "packages/core/src/functions.php",
+      "packages/thumbnail/src/functions.php"
+    ]
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "TMSWP\\AcfBridge\\Tests\\": "packages/acf-bridge/tests/",
+      "TMSWP\\Core\\Tests\\": "packages/core/tests/",
+      "TMSWP\\JaToolkit\\Tests\\": "packages/ja-toolkit/tests/",
+      "TMSWP\\SettingsPage\\Tests\\": "packages/settings-page/tests/",
+      "TMSWP\\Testing\\": "packages/testing/src/",
+      "TMSWP\\Testing\\Tests\\": "packages/testing/tests/",
+      "TMSWP\\Thumbnail\\Tests\\": "packages/thumbnail/tests/"
+    }
+  },
+  "scripts": {
+    "lint": "php-cs-fixer fix --dry-run --diff --show-progress=none",
+    "fix": "php-cs-fixer fix",
+    "analyse": "phpstan analyse -c phpstan.neon.dist --memory-limit=2G",
+    "i18n:build": [
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/core/src packages/core/languages/tmswp-core.pot --domain=tmswp --package-name=tmswp-core --headers='{\"POT-Creation-Date\":\"\"}'",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/core/languages/tmswp-core.pot",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/core/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/core/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/ja-toolkit/src packages/ja-toolkit/languages/tmswp-ja-toolkit.pot --domain=tmswp --package-name=tmswp-ja-toolkit --headers='{\"POT-Creation-Date\":\"\"}'",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/ja-toolkit/languages/tmswp-ja-toolkit.pot",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/ja-toolkit/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/ja-toolkit/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/settings-page/src packages/settings-page/languages/tmswp-settings-page.pot --domain=tmswp --package-name=tmswp-settings-page --headers='{\"POT-Creation-Date\":\"\"}'",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/settings-page/languages/tmswp-settings-page.pot",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/settings-page/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/settings-page/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/thumbnail/src packages/thumbnail/languages/tmswp-thumbnail.pot --domain=tmswp --package-name=tmswp-thumbnail --headers='{\"POT-Creation-Date\":\"\"}'",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/thumbnail/languages/tmswp-thumbnail.pot",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/thumbnail/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/thumbnail/languages"
+    ],
+    "discover:build": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --kernels=2",
+    "discover:check": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --check --kernels=2",
+    "test:unit": "phpunit -c phpunit.unit.xml.dist",
+    "test:coverage": [
+      "@test:coverage:unit",
+      "@test:coverage:integration",
+      "@test:coverage:check"
+    ],
+    "test:coverage:unit": [
+      "@putenv XDEBUG_MODE=off",
+      "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/unit.xml"
+    ],
+    "test:coverage:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --coverage-clover=var/coverage/integration.xml",
+    "test:coverage:check": "php bin/coverage-check.php 82 --package=acf-bridge:80 --package=core:80 --package=ja-toolkit:80 --package=settings-page:80 --package=testing:80 --package=thumbnail:80 var/coverage/unit.xml var/coverage/integration.xml",
+    "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
+    "test:integration:acf-pro": [
+      "Composer\\Config::disableProcessTimeout",
+      "bash tools/acf-pro-integration.sh"
+    ],
+    "test:e2e": [
+      "Composer\\Config::disableProcessTimeout",
+      "node node_modules/@playwright/test/cli.js test --config=playwright.config.mjs"
+    ],
+    "test": [
+      "@test:unit",
+      "@test:integration"
+    ],
+    "qa:fast": [
+      "@lint",
+      "@analyse",
+      "@test:unit"
+    ],
+    "acf:check:fixtures": [
+      "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/themes/tmswp-fixture-theme",
+      "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/plugins/tmswp-fixture-plugin"
+    ],
+    "qa": [
+      "@lint",
+      "@analyse",
+      "@acf:check:fixtures",
+      "@discover:check",
+      "@test"
+    ],
+    "monorepo:validate": "monorepo-builder validate",
+    "wp:start": "node node_modules/@wordpress/env/bin/wp-env start",
+    "wp:start:coverage": "node node_modules/@wordpress/env/bin/wp-env start --xdebug=coverage",
+    "wp:stop": "node node_modules/@wordpress/env/bin/wp-env stop"
+  },
+  "config": {
+    "sort-packages": true,
+    "platform": {
+      "php": "8.3.0"
     },
-    "replace": {
-        "tmswp/acf-bridge": "self.version",
-        "tmswp/core": "self.version",
-        "tmswp/ja-toolkit": "self.version",
-        "tmswp/settings-page": "self.version",
-        "tmswp/testing": "self.version",
-        "tmswp/thumbnail": "self.version"
-    },
-    "autoload": {
-        "psr-4": {
-            "TMSWP\\AcfBridge\\": "packages/acf-bridge/src/",
-            "TMSWP\\Core\\": "packages/core/src/",
-            "TMSWP\\Core\\PHPStan\\": "packages/core/phpstan/src/",
-            "TMSWP\\JaToolkit\\": "packages/ja-toolkit/src/",
-            "TMSWP\\SettingsPage\\": "packages/settings-page/src/",
-            "TMSWP\\Thumbnail\\": "packages/thumbnail/src/"
-        },
-        "files": [
-            "packages/core/src/functions.php",
-            "packages/thumbnail/src/functions.php"
-        ]
-    },
-    "autoload-dev": {
-        "psr-4": {
-            "TMSWP\\AcfBridge\\Tests\\": "packages/acf-bridge/tests/",
-            "TMSWP\\Core\\Tests\\": "packages/core/tests/",
-            "TMSWP\\JaToolkit\\Tests\\": "packages/ja-toolkit/tests/",
-            "TMSWP\\SettingsPage\\Tests\\": "packages/settings-page/tests/",
-            "TMSWP\\Testing\\": "packages/testing/src/",
-            "TMSWP\\Testing\\Tests\\": "packages/testing/tests/",
-            "TMSWP\\Thumbnail\\Tests\\": "packages/thumbnail/tests/"
-        }
-    },
-    "scripts": {
-        "lint": "php-cs-fixer fix --dry-run --diff --show-progress=none",
-        "fix": "php-cs-fixer fix",
-        "analyse": "phpstan analyse -c phpstan.neon.dist --memory-limit=2G",
-        "i18n:build": [
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/core/src packages/core/languages/tmswp-core.pot --domain=tmswp --package-name=tmswp-core --headers='{\"POT-Creation-Date\":\"\"}'",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/core/languages/tmswp-core.pot",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/core/languages",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/core/languages",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/ja-toolkit/src packages/ja-toolkit/languages/tmswp-ja-toolkit.pot --domain=tmswp --package-name=tmswp-ja-toolkit --headers='{\"POT-Creation-Date\":\"\"}'",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/ja-toolkit/languages/tmswp-ja-toolkit.pot",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/ja-toolkit/languages",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/ja-toolkit/languages",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/settings-page/src packages/settings-page/languages/tmswp-settings-page.pot --domain=tmswp --package-name=tmswp-settings-page --headers='{\"POT-Creation-Date\":\"\"}'",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/settings-page/languages/tmswp-settings-page.pot",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/settings-page/languages",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/settings-page/languages",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/thumbnail/src packages/thumbnail/languages/tmswp-thumbnail.pot --domain=tmswp --package-name=tmswp-thumbnail --headers='{\"POT-Creation-Date\":\"\"}'",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/thumbnail/languages/tmswp-thumbnail.pot",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/thumbnail/languages",
-            "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/thumbnail/languages"
-        ],
-        "discover:build": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --kernels=2",
-        "discover:check": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --check --kernels=2",
-        "test:unit": "phpunit -c phpunit.unit.xml.dist",
-        "test:coverage": [
-            "@test:coverage:unit",
-            "@test:coverage:integration",
-            "@test:coverage:check"
-        ],
-        "test:coverage:unit": [
-            "@putenv XDEBUG_MODE=off",
-            "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/unit.xml"
-        ],
-        "test:coverage:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --coverage-clover=var/coverage/integration.xml",
-        "test:coverage:check": "php bin/coverage-check.php 82 --package=acf-bridge:80 --package=core:80 --package=ja-toolkit:80 --package=settings-page:80 --package=testing:80 --package=thumbnail:80 var/coverage/unit.xml var/coverage/integration.xml",
-        "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
-        "test:integration:acf-pro": [
-            "Composer\\Config::disableProcessTimeout",
-            "bash tools/acf-pro-integration.sh"
-        ],
-        "test": [
-            "@test:unit",
-            "@test:integration"
-        ],
-        "qa:fast": [
-            "@lint",
-            "@analyse",
-            "@test:unit"
-        ],
-        "acf:check:fixtures": [
-            "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/themes/tmswp-fixture-theme",
-            "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/plugins/tmswp-fixture-plugin"
-        ],
-        "qa": [
-            "@lint",
-            "@analyse",
-            "@acf:check:fixtures",
-            "@discover:check",
-            "@test"
-        ],
-        "monorepo:validate": "monorepo-builder validate",
-        "wp:start": "node node_modules/@wordpress/env/bin/wp-env start",
-        "wp:start:coverage": "node node_modules/@wordpress/env/bin/wp-env start --xdebug=coverage",
-        "wp:stop": "node node_modules/@wordpress/env/bin/wp-env stop"
-    },
-    "config": {
-        "sort-packages": true,
-        "platform": {
-            "php": "8.3.0"
-        },
-        "allow-plugins": {
-            "bamarni/composer-bin-plugin": true
-        }
-    },
-    "extra": {
-        "bamarni-bin": {
-            "bin-links": false,
-            "forward-command": true,
-            "target-directory": "vendor-bin"
-        }
-    },
-    "minimum-stability": "stable"
+    "allow-plugins": {
+      "bamarni/composer-bin-plugin": true
+    }
+  },
+  "extra": {
+    "bamarni-bin": {
+      "bin-links": false,
+      "forward-command": true,
+      "target-directory": "vendor-bin"
+    }
+  },
+  "minimum-stability": "stable"
 }
 ```
 
@@ -243,6 +248,7 @@ packages/testing/src/UnitTestCase.php (TMSWP\Testing\UnitTestCase)
 - `config.platform.php` を下限の `8.3.0` に固定し、依存を下限の PHP で解決する(上位の PHP で `composer update` しても、8.3 で動かない版が lock に入らない)。`vendor-bin/wp-tests/composer.json` も同じ値を持つ(§4.2)。
 - php-cs-fixer は composer.json の PHP 下限より新しい PHP で実行すると、下限で使えない構文を生成しうるとして警告を出す。`composer lint` / `fix` は下限の PHP 8.3 で実行する(CI の `lint` ジョブも 8.3)。
 - wp-env は npm の開発依存として monorepo ルートの `package.json` で版を固定し(`@wordpress/env` を完全一致で指定。`package-lock.json` もコミットする)、`npm ci` で導入する。composer スクリプトと qa.yml は、固定したパッケージの実行ファイルを `node node_modules/@wordpress/env/bin/wp-env …` とパスで直接実行する。未導入ならファイルが無いため node がエラーで止まる。`npx` や npm の `exec` / `run` のようにコマンド名 `wp-env` で解決する呼び出しは、ローカルに実行ファイルが無いときに npm 上の第三者パッケージ `wp-env` やグローバルの同名コマンドを実行しうるため使わない。
+- E2Eの`@playwright/test`も、ルートの`package.json`で版を完全一致で固定する(4.10)。`test:e2e`は`node node_modules/@playwright/test/cli.js`をパスで呼ぶ。ブラウザは`npm ci`では入らないため、`node node_modules/@playwright/test/cli.js install chromium`で入れる。`test:e2e`は、Composerのプロセスの時間制限(300秒)を外す。
 
 `package.json`(完全版):
 
@@ -253,6 +259,7 @@ packages/testing/src/UnitTestCase.php (TMSWP\Testing\UnitTestCase)
   "description": "TMStack WordPress Framework (monorepo) development tooling",
   "license": "GPL-2.0-or-later",
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "@wordpress/env": "12.0.0"
   },
   "allowScripts": {
@@ -286,82 +293,65 @@ acf-bridgeを入れたアプリのcomposer.json scriptsに足す定義(スター
 
 ```neon
 includes:
-    # WordPress コア関数のスタブと動的戻り値拡張(php-stubs/wordpress-stubs を内包)
-    - vendor/szepeviktor/phpstan-wordpress/extension.neon
-    # PHPUnit 拡張(データプロバイダ・モックの型解決)+ ルール
-    - vendor/phpstan/phpstan-phpunit/extension.neon
-    - vendor/phpstan/phpstan-phpunit/rules.neon
-    # 厳格ルール(===強制・暗黙bool禁止等)
-    - vendor/phpstan/phpstan-strict-rules/rules.neon
-    # @deprecated 利用検出(WP バージョン更新時の検知)
-    - vendor/phpstan/phpstan-deprecation-rules/rules.neon
-    # FW 同梱 PHPStan 拡張(MetaSchema/OptionSchema からの型ナローイング。正準仕様は 04 文書)
-    - packages/core/phpstan/extension.neon
+  - vendor/szepeviktor/phpstan-wordpress/extension.neon
+  - vendor/phpstan/phpstan-phpunit/extension.neon
+  - vendor/phpstan/phpstan-phpunit/rules.neon
+  - vendor/phpstan/phpstan-strict-rules/rules.neon
+  - vendor/phpstan/phpstan-deprecation-rules/rules.neon
+  - packages/core/phpstan/extension.neon
 
 parameters:
-    level: max
+  level: max
 
-    # 対応範囲 PHP 8.3〜8.5(DR-02)
-    phpVersion:
-        min: 80300
-        max: 80500
+  phpVersion:
+    min: 80300
+    max: 80500
 
-    paths:
-        - packages/core/src
-        - packages/core/phpstan/src
-        - packages/core/tests
-        - packages/thumbnail/src
-        - packages/thumbnail/tests
-        - packages/settings-page/src
-        - packages/settings-page/tests
-        - packages/acf-bridge/src
-        - packages/acf-bridge/bin/tms-acf
-        - packages/acf-bridge/tests
-        - packages/ja-toolkit/src
-        - packages/ja-toolkit/tests
-        - starters/theme/app
-        - starters/plugin/app
-        # スターターのbin/setup.php(starters/plugin/bin/setup.phpは同じ内容)
-        - starters/theme/bin/setup.php
-        - bin
-        # 開発用スクリプト(rules/ のコード例の抽出・検査等)
-        - tools
-        # bin/・tools/ のユニットテスト
-        - tests/Unit
-        # スターターの統合テスト(4.6)
-        - tests/Integration
+  paths:
+    - packages/core/src
+    - packages/core/phpstan/src
+    - packages/core/tests
+    - packages/thumbnail/src
+    - packages/thumbnail/tests
+    - packages/settings-page/src
+    - packages/settings-page/tests
+    - packages/acf-bridge/src
+    - packages/acf-bridge/bin/tms-acf
+    - packages/acf-bridge/tests
+    - packages/ja-toolkit/src
+    - packages/ja-toolkit/tests
+    - packages/testing/src
+    - packages/testing/tests
+    - starters/theme/app
+    - starters/plugin/app
+    - starters/theme/bin/setup.php
+    - bin
+    - tools
+    - tests/Unit
+    - tests/Integration
 
-    excludePaths:
-        # テスト用フィクスチャ(意図的な型違反・生成コードのサンプルを含む)
-        - packages/*/tests/fixtures/*
-        - packages/*/tests/*/fixtures/*
-        # スターターの統合テストが別のプロセスで読み込むWP-CLIの--requireとルーター(4.6)
-        - tests/Integration/fixtures/*
+  excludePaths:
+    - packages/core/tests/fixtures/*
+    - tests/Integration/fixtures/*
 
-    scanDirectories:
-        # 統合テストが参照する Yoast PHPUnit Polyfills の実体
-        - vendor-bin/wp-tests/vendor/yoast/phpunit-polyfills/src
+  scanDirectories:
+    - vendor-bin/wp-tests/vendor/yoast/phpunit-polyfills/src
 
-    scanFiles:
-        # acf-bridge が参照する get_field / update_field 等(ACF Pro スタブ)
-        - vendor/php-stubs/acf-pro-stubs/acf-pro-stubs.php
-        # 統合テストが参照する WP_UnitTestCase / tests_add_filter 等(WordPress のテストライブラリのスタブ)
-        - vendor/php-stubs/wordpress-tests-stubs/wordpress-tests-stubs.php
+  scanFiles:
+    - vendor/php-stubs/acf-pro-stubs/acf-pro-stubs.php
+    - vendor/php-stubs/wordpress-tests-stubs/wordpress-tests-stubs.php
 
-    # wordpress-stubs の PHPDoc 精度に起因する誤検知を抑制しつつ、実型での検査を維持する
-    treatPhpDocTypesAsCertain: false
+  treatPhpDocTypesAsCertain: false
+  reportUnmatchedIgnoredErrors: true
 
-    # ignore 規律の強制: 使われていない ignore はエラー
-    reportUnmatchedIgnoredErrors: true
+  dynamicConstantNames:
+    - WP_DEBUG
+    - WP_DEBUG_LOG
+    - WP_DEBUG_DISPLAY
 
-    dynamicConstantNames:
-        - WP_DEBUG
-        - WP_DEBUG_LOG
-        - WP_DEBUG_DISPLAY
+  tmpDir: var/phpstan
 
-    tmpDir: var/phpstan
-
-    ignoreErrors: []
+  ignoreErrors: []
 ```
 
 ### 2.2 運用規律(必須)
@@ -548,6 +538,8 @@ return (new Config())
 | ユニット | `packages/<pkg>/tests/Unit/`(bin/・tools/ のテストはリポジトリルートの `tests/Unit/`) | PHPUnit **11** + Brain Monkey(+ Mockery / vfsStream) | 素の PHP(WP 不要) | ロジックの仕様確定。高速・常時実行 |
 | 統合 | `packages/<pkg>/tests/Integration/` | PHPUnit **9.6** + WordPress のテストライブラリ(WP_TESTS_DIR)+ Yoast Polyfills | wp-env(Docker) | WP 実環境での登録系・DB 系の検証 |
 
+この2層のほかに、examples/sample-siteの画面をブラウザで確かめるE2E(Playwright。リポジトリルートの`tests/E2E/`)がある(4.10)。
+
 ディレクトリ規約(全パッケージ共通):
 
 ```
@@ -615,17 +607,17 @@ WordPress コアテストスイート(wordpress-develop の `tests/phpunit/inclu
 
 ```json
 {
-    "require": {
-        "php": ">=8.3",
-        "phpunit/phpunit": "^9.6",
-        "yoast/phpunit-polyfills": "^2.0"
-    },
-    "config": {
-        "sort-packages": true,
-        "platform": {
-            "php": "8.3.0"
-        }
+  "require": {
+    "php": ">=8.3",
+    "phpunit/phpunit": "^9.6",
+    "yoast/phpunit-polyfills": "^2.0"
+  },
+  "config": {
+    "sort-packages": true,
+    "platform": {
+      "php": "8.3.0"
     }
+  }
 }
 ```
 
@@ -815,6 +807,10 @@ abstract class UnitTestCase extends TestCase
          colors="true"
          convertDeprecationsToExceptions="true"
          failOnWarning="true"
+         failOnRisky="true"
+         failOnSkipped="true"
+         failOnIncomplete="true"
+         failOnEmptyTestSuite="true"
          beStrictAboutTestsThatDoNotTestAnything="true"
          testdox="true">
     <testsuites>
@@ -864,6 +860,8 @@ testsuite `testing`(`packages/testing/tests/Integration/`)は、ユニット層�
 `<groups>`の除外により、ACF Pro専用のテスト(グループ`acf-pro`)は`composer test:integration`・カバレッジの計測・CIでは走らない(4.9)。
 
 `<coverage>` の計測対象は、4.3 の `<source>` と同じ6パッケージのsrcである(4.8)。`--coverage-clover` を付けない通常の実行(`composer test:integration`)では計測しない。
+
+`failOnRisky`・`failOnSkipped`・`failOnIncomplete`・`failOnEmptyTestSuite`により、アサーションの無いテスト(risky)・skip・incompleteのテストがあるとき、またはテストが1件も実行されなかったときは、終了コードが失敗になる。統合テストが空の実行やskipのまま成功しないこと(実装計画のv0.1.0の受け入れ条件1)を、CIで常に確かめるためである。
 
 `convertDeprecationsToExceptions="true"` により、テスト中に出た非推奨(`E_DEPRECATED` / `E_USER_DEPRECATED`)はテストの失敗になる。ユニット層の `failOnDeprecation` と同じ方針である。Notice(`E_NOTICE` / `E_USER_NOTICE`)は、PHPUnit 9.6の`convertNoticesToExceptions`の既定値(true)でテストのエラーになるため、ユニット層の`failOnNotice`に当たる設定は書かない。発生元が FW か WordPress 本体かは区別しない。FW が WordPress や PHP の関数に不正な値を渡した結果の非推奨は、呼び出された側のファイルで報告されるため、発生元のパスでは FW 由来かどうかを判定できないからである。WordPress 本体や ACF が出す非推奨で失敗した場合は、その版の組み合わせと非推奨の内容を確かめてから対処を決める。
 
@@ -1009,19 +1007,19 @@ define('WP_DEBUG', true);
 
 ```json
 {
-    "core": null,
-    "phpVersion": "8.3",
-    "testsEnvironment": false,
-    "plugins": [
-        "https://downloads.wordpress.org/plugin/advanced-custom-fields.6.8.10.zip"
-    ],
-    "mappings": {
-        "wp-content/plugins/tmswp": "."
-    },
-    "config": {
-        "WP_DEBUG": true,
-        "SCRIPT_DEBUG": true
-    }
+  "core": null,
+  "phpVersion": "8.3",
+  "testsEnvironment": false,
+  "plugins": [
+    "https://downloads.wordpress.org/plugin/advanced-custom-fields.6.8.10.zip"
+  ],
+  "mappings": {
+    "wp-content/plugins/tmswp": "."
+  },
+  "config": {
+    "WP_DEBUG": true,
+    "SCRIPT_DEBUG": true
+  }
 }
 ```
 
@@ -1095,6 +1093,43 @@ TMSWP_ACF_PRO_ZIP=/path/to/advanced-custom-fields-pro.zip composer test:integrat
 - 走らせるのはacf-bridgeの統合テストの全体で、グループ`acf-free`(無料版であることを確かめるテスト)を外す。Pro専用のテストはグループ`acf-pro`とし、`acf_is_pro()`が偽なら失敗にする(skipにしない)。通常の`composer test:integration`は4.5のXMLでこのグループを除外する。
 - ライセンスキーは使わない。Proのzipは、ACFの公式のcomposerリポジトリ(`connect.advancedcustomfields.com`。ライセンスキーをusernameにしたHTTP basic認証)からも取得できる。スクリプトはこの取得を行わない。
 - 手元の確認に使う版は、CIの無料版と同じ版(6.8.10)にする。結果は、その版の受け入れの記録に残す。
+
+### 4.10 E2E(Playwright。examples/sample-site)
+
+FWの主な機能を、examples/sample-site(専用のwp-env、ポート8882)の画面とHTTPの応答で確かめる(D-55)。ユニット・統合の2層とは別の確認で、カバレッジの計測には含めない。
+
+```bash
+cd examples/sample-site
+composer wp:start   # sample-siteのwp-env(http://localhost:8882)
+composer wp:setup   # テーマを有効にし、dev/seed.phpで確認用のページ・製品・設定を作る
+cd ../..
+node node_modules/@playwright/test/cli.js install chromium   # 初回と、@playwright/testの版を上げたとき
+composer test:e2e
+# ファイルや名前で絞るとき
+composer test:e2e -- tests/E2E/contact-form.spec.mjs
+composer test:e2e -- --grep Thumbnail
+```
+
+- 道具は`@playwright/test`だけを使う(ルートの`package.json`で版を完全一致で固定する。1.1補足)。`@wordpress/e2e-test-utils-playwright`は、依存が重くNode.jsの要件が上がるため入れない。ログイン(`wp-login.php`へのPOST)とwp-envのcliの呼び出しは、`tests/E2E/support/`の小さな補助で書く。
+- JavaScript(ESM。拡張子`.mjs`)で書き、型はJSDocで書く。TypeScriptもPlaywrightがそのまま実行できるが、型の検査には`typescript`の依存が要る。検査しない型の注釈は誤りを見逃すため、TypeScriptは使わない。
+- 設定は`playwright.config.mjs`である。baseURLは`http://localhost:8882`、workersは1、retriesは0(CIでも)、ブラウザはChromiumだけにする。webServerは使わない(wp-envの起動はcomposerのスクリプトで行い、コマンド名でwp-envを解決しない。1.1補足)。失敗したテストのtraceを`var/e2e/test-results/`に残す。
+- wp-envのcliは、`tests/E2E/support/wp-env.mjs`が`node node_modules/@wordpress/env/bin/wp-env run cli ...`を、sample-siteのディレクトリをcwdにしてnodeの子プロセスで呼ぶ(sample-siteのcomposerのスクリプトと同じ)。値は、PHPの式へbase64のJSONで渡す(wp-envの引数の解析を通さない)。
+- すべてのテストで、ページ本体の文書(リダイレクトを除く)にPHPのエラーの表示(`Fatal error`・`Parse error`・`Warning:`・`Notice:`・`Deprecated:`、WordPressの致命的なエラーの画面)が無いことと、ページの未捕捉の例外(pageerror)が0件であることを、テストの終わりに確かめる(`tests/E2E/support/test.mjs`)。
+- テストは、seed(`composer wp:setup`)の状態に依存してよい。状態を変えるテスト(設定・ACFの値・作ったユーザー・エディタの下書き)は、テストの終わりに元に戻す。記録したメール(`sample_site_captured_mails`。直近の10通だけが残る)は件数で数えず、テストごとに本文へ入れる一意の印で数える。2回続けて実行しても通る。
+- 確かめる機能は、examples/sample-site/README.mdの「確認の方法」の1〜5である。
+
+| ファイル | 確かめること |
+|---|---|
+| `pages.spec.mjs` | 主なページ(公開側と管理画面)が200を返す |
+| `contact-form.spec.mjs` | フォームの入力・確認・完了と`/contact/thanks/`への移動、必須の項目が空のときのエラー、メールの記録、完了画面の再読み込みと確認画面の再送でメールが増えないこと、`/contact/`の`Cache-Control`の`no-store` |
+| `settings-page.spec.mjs` | 「設定 > Sample Site」の保存(PRG。成功の通知がちょうど1つで、再読み込みでは出ない)とトップページの説明文、メールアドレスの形でない通知先の拒否、`manage_options`の無いユーザーへの403 |
+| `thumbnail.spec.mjs` | 生成の前のRESTのURLの302(`Cache-Control`と`Location`)と移った先の画像、生成の後の静的なURL、署名を変えたURL・署名の無いURLの403 |
+| `ja-toolkit.spec.mjs` | 日本語のタイトルの製品のスラッグ`product-<ID>`、`/?p=<ID>`の301、フリガナのひらがな・半角カナの全角カタカナへの変換 |
+| `acf.spec.mjs` | 製品の詳細の価格・仕様(ACFの値)と、編集画面で値を変えたときの表示の変化(無料版のACF) |
+| `blocks.spec.mjs` | `/blocks/`のブロック`sample-site/latest-products`、固定ページの編集画面のカテゴリ「Sample Site」からの挿入、製品の編集画面の`allowedBlocks()`による制限 |
+
+- CIでは、`sample-site`ジョブ(5.1)が`composer qa`の後に、ブラウザを入れて(`node node_modules/@playwright/test/cli.js install --with-deps chromium`。キャッシュしない)`composer test:e2e`を実行する。失敗したときだけ、`var/e2e/test-results/`を成果物`e2e-traces`に保存する。
+- 対象のWordPressは、sample-siteの`.wp-env.json`の`core: null`(wp-envの既定の最新版)である。エディタの画面の変化(ボタンの名前等)で失敗したときは、補助かテストの要素の指定を直す。
 
 ---
 
@@ -1188,7 +1223,8 @@ jobs:
           php-version: ${{ matrix.php }}
           coverage: none
       - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
-      - run: composer test:unit
+      # --testdoxで、ログにテストの名前を出す
+      - run: composer test:unit -- --testdox
 
   integration:
     name: Integration (PHP ${{ matrix.php }} / WP ${{ matrix.wp }})
@@ -1301,7 +1337,7 @@ jobs:
       - name: Check discovery files are up to date
         run: composer discover:check
       - name: Run unit tests with coverage
-        run: composer test:coverage:unit
+        run: composer test:coverage:unit -- --testdox
       - name: Run integration tests with coverage
         run: composer test:coverage:integration
       - name: Upload coverage reports
@@ -1318,13 +1354,14 @@ jobs:
         if: failure()
         run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
 
-  # examples/sample-siteのcomposer qa(lint・analyse・tms-acf check --strict・discover:check・test)。
-  # discover:checkはsample-siteのwp-env(examples/sample-site/.wp-env.json)で、テーマを有効にしてから行う。
+  # examples/sample-siteのcomposer qa(lint・analyse・tms-acf check --strict・discover:check・test)と、E2E(tests/E2E/)。
+  # discover:checkとE2Eはsample-siteのwp-env(examples/sample-site/.wp-env.json)で、composer wp:setup(テーマを有効にし、
+  # dev/seed.phpで確認用のページ・製品・設定を作る)の後に行う。
   sample-site:
     name: Sample Site QA
     runs-on: ubuntu-24.04
     needs: [unit]
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
@@ -1361,12 +1398,24 @@ jobs:
             fi
             sleep 10
           done
-      - name: Activate the theme
+      - name: Set up the site
         working-directory: examples/sample-site
-        run: node ../../node_modules/@wordpress/env/bin/wp-env run cli wp theme activate sample-site
+        run: composer wp:setup
       - name: Run QA
         working-directory: examples/sample-site
         run: composer qa
+      # ブラウザはキャッシュせず、毎回@playwright/testの版に合うものを入れる
+      - name: Install the browser for E2E
+        run: node node_modules/@playwright/test/cli.js install --with-deps chromium
+      - name: Run E2E
+        run: composer test:e2e
+      - name: Upload E2E traces on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-traces
+          path: var/e2e/test-results
+          if-no-files-found: ignore
       - name: Show wp-env logs on failure
         if: failure()
         working-directory: examples/sample-site
@@ -1453,12 +1502,13 @@ jobs:
 - npm(11.19以降)は、依存のインストールスクリプトを、package.jsonの`allowScripts`に無いかぎり実行せず、警告を出す。ルートのpackage.jsonは、@wordpress/envの依存の`fs-ext-extra-prebuilt`(@wp-playground/cliが使う)のインストールスクリプトを`false`で拒否する(`npm install-scripts deny fs-ext-extra-prebuilt`で書く)。このパッケージは各OS・Node.jsの版のビルド済みのバイナリを同梱し、インストールスクリプトはそのバイナリの確認かnode-gypでのビルドだけを行う。wp-envのDockerの実行環境はこのパッケージを使わない。@wordpress/envを更新して、インストールスクリプトを持つ依存が増えた場合は、中身を確かめてから`allowScripts`に許可か拒否を書く。
 - `lint` / `analyse` / `monorepo` / `rules-verify` は下限の PHP 8.3 で実行する(php-cs-fixer の推奨と依存解決の下限に合わせる。§1.1 補足)。PHP 8.5 での解析は PHPStan の `phpVersion`(8.3〜8.5。§2.1)が担う。
 - 全ジョブのrunnerを`ubuntu-24.04`に固定する(`ubuntu-latest`は使わない)。`ubuntu-latest`の指す版は予告のうえで新しいUbuntuへ移るため、名前で指定すると、ワークフローを変えなくてもrunnerの版が変わりうる。runnerの版を上げる場合は、全ジョブが新しい版で通ることを確かめてから、qa.yml・split.ymlの`runs-on`と5.1・5.2の完全版を同時に改訂する。
-- wp-envを起動するジョブ(`integration`・`coverage`・`sample-site`・`starters`)は`timeout-minutes: 20`で打ち切る。wp-envの起動は、Dockerイメージの取得の一時的な失敗に備えて10秒の間隔で3回まで再試行し、3回目の失敗でジョブを失敗させる。失敗時はwp-envのログ(`logs development --no-watch`)を出力する。
+- wp-envを起動するジョブは、`integration`・`coverage`・`starters`を`timeout-minutes: 20`、E2Eを含む`sample-site`を`timeout-minutes: 30`で打ち切る。wp-envの起動は、Dockerイメージの取得の一時的な失敗に備えて10秒の間隔で3回まで再試行し、3回目の失敗でジョブを失敗させる。失敗時はwp-envのログ(`logs development --no-watch`)を出力する。
 - `lint` ジョブが baseline ファイルの不存在を機械的に強制する。
+- `unit`ジョブと`coverage`ジョブのユニットテストの段は、`--testdox`(`composer test:unit -- --testdox`・`composer test:coverage:unit -- --testdox`)で実行し、ログにテストの名前を出す。
 - 合算カバレッジの判定は `coverage` ジョブ(PHP 8.3 / WordPress 最新版の 1 セル)だけで行う(4.8)。このジョブは pcov で unit を、`wp:start:coverage` で起動した wp-env の Xdebug で integration を計測し、2 つの clover を artifact `coverage-clover` に保存してから `test:coverage:check` で判定する。clover はジョブ内で生成して使うため、ジョブ間の受け渡しは無い。`unit` と `integration` の各セルはカバレッジを計測しない。
 - `coverage` ジョブは wp-env の起動後に `composer i18n:build` を実行し、`packages/*/languages` に差分や未追跡のファイルが出ないことを確かめる(コミット済みの翻訳ファイルが、ソースと .po から作り直したものと一致すること。01 文書 §7.2)。WP-CLI は wp-env の cli コンテナのものを使うため、このジョブで行う。
 - 同じく `coverage` ジョブは `composer discover:check` で、コミット済みの fixture の探索結果ファイルが `wp tmswp discover` で走査した結果とバイト単位で一致するかを照合する(02 文書 §3.6・§6)。ファイルが無い、または古い Kernel があれば、その名前空間とファイルパスを出して失敗する。探索結果ファイルは絶対パスを含まないため、手元(ホスト)と CI のどちらで生成しても内容は同じになる。
-- `sample-site`ジョブは、examples/sample-siteの`composer qa`(lint・analyse・`tms-acf check --strict`・`discover:check`・test)を実行する。依存はsample-siteのcomposer.jsonのpathリポジトリ(`../../packages/*`)で入れ、pathリポジトリの`versions`の`tmswp/core`が`Kernel::VERSION`と同じかを先に確かめる(リリースの道具はsample-siteを書き換えないため、版を上げたときの直し忘れをここで止める)。wp-envはsample-siteの`.wp-env.json`で`composer wp:start`で起動し、`discover:check`の前にテーマ`sample-site`を有効にする。
+- `sample-site`ジョブは、examples/sample-siteの`composer qa`(lint・analyse・`tms-acf check --strict`・`discover:check`・test)を実行する。依存はsample-siteのcomposer.jsonのpathリポジトリ(`../../packages/*`)で入れ、pathリポジトリの`versions`の`tmswp/core`が`Kernel::VERSION`と同じかを先に確かめる(リリースの道具はsample-siteを書き換えないため、版を上げたときの直し忘れをここで止める)。wp-envはsample-siteの`.wp-env.json`で`composer wp:start`で起動し、`composer wp:setup`(テーマ`sample-site`を有効にし、`dev/seed.php`で確認用のページ・製品・設定を作る)の後に`composer qa`を実行する。続けて、ブラウザ(Chromium)を`node node_modules/@playwright/test/cli.js install --with-deps chromium`で入れて(キャッシュしない)、E2E(`composer test:e2e`。4.10)を実行する。失敗したときだけ、E2Eのtrace(`var/e2e/test-results/`)を成果物`e2e-traces`に保存する。
 - `starters`ジョブは、スターターから`composer create-project`でプロジェクトを作り(`tools/ci/create-starter-project.sh`)、スターターとプロジェクトの手順が通ることを確かめる。スターターと`tmswp/core`は、monorepoの`starters/*`・`packages/core`をpathリポジトリ(シンボリックリンクではなく写し)で入れ、版は`Kernel::VERSION`にする。それ以外の依存はPackagistから入れる。作るのは次の3つで、1つのwp-envのサイト(`$RUNNER_TEMP/starter-site/.wp-env.json`)にテーマ2つとプラグイン1つとして置く。
   - `tmswp-starter-theme`: テーマのスターターをそのまま写したもの(`--no-scripts`)。テーマを有効にして`npm ci`と`npm run build`(wp-scriptsでblocks/をビルドし、`wp tmswp discover`で探索結果ファイルを作る)を実行し、ビルドの出力と探索結果ファイルが、コミット済みの`starters/theme/build/blocks/`・`starters/theme/tmswp-discovery.php`と同じかを`diff`で確かめる(§1.4・§1.11)。
   - `client-theme`・`shop-tools`: `bin/setup.php`(post-create-project-cmd)を、スラッグと表示名を環境変数で渡して非対話で実行したテーマとプラグイン。作った直後に、`{{`が残っていない(`grep -rn "{{" <プロジェクト> --exclude-dir=vendor --exclude-dir=node_modules`が一致なし)こと、`bin/setup.php`が消えていること、プラグインの本体ファイルが`shop-tools.php`になり`plugin.php`が無いことを確かめる。続けて各README.mdの「セットアップの後」の手順で探索結果ファイルを作り(テーマは`npm ci`と`npm run build`、プラグインは`composer discover`)、`composer qa`を実行する。
@@ -1817,7 +1867,7 @@ final class EmailTest extends UnitTestCase
 - [ ] `parameters.ignoreErrors` が空で、`reportUnmatchedIgnoredErrors: true`
 - [ ] php-cs-fixer が `@PER-CS2x0`(+ `:risky`)基底と `declare_strict_types` / `final_class` / `strict_comparison` を含む 3.1 のルール全文で構成され、`composer lint` がクリーンに通る
 - [ ] ユニットテストが PHPUnit 11・`tests/bootstrap-unit.php`(WP 定数を定義しない)で、WP / MySQL / Docker なしで全件パスする
-- [ ] 全ユニットテストが`TMSWP\Testing\UnitTestCase`を継承している
+- [ ] 全ユニットテストが`TMSWP\Testing\UnitTestCase`を継承している(PHPStanの規則・型推論のテスト(`RuleTestCase`・`TypeInferenceTestCase`が基底)を除く)
 - [ ] 統合テストが wp-env の `cli` コンテナ内で PHPUnit 9.6(vendor-bin 隔離)+ WP_TESTS_DIR のテストライブラリで全件パスする
 - [ ] `phpunit.unit.xml.dist` / `phpunit.integration.xml.dist`に6パッケージ分のtestsuiteが定義されている
 - [ ] packages/*のそれぞれに`phpunit.xml.dist`・`.gitattributes`・`LICENSE`があり、split相当で単独で取り出して`composer install && composer test`が通る

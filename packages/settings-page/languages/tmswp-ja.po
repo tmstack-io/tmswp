@@ -13,18 +13,18 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 "X-Domain: tmswp\n"
 
-#: PageRegistrar.php:85
+#: PageRegistrar.php:108
 msgid "Sorry, you are not allowed to access this page."
 msgstr "このページにアクセスする権限がありません。"
 
-#: PageRegistrar.php:128
+#: PageRegistrar.php:151
 msgid "Settings saved."
 msgstr "設定を保存しました。"
 
-#: PageRegistrar.php:143
+#: PageRegistrar.php:166
 msgid "The settings were not saved. Please check the errors in the fields."
 msgstr "設定を保存できませんでした。項目のエラーを確認してください。"
 
-#: PageRegistrar.php:148
+#: PageRegistrar.php:171
 msgid "Save Changes"
 msgstr "変更を保存"

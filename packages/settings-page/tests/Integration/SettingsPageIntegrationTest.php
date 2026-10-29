@@ -12,6 +12,7 @@ use TMSWP\Core\Kernel\DiscoveryFile;
 use TMSWP\Core\Kernel\ExtensionInterface;
 use TMSWP\Core\Kernel\KernelConfig;
 use TMSWP\Core\Log\LogChannel;
+use TMSWP\SettingsPage\PageRegistrar;
 use TMSWP\SettingsPage\SettingsPage;
 use TMSWP\SettingsPage\SettingsPages;
 use TMSWP\Testing\BootsKernelBeforeInit;
@@ -326,7 +327,7 @@ PHP;
 
         $location = $this->submitExpectingRedirect([...$hidden, 'site_name' => 'Shop', 'max_items' => '42', 'enabled' => '1', 'channels' => ['mail']]);
 
-        self::assertSame(admin_url('options-general.php?page=' . self::SLUG . '&updated=1'), $location);
+        self::assertSame(admin_url('options-general.php?page=' . self::SLUG . '&' . PageRegistrar::SAVED_QUERY_ARG . '=1'), $location);
         self::assertSame('Shop', get_option(self::PREFIX . 'site_name'));
         self::assertSame(42, get_option(self::PREFIX . 'max_items'));
         self::assertTrue(get_option(self::PREFIX . 'enabled'));
@@ -337,13 +338,46 @@ PHP;
         self::assertSame('42', get_option(self::PREFIX . 'max_items'));
         self::assertSame('1', get_option(self::PREFIX . 'enabled'));
 
-        $html = $this->requestPage('GET', ['page' => self::SLUG, 'updated' => '1']);
+        $html = $this->requestPage('GET', ['page' => self::SLUG, PageRegistrar::SAVED_QUERY_ARG => '1']);
 
         self::assertStringContainsString('<div class="notice notice-success is-dismissible"><p>Settings saved.</p></div>', $html);
         self::assertStringContainsString('name="max_items" value="42"', $html);
         self::assertMatchesRegularExpression('#name="enabled"[^>]*checked#', $html);
         self::assertMatchesRegularExpression('#value="mail"[^>]*checked#', $html);
         self::assertDoesNotMatchRegularExpression('#value="sms"[^>]*checked#', $html);
+    }
+
+    /**
+     * 保存の後のURLでは、親がoptions-general.phpのページでもトップレベルのページでも、「Settings saved.」がちょうど1つ
+     * 出る。WordPress本体の管理画面の描画(wp-admin/admin-header.php)は、親がoptions-general.phpのページでだけ
+     * options-head.php(`updated`と`page`があれば「Settings saved.」を出す)を読むため、そのページでは本体の出力も合わせて
+     * 数える。保存の後のクエリ変数は、表示の後にWordPressがURLから除く(removable_query_args)。
+     */
+    public function testSavedNoticeIsShownExactlyOnceUnderEveryParent(): void
+    {
+        $this->bootApp();
+        $this->loginAsAdministrator();
+        $pages = [
+            'options-general.php' => [self::SLUG, self::SUBMENU_HOOK, ['site_name' => 'Shop', 'max_items' => '3']],
+            'トップレベル' => ['tmswp-sp-top', self::TOP_HOOK, ['note' => 'x']],
+        ];
+
+        foreach ($pages as $parent => [$slug, $hook, $values]) {
+            $hidden = self::hiddenValues($this->requestPage('GET', ['page' => $slug], hook: $hook));
+            $location = $this->submitExpectingRedirect([...$hidden, ...$values], $hook, $slug);
+            parse_str((string) wp_parse_url($location, PHP_URL_QUERY), $query);
+            self::assertSame(['page' => $slug, PageRegistrar::SAVED_QUERY_ARG => '1'], $query, $parent);
+
+            $html = $this->requestPage('GET', ['page' => $slug, PageRegistrar::SAVED_QUERY_ARG => '1'], hook: $hook);
+
+            if ($parent === 'options-general.php') {
+                $html .= self::optionsHead();
+            }
+
+            self::assertSame(1, substr_count($html, 'Settings saved.'), $parent);
+        }
+
+        self::assertContains(PageRegistrar::SAVED_QUERY_ARG, wp_removable_query_args());
     }
 
     /** falseのboolのオプションも保存でき、読み直した''を未チェックの既定値にする。 */
@@ -362,14 +396,14 @@ PHP;
         self::assertDoesNotMatchRegularExpression('#name="enabled"[^>]*checked#', $this->requestPage('GET'));
     }
 
-    /** 値の検証のエラーは、保存せずにエラーの通知を出す。保存後のURL(updated=1)のままの送信でも成功の通知を出さない。 */
+    /** 値の検証のエラーは、保存せずにエラーの通知を出す。保存後のURL(PageRegistrar::SAVED_QUERY_ARG=1)のままの送信でも成功の通知を出さない。 */
     public function testValidationErrorsAreShownAsAnErrorNotice(): void
     {
         $this->bootApp();
         $this->loginAsAdministrator();
         $hidden = self::hiddenValues($this->requestPage('GET'));
 
-        $html = $this->requestPage('POST', ['page' => self::SLUG, 'updated' => '1'], [...$hidden, Form::FIELD_STEP => 'submit', 'site_name' => '', 'max_items' => '5']);
+        $html = $this->requestPage('POST', ['page' => self::SLUG, PageRegistrar::SAVED_QUERY_ARG => '1'], [...$hidden, Form::FIELD_STEP => 'submit', 'site_name' => '', 'max_items' => '5']);
 
         self::assertStringContainsString('<div class="notice notice-error"><p>The settings were not saved. Please check the errors in the fields.</p></div>', $html);
         self::assertStringContainsString('Site name is required.', $html);
@@ -517,7 +551,7 @@ PHP;
         add_filter('user_has_cap', $grant);
 
         try {
-            self::assertSame(admin_url('admin.php?page=tmswp-sp-top&updated=1'), $this->submitExpectingRedirect($post, self::TOP_HOOK, 'tmswp-sp-top'));
+            self::assertSame(admin_url('admin.php?page=tmswp-sp-top&' . PageRegistrar::SAVED_QUERY_ARG . '=1'), $this->submitExpectingRedirect($post, self::TOP_HOOK, 'tmswp-sp-top'));
         } finally {
             remove_filter('user_has_cap', $grant);
         }
@@ -673,6 +707,26 @@ PHP;
         }
 
         self::fail('保存の後にリダイレクトしませんでした');
+    }
+
+    /**
+     * WordPress本体のwp-admin/options-head.php(親がoptions-general.phpのページで、admin-header.phpが読む)の出力。
+     * 今の$_GETで読み、足された設定の通知(add_settings_error())は片付ける。
+     */
+    private static function optionsHead(): string
+    {
+        ob_start();
+
+        try {
+            require ABSPATH . 'wp-admin/options-head.php';
+        } finally {
+            $html = ob_get_clean();
+            $GLOBALS['wp_settings_errors'] = [];
+        }
+
+        self::assertIsString($html);
+
+        return $html;
     }
 
     private function page(string $shortName): SettingsPage

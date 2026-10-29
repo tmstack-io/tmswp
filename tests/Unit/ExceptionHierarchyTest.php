@@ -6,7 +6,6 @@ namespace TMSWP\Tests\Unit;
 
 use OutOfBoundsException;
 use PhpToken;
-use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use ReflectionClass;
@@ -14,11 +13,12 @@ use SplFileInfo;
 use Throwable;
 use TMSWP\Core\Exception\TmswpExceptionInterface;
 use TMSWP\Core\Exception\UnknownLogChannelException;
+use TMSWP\Testing\UnitTestCase;
 
 /**
  * packages/*\/src のすべての例外クラスが TMSWP のマーカー interface を実装することを、ファイルを列挙して確かめる。
  */
-final class ExceptionHierarchyTest extends TestCase
+final class ExceptionHierarchyTest extends UnitTestCase
 {
     public function testEveryExceptionClassInPackageSourcesImplementsTheMarkerInterface(): void
     {

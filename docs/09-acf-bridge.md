@@ -81,6 +81,7 @@ packages/acf-bridge/
 │   ├── AcfTypes.php             # @phpstan-type 定義専用クラス
 │   ├── AcfLocalTime.php         # 日付系の現地の時刻の変換(§6.3)
 │   ├── AcfMetaStorage.php       # MetaStorageInterface 実装
+│   ├── WpCliProcess.php         # 今のWP-CLIのコマンドの判定(@internal。§7.3の照合のコマンドのプロセス)
 │   ├── Json/
 │   │   ├── AcfJsonRepository.php
 │   │   ├── AcfJsonSource.php    # 読み込みの結果(グループ・オプションページのpost_id・警告・source hash)
@@ -1052,10 +1053,13 @@ foreach ($keys as $key) {
         continue;
     }
     $registry->markExternallyManaged($key->objectType, $key->objectSubtype, $key->metaKey, AcfMetaStorage::class, $origin);
+    // 2つのmark…()が投げるDuplicateMetaKeyExceptionは、`wp tmswp acf check`・`sync`のプロセスでだけ捕まえて、
+    // そのキーを申告せずに続ける(§7.3)。それ以外のプロセスでは投げる
 }
 ```
 
 - `AcfManifest`クラスが無い(sync未実行、または生成物のデプロイ漏れ)ことは設定の誤りであり、debugに関係なく`AcfBridgeRuntimeException`にする(文書00 §5.6)。黙ってマーク無しに縮退すると、重複の検出が働かないまま動くためである。ただしWP-CLIでは、生成物を作る`wp tmswp acf sync`自体がWordPressの読み込み(`init`)を経て動くため、例外にするとsyncを実行できない。WP-CLIに限り`WP_CLI::warning()`で警告して申告しない(黙らない)。
+- `#[MetaSchema]`の宣言と重複する管理キーの扱いは§7.3のとおり。`wp tmswp acf check`・`sync`のプロセスでだけ、`DuplicateMetaKeyException`で止めずに、そのキーを申告しないで続ける。
 - `managedKeys()`が`ManagedKey`以外の要素を返した場合も、黙って飛ばさず`AcfBridgeRuntimeException`にする(生成物の改変。syncで作り直す)。
 - 申告はACFの有効・無効に関係なく行う。申告に使うのはコミット済みの生成物`AcfManifest`だけで、ACFの実行時に依存しないためである(ACFが無効なときの値へのアクセスは§10の`AcfNotActiveException`で防護される)。`function_exists('acf')`で申告を飛ばす経路は持たない。
 
@@ -1077,6 +1081,7 @@ public function isExternallyManaged(ObjectType $objectType, string $subtype, str
 ACF管理下キーは、`#[MetaSchema]`と`#[UseMetaStorage(AcfMetaStorage::class)]`で宣言してよい(文書04「メタ・設定の使い分け」)。読み書きの保存先が、ACFのフィールドの保存先(値のメタと参照のメタ)の1つに揃うためである。一方、同一`(ObjectType, objectSubtype, metaKey)`を、読み書きのストレージが`AcfMetaStorage`でないエンティティ(`#[UseMetaStorage]`の無いエンティティ等)が`#[MetaSchema]`で宣言している状態は**構成エラー**であり、フェイルファストする(DR-06)。旧FWの「ACFとコアのメタ層が同じキーを別経路で読み書きして挙動不明」という事故の再発防止が目的。ストレージは`#[UseMetaStorage]`の指定(無ければ既定のストレージ)をContainerで解決したインスタンスのクラスで比べる。
 
 - **実行時**: `MetaSchemaRegistry`は、`#[MetaSchema]`の宣言と外部管理の申告(`markExternallyManaged`・`markExternallyManagedInAllSubtypes`)のうち後から行われた側の時点で、同じキーをストレージの違うエンティティが宣言していないかを検査し、あれば`DuplicateMetaKeyException`(コア例外。Meta/Option文書定義)を投げる。宣言はKernelのbootの中で揃うため、本拡張が`init` 6で申告した時点で検出され、`register_*_meta`(`init` 20)には進まない。この検査は、AcfBridgeを登録したKernelのレジストリの中だけで行う(申告先がそのレジストリだけのため。§7.2)。テーマの`#[MetaSchema]`とプラグインのフィールドグループのような、Kernelをまたぐ重複は実行時には検出しない。
+- **照合のコマンドのプロセスの例外**: `wp tmswp acf check`と`wp tmswp acf sync`のプロセスに限り、`init` 6の申告で重複を見つけても例外にせず、そのキーを申告しないで続ける。2つのコマンドは、下の静的な検査で重複をE101として報告するのが役目である。生成物の`AcfManifest`がすでにそのキーを持つとき(生成物をコミットした後に`#[MetaSchema]`を足した、よくある順序)に起動の時点で止めると、コマンドに届かず、E101・exit 2で報告できないためである。ほかのWP-CLIのコマンド(`wp eval`等)とWP-CLIでないリクエストは、重複を抱えたまま動かないよう、今のとおり例外で止める。今のプロセスがこの2つのコマンドかは、WP-CLIがWordPressの読み込みの前に解析する位置引数(`WP_CLI::get_runner()->arguments`の先頭の3つ)で決め、判定は`TMSWP\AcfBridge\WpCliProcess`(`@internal`)に閉じ込める。
 - **静的(CI)**: `wp tmswp acf check`も同じ検査を行い、検出時はE101・exit 2で報告する(WordPressを起動しない`tms-acf`は、bootしたKernelが無いため検査しない。§5.1。実行時例外より早くCIで気づける。`sync`はE101があれば書き込まずにexit 1)。管理キーは、acf-jsonのグループのcloneを解決してから`ManagedKeyCollector`で集める(Generatorが生成する`AcfManifest`の行と同じキー。seamlessのcloneが展開したキーも含む)。判定は、`--app=`で選んだKernelだけでなく起動中の全Kernelの`MetaSchemaRegistry`の複製に実行時と同じ申告(`AcfBridge::markManagedKey()`)を行い、その`DuplicateMetaKeyException`のメッセージを`E101: `に続けて出す。複製に申告するため、起動中のレジストリは変えない。全Kernelと照合するため、実行時には検出しないKernelをまたぐ重複もE101で検出する。
 - 例外のメッセージ(E101も同じ)は、衝突したキー・(ObjectType, サブタイプ)・宣言クラスと`#[MetaSchema]`の定数名・ACFのフィールドグループのkey・両方のストレージのクラスと、次の解消方法を含む。(a)エンティティに`#[UseMetaStorage(AcfMetaStorage::class)]`を付けてACFの保存規約に揃える、(b) `#[MetaSchema]`定数を削除して生成アクセサ(`XxxFields`)へ一本化する、(c) acf-jsonから当該フィールドを削除してPHP宣言へ一本化する。例:
 

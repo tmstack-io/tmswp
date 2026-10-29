@@ -101,6 +101,10 @@
       "Composer\\Config::disableProcessTimeout",
       "bash tools/acf-pro-integration.sh"
     ],
+    "test:e2e": [
+      "Composer\\Config::disableProcessTimeout",
+      "node node_modules/@playwright/test/cli.js test --config=playwright.config.mjs"
+    ],
     "test": [
       "@test:unit",
       "@test:integration"

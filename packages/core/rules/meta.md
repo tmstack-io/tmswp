@@ -18,7 +18,7 @@
 acf-bridgeは、ACFのフィールドグループで管理するキーを外部管理(ストレージは`AcfMetaStorage`)として申告する。
 
 - そのキーを`#[MetaSchema]`で宣言するエンティティには`#[UseMetaStorage(AcfMetaStorage::class)]`を付ける。申告と衝突せず、宣言どおりに登録される。
-- `#[UseMetaStorage]`の無いエンティティで同じキーを宣言すると、acf-bridgeが申告する`init`(priority 6)の時点で`DuplicateMetaKeyException`になる。
+- `#[UseMetaStorage]`の無いエンティティで同じキーを宣言すると、acf-bridgeが申告する`init`(priority 6)の時点で`DuplicateMetaKeyException`になる。`wp tmswp acf check`・`sync`だけは起動の時点で止まらず、この重複をE101で報告する。
 - 同じキーを`MetaBag`と生成アクセサ(`XxxFields`)の両方から読み書きしない。
 
 ## 手順

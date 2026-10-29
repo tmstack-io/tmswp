@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Core\Kernel;
 
 /**
- * Kernel ごとに登録する拡張(acf-bridge・settings-page 等)の共通の入口。
+ * Kernelごとに登録する拡張(tmswp/settings-page・tmswp/thumbnail等の拡張のパッケージ)の共通の入口。
  *
  * 拡張は `KernelConfig::theme()` / `plugin()` の `extensions` に渡したインスタンスだけが有効になる。
  * テーマとプラグインがそれぞれ同じ拡張を登録した場合は、Kernel ごとに別々に呼ばれる。

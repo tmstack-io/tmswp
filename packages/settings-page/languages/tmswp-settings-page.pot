@@ -12,18 +12,18 @@ msgstr ""
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: tmswp\n"
 
-#: PageRegistrar.php:85
+#: PageRegistrar.php:108
 msgid "Sorry, you are not allowed to access this page."
 msgstr ""
 
-#: PageRegistrar.php:128
+#: PageRegistrar.php:151
 msgid "Settings saved."
 msgstr ""
 
-#: PageRegistrar.php:143
+#: PageRegistrar.php:166
 msgid "The settings were not saved. Please check the errors in the fields."
 msgstr ""
 
-#: PageRegistrar.php:148
+#: PageRegistrar.php:171
 msgid "Save Changes"
 msgstr ""

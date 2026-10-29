@@ -433,7 +433,7 @@ final class Kernel
     {
         $groups = $this->componentGroups();
         // MetaSchema の WordPress への登録(init 20。register_*_meta)も、コンポーネントの初期化と同じ順序の規則で扱う。
-        // スキーマ自体は boot の中で集める(initializeAtBoot())。WordPress へは、acf-bridge が外部管理のキーを申告する
+        // スキーマ自体はbootの中で集める(initializeAtBoot())。WordPressへは、拡張が外部管理のキーを申告する
         // init 6 の後、かつ revisions_enabled の検査(post_type_supports())が効くよう投稿タイプの登録(init 10)の後に流す
         $groups[] = [
             'hook' => 'init',

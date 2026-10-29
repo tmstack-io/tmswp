@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace TMSWP\Core\Tests\Unit\Log;
 
 use Brain\Monkey\Functions;
+use ReflectionClass;
+use ReflectionMethod;
 use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
+use TMSWP\Core\Log\Log;
 use TMSWP\Core\Log\LogChannel;
 use TMSWP\Core\Log\LoggerRegistry;
 use TMSWP\Testing\RecordingLogger;
@@ -202,6 +205,22 @@ final class LogTest extends UnitTestCase
         $theme = $this->bootKernel($this->createTempDirectory('log-container'), 'Container');
 
         self::assertSame($theme['kernel']->logger(), $theme['kernel']->container()->get(LoggerRegistry::class));
+    }
+
+    /**
+     * docs/07の受け入れ基準「Logにレジストリの差し替え・チャンネル登録のAPI(set/setRegistry)が無く」を確かめる。
+     * publicメソッドは、docs/07 §5.2のAPIの一覧(registry・channel・scope・レベルの8つ・log)と完全に一致する。
+     */
+    public function testLogHasNoApiToReplaceTheRegistryOrRegisterChannels(): void
+    {
+        $class = new ReflectionClass(Log::class);
+        $methods = array_map(static fn(ReflectionMethod $method): string => $method->getName(), $class->getMethods(ReflectionMethod::IS_PUBLIC));
+        sort($methods);
+
+        self::assertSame(['alert', 'channel', 'critical', 'debug', 'emergency', 'error', 'info', 'log', 'notice', 'registry', 'scope', 'warning'], $methods);
+        // privateを含めて、その名前のメソッドが無い
+        self::assertFalse($class->hasMethod('set'));
+        self::assertFalse($class->hasMethod('setRegistry'));
     }
 
     /**

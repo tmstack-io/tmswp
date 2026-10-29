@@ -18,11 +18,16 @@
 
 ### 修正
 
+- tmswp/settings-pageで、親が`options-general.php`の設定ページの保存の後に「Settings saved.」の通知が2つ出ていたのを直した。保存の後のリダイレクト先のクエリ変数を`updated=1`から`tmswp-settings-saved=1`に変えた(WordPress本体の`wp-admin/options-head.php`が`updated`を見て同じ通知を出していたため)。どの親のページでも、成功の通知はFWの1つだけになる。この変数は`removable_query_args`に足し、表示の後にアドレスバーのURLから除く。利用側で保存の完了を`$_GET['updated']`で見ていたコードは、`$_GET['tmswp-settings-saved']`に直す。
+- tmswp/acf-bridgeで、生成物の`AcfManifest`がすでに持つ管理キーを、`#[UseMetaStorage(AcfMetaStorage::class)]`の無いエンティティが`#[MetaSchema]`で宣言している(生成物をコミットした後に`#[MetaSchema]`を足した)とき、`wp tmswp acf check`・`sync`が、起動時(`init` 6)の申告の`DuplicateMetaKeyException`の致命的エラーで止まり、E101(checkはexit 2、syncは書き込まずにexit 1)を報告できなかったのを直した。この2つのコマンドのプロセスに限り、重複するキーを申告せずに続け、コマンドがE101で報告する。ほかのWP-CLIのコマンド(`wp eval`等)とWP-CLIでないリクエストは、これまでどおり起動時の例外で止まる。
 - tmswp/testingの`WpdbTestDouble`の`query()`が、`JtiStore::gc()`の掃除のDELETE(`option_name LIKE %s AND CAST(option_value AS UNSIGNED) < %d`)で何も消さずに0を返していたのを、実wpdbと同じく、LIKEのパターン(大文字と小文字を区別しない)に合い期限が時刻より前の獲得済みのjtiを消し、消した件数を返すようにした。これと違う形の`option_name LIKE`のDELETEは、黙って成功せずに`InvalidArgumentException`になる。
 
 ### 開発
 
 - testingの`UsesTempDirectories`の専用のユニットテスト(`packages/testing/tests/Unit/UsesTempDirectoriesTest.php`。テストごとの親ディレクトリの下に作ること、探索結果ファイルを含めて親ディレクトリごと片付けること、作れないときに失敗すること)と、未登録のブロックのカテゴリが探索コマンドのエラーになり、どのKernelの探索結果ファイルも書かないことのテスト(`DiscoverCommandTest`)を足した。`WpdbTestDouble`の掃除のDELETEの単体のテスト(`WpdbTestDoubleTest`)と、実wpdbとの照合(`WpdbTestDoubleParityTest`)を足し、testingのパッケージ別のカバレッジが実行ごとに揺れない(確率的な掃除に当たったときだけ通る行が無い)ようにした。ja-toolkit・settings-pageのソースの検査のテスト(`JaToolkitSourceTest`・`SettingsPageSourceTest`)が、src/の`.php`以外のファイル(`.DS_Store`等)の数だけアサーションを数えていたのを直し、手元とCIでユニットテストのアサーションの数が揃うようにした。
+- examples/sample-siteに対するE2E(Playwright。`tests/E2E/`・`playwright.config.mjs`、`composer test:e2e`)を足し、フォーム・設定ページ・サムネイル・日本語対応・ACF・ブロックの画面と応答と、全ページのPHPのエラーの表示とpageerrorが無いことを確かめる。`@playwright/test`をルートのpackage.jsonで1.64.1に固定し、CIのSample Site QAのジョブで、seed(`composer wp:setup`)の後に実行して、失敗したときだけtraceを保存する。
+- CIのUnitのジョブとCoverageのジョブのユニットテストを`--testdox`で実行し、ログにテストの名前を出す。
+- docs/00〜10の受け入れ基準とdocs/12の各版の受け入れ条件の454項目を、根拠のテストに対応させた表を`docs/acceptance/v0.9.0.md`に作り、WordPressに依存するのに統合テストの根拠が無かった項目に統合テストを足した(Formの確認・送信トークンの改ざんと期限切れ・エスケープ・一時ファイルの保管と削除の失敗、タームとユーザーのメタの契約と読み取りの失敗、子テーマ、本番の遅延bootのキャッチアップ、フックのメソッドの失敗、拡張の有効化の時の起動、Log、入れ子のルート、`wp tmswp discover`・`migrate`・`thumb`・`acf`のコマンドを本物のWP-CLIで実行する等)。ユニットテストで主張の一部しか確かめていなかった項目(Logの補間・トレース・ローテーション、acf-bridgeのE001・E004・E005・W009・`AcfNotActiveException`の文言、gcの削除の失敗の後の続行、docs/05のシグネチャと実装の照合)にユニットテストを足し、手作業のgrepで確かめていた「〜が無い」の条件(コマンド名での`wp-env`の呼び出し、actions/規約の痕跡、偽のACF、拡張の旧API、acf-bridgeの実行時のファイルの書き込みとacf-jsonの走査、マジックメソッドと`extract()`、予約表に無いグローバル関数、coreのソースの`acf`の文字列、`UnitTestCase`を継承しないユニットテスト、`declare(strict_types=1)`の無い手で書いたPHPファイル、composer.jsonの依存とライセンスとdocs/01 §3.1の表との一致)を、ファイルを走査するユニットテスト(`tests/Unit/RepositoryScanTest.php`・`PackageManifestTest.php`)にした。wp-envをコマンド名で呼ぶことの検査は、E2EのJavaScript(`tests/E2E/`・`playwright.config.mjs`)も対象にする。docs/05のシグネチャ(引数の既定値の値を含む)と実装の照合は、設計書を読むため、分割したパッケージには入らないルートの`tests/Unit/Docs/FormSignatureDocumentationTest.php`に置いた。`phpunit.integration.xml.dist`に`failOnRisky`・`failOnSkipped`・`failOnIncomplete`・`failOnEmptyTestSuite`を足し、統合テストのrisky・skip・incomplete・0件の実行を失敗にした。
 
 ## v0.8.0 — ブロック・スターター・配布導線・AI向け文書
 

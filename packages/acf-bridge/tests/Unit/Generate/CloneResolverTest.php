@@ -230,7 +230,63 @@ final class CloneResolverTest extends UnitTestCase
             ]),
         ], $errors);
 
-        self::assertContains("E005: clone field 'a' in group 'group_product' has a circular reference", $errors);
+        // field_aを読むとfield_bの中でfield_aに戻り、field_bを読むとfield_aの中でfield_bに戻るため、循環の両端を1回ずつ報告する
+        self::assertSame([
+            "E005: clone field 'b' in group 'group_product' has a circular reference",
+            "E005: clone field 'a' in group 'group_product' has a circular reference",
+        ], $errors);
+    }
+
+    /**
+     * 参照の値が`group_`で始まり、acf-jsonにそのkeyのグループが無ければE004にする(docs/09 §6.6の1。受け入れ基準
+     * 「E004(参照先なし)」のグループの参照)。
+     */
+    public function testCloneReferencingAMissingGroupIsE004(): void
+    {
+        $errors = [];
+
+        $groups = (new CloneResolver())->resolve([
+            $this->group('group_product', [
+                ['key' => 'field_price', 'name' => 'price', 'label' => '価格', 'type' => 'number'],
+                [
+                    'key' => 'field_common_clone',
+                    'name' => 'common',
+                    'label' => '共通',
+                    'type' => 'clone',
+                    'clone' => ['group_missing'],
+                    'display' => 'seamless',
+                ],
+            ]),
+        ], $errors);
+
+        self::assertSame(["E004: clone field 'common' in group 'group_product' references missing group 'group_missing'"], $errors);
+        // 参照を解決できないcloneは何も展開しない
+        self::assertSame(['price'], $this->fieldNames($groups[0]));
+    }
+
+    /**
+     * cloneが自分のいるグループを参照すれば、グループの読み込みが自分に戻るためE005にする(docs/09 §6.6の6。受け入れ
+     * 基準「E005(循環)」のグループの自己参照)。
+     */
+    public function testCloneReferencingItsOwnGroupIsE005(): void
+    {
+        $errors = [];
+
+        (new CloneResolver())->resolve([
+            $this->group('group_product', [
+                ['key' => 'field_price', 'name' => 'price', 'label' => '価格', 'type' => 'number'],
+                [
+                    'key' => 'field_self_clone',
+                    'name' => 'self_clone',
+                    'label' => '自分',
+                    'type' => 'clone',
+                    'clone' => ['group_product'],
+                    'display' => 'seamless',
+                ],
+            ]),
+        ], $errors);
+
+        self::assertSame(["E005: clone field 'self_clone' in group 'group_product' has a circular reference"], $errors);
     }
 
     /**

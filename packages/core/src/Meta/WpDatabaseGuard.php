@@ -45,8 +45,8 @@ use wpdb;
  *    false(書き込まなかった)、読み取りは成功として扱う。データベースのサーバーの障害の経路であり、wpdb の内部
  *    (接続ハンドル等)に依存して検出すると WP の版の変更で壊れやすいため、検出しない。
  *
- * @internal WpMetaStorage・WpOptionStorageと、Migrator(保存済みのハッシュの読み書き)と、acf-bridgeのAcfMetaStorage
- *           (書き込みの中の参照のメタの読み取り)だけが使う。
+ * @internal WpMetaStorage・WpOptionStorageと、Migrator(保存済みのハッシュの読み書き)と、拡張のパッケージのメタの
+ *           ストレージ(外部のフィールドの書き込みの中で、参照のメタを読む)だけが使う。
  */
 final class WpDatabaseGuard
 {

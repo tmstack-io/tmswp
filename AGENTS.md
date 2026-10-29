@@ -50,6 +50,7 @@ composer qa:fast            # lint → analyse → test:unit。Docker不要。�
 composer test               # test:unit → test:integration(wp-envが必要: composer wp:start)
 composer test:unit          # ユニットテスト(PHPUnit 11・Brain Monkey。WordPress非依存。Docker不要)
 composer test:integration   # 統合テスト(wp-envのcliコンテナのPHPUnit 9.6。wp-envが必要: composer wp:start)
+composer test:e2e           # E2E(Playwright。tests/E2E/)。sample-siteのwp-env(ポート8882)が必要: cd examples/sample-site && composer wp:start && composer wp:setup。初回はnode node_modules/@playwright/test/cli.js install chromium
 composer test:coverage      # ユニット・統合の合算カバレッジの計測と閾値の判定(wp-envをcomposer wp:start:coverageで起動しておく)
 composer analyse            # PHPStan level max(baselineなし)
 composer lint               # コードスタイルの検査(php-cs-fixerのdry-run)
@@ -105,6 +106,7 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 3. `composer qa`を通す。
 4. 利用者に見える変更は、`CHANGELOG.md`の先頭の節(見出しはUnreleased)の小見出し(追加・変更・削除・修正・開発)に書く。公開APIのシグネチャの変更・削除等の破壊的変更は、変更・削除に、利用側で直すことと一緒に書く。
 5. 公開APIを変えたら、`packages/*/rules/`・`starters/`・`examples/sample-site/`の規約とコード例を追従させる(`grep -rn <旧API> packages/*/rules starters examples/sample-site --exclude-dir=vendor --exclude-dir=node_modules`で追従の漏れを確かめる)。
+6. `docs/01-architecture.md` §5.3の表に無いWordPressのAPI(関数・クラス・フック・引数)を新しく使うときは、そのAPIが導入された版がWordPress 7.0以下であることを、WordPressの公式のリファレンス(developer.wordpress.org)の「Since」で確かめる。7.0より後に導入されたAPIは使わない(7.0未満のための分岐やフォールバックも書かない。§5.3)。
 
 ## 新しいパッケージを足す手順
 

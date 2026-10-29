@@ -182,7 +182,7 @@ final class ShopSettingsPage extends SettingsPage
 ```
 
 - FWは、`<div class="wrap">`・見出し(`pageTitle`)・保存とエラーの通知・`$form->open()`(`<form>`の開始タグとnonce等の必須のhidden)・「変更を保存」のボタン・`$form->close()`を出す。`render()`は、その間に入る項目だけを出す。
-- 送信が完了すると(CSRFと項目の検証を通ると)、FWが`onSubmit()`を呼び、同じページの`&updated=1`のURLへリダイレクトする(PRG)。リダイレクトの後に「設定を保存しました。」の通知が出る。検証のエラーのときは保存せず、項目のエラーと「設定を保存できませんでした。項目のエラーを確認してください。」の通知を出す。
+- 送信が完了すると(CSRFと項目の検証を通ると)、FWが`onSubmit()`を呼び、同じページの`&tmswp-settings-saved=1`のURLへリダイレクトする(PRG)。リダイレクトの後に「設定を保存しました。」の通知が1つ出る(WordPressの`updated`は使わない。親が`options-general.php`のページで、本体も同じ通知を出して二重になるため)。検証のエラーのときは保存せず、項目のエラーと「設定を保存できませんでした。項目のエラーを確認してください。」の通知を出す。
 - `onSubmit()`の`$result->values`は、項目の検証を通った値(項目の名前 => 値)である。
 
 ### ページの定義

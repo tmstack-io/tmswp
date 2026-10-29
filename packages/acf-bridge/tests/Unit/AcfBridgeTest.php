@@ -74,7 +74,7 @@ PHP;
     protected function tearDown(): void
     {
         Kernel::reset();
-        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions'], $GLOBALS['tmswp_test_wp_cli']);
+        unset($GLOBALS['wp_version'], $GLOBALS['wp_actions'], $GLOBALS['tmswp_test_wp_cli'], $GLOBALS['tmswp_test_wp_cli_arguments']);
         parent::tearDown();
     }
 
@@ -338,6 +338,65 @@ PHP;
         self::assertFalse($registry->isExternallyManaged(ObjectType::Post, 'acf_unit_product', 'price'));
     }
 
+    /**
+     * `wp tmswp acf check`・`sync`のプロセスでは、#[MetaSchema]と重複する管理キーを申告せず、例外にもせずに続け、
+     * ほかの管理キーは申告する。重複は、コマンドがE101として報告する(docs/09 §7.3)。
+     *
+     * @param list<string> $arguments WP-CLIの位置引数
+     */
+    #[DataProvider('conflictReportingCommands')]
+    #[RunInSeparateProcess]
+    public function testMarkManagedKeysSkipsTheConflictingKeyInTheCommandsThatReportIt(array $arguments): void
+    {
+        $this->loadWpCliDoubleWithRunner($arguments);
+        \define('WP_CLI', true);
+        $app = $this->bootAcfBridgeKernel('ReportingCli', ['Acf/AcfManifest.php' => self::MANIFEST]);
+        $registry = new MetaSchemaRegistry(self::container());
+        $registry->registerEntity(AcfUnitProductPost::class, ObjectType::Post, 'acf_unit_product');
+
+        $app['bridge']->markManagedKeys($registry);
+
+        self::assertFalse($registry->isExternallyManaged(ObjectType::Post, 'acf_unit_product', 'price'));
+        self::assertTrue($registry->isExternallyManaged(ObjectType::Term, 'category', 'term_color'));
+    }
+
+    /** @return iterable<string, array{list<string>}> */
+    public static function conflictReportingCommands(): iterable
+    {
+        yield 'check' => [['tmswp', 'acf', 'check']];
+        yield 'sync' => [['tmswp', 'acf', 'sync']];
+    }
+
+    /**
+     * ほかのWP-CLIのコマンド(`wp eval`・`wp tmswp acf`の他のコマンドの形等)では、重複する管理キーの申告は、WP-CLIでない
+     * リクエストと同じくDuplicateMetaKeyExceptionで止める。
+     *
+     * @param list<string> $arguments WP-CLIの位置引数
+     */
+    #[DataProvider('otherWpCliCommands')]
+    #[RunInSeparateProcess]
+    public function testMarkManagedKeysRejectsTheConflictingKeyInOtherWpCliCommands(array $arguments): void
+    {
+        $this->loadWpCliDoubleWithRunner($arguments);
+        \define('WP_CLI', true);
+        $app = $this->bootAcfBridgeKernel('OtherCli', ['Acf/AcfManifest.php' => self::MANIFEST]);
+        $registry = new MetaSchemaRegistry(self::container());
+        $registry->registerEntity(AcfUnitProductPost::class, ObjectType::Post, 'acf_unit_product');
+
+        $this->expectException(DuplicateMetaKeyException::class);
+        $this->expectExceptionMessage("externally managed meta key 'price' for post:acf_unit_product is already declared by " . AcfUnitProductPost::class . '::PRICE');
+
+        $app['bridge']->markManagedKeys($registry);
+    }
+
+    /** @return iterable<string, array{list<string>}> */
+    public static function otherWpCliCommands(): iterable
+    {
+        yield 'eval' => [['eval', 'echo 1;']];
+        yield 'help of check' => [['help', 'tmswp', 'acf', 'check']];
+        yield 'discover' => [['tmswp', 'discover']];
+    }
+
     /** managedKeys()がManagedKey以外を返したら、黙って飛ばさずに例外にする。 */
     public function testManifestReturningNonManagedKeyIsAnError(): void
     {
@@ -367,6 +426,47 @@ final class WP_CLI
     public static function warning(string $message): void
     {
         $GLOBALS['tmswp_test_wp_cli'][] = ['warning', $message];
+    }
+}
+PHP);
+
+        require $file;
+    }
+
+    /**
+     * WP_CLIの代役を読み込む。get_runner()は、本物のRunnerと同じく、位置引数$argumentsを`__get('arguments')`で出す
+     * Runnerの代わりを返す。
+     *
+     * @param list<string> $arguments
+     */
+    private function loadWpCliDoubleWithRunner(array $arguments): void
+    {
+        $GLOBALS['tmswp_test_wp_cli_arguments'] = $arguments;
+        $file = $this->createTempDirectory('wp-cli-runner-double') . '/WP_CLI.php';
+        $this->writeTestFile($file, <<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+final class WP_CLI
+{
+    public static function add_command(string $name, object $command): void
+    {
+    }
+
+    public static function warning(string $message): void
+    {
+        $GLOBALS['tmswp_test_wp_cli'][] = ['warning', $message];
+    }
+
+    public static function get_runner(): object
+    {
+        return new class {
+            public function __get(string $key): mixed
+            {
+                return $key === 'arguments' ? $GLOBALS['tmswp_test_wp_cli_arguments'] : null;
+            }
+        };
     }
 }
 PHP);

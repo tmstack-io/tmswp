@@ -7,6 +7,7 @@ namespace TMSWP\AcfBridge;
 use TMSWP\AcfBridge\Cli\AcfCommand;
 use TMSWP\AcfBridge\Exception\AcfBridgeRuntimeException;
 use TMSWP\AcfBridge\Manifest\ManagedKey;
+use TMSWP\Core\Exception\DuplicateMetaKeyException;
 use TMSWP\Core\Kernel\ExtensionInterface;
 use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Core\Kernel\KernelConfig;
@@ -157,15 +158,28 @@ final class AcfBridge implements ExtensionInterface
      * AcfManifestが無い(`wp tmswp acf sync`を実行していない)ことは設定の誤りとして例外にする。ただしWP-CLIでは、
      * 生成物を作る`wp tmswp acf sync`を実行できるよう、警告を出して申告しない。
      *
+     * 管理キーを、AcfMetaStorageでないエンティティが#[MetaSchema]で宣言済みなら、DuplicateMetaKeyExceptionで止める。
+     * ただし`wp tmswp acf check`・`sync`のプロセスでは、そのキーを申告せずに続ける。この2つのコマンドは、重複をE101・
+     * exit 2(syncは書き込まずにexit 1)で報告するのが役目で、起動の時点で止めると、AcfManifestがすでにそのキーを持つ
+     * (生成物をコミットした後に#[MetaSchema]を足した)ときに、コマンドに届かず報告できないためである(docs/09 §7.3)。
+     * ほかのWP-CLIのコマンドと、WP-CLIでないリクエストは止める。
+     *
      * @internal Kernelのinit 6から呼ぶ。テストは任意のレジストリに申告させるために呼ぶ
      *
      * @throws AcfBridgeRuntimeException AcfManifestが無い(WP-CLIを除く)、またはmanagedKeys()がManagedKeyのリストを返さない場合
-     * @throws \TMSWP\Core\Exception\DuplicateMetaKeyException 管理キーを、AcfMetaStorageでないエンティティが#[MetaSchema]で宣言済みの場合
+     * @throws DuplicateMetaKeyException 管理キーを、AcfMetaStorageでないエンティティが#[MetaSchema]で宣言済みの場合
+     *                                   (`wp tmswp acf check`・`sync`のプロセスを除く)
      */
     public function markManagedKeys(MetaSchemaRegistry $registry): void
     {
         foreach ($this->managedKeys() as $key) {
-            self::markManagedKey($registry, $key);
+            try {
+                self::markManagedKey($registry, $key);
+            } catch (DuplicateMetaKeyException $exception) {
+                if (!WpCliProcess::reportsMetaSchemaConflicts()) {
+                    throw $exception;
+                }
+            }
         }
     }
 
@@ -174,7 +188,7 @@ final class AcfBridge implements ExtensionInterface
      *
      * @internal
      *
-     * @throws \TMSWP\Core\Exception\DuplicateMetaKeyException 管理キーを、AcfMetaStorageでないエンティティが#[MetaSchema]で宣言済みの場合
+     * @throws DuplicateMetaKeyException 管理キーを、AcfMetaStorageでないエンティティが#[MetaSchema]で宣言済みの場合
      */
     public static function markManagedKey(MetaSchemaRegistry $registry, ManagedKey $key): void
     {

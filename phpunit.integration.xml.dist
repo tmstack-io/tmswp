@@ -6,6 +6,10 @@
          colors="true"
          convertDeprecationsToExceptions="true"
          failOnWarning="true"
+         failOnRisky="true"
+         failOnSkipped="true"
+         failOnIncomplete="true"
+         failOnEmptyTestSuite="true"
          beStrictAboutTestsThatDoNotTestAnything="true"
          testdox="true">
     <testsuites>
