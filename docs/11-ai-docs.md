@@ -266,7 +266,7 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 
 1. `packages/<name>/`に、`composer.json`(nameは`tmswp/<name>`、PSR-4は`TMSWP\<PascalName>\` → `src/`、license、requireの`"tmswp/core": "^X.Y"`とPHP・拡張の要件、require-devの`"tmswp/testing": "^X.Y"`、`scripts.test`、`extra.branch-alias`)、`LICENSE`(ルートと同じGPL-2.0-or-later)、`README.md`、`phpunit.xml.dist`、`.gitattributes`(`export-ignore`で`/tests`・`/phpunit.xml.dist`・`/.gitattributes`・`.DS_Store`を外す)と、`src/`・`tests/Unit/`を置く。利用者向けのレシピが要る場合は`rules/`に置き、コアの`rules/extensions.md`にも導入手順を足す。コアに要件を足さない。
 2. ルートの`composer.json`の`replace`・`autoload`・`autoload-dev`に手で足す(`monorepo-builder merge`は使わない)。
-3. ルートの`phpstan.neon.dist`の`paths`、`phpunit.unit.xml.dist`・`phpunit.integration.xml.dist`のtestsuite、ルートの`composer.json`の`test:coverage:check`の`--package`、`.github/workflows/split.yml`の`matrix`に足す。
+3. ルートの`phpstan.neon.dist`の`paths`、`phpunit.unit.xml.dist`・`phpunit.integration.xml.dist`のtestsuite、ルートの`composer.json`の`test:coverage:check`の`--package`、`.github/workflows/split.yml`の`matrix`に足す。同期先のリポジトリは、最初の同期の前にmainに初期コミットが要る(`docs/RELEASING.md`の「新しい同期先のリポジトリ」)。
 4. `docs/01-architecture.md`・`docs/10-quality.md`・`docs/RELEASING.md`・このファイルのパッケージの一覧と数を改める。
 5. パッケージをsplit相当で取り出して`composer install && composer test`が通ること(`docs/RELEASING.md`の「split相当の確認」)と、`composer monorepo:validate`で確かめる。
 6. 拡張のパッケージは**コアのAPIだけに依存する**。拡張どうしの依存は原則として作らない(要る場合は変更の説明で合意を取る)。Packagistへの登録はメンテナが行う。
