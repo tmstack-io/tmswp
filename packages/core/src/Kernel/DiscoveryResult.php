@@ -4,18 +4,18 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Kernel;
 
+use TMSWP\Core\Block\DiscoveredBlock;
+
 final readonly class DiscoveryResult
 {
     /**
      * @param list<DiscoveredComponent> $components
      * @param list<DiscoveredHookMethod> $hookMethods
-     * @param array<string, int> $files
-     * @param array<string, int> $dirs
+     * @param list<DiscoveredBlock> $blocks ビルド出力(`build/blocks/`)の独自ブロック。ブロック名の昇順
      */
     public function __construct(
         public array $components,
         public array $hookMethods,
-        public array $files,
-        public array $dirs,
+        public array $blocks = [],
     ) {}
 }

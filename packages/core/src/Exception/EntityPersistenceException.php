@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Exception;
 
-class EntityPersistenceException extends \RuntimeException
+class EntityPersistenceException extends RuntimeException
 {
     public readonly ?\WP_Error $wpError;
 

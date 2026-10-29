@@ -1,12 +1,22 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: tmswp-ja-toolkit\n"
+"Report-Msgid-Bugs-To: \n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: 2026-10-19T10:35:57+00:00\n"
+"PO-Revision-Date: 2026-10-19T10:35:57+00:00\n"
 "Language: ja\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"X-Domain: tmswp\n"
 
+#: Form/KanaRule.php:45
 msgid "Please enter {label} in katakana."
 msgstr "{label}は全角カタカナで入力してください。"
 
+#: Form/KanaRule.php:46
 msgid "Please enter {label} in hiragana."
 msgstr "{label}はひらがなで入力してください。"

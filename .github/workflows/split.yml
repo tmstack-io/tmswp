@@ -6,49 +6,68 @@ on:
     tags: ['v*']
 
 env:
-  GITHUB_ORG: tmswp
-  SPLIT_ACCESS_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
+  GITHUB_ORG: tmstack-io
 
 jobs:
   split:
     name: Split ${{ matrix.package.local }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # 同じ同期先への同期(mainとタグ)を並行させない。先の実行は取り消さず、後の実行は待たせる(queue: maxで待ちを1つに限らない)
+    concurrency:
+      group: split-${{ matrix.package.repo }}
+      cancel-in-progress: false
+      queue: max
     strategy:
       fail-fast: false
       matrix:
         package:
-          - { local: 'packages/core', repo: 'core' }
-          - { local: 'packages/thumbnail', repo: 'thumbnail' }
-          - { local: 'packages/settings-page', repo: 'settings-page' }
-          - { local: 'packages/acf-bridge', repo: 'acf-bridge' }
-          - { local: 'packages/ja-toolkit', repo: 'ja-toolkit' }
-          - { local: 'starters/theme', repo: 'starter-theme' }
-          - { local: 'starters/plugin', repo: 'starter-plugin' }
+          - { local: 'packages/core', repo: 'tmswp-core' }
+          - { local: 'packages/thumbnail', repo: 'tmswp-thumbnail' }
+          - { local: 'packages/settings-page', repo: 'tmswp-settings-page' }
+          - { local: 'packages/acf-bridge', repo: 'tmswp-acf-bridge' }
+          - { local: 'packages/ja-toolkit', repo: 'tmswp-ja-toolkit' }
+          - { local: 'packages/testing', repo: 'tmswp-testing' }
+          - { local: 'starters/theme', repo: 'tmswp-starter-theme' }
+          - { local: 'starters/plugin', repo: 'tmswp-starter-plugin' }
     steps:
-      - uses: actions/checkout@v4
+      # トークンが無ければ同期できないため、成功で終わらせずに失敗にする
+      - name: Require SPLIT_ACCESS_TOKEN
+        env:
+          SPLIT_ACCESS_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
+        run: |
+          if [ -z "${SPLIT_ACCESS_TOKEN}" ]; then
+            echo "::error::SPLIT_ACCESS_TOKEN is not set; cannot split ${{ matrix.package.local }} to ${GITHUB_ORG}/${{ matrix.package.repo }}"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate split source
         run: test -d "${{ matrix.package.local }}"
+      # 同期先でプルリクエストを閉じるワークフローの正本(.github/split/close-pull-request.yml)を、同期するディレクトリへ写す
+      - name: Add the workflow that closes pull requests
+        run: |
+          mkdir -p "${{ matrix.package.local }}/.github/workflows"
+          cp .github/split/close-pull-request.yml "${{ matrix.package.local }}/.github/workflows/close-pull-request.yml"
       - name: Split branch
-        if: "!startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
-        uses: danharrin/monorepo-split-github-action@v2
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: danharrin/monorepo-split-github-action@14e42e2437f674b8987c1f50ca3689116aea1893 # v2.4.5
+        # このアクションに access_token 入力は無く、push 用トークンは環境変数 GITHUB_TOKEN から読む
+        env:
+          GITHUB_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
         with:
-          access_token: ${{ secrets.SPLIT_ACCESS_TOKEN }}
           package_directory: ${{ matrix.package.local }}
           repository_organization: ${{ env.GITHUB_ORG }}
           repository_name: ${{ matrix.package.repo }}
-          user_name: tmswp-bot
-          user_email: bot@tmswp.dev
+          user_name: tmstack-io
+          user_email: tommy@tmstack.io
       - name: Split tag
-        if: "startsWith(github.ref, 'refs/tags/') && env.SPLIT_ACCESS_TOKEN != ''"
-        uses: danharrin/monorepo-split-github-action@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: danharrin/monorepo-split-github-action@14e42e2437f674b8987c1f50ca3689116aea1893 # v2.4.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.SPLIT_ACCESS_TOKEN }}
         with:
           tag: ${{ github.ref_name }}
-          access_token: ${{ secrets.SPLIT_ACCESS_TOKEN }}
           package_directory: ${{ matrix.package.local }}
           repository_organization: ${{ env.GITHUB_ORG }}
           repository_name: ${{ matrix.package.repo }}
-          user_name: tmswp-bot
-          user_email: bot@tmswp.dev
-      - name: Dry-run notice
-        if: env.SPLIT_ACCESS_TOKEN == ''
-        run: echo "SPLIT_ACCESS_TOKEN is not set; validated split source only."
+          user_name: tmstack-io
+          user_email: tommy@tmstack.io

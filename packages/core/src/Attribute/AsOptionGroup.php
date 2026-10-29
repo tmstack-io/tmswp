@@ -8,15 +8,17 @@ use Attribute;
 use TMSWP\Core\Kernel\KernelContext;
 use TMSWP\Core\Option\OptionGroupInitializer;
 use TMSWP\Core\Option\OptionStorageInterface;
-use TMSWP\Core\Option\WpOptionStorage;
 
 #[Attribute(Attribute::TARGET_CLASS)]
 final readonly class AsOptionGroup implements ComponentAttributeInterface
 {
-    /** @param class-string<OptionStorageInterface> $storage */
+    /**
+     * @param class-string<OptionStorageInterface> $storage グループの保存先の Container の id。既定は Kernel が既定の
+     *                                                      ストレージを登録した OptionStorageInterface
+     */
     public function __construct(
         public string $prefix = '',
-        public string $storage = WpOptionStorage::class,
+        public string $storage = OptionStorageInterface::class,
     ) {}
 
     public function hookName(KernelContext $context): string

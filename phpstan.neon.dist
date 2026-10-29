@@ -4,43 +4,48 @@ includes:
   - vendor/phpstan/phpstan-phpunit/rules.neon
   - vendor/phpstan/phpstan-strict-rules/rules.neon
   - vendor/phpstan/phpstan-deprecation-rules/rules.neon
-  - packages/core/extension.neon
+  - packages/core/phpstan/extension.neon
 
 parameters:
   level: max
 
   phpVersion:
-    min: 80200
-    max: 80400
+    min: 80300
+    max: 80500
 
   paths:
     - packages/core/src
     - packages/core/phpstan/src
     - packages/core/tests
-    - packages/core/bin
     - packages/thumbnail/src
     - packages/thumbnail/tests
     - packages/settings-page/src
     - packages/settings-page/tests
     - packages/acf-bridge/src
+    - packages/acf-bridge/bin/tms-acf
     - packages/acf-bridge/tests
     - packages/ja-toolkit/src
     - packages/ja-toolkit/tests
+    - packages/testing/src
+    - packages/testing/tests
     - starters/theme/app
     - starters/plugin/app
+    - starters/theme/bin/setup.php
     - bin
     - tools
+    - tests/Unit
+    - tests/Integration
 
   excludePaths:
-    - packages/*/tests/fixtures/*
-    - packages/*/tests/*/fixtures/*
+    - packages/core/tests/fixtures/*
+    - tests/Integration/fixtures/*
 
   scanDirectories:
-    - vendor-bin/wp-tests/vendor/wp-phpunit/wp-phpunit/includes
     - vendor-bin/wp-tests/vendor/yoast/phpunit-polyfills/src
 
   scanFiles:
     - vendor/php-stubs/acf-pro-stubs/acf-pro-stubs.php
+    - vendor/php-stubs/wordpress-tests-stubs/wordpress-tests-stubs.php
 
   treatPhpDocTypesAsCertain: false
   reportUnmatchedIgnoredErrors: true

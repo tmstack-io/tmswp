@@ -20,9 +20,9 @@ final class MaxFileSize extends Rule
         parent::__construct($message);
     }
 
-    public static function mb(int $mb): self
+    public static function mb(int $mb, ?string $message = null): self
     {
-        return new self($mb * 1024 * 1024);
+        return new self($mb * 1024 * 1024, $message);
     }
 
     public function eachElement(): bool
@@ -41,11 +41,11 @@ final class MaxFileSize extends Rule
 
     public function defaultMessage(): string
     {
-        return $this->translate('{label} must be {size} or smaller.');
+        return __('{label} must be {size} or smaller.', 'tmswp');
     }
 
     public function messageParams(): array
     {
-        return ['size' => \function_exists('size_format') ? size_format($this->bytes) : $this->bytes . ' bytes'];
+        return ['size' => size_format($this->bytes)];
     }
 }

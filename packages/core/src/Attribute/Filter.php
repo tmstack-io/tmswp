@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Core\Attribute;
 
 use Attribute;
-use InvalidArgumentException;
+use TMSWP\Core\Exception\InvalidArgumentException;
 
 #[Attribute(Attribute::TARGET_METHOD)]
 final readonly class Filter

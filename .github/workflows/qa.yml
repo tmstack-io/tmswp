@@ -12,17 +12,14 @@ concurrency:
 jobs:
   lint:
     name: Coding Standards
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
-          php-version: '8.2'
+          php-version: '8.3'
           coverage: none
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - name: Forbid PHPStan baseline
         run: |
           if ls phpstan-baseline* 2>/dev/null; then
@@ -33,47 +30,40 @@ jobs:
 
   analyse:
     name: Static Analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.3'
           coverage: none
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - run: composer analyse
+      # WordPressを起動しないtms-acfで、fixtureのテーマとプラグインの生成物とacf-jsonの一致を確かめる(--strict)
+      - run: composer acf:check:fixtures
 
   monorepo:
     name: Monorepo Validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
-          php-version: '8.2'
+          php-version: '8.3'
           coverage: none
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - run: composer monorepo:validate
 
   rules-verify:
     name: Rules Code Examples
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
-          php-version: '8.2'
+          php-version: '8.3'
           coverage: none
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - uses: ramsey/composer-install@v3
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
       - name: Extract rules code examples
         run: php tools/extract-rules-code.php
       - name: Verify extracted examples
@@ -81,69 +71,65 @@ jobs:
 
   unit:
     name: Unit (PHP ${{ matrix.php }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.2', '8.3', '8.4', '8.5']
+        php: ['8.3', '8.5']
     steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php }}
-          coverage: ${{ matrix.php == '8.3' && 'pcov' || 'none' }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - uses: ramsey/composer-install@v3
-      - name: Run unit tests
-        if: matrix.php != '8.3'
-        run: composer test:unit
-      - name: Run unit tests with coverage gate
-        if: matrix.php == '8.3'
-        run: composer test:coverage
-      - name: Upload coverage artifact
-        if: matrix.php == '8.3'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-clover
-          path: var/coverage/clover.xml
-
-  integration:
-    name: Integration (PHP ${{ matrix.php }} / WP ${{ matrix.wp }})
-    runs-on: ubuntu-latest
-    needs: [unit]
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        php: ['8.2', '8.3', '8.4']
-        wp: ['6.4', 'latest']
-    steps:
-      - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php }}
           coverage: none
-      - uses: actions/setup-node@v4
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+      # --testdoxで、ログにテストの名前を出す
+      - run: composer test:unit -- --testdox
+
+  integration:
+    name: Integration (PHP ${{ matrix.php }} / WP ${{ matrix.wp }})
+    runs-on: ubuntu-24.04
+    needs: [unit]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.5']
+        wp: ['7.0', 'latest']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
-          node-version: '20'
-      - uses: ramsey/composer-install@v3
-      - name: Pin wp-phpunit to WP 6.4
-        if: matrix.wp != 'latest'
-        run: composer bin wp-tests require --no-interaction "wp-phpunit/wp-phpunit:~6.4.0" --update-with-all-dependencies
-      - name: Create wp-env override
+          php-version: ${{ matrix.php }}
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+      # 検証する WordPress の版を確定する。latest は WordPress.org の版情報 API から最新版を取得する。
+      # テストライブラリは、wp-env がこの版と同じタグの wordpress-develop から取得する(WP_TESTS_DIR)。
+      - name: Resolve WordPress version
+        id: wp
+        # bash を明示して pipefail を有効にし、curl の失敗をパイプ先の成功で隠さない
+        shell: bash
         run: |
           if [ "${{ matrix.wp }}" = "latest" ]; then
-            CORE=null
+            version=$(curl -fsS https://api.wordpress.org/core/version-check/1.7/ | jq -er '.offers[0].current')
           else
-            CORE='"https://wordpress.org/wordpress-${{ matrix.wp }}.zip"'
+            version='${{ matrix.wp }}'
           fi
-          printf '{"core": %s, "phpVersion": "%s"}\n' "$CORE" "${{ matrix.php }}" > .wp-env.override.json
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: Create wp-env override
+        run: |
+          printf '{"core": "https://wordpress.org/wordpress-%s.zip", "phpVersion": "%s"}\n' \
+            "${{ steps.wp.outputs.version }}" "${{ matrix.php }}" > .wp-env.override.json
+      # Docker イメージ取得の一時的な失敗に備えて 3 回まで再試行する
       - name: Start wp-env
         run: |
           for attempt in 1 2 3; do
-            if npx wp-env start; then
+            if composer wp:start; then
               exit 0
             fi
             if [ "$attempt" -eq 3 ]; then
@@ -155,4 +141,320 @@ jobs:
         run: composer test:integration
       - name: Show wp-env logs on failure
         if: failure()
-        run: npx wp-env logs tests || true
+        run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+
+  # MySQL 8.4 LTS・9.7 LTSでの統合テスト(D-56)。wp-env 12はDBをMariaDBに固定するため、servicesでMySQLを立て、
+  # wp-envのネットワークに別名mysql-under-testで参加させ、wp-envのcliからWP_TESTS_DB_HOSTで接続する。
+  # PHPとWordPressは8.3・7.0に固定する。http://wordpress/を叩くテストは、このジョブでも開発用サイト(wp-envのMariaDB)を使う。
+  mysql:
+    name: Integration (MySQL ${{ matrix.mysql }} / PHP 8.3 / WP 7.0)
+    runs-on: ubuntu-24.04
+    needs: [unit]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql: ['8.4', '9.7']
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql }}
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: wordpress
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ppassword"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+      - name: Create wp-env override
+        run: |
+          printf '{"core": "https://wordpress.org/wordpress-7.0.zip", "phpVersion": "8.3"}\n' > .wp-env.override.json
+      - name: Start wp-env
+        run: |
+          for attempt in 1 2 3; do
+            if composer wp:start; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+      # servicesのMySQLは別のネットワークにあるため、wp-envのネットワークに参加させる
+      - name: Connect MySQL to the wp-env network
+        run: |
+          containers=$(docker ps -q --filter label=com.docker.compose.service=wordpress)
+          if [ "$(printf '%s\n' "${containers}" | grep -c .)" -ne 1 ]; then
+            echo "::error::expected exactly one wp-env wordpress container: ${containers}"
+            exit 1
+          fi
+          networks=$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "${containers}" | grep .)
+          if [ "$(printf '%s\n' "${networks}" | grep -c .)" -ne 1 ]; then
+            echo "::error::expected exactly one wp-env network: ${networks}"
+            exit 1
+          fi
+          docker network connect --alias mysql-under-test "${networks}" "${{ job.services.mysql.id }}"
+      # tests/wp-tests-config.phpと同じ設定で接続し、wp-envのMariaDBではなくこのセルのMySQLであることを確かめる
+      - name: Check the database version
+        run: |
+          # PHPのコードの$はシェルで展開しない
+          # shellcheck disable=SC2016
+          version=$(node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp \
+            env WP_TESTS_DB_HOST=mysql-under-test \
+            php -r 'require "tests/wp-tests-config.php"; $db = new mysqli(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); echo $db->query("SELECT VERSION()")->fetch_row()[0];')
+          echo "database version: ${version}"
+          case "${version}" in
+            "${{ matrix.mysql }}."*) ;;
+            *)
+              echo "::error::the tests would connect to ${version}, not MySQL ${{ matrix.mysql }}"
+              exit 1
+              ;;
+          esac
+      - name: Run integration tests
+        run: |
+          node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp \
+            env WP_TESTS_DB_HOST=mysql-under-test \
+            vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+          docker logs "${{ job.services.mysql.id }}"
+
+  # 合算カバレッジ(unit と integration)の判定。PHP 8.3 / WordPress 最新版の 1 セルで行う。
+  # unit は pcov、integration は wp-env の Xdebug(--xdebug=coverage)で計測し、clover を行単位で合算する。
+  coverage:
+    name: Coverage (PHP 8.3 / WP latest)
+    runs-on: ubuntu-24.04
+    needs: [unit]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: pcov
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+      - name: Resolve WordPress version
+        id: wp
+        shell: bash
+        run: |
+          version=$(curl -fsS https://api.wordpress.org/core/version-check/1.7/ | jq -er '.offers[0].current')
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: Create wp-env override
+        run: |
+          printf '{"core": "https://wordpress.org/wordpress-%s.zip", "phpVersion": "8.3"}\n' \
+            "${{ steps.wp.outputs.version }}" > .wp-env.override.json
+      - name: Start wp-env with Xdebug
+        run: |
+          for attempt in 1 2 3; do
+            if composer wp:start:coverage; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+      # コミット済みの翻訳ファイルが、ソースと .po から WP-CLI で作り直したものと一致するかを確かめる
+      - name: Check translation files are up to date
+        run: |
+          composer i18n:build
+          git diff --exit-code -- 'packages/*/languages/*'
+          untracked=$(git ls-files --others --exclude-standard -- 'packages/*/languages/*')
+          if [ -n "$untracked" ]; then
+            echo "::error::untracked translation files: ${untracked}"
+            exit 1
+          fi
+      # コミット済みの探索結果ファイル(fixture のテーマ・プラグイン)が、wp tmswp discover で走査した結果と一致するかを確かめる
+      - name: Check discovery files are up to date
+        run: composer discover:check
+      - name: Run unit tests with coverage
+        run: composer test:coverage:unit -- --testdox
+      - name: Run integration tests with coverage
+        run: composer test:coverage:integration
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-clover
+          path: |
+            var/coverage/unit.xml
+            var/coverage/integration.xml
+          if-no-files-found: error
+      - name: Check combined coverage
+        run: composer test:coverage:check
+      - name: Show wp-env logs on failure
+        if: failure()
+        run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+
+  # examples/sample-siteのcomposer qa(lint・analyse・tms-acf check --strict・discover:check・test)と、E2E(tests/E2E/)。
+  # discover:checkとE2Eはsample-siteのwp-env(examples/sample-site/.wp-env.json)で、composer wp:setup(テーマを有効にし、
+  # dev/seed.phpで確認用のページ・製品・設定を作る)の後に行う。
+  sample-site:
+    name: Sample Site QA
+    runs-on: ubuntu-24.04
+    needs: [unit]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+        with:
+          working-directory: examples/sample-site
+      # pathリポジトリのversionsのtmswp/coreが、Kernel::VERSIONと同じかを確かめる(リリースの道具はsample-siteを書き換えないため)
+      - name: Check the tmswp/core version of the path repository
+        working-directory: examples/sample-site
+        run: |
+          expected=$(php -r 'require "vendor/autoload.php"; echo TMSWP\Core\Kernel\Kernel::VERSION;')
+          actual=$(jq -er '.repositories[] | select(.type == "path") | .options.versions["tmswp/core"]' composer.json)
+          if [ "${actual}" != "${expected}" ]; then
+            echo "::error file=examples/sample-site/composer.json::the path repository has tmswp/core ${actual}, but Kernel::VERSION is ${expected}"
+            exit 1
+          fi
+      - name: Start wp-env
+        working-directory: examples/sample-site
+        run: |
+          for attempt in 1 2 3; do
+            if composer wp:start; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+      - name: Set up the site
+        working-directory: examples/sample-site
+        run: composer wp:setup
+      - name: Run QA
+        working-directory: examples/sample-site
+        run: composer qa
+      # ブラウザはキャッシュせず、毎回@playwright/testの版に合うものを入れる
+      - name: Install the browser for E2E
+        run: node node_modules/@playwright/test/cli.js install --with-deps chromium
+      - name: Run E2E
+        run: composer test:e2e
+      - name: Upload E2E traces on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-traces
+          path: var/e2e/test-results
+          if-no-files-found: ignore
+      - name: Show wp-env logs on failure
+        if: failure()
+        working-directory: examples/sample-site
+        run: node ../../node_modules/@wordpress/env/bin/wp-env logs development --no-watch
+
+  # スターターから、composer create-projectでプロジェクトを作って確かめる(tools/ci/create-starter-project.sh)。
+  # 作るのは、スターターのテーマをそのまま写したもの(tmswp-starter-theme)と、bin/setup.phpで初期化したテーマ(client-theme)・
+  # プラグイン(shop-tools)の3つ。tmswp/coreはmonorepoのpackages/coreをpathリポジトリで入れる。
+  # 3つを1つのwp-envのサイトに置き、プロジェクトのスクリプトの`wp`(WP-CLI)は、tools/ci/bin/wpがwp-envのcliコンテナへ渡す。
+  starters:
+    name: Starter Projects
+    runs-on: ubuntu-24.04
+    needs: [unit]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: none
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            starters/theme/package-lock.json
+      - run: npm ci
+      - name: Create projects from the starters
+        run: |
+          site="${RUNNER_TEMP}/starter-site"
+          tools/ci/create-starter-project.sh theme "${site}/tmswp-starter-theme"
+          tools/ci/create-starter-project.sh theme "${site}/client-theme" client-theme 'Client Theme'
+          tools/ci/create-starter-project.sh plugin "${site}/shop-tools" shop-tools 'Shop Tools'
+          printf '%s\n' '{"core": null, "phpVersion": "8.3", "testsEnvironment": false, "themes": ["./tmswp-starter-theme", "./client-theme"], "plugins": ["./shop-tools"]}' > "${site}/.wp-env.json"
+          echo "TMSWP_WP_ENV_DIR=${site}" >> "$GITHUB_ENV"
+          echo "${GITHUB_WORKSPACE}/tools/ci/bin" >> "$GITHUB_PATH"
+      - name: Start wp-env
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}
+        run: |
+          for attempt in 1 2 3; do
+            if node "${GITHUB_WORKSPACE}/node_modules/@wordpress/env/bin/wp-env" start; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+      # スターターのテーマのblocks/をビルドし(npm run buildは、wp-scriptsのビルドとwp tmswp discover)、
+      # ビルドの出力と探索結果ファイルが、コミット済みのstarters/theme/build/blocks/・tmswp-discovery.phpと同じかを確かめる
+      - name: Build the blocks of the starter theme
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}/tmswp-starter-theme
+        run: |
+          wp theme activate tmswp-starter-theme
+          npm ci
+          npm run build
+          diff -r build/blocks "${GITHUB_WORKSPACE}/starters/theme/build/blocks"
+          diff tmswp-discovery.php "${GITHUB_WORKSPACE}/starters/theme/tmswp-discovery.php"
+      # 作ったテーマとプラグインは、README.mdの「セットアップの後」の手順で探索結果ファイルを作ってから、composer qaを実行する
+      - name: Run QA of the theme created from the starter
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}/client-theme
+        run: |
+          wp theme activate client-theme
+          npm ci
+          npm run build
+          composer qa
+      - name: Run QA of the plugin created from the starter
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}/shop-tools
+        run: |
+          composer discover
+          composer qa
+      - name: Show wp-env logs on failure
+        if: failure()
+        working-directory: ${{ env.TMSWP_WP_ENV_DIR }}
+        run: node "${GITHUB_WORKSPACE}/node_modules/@wordpress/env/bin/wp-env" logs development --no-watch
+
+  # packages/*・starters/*の8つを、split.ymlの同期と同じ形の一時のリポジトリへ取り出して確かめる(tools/ci/split-check.sh)。
+  # packages/*の6つは配布物(git archive)から開発用のファイルと.github/が外れることと、単独のcomposer install・composer test、
+  # starters/*の2つは配布物から.github/・.DS_Store・node_modules/が外れ、tests/とphpunit.xml.distが入ることを確かめる。
+  split-check:
+    name: Split Packages Check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.3'
+          coverage: none
+      - name: Check the split packages
+        run: tools/ci/split-check.sh

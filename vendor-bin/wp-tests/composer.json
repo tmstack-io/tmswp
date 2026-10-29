@@ -1,11 +1,13 @@
 {
   "require": {
-    "php": ">=8.2",
+    "php": ">=8.3",
     "phpunit/phpunit": "^9.6",
-    "wp-phpunit/wp-phpunit": "~6.4.0",
     "yoast/phpunit-polyfills": "^2.0"
   },
   "config": {
-    "sort-packages": true
+    "sort-packages": true,
+    "platform": {
+      "php": "8.3.0"
+    }
   }
 }

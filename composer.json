@@ -4,8 +4,9 @@
   "license": "GPL-2.0-or-later",
   "type": "library",
   "require": {
-    "php": ">=8.2",
+    "php": ">=8.3",
     "ext-gd": "*",
+    "ext-intl": "*",
     "ext-mbstring": "*",
     "psr/container": "^2.0",
     "psr/log": "^3.0"
@@ -13,16 +14,17 @@
   "require-dev": {
     "bamarni/composer-bin-plugin": "^1.8",
     "brain/monkey": "^2.6",
-    "friendsofphp/php-cs-fixer": "^3.64",
+    "friendsofphp/php-cs-fixer": "^3.88",
     "mikey179/vfsstream": "^1.6.12",
     "mockery/mockery": "^1.6",
     "php-stubs/acf-pro-stubs": "^6.0",
+    "php-stubs/wordpress-tests-stubs": "7.1.0",
     "phpstan/phpstan": "^2.1",
     "phpstan/phpstan-deprecation-rules": "^2.0",
     "phpstan/phpstan-phpunit": "^2.0",
     "phpstan/phpstan-strict-rules": "^2.0",
     "phpunit/phpunit": "^11.5",
-    "symplify/monorepo-builder": "^11.2",
+    "symplify/monorepo-builder": "^12.7",
     "szepeviktor/phpstan-wordpress": "^2.0"
   },
   "replace": {
@@ -30,6 +32,7 @@
     "tmswp/core": "self.version",
     "tmswp/ja-toolkit": "self.version",
     "tmswp/settings-page": "self.version",
+    "tmswp/testing": "self.version",
     "tmswp/thumbnail": "self.version"
   },
   "autoload": {
@@ -52,21 +55,57 @@
       "TMSWP\\Core\\Tests\\": "packages/core/tests/",
       "TMSWP\\JaToolkit\\Tests\\": "packages/ja-toolkit/tests/",
       "TMSWP\\SettingsPage\\Tests\\": "packages/settings-page/tests/",
-      "TMSWP\\Thumbnail\\Tests\\": "packages/thumbnail/tests/"
+      "TMSWP\\Testing\\": "packages/testing/src/",
+      "TMSWP\\Testing\\Tests\\": "packages/testing/tests/",
+      "TMSWP\\Thumbnail\\Tests\\": "packages/thumbnail/tests/",
+      "TMSWP\\Tools\\Release\\": "tools/release/"
     }
   },
   "scripts": {
     "lint": "php-cs-fixer fix --dry-run --diff --show-progress=none",
     "fix": "php-cs-fixer fix",
-    "analyse": "phpstan analyse -c phpstan.neon.dist --memory-limit=1G",
-    "i18n:build": "php tools/build-l10n.php packages/core/languages/tmswp-ja.po packages/ja-toolkit/languages/tmswp-ja.po",
+    "analyse": "phpstan analyse -c phpstan.neon.dist --memory-limit=2G",
+    "i18n:build": [
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/core/src packages/core/languages/tmswp-core.pot --domain=tmswp --package-name=tmswp-core --headers='{\"POT-Creation-Date\":\"\"}'",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/core/languages/tmswp-core.pot",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/core/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/core/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/ja-toolkit/src packages/ja-toolkit/languages/tmswp-ja-toolkit.pot --domain=tmswp --package-name=tmswp-ja-toolkit --headers='{\"POT-Creation-Date\":\"\"}'",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/ja-toolkit/languages/tmswp-ja-toolkit.pot",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/ja-toolkit/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/ja-toolkit/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/settings-page/src packages/settings-page/languages/tmswp-settings-page.pot --domain=tmswp --package-name=tmswp-settings-page --headers='{\"POT-Creation-Date\":\"\"}'",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/settings-page/languages/tmswp-settings-page.pot",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/settings-page/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/settings-page/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-pot packages/thumbnail/src packages/thumbnail/languages/tmswp-thumbnail.pot --domain=tmswp --package-name=tmswp-thumbnail --headers='{\"POT-Creation-Date\":\"\"}'",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n update-po packages/thumbnail/languages/tmswp-thumbnail.pot",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-mo packages/thumbnail/languages",
+      "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp i18n make-php packages/thumbnail/languages"
+    ],
+    "discover:build": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --kernels=2",
+    "discover:check": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp wp --require=tests/fixtures/_wp-cli.php tmswp discover --check --kernels=2",
     "test:unit": "phpunit -c phpunit.unit.xml.dist",
     "test:coverage": [
-      "@putenv XDEBUG_MODE=off",
-      "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/clover.xml --coverage-text",
-      "php bin/coverage-check.php var/coverage/clover.xml 85"
+      "@test:coverage:unit",
+      "@test:coverage:integration",
+      "@test:coverage:check"
     ],
-    "test:integration": "npx wp-env run tests-cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
+    "test:coverage:unit": [
+      "@putenv XDEBUG_MODE=off",
+      "phpunit -c phpunit.unit.xml.dist --coverage-clover=var/coverage/unit.xml"
+    ],
+    "test:coverage:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist --coverage-clover=var/coverage/integration.xml",
+    "test:coverage:check": "php bin/coverage-check.php 85 --package=acf-bridge:80 --package=core:80 --package=ja-toolkit:80 --package=settings-page:80 --package=testing:80 --package=thumbnail:80 var/coverage/unit.xml var/coverage/integration.xml",
+    "test:integration": "node node_modules/@wordpress/env/bin/wp-env run cli --env-cwd=wp-content/plugins/tmswp vendor-bin/wp-tests/vendor/bin/phpunit -c phpunit.integration.xml.dist",
+    "test:integration:acf-pro": [
+      "Composer\\Config::disableProcessTimeout",
+      "bash tools/acf-pro-integration.sh"
+    ],
+    "test:e2e": [
+      "Composer\\Config::disableProcessTimeout",
+      "node node_modules/@playwright/test/cli.js test --config=playwright.config.mjs"
+    ],
     "test": [
       "@test:unit",
       "@test:integration"
@@ -76,18 +115,27 @@
       "@analyse",
       "@test:unit"
     ],
+    "acf:check:fixtures": [
+      "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/themes/tmswp-fixture-theme",
+      "php packages/acf-bridge/bin/tms-acf check --strict --root=tests/fixtures/plugins/tmswp-fixture-plugin"
+    ],
     "qa": [
       "@lint",
       "@analyse",
+      "@acf:check:fixtures",
+      "@discover:check",
       "@test"
     ],
     "monorepo:validate": "monorepo-builder validate",
-    "monorepo:merge": "monorepo-builder merge",
-    "wp:start": "npx wp-env start",
-    "wp:stop": "npx wp-env stop"
+    "wp:start": "node node_modules/@wordpress/env/bin/wp-env start",
+    "wp:start:coverage": "node node_modules/@wordpress/env/bin/wp-env start --xdebug=coverage",
+    "wp:stop": "node node_modules/@wordpress/env/bin/wp-env stop"
   },
   "config": {
     "sort-packages": true,
+    "platform": {
+      "php": "8.3.0"
+    },
     "allow-plugins": {
       "bamarni/composer-bin-plugin": true
     }

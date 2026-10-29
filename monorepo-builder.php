@@ -3,13 +3,8 @@
 declare(strict_types=1);
 
 use Symplify\MonorepoBuilder\Config\MBConfig;
-use Symplify\MonorepoBuilder\Release\ReleaseWorker\AddTagToChangelogReleaseWorker;
-use Symplify\MonorepoBuilder\Release\ReleaseWorker\PushNextDevReleaseWorker;
-use Symplify\MonorepoBuilder\Release\ReleaseWorker\PushTagReleaseWorker;
-use Symplify\MonorepoBuilder\Release\ReleaseWorker\SetCurrentMutualDependenciesReleaseWorker;
-use Symplify\MonorepoBuilder\Release\ReleaseWorker\SetNextMutualDependenciesReleaseWorker;
-use Symplify\MonorepoBuilder\Release\ReleaseWorker\TagVersionReleaseWorker;
-use Symplify\MonorepoBuilder\Release\ReleaseWorker\UpdateBranchAliasReleaseWorker;
+use TMSWP\Tools\Release\CheckReleaseReadinessReleaseWorker;
+use TMSWP\Tools\Release\CreateAnnotatedTagReleaseWorker;
 
 return static function (MBConfig $mbConfig): void {
     $mbConfig->packageDirectories([
@@ -27,13 +22,13 @@ return static function (MBConfig $mbConfig): void {
         ],
     ]);
 
-    $mbConfig->workers([
-        SetCurrentMutualDependenciesReleaseWorker::class,
-        AddTagToChangelogReleaseWorker::class,
-        TagVersionReleaseWorker::class,
-        PushTagReleaseWorker::class,
-        SetNextMutualDependenciesReleaseWorker::class,
-        UpdateBranchAliasReleaseWorker::class,
-        PushNextDevReleaseWorker::class,
-    ]);
+    // `monorepo-builder release vX.Y.Z`が順に実行するワーカーは、tools/release/の2つだけにする(D-54・docs/RELEASING.md)。
+    // monorepo-builderが既定で登録するワーカーを外し、版の書き換え・mainへのcommitとpush・次の版への引き上げを行わない
+    MBConfig::disableDefaultWorkers();
+
+    $services = $mbConfig->services();
+    // mainであること・origin/mainと同じであること・作業ツリーが空であること・タグが無いこと・版の一致・CHANGELOGの見出しを検査する
+    $services->set(CheckReleaseReadinessReleaseWorker::class)->arg('$repositoryDirectory', __DIR__);
+    // 注釈付きのタグvX.Y.Zを作り、git push origin refs/tags/vX.Y.Zでそのタグだけを送る(split.ymlがタグを同期先へ複製する)
+    $services->set(CreateAnnotatedTagReleaseWorker::class)->arg('$repositoryDirectory', __DIR__);
 };

@@ -1,0 +1,18 @@
+{
+  "private": true,
+  "scripts": {
+    "start": "wp-scripts start --source-path=blocks --output-path=build/blocks",
+    "build": "wp-scripts build --source-path=blocks --output-path=build/blocks && npm run discover",
+    "discover": "composer discover"
+  },
+  "devDependencies": {
+    "@wordpress/scripts": "37.0.0"
+  },
+  "allowScripts": {
+    "@parcel/watcher": false,
+    "core-js": false,
+    "core-js-pure": false,
+    "fsevents": false,
+    "unrs-resolver": false
+  }
+}

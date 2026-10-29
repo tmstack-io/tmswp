@@ -4,6 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Exception;
 
-class QueryException extends \RuntimeException
+class QueryException extends RuntimeException
 {
 }

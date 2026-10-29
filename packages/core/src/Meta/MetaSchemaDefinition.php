@@ -48,6 +48,7 @@ final readonly class MetaSchemaDefinition
         }
 
         self::assertSanitizeShape($attribute->sanitize, $ownerClass, $constantName);
+        self::assertRestSchema($attribute, $ownerClass, $constantName);
 
         return new self(
             $ownerClass,
@@ -67,92 +68,39 @@ final readonly class MetaSchemaDefinition
         return $this->default !== null;
     }
 
-    /** @return array<string, mixed> */
-    public function toArray(): array
+    /**
+     * REST に出す array・object 型には、要素・プロパティのスキーマを求める。
+     * WP の register_meta() は array 型で show_in_rest.schema.items が無いと登録を拒否し、
+     * object 型でプロパティのスキーマが無いと REST の値が常に空のオブジェクトになるため、宣言の誤りとして扱う。
+     */
+    private static function assertRestSchema(MetaSchema $attribute, string $ownerClass, string $constantName): void
     {
-        return [
-            'ownerClass' => $this->ownerClass,
-            'constantName' => $this->constantName,
-            'key' => $this->key,
-            'type' => $this->type->value,
-            'default' => $this->default,
-            'single' => $this->single,
-            'showInRest' => $this->showInRest,
-            'description' => $this->description,
-            'sanitize' => $this->sanitize,
-        ];
-    }
+        $requiredKeys = match ($attribute->type) {
+            MetaValueType::Array => ['items'],
+            MetaValueType::Object => ['properties', 'patternProperties', 'additionalProperties'],
+            default => [],
+        };
 
-    /** @param array<string, mixed> $data */
-    public static function fromArray(array $data): self
-    {
-        foreach (['ownerClass', 'constantName', 'key', 'type', 'single', 'showInRest', 'description', 'sanitize'] as $field) {
-            if (!\array_key_exists($field, $data)) {
-                throw new InvalidSchemaException("meta schema cache payload is missing {$field}");
+        if ($requiredKeys === [] || $attribute->showInRest === false) {
+            return;
+        }
+
+        $schema = \is_array($attribute->showInRest) ? ($attribute->showInRest['schema'] ?? null) : null;
+
+        foreach ($requiredKeys as $requiredKey) {
+            if (\is_array($schema) && isset($schema[$requiredKey])) {
+                return;
             }
         }
 
-        if (!\array_key_exists('default', $data)) {
-            throw new InvalidSchemaException('meta schema cache payload is missing default');
-        }
+        $expected = implode(' or ', $requiredKeys);
 
-        if (!\is_string($data['ownerClass']) || !class_exists($data['ownerClass'])) {
-            throw new InvalidSchemaException('invalid meta schema owner class in cache payload');
-        }
-
-        if (
-            !\is_string($data['constantName'])
-            || !\is_string($data['key'])
-            || !\is_string($data['type'])
-            || !\is_bool($data['single'])
-            || !\is_string($data['description'])
-        ) {
-            throw new InvalidSchemaException('invalid meta schema cache payload');
-        }
-
-        $showInRest = self::normalizeShowInRest($data['showInRest']);
-        $sanitize = self::normalizeSanitize($data['sanitize'], $data['ownerClass'], $data['constantName']);
-
-        return new self(
-            $data['ownerClass'],
-            $data['constantName'],
-            $data['key'],
-            MetaValueType::from($data['type']),
-            $data['default'],
-            $data['single'],
-            $showInRest,
-            $data['description'],
-            $sanitize,
-        );
+        throw new InvalidSchemaException("{$attribute->type->value} meta shown in REST requires showInRest['schema'] with {$expected}: {$ownerClass}::{$constantName}");
     }
 
     private static function assertSanitizeShape(mixed $sanitize, string $ownerClass, string $constantName): void
     {
         self::normalizeSanitize($sanitize, $ownerClass, $constantName);
-    }
-
-    /** @return bool|array<string, mixed> */
-    private static function normalizeShowInRest(mixed $showInRest): bool|array
-    {
-        if (\is_bool($showInRest)) {
-            return $showInRest;
-        }
-
-        if (!\is_array($showInRest)) {
-            throw new InvalidSchemaException('invalid showInRest value in meta schema cache payload');
-        }
-
-        $normalized = [];
-
-        foreach ($showInRest as $key => $value) {
-            if (!\is_string($key)) {
-                throw new InvalidSchemaException('showInRest array keys must be strings in meta schema cache payload');
-            }
-
-            $normalized[$key] = $value;
-        }
-
-        return $normalized;
     }
 
     /** @return string|array{class-string, string}|null */

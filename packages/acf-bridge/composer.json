@@ -4,12 +4,18 @@
   "type": "library",
   "license": "GPL-2.0-or-later",
   "require": {
-    "php": ">=8.2",
-    "tmswp/core": "^0.1"
+    "php": ">=8.3",
+    "tmswp/core": "^0.9"
+  },
+  "require-dev": {
+    "tmswp/testing": "^0.9"
   },
   "suggest": {
-    "advanced-custom-fields-pro": "ACF Pro 6.0+ をWPプラグインとして導入すること"
+    "advanced-custom-fields-pro": "ACF Pro 6.2+ をWPプラグインとして導入すること"
   },
+  "bin": [
+    "bin/tms-acf"
+  ],
   "autoload": {
     "psr-4": {
       "TMSWP\\AcfBridge\\": "src/"
@@ -18,6 +24,14 @@
   "autoload-dev": {
     "psr-4": {
       "TMSWP\\AcfBridge\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit"
+  },
+  "extra": {
+    "branch-alias": {
+      "dev-main": "0.9.x-dev"
     }
   },
   "minimum-stability": "stable",

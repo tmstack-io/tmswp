@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Hook;
+namespace TmswpStarterTheme\Hook;
 
 use TMSWP\Core\Attribute\Action;
 use TMSWP\Core\Attribute\AsHook;

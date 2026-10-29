@@ -4,12 +4,17 @@
   "type": "library",
   "license": "GPL-2.0-or-later",
   "require": {
-    "php": ">=8.2",
-    "ext-mbstring": "*",
+    "php": ">=8.3",
     "psr/container": "^2.0",
     "psr/log": "^3.0"
   },
+  "require-dev": {
+    "mikey179/vfsstream": "^1.6.12",
+    "phpstan/phpstan": "^2.1",
+    "tmswp/testing": "^0.9"
+  },
   "suggest": {
+    "ext-intl": "Required by TMSWP\\Core\\Form\\Rule\\Url to validate internationalized domain names",
     "ext-mbstring": "Required for multibyte string handling in TMSWP\\Core\\Support\\Str",
     "tmswp/acf-bridge": "Typed accessors generated from acf-json",
     "tmswp/thumbnail": "Signed dynamic thumbnail URLs"
@@ -28,17 +33,17 @@
       "TMSWP\\Core\\Tests\\": "tests/"
     }
   },
-  "bin": [
-    "bin/tms-check"
-  ],
+  "scripts": {
+    "test": "phpunit"
+  },
   "extra": {
     "phpstan": {
       "includes": [
-        "extension.neon"
+        "phpstan/extension.neon"
       ]
     },
     "branch-alias": {
-      "dev-main": "0.1.x-dev"
+      "dev-main": "0.9.x-dev"
     }
   },
   "minimum-stability": "stable",

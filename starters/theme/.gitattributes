@@ -1,0 +1,5 @@
+# create-projectの配布物(読み取り専用リポジトリのzipと、Composerのpathリポジトリの写し)から、ビルドの道具とOSのファイルと、GitHubのワークフロー等(.github/)を外す。
+# build/blocks/と探索結果ファイル(tmswp-discovery.php)は、作ったプロジェクトがそのまま動くために要るので外さない
+/node_modules export-ignore
+.DS_Store export-ignore
+/.github export-ignore

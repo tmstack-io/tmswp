@@ -1,0 +1,137 @@
+{
+    "key": "group_tmswp_acf_post",
+    "title": "TMSWP ACF post",
+    "fields": [
+        {
+            "key": "field_tmswp_acf_post_price",
+            "label": "Price",
+            "name": "price",
+            "type": "text",
+            "default_value": "0"
+        },
+        {
+            "key": "field_tmswp_acf_post_subtitle",
+            "label": "Subtitle",
+            "name": "subtitle",
+            "type": "text"
+        },
+        {
+            "key": "field_tmswp_acf_post_slashed_text",
+            "label": "Slashed text",
+            "name": "slashed_text",
+            "type": "text"
+        },
+        {
+            "key": "field_tmswp_acf_post_slashed_group",
+            "label": "Slashed group",
+            "name": "slashed_group",
+            "type": "group",
+            "layout": "block",
+            "sub_fields": [
+                {
+                    "key": "field_tmswp_acf_post_slashed_group_json",
+                    "label": "JSON",
+                    "name": "json",
+                    "type": "text"
+                },
+                {
+                    "key": "field_tmswp_acf_post_slashed_group_path",
+                    "label": "Path",
+                    "name": "path",
+                    "type": "text"
+                }
+            ]
+        },
+        {
+            "key": "field_tmswp_acf_post_related_posts",
+            "label": "Related posts",
+            "name": "related_posts",
+            "type": "relationship",
+            "return_format": "object"
+        },
+        {
+            "key": "field_tmswp_acf_post_picked_posts",
+            "label": "Picked posts",
+            "name": "picked_posts",
+            "type": "post_object",
+            "multiple": 1,
+            "return_format": "object"
+        },
+        {
+            "key": "field_tmswp_acf_post_picked_terms",
+            "label": "Picked terms",
+            "name": "picked_terms",
+            "type": "taxonomy",
+            "taxonomy": "category",
+            "field_type": "checkbox",
+            "return_format": "object"
+        },
+        {
+            "key": "field_tmswp_acf_post_picked_users",
+            "label": "Picked users",
+            "name": "picked_users",
+            "type": "user",
+            "multiple": 1,
+            "return_format": "object"
+        },
+        {
+            "key": "field_tmswp_acf_post_stock",
+            "label": "Stock",
+            "name": "stock",
+            "type": "number"
+        },
+        {
+            "key": "field_tmswp_acf_post_featured",
+            "label": "Featured",
+            "name": "featured",
+            "type": "true_false"
+        },
+        {
+            "key": "field_tmswp_acf_post_tags_select",
+            "label": "Tags",
+            "name": "tags_select",
+            "type": "select",
+            "multiple": 1,
+            "choices": {
+                "red": "Red",
+                "blue": "Blue"
+            }
+        },
+        {
+            "key": "field_tmswp_acf_post_color_radio",
+            "label": "Color",
+            "name": "color_radio",
+            "type": "radio",
+            "choices": {
+                "red": "Red",
+                "blue": "Blue"
+            },
+            "other_choice": 1,
+            "save_other_choice": 1
+        },
+        {
+            "key": "field_tmswp_acf_post_main_image",
+            "label": "Main image",
+            "name": "main_image",
+            "type": "image",
+            "return_format": "array"
+        },
+        {
+            "key": "field_tmswp_acf_post_attachment_file",
+            "label": "Attachment file",
+            "name": "attachment_file",
+            "type": "file",
+            "return_format": "array"
+        }
+    ],
+    "location": [
+        [
+            {
+                "param": "post_type",
+                "operator": "==",
+                "value": "tmswp_acf_post"
+            }
+        ]
+    ],
+    "active": true
+}

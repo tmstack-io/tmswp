@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Core\Option;
 
 use BackedEnum;
-use TMSWP\Core\Exception\KernelException;
+use TMSWP\Core\Exception\InvalidSchemaException;
 use TMSWP\Core\Kernel\Kernel;
 
 /**
@@ -16,10 +16,6 @@ trait OptionAccess
     final public static function repository(): OptionRepository
     {
         $factory = Kernel::forClass(static::class)->container()->get(OptionRepositoryFactory::class);
-
-        if (!$factory instanceof OptionRepositoryFactory) {
-            throw new KernelException('container entry OptionRepositoryFactory must resolve to OptionRepositoryFactory');
-        }
 
         return $factory->for(static::class);
     }
@@ -104,7 +100,7 @@ trait OptionAccess
     private function optionKey(): string
     {
         if (!$this instanceof BackedEnum || !\is_string($this->value)) {
-            throw new KernelException('OptionAccess requires a string backed enum');
+            throw new InvalidSchemaException('OptionAccess requires a string backed enum: ' . static::class);
         }
 
         return $this->value;

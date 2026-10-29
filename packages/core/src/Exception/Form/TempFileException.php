@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Exception\Form;
 
-final class TempFileException extends \RuntimeException
+use TMSWP\Core\Exception\RuntimeException;
+
+final class TempFileException extends RuntimeException
 {
 }

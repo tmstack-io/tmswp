@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Form\Rule;
 
+use TMSWP\Core\Form\Messages;
 use TMSWP\Core\Form\ValidationContext;
 use TMSWP\Core\Form\Validator;
 
@@ -33,24 +34,11 @@ final class Retype implements RuleInterface
             return null;
         }
 
-        $message = $this->message ?? $this->translate('{label} must match {otherLabel}.');
-
-        if (\function_exists('apply_filters')) {
-            $filtered = apply_filters('tmswp/form/rule_message', $message, $this, $context);
-
-            if (\is_string($filtered)) {
-                $message = $filtered;
-            }
-        }
-
-        return strtr($message, [
-            '{label}' => $context->label($context->currentField),
-            '{otherLabel}' => $context->label($this->field),
-        ]);
-    }
-
-    private function translate(string $message): string
-    {
-        return \function_exists('__') ? __($message, 'tmswp') : $message;
+        return Messages::resolve(
+            $this,
+            $this->message ?? __('{label} must match {otherLabel}.', 'tmswp'),
+            $context,
+            ['otherLabel' => $context->label($this->field)],
+        );
     }
 }

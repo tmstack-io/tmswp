@@ -10,16 +10,43 @@ use DateTimeImmutable;
 use DateTimeInterface;
 use JsonException;
 use ReflectionClass;
+use ReflectionEnum;
 use ReflectionNamedType;
 use ReflectionParameter;
+use ReflectionType;
 use TMSWP\Core\Exception\HydrationException;
 use TMSWP\Core\Exception\InvalidQueryException;
 use TMSWP\Core\Exception\QueryException;
 use TMSWP\Core\Query\SortOrder;
 use ValueError;
 
+/**
+ * @phpstan-type RowParameter array{
+ *     name: string,
+ *     column: string,
+ *     parameter: ReflectionParameter,
+ *     type: ReflectionType|null,
+ *     hasDefault: bool,
+ * }
+ */
 final class QueryBuilder
 {
+    /**
+     * 行クラスのコンストラクタの引数の情報の、クラス別キャッシュ。クラスの定義だけで決まる不変の情報なので、
+     * 行ごと・クエリごとにReflectionで求め直さない。引数の型のクラスは読み込まず、enumかどうかは変換の位置で求める。
+     *
+     * @var array<class-string, array{class: ReflectionClass<object>, parameters: list<RowParameter>}>
+     */
+    private static array $rowConstructors = [];
+
+    /**
+     * 変換に使ったbacked enumのbacking type('int'か'string')の、enumのクラス別キャッシュ。enumであると分かったクラス
+     * だけを入れる(enumでないという結果は、後からクラスが読み込まれうるため入れない)。
+     *
+     * @var array<class-string<BackedEnum>, string>
+     */
+    private static array $enumBackingTypes = [];
+
     /** @var list<string> */
     private array $selects = [];
 
@@ -50,13 +77,22 @@ final class QueryBuilder
 
     private ?int $offsetValue = null;
 
-    /** @param class-string|null $rowClass */
+    /** @var class-string|null */
+    private ?string $rowClass;
+
+    /**
+     * @param class-string|null $rowClass
+     *
+     * @throws HydrationException $rowClass が存在しないクラスの場合
+     * @throws InvalidQueryException $rowClass が Model のサブクラスの場合(as() と同じ検査)
+     */
     public function __construct(
         private readonly Connection $connection,
         private readonly string $table,
-        private ?string $rowClass = null,
+        ?string $rowClass = null,
     ) {
         Identifier::bareTable($table);
+        $this->rowClass = $rowClass === null ? null : self::rowClassOrFail($rowClass);
     }
 
     public function alias(string $alias): self
@@ -243,14 +279,15 @@ final class QueryBuilder
         return $this;
     }
 
-    /** @param class-string<object> $class */
+    /**
+     * @param class-string<object> $class
+     *
+     * @throws HydrationException $class が存在しないクラスの場合
+     * @throws InvalidQueryException $class が Model のサブクラスの場合(Model は行を表さない)
+     */
     public function as(string $class): self
     {
-        if (!class_exists($class)) {
-            throw new HydrationException("row class not found: {$class}");
-        }
-
-        $this->rowClass = $class;
+        $this->rowClass = self::rowClassOrFail($class);
 
         return $this;
     }
@@ -277,10 +314,20 @@ final class QueryBuilder
         return $clone->get()[0] ?? null;
     }
 
+    /**
+     * 先頭行の指定カラムの値。SELECT 句が未指定ならそのカラムだけを選び、指定済みなら SELECT 句を保って
+     * 結果のキーと照合する。結果が0行なら null、行に照合するキーが無ければ QueryException。
+     */
     public function value(string $column): mixed
     {
+        $key = $this->resultKey($column);
         $clone = clone $this;
-        $clone->select($column)->limit(1);
+
+        if ($clone->selects === []) {
+            $clone->select($column);
+        }
+
+        $clone->limit(1);
         $query = $clone->buildSelect();
         $row = $this->connection->selectRow($query->sql, $query->bindings);
 
@@ -288,12 +335,16 @@ final class QueryBuilder
             return null;
         }
 
-        $key = $this->resultKey($column);
-
-        return \array_key_exists($key, $row) ? $row[$key] : null;
+        return $this->resultColumn($row, $key);
     }
 
-    /** @return array<int|string, mixed> */
+    /**
+     * 単一カラムの値のリスト。$keyColumn を指定すると、その値をキーにする(キーの重複は後勝ち)。
+     * SELECT 句の扱いは value() と同じ。行に照合するキーが無い場合と、キーの値が int・string でない場合は
+     * QueryException。
+     *
+     * @return array<int|string, mixed>
+     */
     public function pluck(string $column, ?string $keyColumn = null): array
     {
         $valueKey = $this->resultKey($column);
@@ -301,25 +352,29 @@ final class QueryBuilder
         $values = [];
 
         $clone = clone $this;
-        $clone->select(...($keyColumn === null ? [$column] : [$column, $keyColumn]));
+
+        if ($clone->selects === []) {
+            $clone->select(...($keyColumn === null ? [$column] : [$column, $keyColumn]));
+        }
+
         $query = $clone->buildSelect();
 
         foreach ($this->connection->select($query->sql, $query->bindings) as $row) {
-            if (!\array_key_exists($valueKey, $row)) {
-                continue;
-            }
+            $value = $this->resultColumn($row, $valueKey);
 
-            if ($keyKey !== null && \array_key_exists($keyKey, $row)) {
-                $key = $row[$keyKey];
-
-                if (\is_int($key) || \is_string($key)) {
-                    $values[$key] = $row[$valueKey];
-                }
+            if ($keyKey === null) {
+                $values[] = $value;
 
                 continue;
             }
 
-            $values[] = $row[$valueKey];
+            $key = $this->resultColumn($row, $keyKey);
+
+            if (!\is_int($key) && !\is_string($key)) {
+                throw new QueryException("pluck key column '{$keyKey}' must be an integer or a string, " . get_debug_type($key) . ' given');
+            }
+
+            $values[$key] = $value;
         }
 
         return $values;
@@ -327,7 +382,7 @@ final class QueryBuilder
 
     public function count(): int
     {
-        $query = $this->groups === [] ? $this->buildSelect('COUNT(*)', forCount: true) : $this->buildGroupedCount();
+        $query = $this->buildCount();
         $value = $this->connection->selectVar($query->sql, $query->bindings);
 
         if (\is_int($value)) {
@@ -343,7 +398,7 @@ final class QueryBuilder
 
     public function exists(): bool
     {
-        $query = $this->buildSelect('1', limit: 1);
+        $query = $this->buildSelect('1', 1);
 
         return $this->connection->selectVar($query->sql, $query->bindings) !== null;
     }
@@ -357,6 +412,13 @@ final class QueryBuilder
 
         foreach ($values as $column => $value) {
             Identifier::simple($column);
+
+            if ($value === null) {
+                $assignments[] = $column . ' = NULL';
+
+                continue;
+            }
+
             $assignments[] = $column . ' = ' . Connection::placeholderFor($value);
             $bindings[] = $value;
         }
@@ -430,6 +492,26 @@ final class QueryBuilder
         return $this->pushWhere($boolean, "{$column} {$operator} " . Connection::placeholderFor($value), [$value]);
     }
 
+    /**
+     * 行クラスの検査。行クラスを受け取る入口(コンストラクタと as())はすべてこれを通す。
+     *
+     * @param class-string $class
+     *
+     * @return class-string
+     */
+    private static function rowClassOrFail(string $class): string
+    {
+        if (!class_exists($class)) {
+            throw new HydrationException("row class not found: {$class}");
+        }
+
+        if (is_a($class, Model::class, true)) {
+            throw new InvalidQueryException("row class must not be a Model; declare a separate row class: {$class}");
+        }
+
+        return $class;
+    }
+
     /** @param list<mixed> $bindings */
     private function pushWhere(string $boolean, string $sql, array $bindings = []): self
     {
@@ -444,7 +526,7 @@ final class QueryBuilder
         $child = new self($this->connection, $this->table, $this->rowClass);
         $group($child);
 
-        if ($child->selects !== [] || $child->joins !== [] || $child->groups !== [] || $child->orders !== [] || $child->limitValue !== null || $child->offsetValue !== null) {
+        if ($child->selects !== [] || $child->fromAlias !== null || $child->joins !== [] || $child->groups !== [] || $child->orders !== [] || $child->limitValue !== null || $child->offsetValue !== null) {
             throw new InvalidQueryException('where group can contain only where clauses');
         }
 
@@ -457,6 +539,10 @@ final class QueryBuilder
     private function whereInClause(string $boolean, string $column, array $values, bool $not): self
     {
         $column = Identifier::qualified($column);
+
+        if (!array_is_list($values)) {
+            throw new InvalidQueryException('whereIn values must be a list');
+        }
 
         if ($values === []) {
             return $this->pushWhere($boolean, $not ? '1 = 1' : '0 = 1');
@@ -497,7 +583,7 @@ final class QueryBuilder
         $name = $matches[1];
         $alias = $matches[2] ?? null;
 
-        return [$prefix ? $this->connection->tableName(strtolower($name)) : Identifier::table($name), $alias];
+        return [$prefix ? $this->connection->tableName($name) : Identifier::table($name), $alias];
     }
 
     private function operator(string $operator): string
@@ -550,13 +636,62 @@ final class QueryBuilder
         return [implode('', $parts), $this->whereBindings];
     }
 
-    private function buildSelect(?string $selectOverride = null, bool $forCount = false, ?int $limit = null): SqlQuery
+    /**
+     * ORDER BY・LIMIT・OFFSET までの SELECT 文。$selectOverride を渡すと SELECT 句とその値を置き換え、
+     * $limitOverride を渡すと limit() の値を置き換える。
+     */
+    private function buildSelect(?string $selectOverride = null, ?int $limitOverride = null): SqlQuery
     {
-        if ($this->offsetValue !== null && $this->limitValue === null && $limit === null) {
+        $limit = $limitOverride ?? $this->limitValue;
+
+        if ($this->offsetValue !== null && $limit === null) {
             throw new InvalidQueryException('offset requires limit');
         }
 
-        $selects = $selectOverride ?? ($this->selects === [] ? '*' : implode(', ', $this->selects));
+        $query = $selectOverride === null
+            ? $this->buildSelectBody($this->selects === [] ? '*' : implode(', ', $this->selects), $this->selectBindings)
+            : $this->buildSelectBody($selectOverride, []);
+        $sql = $query->sql;
+        $bindings = $query->bindings;
+
+        if ($this->orders !== []) {
+            $sql .= ' ORDER BY ' . implode(', ', $this->orders);
+        }
+
+        if ($limit !== null) {
+            $sql .= ' LIMIT %d';
+            $bindings[] = $limit;
+        }
+
+        if ($this->offsetValue !== null) {
+            $sql .= ' OFFSET %d';
+            $bindings[] = $this->offsetValue;
+        }
+
+        return new SqlQuery($sql, $bindings);
+    }
+
+    /**
+     * 件数の SELECT 文。SELECT 句・ORDER BY・LIMIT・OFFSET を捨てる。GROUP BY があればグループの数を数える。
+     */
+    private function buildCount(): SqlQuery
+    {
+        if ($this->groups === []) {
+            return $this->buildSelectBody('COUNT(*)', []);
+        }
+
+        $inner = $this->buildSelectBody('1', []);
+
+        return new SqlQuery('SELECT COUNT(*) FROM (' . $inner->sql . ') AS tmswp_count', $inner->bindings);
+    }
+
+    /**
+     * SELECT 句から GROUP BY までの SELECT 文。
+     *
+     * @param list<mixed> $selectBindings
+     */
+    private function buildSelectBody(string $selects, array $selectBindings): SqlQuery
+    {
         $sql = 'SELECT ' . $selects . ' FROM ' . $this->connection->tableName($this->table);
 
         if ($this->fromAlias !== null) {
@@ -567,7 +702,7 @@ final class QueryBuilder
             $sql .= ' ' . implode(' ', $this->joins);
         }
 
-        $bindings = [...($selectOverride === null ? $this->selectBindings : []), ...$this->joinBindings];
+        $bindings = [...$selectBindings, ...$this->joinBindings];
 
         if ($this->wheres !== []) {
             [$whereSql, $whereBindings] = $this->compileWhere();
@@ -575,34 +710,11 @@ final class QueryBuilder
             array_push($bindings, ...$whereBindings);
         }
 
-        if (!$forCount && $this->groups !== []) {
+        if ($this->groups !== []) {
             $sql .= ' GROUP BY ' . implode(', ', $this->groups);
         }
 
-        if (!$forCount && $this->orders !== []) {
-            $sql .= ' ORDER BY ' . implode(', ', $this->orders);
-        }
-
-        $limitValue = $limit ?? $this->limitValue;
-
-        if (!$forCount && $limitValue !== null) {
-            $sql .= ' LIMIT %d';
-            $bindings[] = $limitValue;
-        }
-
-        if (!$forCount && $this->offsetValue !== null) {
-            $sql .= ' OFFSET %d';
-            $bindings[] = $this->offsetValue;
-        }
-
         return new SqlQuery($sql, $bindings);
-    }
-
-    private function buildGroupedCount(): SqlQuery
-    {
-        $inner = $this->buildSelect('1', forCount: false);
-
-        return new SqlQuery('SELECT COUNT(*) FROM (' . $inner->sql . ') AS tmswp_count', $inner->bindings);
     }
 
     /** @param array<string, mixed> $values */
@@ -628,45 +740,86 @@ final class QueryBuilder
             return (object) $row;
         }
 
-        $class = new ReflectionClass($this->rowClass);
-        $constructor = $class->getConstructor();
-
-        if ($constructor === null || !$constructor->isPublic()) {
-            throw new HydrationException("row class '{$this->rowClass}' requires a public constructor");
-        }
-
+        $constructor = self::rowConstructor($this->rowClass);
         $arguments = [];
 
-        foreach ($constructor->getParameters() as $parameter) {
+        foreach ($constructor['parameters'] as $parameter) {
             $arguments[] = $this->resolveParameter($parameter, $row);
         }
 
-        return $class->newInstanceArgs($arguments);
+        return $constructor['class']->newInstanceArgs($arguments);
     }
 
-    /** @param array<string, mixed> $row */
-    private function resolveParameter(ReflectionParameter $parameter, array $row): mixed
+    /**
+     * 行クラスとそのコンストラクタの引数の情報。クラスごとに1回だけReflectionで求め、2回目からはキャッシュを返す。
+     * 既定値そのものは持たず、使うたびにReflectionParameterから得る(new式の既定値を行の間で共有しないため)。
+     *
+     * @param class-string $class
+     *
+     * @throws HydrationException コンストラクタが無いかpublicでない場合
+     *
+     * @return array{class: ReflectionClass<object>, parameters: list<RowParameter>}
+     */
+    private static function rowConstructor(string $class): array
     {
-        $name = $parameter->getName();
-        $key = \array_key_exists($name, $row) ? $name : $this->snake($name);
+        if (isset(self::$rowConstructors[$class])) {
+            return self::$rowConstructors[$class];
+        }
+
+        $reflection = new ReflectionClass($class);
+        $constructor = $reflection->getConstructor();
+
+        if ($constructor === null || !$constructor->isPublic()) {
+            throw new HydrationException("row class '{$class}' requires a public constructor");
+        }
+
+        $parameters = [];
+
+        foreach ($constructor->getParameters() as $parameter) {
+            $parameters[] = [
+                'name' => $parameter->getName(),
+                'column' => self::snake($parameter->getName()),
+                'parameter' => $parameter,
+                'type' => $parameter->getType(),
+                'hasDefault' => $parameter->isDefaultValueAvailable(),
+            ];
+        }
+
+        return self::$rowConstructors[$class] = ['class' => $reflection, 'parameters' => $parameters];
+    }
+
+    /**
+     * @param RowParameter $parameter
+     * @param array<string, mixed> $row
+     */
+    private function resolveParameter(array $parameter, array $row): mixed
+    {
+        $name = $parameter['name'];
+        $key = \array_key_exists($name, $row) ? $name : $parameter['column'];
 
         if (!\array_key_exists($key, $row)) {
-            throw new HydrationException("missing column '{$name}' for row class '{$this->rowClass}'");
+            if ($parameter['hasDefault']) {
+                return $parameter['parameter']->getDefaultValue();
+            }
+
+            throw new HydrationException("missing column '{$name}' for row class '{$this->rowClass}'; available columns: " . implode(', ', array_keys($row)));
         }
 
         return $this->coerce($row[$key], $parameter);
     }
 
-    private function coerce(mixed $value, ReflectionParameter $parameter): mixed
+    /** @param RowParameter $parameter */
+    private function coerce(mixed $value, array $parameter): mixed
     {
-        $type = $parameter->getType();
+        $type = $parameter['type'];
+        $parameterName = $parameter['name'];
 
         if (!$type instanceof ReflectionNamedType) {
             if ($type === null) {
                 return $value;
             }
 
-            throw new HydrationException("unsupported parameter type for '{$parameter->getName()}'");
+            throw new HydrationException("unsupported parameter type for '{$parameterName}'");
         }
 
         if ($value === null) {
@@ -674,40 +827,51 @@ final class QueryBuilder
                 return null;
             }
 
-            throw new HydrationException("non-nullable parameter '{$parameter->getName()}' received null");
+            throw new HydrationException("non-nullable parameter '{$parameterName}' received null");
         }
 
         $name = $type->getName();
 
         if ($type->isBuiltin()) {
             return match ($name) {
-                'int' => $this->coerceInt($value, $parameter->getName()),
-                'float' => $this->coerceFloat($value, $parameter->getName()),
-                'string' => $this->coerceString($value, $parameter->getName()),
-                'bool' => $this->coerceBool($value, $parameter->getName()),
-                'array' => $this->decodeJson($this->coerceString($value, $parameter->getName()), $parameter->getName()),
+                'int' => $this->coerceInt($value, $parameterName),
+                'float' => $this->coerceFloat($value, $parameterName),
+                'string' => $this->coerceString($value, $parameterName),
+                'bool' => $this->coerceBool($value, $parameterName),
+                'array' => $this->decodeJson($this->coerceString($value, $parameterName), $parameterName),
                 'mixed' => $value,
                 default => throw new HydrationException("unsupported parameter type '{$name}'"),
             };
         }
 
         if ($name === DateTimeImmutable::class || $name === DateTimeInterface::class) {
-            return $this->dateTime($this->coerceString($value, $parameter->getName()), $parameter->getName());
+            return $this->dateTime($this->coerceString($value, $parameterName), $parameterName);
         }
 
         if (is_subclass_of($name, BackedEnum::class)) {
-            if (!\is_int($value) && !\is_string($value)) {
-                throw new HydrationException("invalid enum value type for '{$parameter->getName()}'");
-            }
+            // DB の値は string で届くため、int を値に持つ enum では int に変換してから from() に渡す
+            $backingValue = self::enumBackingType($name) === 'int'
+                ? $this->coerceInt($value, $parameterName)
+                : $this->coerceString($value, $parameterName);
 
             try {
-                return $name::from($value);
+                return $name::from($backingValue);
             } catch (ValueError $exception) {
-                throw new HydrationException("invalid enum value for '{$parameter->getName()}'", previous: $exception);
+                throw new HydrationException("invalid enum value for '{$parameterName}'", previous: $exception);
             }
         }
 
         throw new HydrationException("unsupported parameter class '{$name}'");
+    }
+
+    /**
+     * backed enumのbacking type('int'か'string')。enumのクラスごとに1回だけReflectionで求める。
+     *
+     * @param class-string<BackedEnum> $enum
+     */
+    private static function enumBackingType(string $enum): string
+    {
+        return self::$enumBackingTypes[$enum] ??= (string) (new ReflectionEnum($enum))->getBackingType();
     }
 
     private function coerceInt(mixed $value, string $parameter): int
@@ -716,8 +880,15 @@ final class QueryBuilder
             return $value;
         }
 
-        if (\is_string($value) && preg_match('/\A-?(0|[1-9][0-9]*)\z/', $value) === 1) {
-            return (int) $value;
+        if (\is_string($value) && preg_match('/\A(0|-?[1-9][0-9]*)\z/', $value) === 1) {
+            $integer = (int) $value;
+
+            // PHP の int の範囲を超える値(bigint unsigned の上半分等)は、(int) で上限に丸められるため拒否する
+            if ((string) $integer !== $value) {
+                throw new HydrationException("integer out of range for '{$parameter}'");
+            }
+
+            return $integer;
         }
 
         throw new HydrationException("invalid integer for '{$parameter}'");
@@ -788,6 +959,11 @@ final class QueryBuilder
             throw new HydrationException('wp_timezone is not available');
         }
 
+        // createFromFormat()はNULを含む文字列でValueErrorを投げるため、呼ぶ前に変換できない値として拒否する
+        if (str_contains($value, "\0")) {
+            throw new HydrationException("invalid datetime for '{$parameter}'");
+        }
+
         $date = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $value, wp_timezone());
         $errors = DateTimeImmutable::getLastErrors();
 
@@ -798,7 +974,7 @@ final class QueryBuilder
         return $date;
     }
 
-    private function snake(string $name): string
+    private static function snake(string $name): string
     {
         $snake = preg_replace('/(?<=[a-z0-9])([A-Z])/', '_$1', $name);
 
@@ -809,8 +985,22 @@ final class QueryBuilder
         return strtolower($snake);
     }
 
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function resultColumn(array $row, string $key): mixed
+    {
+        if (!\array_key_exists($key, $row)) {
+            throw new QueryException("result row has no column '{$key}'; available columns: " . implode(', ', array_keys($row)));
+        }
+
+        return $row[$key];
+    }
+
     private function resultKey(string $column): string
     {
+        Identifier::selectable($column);
+
         if (preg_match('/\s+(?i:AS)\s+([A-Za-z_][A-Za-z0-9_]*)\z/', $column, $matches) === 1) {
             return $matches[1];
         }

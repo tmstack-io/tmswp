@@ -8,7 +8,7 @@ final readonly class FieldDefinition
 {
     /**
      * @param list<FieldDefinition> $subFields
-     * @param array<string, list<FieldDefinition>> $layouts
+     * @param list<FlexibleLayout> $layouts flexible_contentのレイアウト(JSONの順)
      * @param array<string, mixed> $raw
      */
     public function __construct(
@@ -65,8 +65,9 @@ final readonly class FieldDefinition
     }
 
     /**
+     * flexible_contentのレイアウトを、JSONの順のまま読む。同じ名前のレイアウトもそのまま並べる(生成時のE002で検出する)。
      *
-     * @return array<string, list<FieldDefinition>>
+     * @return list<FlexibleLayout>
      */
     private static function layouts(mixed $rows): array
     {
@@ -82,14 +83,8 @@ final readonly class FieldDefinition
             }
 
             $layout = self::stringKeyed($layout);
-            $name = self::string($layout, 'name');
-
-            if ($name !== '') {
-                $layouts[$name] = self::fields($layout['sub_fields'] ?? []);
-            }
+            $layouts[] = new FlexibleLayout(self::string($layout, 'name'), self::fields($layout['sub_fields'] ?? []));
         }
-
-        ksort($layouts, SORT_STRING);
 
         return $layouts;
     }

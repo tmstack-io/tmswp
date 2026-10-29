@@ -10,13 +10,11 @@ final class Report
      * @param list<GeneratedFile> $files
      * @param list<string> $errors
      * @param list<string> $warnings
-     * @param list<string> $infos
      */
     public function __construct(
         private readonly array $files,
         private readonly array $errors = [],
         private readonly array $warnings = [],
-        private readonly array $infos = [],
     ) {}
 
     /** @return list<GeneratedFile> */
@@ -35,12 +33,6 @@ final class Report
     public function warnings(): array
     {
         return $this->warnings;
-    }
-
-    /** @return list<string> */
-    public function infos(): array
-    {
-        return $this->infos;
     }
 
     public function hasErrors(): bool

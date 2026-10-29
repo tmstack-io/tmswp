@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Form;
 
+use TMSWP\Core\Exception\Form\FormConfigException;
+
 final readonly class OptionView
 {
     public function __construct(
@@ -15,10 +17,14 @@ final readonly class OptionView
         public FieldType $type,
     ) {}
 
-    /** @param array<string, mixed> $attrs */
+    /**
+     * @param array<array-key, mixed> $attrs id は上書きできる。type・name・value・checked は指定できない
+     *
+     * @throws FormConfigException
+     */
     public function input(array $attrs = []): string
     {
-        $attrs = ['id' => $this->id] + $attrs;
+        $attrs = array_replace(['id' => $this->id], FormHtml::normalizeAttributes($attrs));
 
         if ($this->type === FieldType::Radios) {
             return FormHtml::radio($this->name, $this->value, $this->checked, $attrs);
@@ -27,9 +33,21 @@ final readonly class OptionView
         return FormHtml::checkbox($this->name, $this->value, $this->checked, $attrs);
     }
 
-    /** @param array<string, mixed> $attrs */
+    /**
+     * @param array<array-key, mixed> $attrs for は上書きできる(input() の id を変えたとき)
+     *
+     * @throws FormConfigException
+     */
     public function labelTag(array $attrs = []): string
     {
-        return FormHtml::label($this->label, $this->id, $attrs);
+        $attrs = FormHtml::normalizeAttributes($attrs);
+        $for = $this->id;
+
+        if (\array_key_exists('for', $attrs)) {
+            $for = Validator::stringValue($attrs['for']) ?? throw new FormConfigException("attribute 'for' must be scalar or Stringable");
+            unset($attrs['for']);
+        }
+
+        return FormHtml::label($this->label, $for, $attrs);
     }
 }

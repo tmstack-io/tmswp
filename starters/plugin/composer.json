@@ -2,14 +2,14 @@
   "name": "tmswp/starter-plugin",
   "description": "Starter plugin for TMStack WordPress Framework.",
   "type": "project",
-  "license": "proprietary",
+  "license": "GPL-2.0-or-later",
   "require": {
-    "php": ">=8.2",
-    "tmswp/core": "^0.1"
+    "php": ">=8.3",
+    "tmswp/core": "^0.9"
   },
   "require-dev": {
     "brain/monkey": "^2.6",
-    "friendsofphp/php-cs-fixer": "^3.64",
+    "friendsofphp/php-cs-fixer": "^3.88",
     "phpstan/extension-installer": "^1.4",
     "phpstan/phpstan": "^2.1",
     "phpunit/phpunit": "^11.5",
@@ -17,27 +17,31 @@
   },
   "autoload": {
     "psr-4": {
-      "PluginApp\\": "app/"
+      "TmswpStarterPlugin\\": "app/"
     }
   },
   "autoload-dev": {
     "psr-4": {
-      "PluginApp\\Tests\\": "tests/"
+      "TmswpStarterPlugin\\Tests\\": "tests/"
     }
   },
   "scripts": {
     "lint": "php-cs-fixer fix --dry-run --diff",
     "fix": "php-cs-fixer fix",
     "analyse": "phpstan analyse --memory-limit=1G",
+    "discover": "wp tmswp discover",
+    "discover:check": "wp tmswp discover --check",
     "test": "phpunit",
     "qa": [
       "@lint",
       "@analyse",
+      "@discover:check",
       "@test"
     ],
-    "acf:check": "wp tmswp acf check",
-    "acf:sync": "wp tmswp acf sync",
-    "post-create-project-cmd": "@php bin/setup.php"
+    "post-create-project-cmd": [
+      "@php bin/setup.php",
+      "@composer dump-autoload"
+    ]
   },
   "config": {
     "allow-plugins": {

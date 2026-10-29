@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace TMSWP\Core\Option;
 
 use TMSWP\Core\Exception\DiscoveryException;
-use TMSWP\Core\Exception\KernelException;
 use TMSWP\Core\Kernel\ComponentInitializerInterface;
 use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\Kernel;
@@ -19,10 +18,6 @@ final class OptionGroupInitializer implements ComponentInitializerInterface
         }
 
         $factory = $kernel->container()->get(OptionRepositoryFactory::class);
-
-        if (!$factory instanceof OptionRepositoryFactory) {
-            throw new KernelException('container entry OptionRepositoryFactory must resolve to OptionRepositoryFactory');
-        }
 
         $factory->preload($component->class);
     }

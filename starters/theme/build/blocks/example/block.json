@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schemas.wp.org/trunk/block.json",
+  "apiVersion": 3,
+  "name": "tmswp-starter/example",
+  "title": "Example",
+  "category": "widgets",
+  "description": "An example dynamic block rendered by render.php.",
+  "textdomain": "{{project_slug}}",
+  "editorScript": "file:./index.js",
+  "render": "file:./render.php"
+}

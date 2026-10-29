@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace PluginApp\Hook;
+namespace TmswpStarterPlugin\Hook;
 
 use TMSWP\Core\Attribute\AsHook;
 use TMSWP\Core\Hook\Hook;

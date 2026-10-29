@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# CIのStarter ProjectsジョブでPATHに置く`wp`。引数をそのまま、wp-envのcliコンテナのWP-CLIへ渡す。
+# スターターから作ったプロジェクトのスクリプト(composer discover・discover:check、npm run buildの`wp tmswp discover`)は、
+# WP-CLIがサイトに届く場所で`wp`を実行する前提のため、ホストの`wp`をwp-envのサイトへつなぐ。
+# wp-envの設定(.wp-env.json)のあるディレクトリを、環境変数TMSWP_WP_ENV_DIRで受け取る。
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+cd "${TMSWP_WP_ENV_DIR:?TMSWP_WP_ENV_DIR must be the directory of .wp-env.json}"
+exec node "$root/node_modules/@wordpress/env/bin/wp-env" run cli wp "$@"

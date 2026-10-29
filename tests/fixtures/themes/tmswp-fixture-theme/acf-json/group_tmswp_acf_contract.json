@@ -1,0 +1,64 @@
+{
+    "key": "group_tmswp_acf_contract",
+    "title": "TMSWP ACF contract",
+    "fields": [
+        {
+            "key": "field_tmswp_acf_contract_absent",
+            "label": "Contract absent",
+            "name": "tmswp_acf_contract_absent",
+            "type": "text"
+        },
+        {
+            "key": "field_tmswp_acf_contract_empty",
+            "label": "Contract empty",
+            "name": "tmswp_acf_contract_empty",
+            "type": "text"
+        },
+        {
+            "key": "field_tmswp_acf_contract_zero",
+            "label": "Contract zero",
+            "name": "tmswp_acf_contract_zero",
+            "type": "text"
+        },
+        {
+            "key": "field_tmswp_acf_contract_false",
+            "label": "Contract false",
+            "name": "tmswp_acf_contract_false",
+            "type": "text"
+        },
+        {
+            "key": "field_tmswp_acf_contract_single",
+            "label": "Contract single",
+            "name": "tmswp_acf_contract_single",
+            "type": "text"
+        },
+        {
+            "key": "field_tmswp_acf_contract_broken",
+            "label": "Contract broken",
+            "name": "tmswp_acf_contract_broken",
+            "type": "text"
+        },
+        {
+            "key": "field_tmswp_acf_contract_json",
+            "label": "Contract json",
+            "name": "tmswp_acf_contract_json",
+            "type": "text"
+        },
+        {
+            "key": "field_tmswp_acf_contract_array",
+            "label": "Contract array",
+            "name": "tmswp_acf_contract_array",
+            "type": "text"
+        }
+    ],
+    "location": [
+        [
+            {
+                "param": "post_type",
+                "operator": "==",
+                "value": "tmswp_acf_post"
+            }
+        ]
+    ],
+    "active": true
+}

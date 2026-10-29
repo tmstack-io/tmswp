@@ -1,34 +1,108 @@
 {
-  "key": "group_product",
-  "title": "製品補足情報",
-  "location": [
-    [
-      {
-        "param": "post_type",
-        "operator": "==",
-        "value": "product"
-      }
-    ]
-  ],
-  "fields": [
-    {
-      "key": "field_main_visual",
-      "name": "main_visual",
-      "label": "メイン画像",
-      "type": "image",
-      "return_format": "array"
-    },
-    {
-      "key": "field_published_at",
-      "name": "published_at",
-      "label": "公開日時",
-      "type": "date_time_picker"
-    },
-    {
-      "key": "field_store_name",
-      "name": "店舗名",
-      "label": "店舗名",
-      "type": "text"
-    }
-  ]
+    "key": "group_sample_site_product",
+    "title": "製品情報",
+    "fields": [
+        {
+            "key": "field_sample_site_product_price",
+            "label": "価格(円)",
+            "name": "price",
+            "aria-label": "",
+            "type": "number",
+            "instructions": "",
+            "required": 0,
+            "conditional_logic": 0,
+            "wrapper": {
+                "width": "",
+                "class": "",
+                "id": ""
+            },
+            "default_value": "",
+            "min": 0,
+            "max": "",
+            "allow_in_bindings": 0,
+            "placeholder": "",
+            "step": 1,
+            "prepend": "",
+            "append": "円"
+        },
+        {
+            "key": "field_sample_site_product_spec",
+            "label": "仕様",
+            "name": "spec",
+            "aria-label": "",
+            "type": "group",
+            "instructions": "",
+            "required": 0,
+            "conditional_logic": 0,
+            "wrapper": {
+                "width": "",
+                "class": "",
+                "id": ""
+            },
+            "layout": "table",
+            "sub_fields": [
+                {
+                    "key": "field_sample_site_product_spec_material",
+                    "label": "素材",
+                    "name": "material",
+                    "aria-label": "",
+                    "type": "text",
+                    "instructions": "",
+                    "required": 0,
+                    "conditional_logic": 0,
+                    "wrapper": {
+                        "width": "",
+                        "class": "",
+                        "id": ""
+                    },
+                    "default_value": "",
+                    "maxlength": "",
+                    "allow_in_bindings": 0,
+                    "placeholder": "",
+                    "prepend": "",
+                    "append": ""
+                },
+                {
+                    "key": "field_sample_site_product_spec_size",
+                    "label": "サイズ",
+                    "name": "size",
+                    "aria-label": "",
+                    "type": "text",
+                    "instructions": "",
+                    "required": 0,
+                    "conditional_logic": 0,
+                    "wrapper": {
+                        "width": "",
+                        "class": "",
+                        "id": ""
+                    },
+                    "default_value": "",
+                    "maxlength": "",
+                    "allow_in_bindings": 0,
+                    "placeholder": "",
+                    "prepend": "",
+                    "append": ""
+                }
+            ]
+        }
+    ],
+    "location": [
+        [
+            {
+                "param": "post_type",
+                "operator": "==",
+                "value": "product"
+            }
+        ]
+    ],
+    "menu_order": 0,
+    "position": "normal",
+    "style": "default",
+    "label_placement": "top",
+    "instruction_placement": "label",
+    "hide_on_screen": "",
+    "active": true,
+    "description": "",
+    "show_in_rest": 0,
+    "modified": 1792800000
 }

@@ -4,6 +4,6 @@ declare(strict_types=1);
 
 namespace TMSWP\Core\Exception;
 
-class UnknownLogChannelException extends \RuntimeException
+final class UnknownLogChannelException extends \OutOfBoundsException implements TmswpExceptionInterface
 {
 }

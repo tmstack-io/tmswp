@@ -3,23 +3,27 @@
 declare(strict_types=1);
 
 $root = dirname(__DIR__);
-$rulesDir = $root . '/packages/core/rules';
 $outputDir = $root . '/var/rules-code';
+// 各パッケージのrules/(レシピはパッケージごとに置く)。mdの無いディレクトリからは何も抽出しない
+$rulesDirs = glob($root . '/packages/*/rules', GLOB_ONLYDIR);
 
-if (!is_dir($rulesDir)) {
-    throw new RuntimeException("rules ディレクトリがありません: {$rulesDir}");
+if ($rulesDirs === false || $rulesDirs === []) {
+    throw new RuntimeException("rules ディレクトリがありません: {$root}/packages/*/rules");
 }
 
+sort($rulesDirs);
 clearDirectory($outputDir);
 
-$iterator = new DirectoryIterator($rulesDir);
+foreach ($rulesDirs as $rulesDir) {
+    $iterator = new DirectoryIterator($rulesDir);
 
-foreach ($iterator as $fileInfo) {
-    if (!$fileInfo->isFile() || $fileInfo->getExtension() !== 'md') {
-        continue;
+    foreach ($iterator as $fileInfo) {
+        if (!$fileInfo->isFile() || $fileInfo->getExtension() !== 'md') {
+            continue;
+        }
+
+        extractCodeBlocks($fileInfo->getPathname(), $outputDir);
     }
-
-    extractCodeBlocks($fileInfo->getPathname(), $outputDir);
 }
 
 function extractCodeBlocks(string $markdownFile, string $outputDir): void
@@ -60,7 +64,8 @@ function targetPath(string $code, string $markdownFile, string $outputDir, int $
         $relativeNamespace = str_replace('\\', DIRECTORY_SEPARATOR, $matches[1]);
         $classMatches = [];
 
-        if (preg_match('/\n(?:final\s+class|class|enum)\s+([A-Za-z][A-Za-z0-9_]*)\b/m', $code, $classMatches) !== 1) {
+        // クラスの修飾子(final・readonly・abstract)は、PHPが許すどの順・組み合わせでも読む(`final readonly class`等)
+        if (preg_match('/\n(?:(?:final|readonly|abstract)\s+)*(?:class|enum)\s+([A-Za-z][A-Za-z0-9_]*)\b/m', $code, $classMatches) !== 1) {
             throw new RuntimeException("namespace付きコード例にクラス名がありません: {$markdownFile}");
         }
 

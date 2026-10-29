@@ -1,70 +1,67 @@
 <?php
-/**
- * Template Name: お問い合わせ
- */
 
 declare(strict_types=1);
 
-use App\Form\ContactForm;
-use App\Option\SiteOption;
-use App\Post\ProductPost;
-use TMSWP\Core\Form\Form;
-use TMSWP\Core\Form\FormAction;
+/*
+ * 固定ページcontact(/contact/)のテンプレート。入力画面と確認画面を出す。完了画面は子ページthanks(/contact/thanks/)。
+ */
+
+use SampleSite\Page\ContactPage;
 use TMSWP\Core\Form\FormStep;
 
-$form = ContactForm::create();
-$result = $form->handle();
+// 出力の前(get_header()より前)に1回だけ呼ぶ。リダイレクトとnocacheのヘッダは出力の後では効かない
+$vm = ContactPage::handle();
+$form = $vm->form;
 
 get_header();
 ?>
-<main class="site-main">
-    <h1><?php echo esc_html((string) tms_var('title', get_the_title())); ?></h1>
-    <p>通知先: <?php echo esc_html(SiteOption::contactEmail()); ?></p>
-    <p>製品一覧: <a href="<?php echo esc_url((string) ProductPost::archiveUrl()); ?>">アーカイブへ</a></p>
+<main class="contact">
+    <h1><?php the_title(); ?></h1>
 
-    <?php foreach ($form->formErrors() as $error) : ?>
-        <p class="form-error"><?php echo esc_html($error); ?></p>
-    <?php endforeach; ?>
-
-    <?php if ($result->step === FormStep::Complete) : ?>
-        <p class="notice">お問い合わせを受け付けました。</p>
-    <?php elseif ($result->step === FormStep::Confirm) : ?>
+    <?php if ($vm->result->step === FormStep::Confirm) : ?>
+        <p><?php esc_html_e('Please check your entries and press Send.', 'sample-site'); ?></p>
         <?php echo $form->open(['class' => 'contact-form']); ?>
-        <dl class="confirm-list">
-            <?php foreach (['customer_name', 'email', 'message', 'attachment'] as $fieldName) : ?>
-                <div>
-                    <dt><?php echo esc_html($form->field($fieldName)->label()); ?></dt>
-                    <dd><?php echo $form->field($fieldName)->display(); ?></dd>
-                    <?php echo $form->field($fieldName)->hidden(); ?>
-                </div>
+        <dl>
+            <?php foreach ($form->confirmFields() as $view) : ?>
+                <dt><?php echo $view->label(); ?></dt>
+                <dd><?php echo $view->display(); ?></dd>
             <?php endforeach; ?>
         </dl>
-        <button type="submit" name="<?php echo esc_attr(Form::FIELD_STEP); ?>" value="<?php echo esc_attr(FormAction::Back->value); ?>">戻る</button>
-        <button type="submit" name="<?php echo esc_attr(Form::FIELD_STEP); ?>" value="<?php echo esc_attr(FormAction::Submit->value); ?>">送信する</button>
+        <button type="submit" name="_step" value="back"><?php esc_html_e('Back', 'sample-site'); ?></button>
+        <button type="submit" name="_step" value="submit"><?php esc_html_e('Send', 'sample-site'); ?></button>
         <?php echo $form->close(); ?>
     <?php else : ?>
+        <?php foreach ($vm->result->formErrors as $error) : ?>
+            <p class="form-alert"><?php echo esc_html($error); ?></p>
+        <?php endforeach; ?>
+
         <?php echo $form->open(['class' => 'contact-form']); ?>
-        <div class="form-row">
-            <?php echo $form->field('customer_name')->labelTag(); ?>
-            <?php echo $form->field('customer_name')->input(); ?>
-            <?php echo $form->field('customer_name')->errors(); ?>
-        </div>
-        <div class="form-row">
-            <?php echo $form->field('email')->labelTag(); ?>
-            <?php echo $form->field('email')->input(['type' => 'email']); ?>
-            <?php echo $form->field('email')->errors(); ?>
-        </div>
-        <div class="form-row">
-            <?php echo $form->field('message')->labelTag(); ?>
-            <?php echo $form->field('message')->textarea(['rows' => 6]); ?>
-            <?php echo $form->field('message')->errors(); ?>
-        </div>
-        <div class="form-row">
-            <?php echo $form->field('attachment')->labelTag(); ?>
-            <?php echo $form->field('attachment')->input(['accept' => '.txt']); ?>
-            <?php echo $form->field('attachment')->errors(); ?>
-        </div>
-        <button type="submit" name="<?php echo esc_attr(Form::FIELD_STEP); ?>" value="<?php echo esc_attr(FormAction::Confirm->value); ?>">確認する</button>
+        <dl>
+            <dt><?php echo $form->field('full_name')->labelTag(); ?></dt>
+            <dd>
+                <?php echo $form->field('full_name')->input(['autocomplete' => 'name']); ?>
+                <?php echo $form->field('full_name')->errors(); ?>
+            </dd>
+
+            <dt><?php echo $form->field('kana')->labelTag(); ?></dt>
+            <dd>
+                <?php echo $form->field('kana')->input(); ?>
+                <?php echo $form->field('kana')->errors(); ?>
+            </dd>
+
+            <dt><?php echo $form->field('email')->labelTag(); ?></dt>
+            <dd>
+                <?php echo $form->field('email')->input(['type' => 'email', 'autocomplete' => 'email']); ?>
+                <?php echo $form->field('email')->errors(); ?>
+            </dd>
+
+            <dt><?php echo $form->field('message')->labelTag(); ?></dt>
+            <dd>
+                <?php echo $form->field('message')->textarea(['rows' => 6]); ?>
+                <?php echo $form->field('message')->errors(); ?>
+            </dd>
+        </dl>
+        <button type="submit" name="_step" value="confirm"><?php esc_html_e('Confirm', 'sample-site'); ?></button>
         <?php echo $form->close(); ?>
     <?php endif; ?>
 </main>

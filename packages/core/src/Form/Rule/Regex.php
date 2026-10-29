@@ -47,6 +47,6 @@ final class Regex extends Rule
 
     public function defaultMessage(): string
     {
-        return $this->translate('{label} has an invalid format.');
+        return __('{label} has an invalid format.', 'tmswp');
     }
 }

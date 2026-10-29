@@ -9,19 +9,19 @@ use TMSWP\Core\Kernel\ComponentInitializerInterface;
 use TMSWP\Core\Kernel\DiscoveredComponent;
 use TMSWP\Core\Kernel\Kernel;
 
+/**
+ * `#[AsSettingsPage]`のクラスを、Kernelがadmin_menu(priority 10)で1件ずつ初期化する。
+ */
 final class SettingsPageInitializer implements ComponentInitializerInterface
 {
+    /**
+     * 設定ページを、Kernelに登録したSettingsPagesでメニューに登録する。
+     *
+     * @throws LogicException KernelにSettingsPagesを登録していない場合(設定の誤り。Kernelはdebugに関係なく投げる)、
+     *                        SettingsPageを継承していない場合、slugが登録済みの場合
+     */
     public function initialize(DiscoveredComponent $component, Kernel $kernel): void
     {
-        if (!SettingsPages::isRegistered()) {
-            throw new LogicException('SettingsPages::register() must be called immediately after Kernel::boot()');
-        }
-
-        if (!is_subclass_of($component->class, SettingsPage::class)) {
-            throw new LogicException("settings page must extend SettingsPage: {$component->class}");
-        }
-
-        SettingsPages::registerPage($component->class);
-        (new PageRegistrar($component->class))->registerMenu();
+        SettingsPages::forKernel($kernel)->addPage($component->class);
     }
 }

@@ -8,12 +8,12 @@ final readonly class MigrationResult
 {
     /**
      * @param class-string<Model> $model
-     * @param 'current'|'migrated'|'pending' $action
+     * @param string $table ベアテーブル名(prefix なし)
      */
     public function __construct(
         public string $model,
         public string $table,
-        public string $action,
+        public MigrationAction $action,
         public string $schemaHash,
     ) {}
 }

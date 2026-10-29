@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schemas.wp.org/trunk/block.json",
+  "apiVersion": 3,
+  "name": "tmswp-fixture/notice",
+  "title": "Fixture Notice",
+  "category": "text",
+  "attributes": {
+    "message": {
+      "type": "string",
+      "default": "notice"
+    }
+  },
+  "render": "file:./render.php"
+}

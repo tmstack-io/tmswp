@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Unit;
+namespace SampleSite\Tests\Unit;
 
-use App\Form\ContactForm;
-use PHPUnit\Framework\TestCase;
+use SampleSite\Form\ContactForm;
+use TMSWP\Testing\UnitTestCase;
 
-final class ContactFormTest extends TestCase
+final class ContactFormTest extends UnitTestCase
 {
-    public function testCreateBuildsContactForm(): void
+    public function testFormHasContactFieldsAndConfirmScreen(): void
     {
         $form = ContactForm::create();
 
-        self::assertSame('contact', $form->id());
-        self::assertSame(['customer_name', 'email', 'message', 'attachment'], array_keys($form->fields()));
+        self::assertSame(['full_name', 'kana', 'email', 'message'], array_keys($form->fields()));
+        self::assertTrue($form->isConfirmEnabled());
     }
 }

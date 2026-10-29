@@ -14,8 +14,6 @@ use wpdb;
 
 final class Connection
 {
-    private const PLACEHOLDER_PATTERN = '/(?<!%)%(?:\d+\$)?[dfsi]/';
-
     public function __construct(
         private readonly wpdb $wpdb,
     ) {}
@@ -59,14 +57,24 @@ final class Connection
     }
 
     /**
+     * プレースホルダに値を当てはめた SQL を返す。
+     *
+     * `%` で始まる並びは `%d` `%f` `%s` `%i` のプレースホルダと、リテラルの `%` を表す `%%` だけを受け付ける。
+     * 値が無いときは wpdb::prepare() を通さず、`%%` を `%` に戻して返す。値があるときは、wpdb::prepare()が`%`を
+     * 置き換えたエスケープの文字列(`{` + 16進 + `}`)をremove_placeholder_escape()で`%`に戻して返す。
+     *
      * @param list<mixed> $bindings
      */
     public function prepare(string $sql, array $bindings = []): string
     {
-        $this->assertPlaceholderCount($sql, $bindings);
+        $count = self::placeholderCount($sql);
+
+        if ($count !== \count($bindings)) {
+            throw new InvalidQueryException("SQL placeholder count {$count} does not match bindings count " . \count($bindings));
+        }
 
         if ($bindings === []) {
-            return $sql;
+            return str_replace('%%', '%', $sql);
         }
 
         $prepared = $this->prepareWpdb($sql, $this->normalizeBindings($bindings));
@@ -75,7 +83,7 @@ final class Connection
             throw new QueryException('wpdb::prepare failed');
         }
 
-        return $prepared;
+        return $this->wpdb->remove_placeholder_escape($prepared);
     }
 
     /**
@@ -177,9 +185,9 @@ final class Connection
             throw new InvalidQueryException('Connection::insert requires at least one value');
         }
 
-        $table = $this->tableForWrite($table);
-        $formats = $this->formats($data);
-        $result = $this->wpdb->insert($table, $data, $formats);
+        $table = $this->tableName($table);
+        [$values, $formats] = $this->writeValues($data);
+        $result = $this->wpdb->insert($table, $values, $formats);
         $this->assertNoLastError("INSERT INTO {$table}");
 
         if ($result === false) {
@@ -200,8 +208,10 @@ final class Connection
         }
 
         $this->assertScalarWhere($where);
-        $table = $this->tableForWrite($table);
-        $result = $this->wpdb->update($table, $data, $where, $this->formats($data), $this->formats($where));
+        $table = $this->tableName($table);
+        [$values, $formats] = $this->writeValues($data);
+        [$whereValues, $whereFormats] = $this->writeValues($where);
+        $result = $this->wpdb->update($table, $values, $whereValues, $formats, $whereFormats);
         $this->assertNoLastError("UPDATE {$table}");
 
         if ($result === false) {
@@ -219,8 +229,9 @@ final class Connection
         }
 
         $this->assertScalarWhere($where);
-        $table = $this->tableForWrite($table);
-        $result = $this->wpdb->delete($table, $where, $this->formats($where));
+        $table = $this->tableName($table);
+        [$whereValues, $whereFormats] = $this->writeValues($where);
+        $result = $this->wpdb->delete($table, $whereValues, $whereFormats);
         $this->assertNoLastError("DELETE FROM {$table}");
 
         if ($result === false) {
@@ -241,19 +252,43 @@ final class Connection
     }
 
     /**
-     * @param list<mixed> $bindings
+     * SQL のプレースホルダを数える。`%` は直後の1文字と組にして左から読む。
+     *
+     * 番号付き(`%1$s`)・書式付き(`%5s`)・大文字(`%F`)のプレースホルダは拒否する。番号付きは、QueryBuilder が
+     * 断片ごとの値を1つのリストへつなぐため、番号が別の断片の値を指してしまう。
+     * `%%` の直後のプレースホルダも拒否する。wpdb::prepare() は `%%%s` の `%s` を引用符で囲まずに埋め込む。
      */
-    private function assertPlaceholderCount(string $sql, array $bindings): void
+    private static function placeholderCount(string $sql): int
     {
-        $count = preg_match_all(self::PLACEHOLDER_PATTERN, $sql);
-
-        if ($count === false) {
+        if (preg_match_all('/%(.?)/s', $sql, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE) === false) {
             throw new InvalidQueryException('failed to parse SQL placeholders');
         }
 
-        if ($count !== \count($bindings)) {
-            throw new InvalidQueryException("SQL placeholder count {$count} does not match bindings count " . \count($bindings));
+        $count = 0;
+        $literalPercentEnd = null;
+
+        foreach ($matches as $match) {
+            [$sequence, $offset] = $match[0];
+            $type = $match[1][0];
+
+            if ($type === '%') {
+                $literalPercentEnd = $offset + 2;
+
+                continue;
+            }
+
+            if (!\in_array($type, ['d', 'f', 's', 'i'], true)) {
+                throw new InvalidQueryException("unsupported percent sequence '{$sequence}' in SQL; use %d, %f, %s, %i, or %% for a literal percent");
+            }
+
+            if ($offset === $literalPercentEnd) {
+                throw new InvalidQueryException('a placeholder must not directly follow %%');
+            }
+
+            ++$count;
         }
+
+        return $count;
     }
 
     /**
@@ -328,6 +363,9 @@ final class Connection
     }
 
     /**
+     * スタブの wpdb::prepare() は $query に literal-string を要求するが、prefix 由来のテーブル名を含む SQL は
+     * literal-string にならないため、リフレクションで呼ぶ。
+     *
      * @param list<int|float|string> $bindings
      */
     private function prepareWpdb(string $sql, array $bindings): mixed
@@ -358,20 +396,33 @@ final class Connection
     }
 
     /**
+     * wpdb の insert/update/delete に渡す値を R3 で正規化し、format を導出する。null は wpdb が SQL の NULL
+     * (where では IS NULL)にするため、そのまま渡す(format は wpdb が無視する)。
+     *
      * @param array<string, mixed> $values
      *
-     * @return list<string>
+     * @return array{0: array<string, int|float|string|null>, 1: list<string>}
      */
-    private function formats(array $values): array
+    private function writeValues(array $values): array
     {
+        $normalized = [];
         $formats = [];
 
         foreach ($values as $column => $value) {
             Identifier::simple($column);
-            $formats[] = $value === null ? '%s' : self::placeholderFor($value);
+
+            if ($value === null) {
+                $normalized[$column] = null;
+                $formats[] = '%s';
+
+                continue;
+            }
+
+            $normalized[$column] = self::normalizeValue($value);
+            $formats[] = self::placeholderFor($value);
         }
 
-        return $formats;
+        return [$normalized, $formats];
     }
 
     /** @param array<string, mixed> $where */
@@ -384,10 +435,5 @@ final class Connection
                 throw new InvalidQueryException('Connection where values cannot be arrays');
             }
         }
-    }
-
-    private function tableForWrite(string $table): string
-    {
-        return preg_match('/^[a-z][a-z0-9_]*$/', $table) === 1 ? $this->tableName($table) : Identifier::table($table);
     }
 }
