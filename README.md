@@ -75,7 +75,7 @@ wp-envは、`npm ci`で入れたローカルの`@wordpress/env`を`composer wp:s
 ## 文書
 
 - [docs/README.md](./docs/README.md): 設計書(`docs/00〜11`)の地図と読む順番
-- [docs/12-implementation-plan.md](./docs/12-implementation-plan.md): v0.1.0〜v0.9.0のロードマップ
+- [docs/12-implementation-plan.md](./docs/12-implementation-plan.md): v0.1.0〜v1.0.0のロードマップ
 - [docs/acceptance/](./docs/acceptance/): 各版の受け入れ記録
 - [docs/RELEASING.md](./docs/RELEASING.md): リリースの手順
 - [CHANGELOG.md](./CHANGELOG.md): 変更履歴

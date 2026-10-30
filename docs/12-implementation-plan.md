@@ -1,8 +1,8 @@
-# 12. ロードマップ(v0.1.0〜v0.9.0) — TMStack WordPress Framework
+# 12. ロードマップ(v0.1.0〜v1.0.0) — TMStack WordPress Framework
 
 ## 目的
 
-本書は、TMStack WordPress Framework(以下 TMSWP)を v0.1.0 から v0.9.0 まで版ごとに整備していく計画を定める。本書が確定させるのは次のとおり。
+本書は、TMStack WordPress Framework(以下 TMSWP)を v0.1.0 から v0.9.0 まで版ごとに整備し、導入先での運用を経て v1.0.0 を出すまでの計画を定める。v0.1.0〜v0.9.0(§0〜§2)は完了済みで、v0.9.0 の後の計画は §3 にある。本書が確定させるのは次のとおり。
 
 - 版の構成と各版の目的・依存関係
 - 各版のタスク(対象ファイル領域・完了条件・検証コマンド)
@@ -243,14 +243,14 @@ TMSWP の主な利用形態は、1 サイト用のテーマ(必要に応じて�
 
 ## 1.17 導入できる版
 
-- 利用者のプロジェクトへの導入は、0.x 系の最後の版(本計画では v0.9.0)から行う。1.0.0 は導入先で安定運用を確認してから出す。
+- 利用者のプロジェクトへの導入は、v0.9.0(v0.9.0 までの計画の最後の版)から行う。1.0.0 は導入先で安定運用を確認してから出す。
 - 導入できる版の条件は次の 5 つ。
   1. 既知の critical / high の不具合がすべて解消している。
   2. 全マトリクスで `composer qa`(integration を含む)が通る。
   3. 実物の ACF Pro で確認済みである。
   4. 想定する用途の機能(フォーム、設定ページ、サムネイル、日本語対応、ACF、ブロック)が examples/sample-site で動く。
   5. unit と integration の合算の行カバレッジが 85% 以上である(§0.7)。
-- 本計画全体の完了条件は次の 3 つ。
+- v0.9.0 までの計画の完了条件は次の 3 つ。
   1. integration を含む `composer qa` がすべて通る。
   2. examples/sample-site が実際の WordPress 上で動く。
   3. 利用者のプロジェクトから `composer require` で導入できる。
@@ -1192,3 +1192,204 @@ v0.8.0
 5. 想定用途の機能(フォーム、設定ページ、サムネイル、日本語対応、ACF、ブロック)のE2EがCIのSample Site QAのジョブで通り、docs/00〜10の受け入れ基準と各版の受け入れ条件の網羅の対応表がdocs/acceptance/v0.9.0.mdにある。
 6. スターターから作ったプロジェクトの`composer qa`が1件以上のユニットテストを実行し、Packagist経由の`composer create-project`でスターターからプロジェクトを作れる。
 7. タグ`v0.9.0`は、リリースの前の検査を通したうえで、注釈付きのタグとしてそのタグだけがpushされている。mainへの反映はPR #1のマージで行い、同期先の8リポジトリは読み取り専用の設定(IssueとWikiが無効、説明文での案内、プルリクエストの自動のクローズ)になっている。
+
+---
+
+# 3. v0.9.0の後の計画(v0.9.x〜v1.0.0)
+
+v0.9.0から、利用者のプロジェクトへの導入を始めた(§1.17)。この章は、導入先での運用を経てv1.0.0を出すまでの計画を定める。§0の進め方は、次の§3.1で変える点を除いて、この章の版にも適用する。
+
+```
+v0.9.0 → v0.9.1 → v0.9.x(導入先から出た不具合の修正) ─────────────────────→ v1.0.0
+                    └→ v0.10.0(公開APIの追加・破壊的変更が要るときだけ) → v0.10.x ─┘
+```
+
+## 3.1 進め方
+
+- 版の刻み(`01-architecture.md` §4.1):
+  - パッチの版(v0.9.1、v0.9.2…。v0.10.0を出した後はv0.10.1…)は、後方互換のある不具合の修正・文書の補い・依存の更新だけを出す。公開APIを足さず、壊さない。導入先から出た修正は、1件でもその都度小さく出してよい。
+  - 公開APIの追加(後方互換のある機能の追加)と破壊的変更は、MINORの版(v0.10.0)で出す。導入先で要ったときだけ出す。
+  - v0.9.2以降とv0.10.0も、着手の時にこの章に版の節(版の準備・各タスク・受け入れ確認)を足してから着手する。
+  - 版の上げ方とリリースの手順は、v0.9.0と同じである(`RELEASING.md`)。パッチの版では、版の最初のタスクで`Kernel::VERSION`を`X.Y.Z`に、tmswp/*の制約を`^X.Y.Z`に上げる(branch-aliasは`X.Y.x-dev`のまま)。packages/*/rules/・README.mdの設計文書へのリンク(`blob/vX.Y.Z/`)も、同じコミットでその版に上げる。
+- 作業は開発のブランチ(`rewrite/v0`)で行い、mainへの反映は、ユーザーの確認を経たPR(`rewrite/v0`→`main`)のマージで行う。§0.1の「`main`は初期のコミットだけを持ち」はv0.9.0までの記述である。
+- 各版の最初のタスク(版の準備)で、CHANGELOG.mdの`## Unreleased`の節を開き、§3.4の上流の事項に更新が出たかを確かめる。出ていれば、その版のタスクに足す。
+- CHANGELOG.mdは、§0.4の例外として、並列のタスクが別々の小見出しに書いてよい。後から着手したタスクが、先の変更に追記する。
+- 合算カバレッジの閾値は85%のまま下げない(§0.7)。
+- 版ごとの受け入れ記録を`docs/acceptance/vX.Y.Z.md`に書く(§0.3)。受け入れ記録と文書に、導入先の案件の名前・クライアントの名前を書かない(「導入先のプロジェクトA」等と書く)。
+- 導入先から出たTMSWPの不具合は、monorepoのGitHubのIssueに記録する。critical / high等の重さと、TMSWPが原因かどうかは、メンテナが判定してIssueに書く。
+- 新しい機能は、導入先で必要になったときに、§3.5の候補またはその要求から、v0.10.0のタスクとして足す。先回りして作らない(原則3)。
+- 新しく書く文書とコメントは、公開していないファイル(`.omc/`等)の決定の番号を参照しない。
+
+## 3.2 v0.9.1 — 導入の支え
+
+### 目的
+
+導入先が最初に詰まりやすい、本番へのデプロイの手順を1か所にまとめる。配布物(packages/*のsrc/・phpstan/・bin/とrules/)のコメント・文書から、利用者の手元に無い設計文書や、公開していない決定の番号への参照を除く。あわせて、v0.9.0から引き継いだ事項(`docs/acceptance/v0.9.0.md` 6章)のうち、自分たちで直せるもの(PHPStan 2.3、手元のテストの件数、スターターの`SimpleLogger`)を片付ける。
+
+### 依存する版
+
+v0.9.0。
+
+### タスク
+
+#### v0.9.1-T0: 版の準備
+
+- 対象ファイル領域: v0.9.0-T0bと同じ版の箇所(packages/core/src/Kernel/Kernel.php、packages/*・starters/*のcomposer.json、examples/sample-siteのcomposer.json・README.md、packages/*/README.mdの制約の記述、docs/01・02・08・10・11の版の例)、CHANGELOG.md、docs/acceptance/v0.9.1.md(新設。§3.4の確認の結果)、docs/12 §3.2(上流の更新が出ていた場合のタスクの追加)
+- 完了条件:
+  - `Kernel::VERSION`を`0.9.1`に、packages/*・starters/*・examples/sample-siteのtmswp/*の制約を`^0.9.1`に、sample-siteのpathリポジトリの`versions`を`0.9.1`に、文書の版の例を、1つのコミットで上げている(`RELEASING.md`)。branch-aliasは`0.9.x-dev`のままである。
+  - CHANGELOG.mdの先頭に`## Unreleased`の節を開いている。
+  - §3.4の上流の事項に更新が出たかを確かめ、結果を受け入れ記録に書いている。出ていれば、この節にタスクを足している。
+- 検証コマンド: `composer monorepo:validate`、`git grep -nE '0\.9\.0|\^0\.9([^.0-9]|$)' -- packages starters examples docs/0*.md docs/1[01]*.md`(残りが、版の例として意図して残すものだけである)、`composer qa`
+
+#### v0.9.1-T1: 本番へのデプロイのレシピ
+
+- 対象ファイル領域: packages/core/rules/deploy.md(新設)、packages/core/rules/model.md・blocks.md・acf.mdのデプロイの記述、packages/core/README.md(レシピの表)、starters/theme/AGENTS.md・starters/plugin/AGENTS.md(「最初に読むもの」の表とデプロイの記述)、docs/11-ai-docs.md(§1.4・§5の冒頭のレシピの数、§5.1の写し、§6.1の表、§6.2の共通フォーマット、§12.1の受け入れ基準)、tests/Unit/(docs/11の写しの照合のテスト)、CHANGELOG.md、docs/acceptance/v0.9.1.md(起動の確認の結果)
+- 完了条件:
+  - rules/deploy.mdが、FTPで本番へ上げる手順(§1.3)を1か所にまとめている。少なくとも次を含む。
+    1. 本番用の`vendor/`を`composer install --no-dev --optimize-autoloader`で作ること(`vendor/`はgitに入れないが、本番には上げる)。
+    2. 上げるもの(`vendor/`・探索結果ファイル・`build/blocks/`・acf-bridgeの生成物・`languages/`)と、上げないもの(`node_modules/`・`tests/`・開発の設定ファイル)。
+    3. 本番(debugが偽)は探索結果ファイルだけを読むため、上げる前に`composer discover:check`で最新であることを確かめること。
+    4. 同じサイトでTMSWPを使うテーマ・プラグインは、tmswp/*の版が完全に一致しないと起動しない(`01-architecture.md` §3.3の版の照合)。そのため、tmswp/*の版をそろえて一緒に上げること。上げる間は保守モードにすること。
+    5. 上げた後の`wp tmswp migrate`(Modelを使う場合)、OPcacheの扱い、ページキャッシュの消去。
+  - model.md・blocks.md・acf.md・スターターのAGENTS.mdのデプロイの記述は、deploy.mdを参照する形にし、同じ内容を重複させない(§1.18)。スターターのAGENTS.mdの「最初に読むもの」の表と、packages/core/README.mdのレシピの表に、deploy.mdの行がある。
+  - docs/11のcoreのレシピの数と一覧を、deploy.mdを含めて改めている。deploy.mdはコードの例を持たないため、§6.2の共通フォーマットの「完全な実装例」の節を省いてよい旨を、§6.2に書いている。
+  - docs/11 §4とAGENTS.md、§5.1とstarters/theme/AGENTS.mdが一致することを確かめるユニットテストを足している。
+  - スターターから作ったテーマで、deploy.mdの手順のとおりに`--no-dev`の`vendor/`を作り、`WP_DEBUG`を無効にしたWordPressで起動できることを確かめ、受け入れ記録に書いている。WordPressは、`tools/lib/isolated-wp-env.sh`で隔離したwp-envを使う。
+- 検証コマンド: `php tools/extract-rules-code.php && php tools/verify-rules-code.php`、`composer test:unit`(docs/11の照合のテストを含む)、`tools/ci/create-starter-project.sh theme <ディレクトリ> <スラッグ> '<表示名>'`で作ったテーマでの手順の実行
+
+#### v0.9.1-T2: PHPStanを2.3に上げる
+
+- 対象ファイル領域: ルートのcomposer.json・composer.lock、tests/bootstrap-unit.php、docs/10 §1.1(composer.jsonの写し)・§4.4(tests/bootstrap-unit.phpの全文の写し)、PHPStanの更新で新しく出た指摘を直すためのsrc/・tests/の箇所、CHANGELOG.md(開発)
+- 完了条件:
+  - ルートのlockの`phpstan/phpstan`が2.3以上である。
+  - tests/bootstrap-unit.phpに、packages/core/tests/bootstrap.phpと同じ前処理(Patchworkより先にPHPStanのテストのコンテナを作る)を置いている(`docs/acceptance/v0.9.0.md` 5.5の10)。docs/10の写しも同じ内容にしている。
+  - `composer analyse`(level max・baselineなし)が通り、`@phpstan-ignore`を足していない(足す場合は理由のコメントと変更の説明がある)。
+- 検証コマンド: `composer analyse`、`composer test:unit`
+
+#### v0.9.1-T3: テストとスターターの残り
+
+- 対象ファイル領域: tests/Unit/RepositoryScanTest.phpと、アサーションの数の差の原因の箇所、starters/theme/tmswp-kernel.php・starters/plugin/tmswp-kernel.php、starters/*/tests/、starters/*/AGENTS.md(ログの出力先の記述)、docs/11(§5.1の写し、§8.1・§9.1のファイルの一覧、§8.4・§9.3のtmswp-kernel.phpの全文)、packages/core/rules/deploy.md(ログの出力先を変えた場合)、docs/12 §3.5(候補に移す場合)、docs/acceptance/v0.9.1.md、CHANGELOG.md
+- 完了条件:
+  - (a) `RepositoryScanTest::testNoTraceOfActionsConventionRemains`の走査をgitの追跡するファイルに限っている。`docs/acceptance/v0.9.0.md` 6章の8の残りの15件の原因も直している。PHP 8.3で、追跡外のファイルがある手元でも、ユニットテストのアサーションの数がCIと一致する。
+  - (b) スターターから作ったプロジェクトのユニットテストで、`tmswp-kernel.php`を`KernelConfig::load()`で読んだ構成の`logChannels`を呼んでも、`WP_CONTENT_DIR`が無いことで例外にならない(`docs/acceptance/v0.9.0.md` 5.5の11)。方法はスターターの構成の範囲で決め、黙って別の出力先に切り替える分岐は作らない。ログの出力先は、Webから読めるテーマ・プラグインのディレクトリの中にしない。公開APIの追加(`SimpleLogger`の新しい引数等)が要ると分かった場合は、このタスクでは行わず、§3.5の候補に移して受け入れ記録に書く。
+  - (b)を確かめる例のユニットテストを、スターターに置いている。
+- 検証コマンド: `composer test:unit`(手元とCIの件数の比較)、`tools/ci/create-starter-project.sh`で作ったテーマ・プラグインの`composer qa`
+
+#### v0.9.1-T4: 設計文書・決定の番号への参照の整理
+
+- 対象ファイル領域: packages/*/src/・packages/*/phpstan/・packages/*/bin/のコメント、packages/*/rules/の設計文書への参照(「発展」の節と本文)、packages/*/README.mdの設計文書への参照、docs/00〜11・docs/RELEASING.mdと、CHANGELOG.mdのUnreleasedの節の決定の番号(`D-xx`)の参照、docs/00 §4(DRに移す場合)、docs/11 §6.2(「発展」の節のリンクの書き方)、tests/Unit/RepositoryScanTest.php(参照が無いことを確かめるテスト)、docs/10(そのテストの説明が要る場合)
+- 完了条件:
+  - packages/*/src/・phpstan/・bin/のコメントに、設計文書(`docs/xx`・`xx-name.md`・`§x.y`)と決定の番号(`D-xx`)への参照が無い。参照を消した箇所は、参照が担っていた内容(エラー方針の扱い等)をコメントに書き、参照が無くても意味が通る。
+  - packages/*/rules/の設計文書への参照(「発展」の節と本文)とpackages/*/README.mdの設計文書への参照は、その版のタグのmonorepoのURL(`https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/...`)にしている。利用者が入れた版の設計文書を指すためで、版の準備で一緒に上げる(§3.1)。docs/11 §6.2に、このリンクの書き方を書いている。
+  - docs/00〜11・docs/RELEASING.mdと、CHANGELOG.mdのUnreleasedの節の決定の番号の参照は、内容をdocs/00 §4のDRに移すか、参照を消している(§1.18)。受け入れ記録(docs/acceptance/)、docs/12の§0〜§2、CHANGELOG.mdのリリース済みの版の節は、その時点の記録として変えない。
+  - packages/*/src/・phpstan/・bin/に設計文書・決定の番号への参照が無いことを確かめるユニットテストを足している。あわせて、packages/*/rules/・README.mdの`blob/vX.Y.Z/`の版が`Kernel::VERSION`と一致することも、同じテストで確かめる(版の準備でリンクを上げ忘れると失敗する)。packages/*/tests/は開発者だけが読み、配布物にも入らないため、対象にしない。
+- 検証コマンド: `composer test:unit`(参照の検査のテストを含む)、`composer lint`、`php tools/extract-rules-code.php && php tools/verify-rules-code.php`
+
+#### v0.9.1-T5: 受け入れ確認と記録
+
+- 対象ファイル領域: docs/acceptance/v0.9.1.md、CHANGELOG.md(見出し)
+- 完了条件:
+  - 受け入れ条件の確認の結果を`docs/acceptance/v0.9.1.md`に書いている。
+  - リリースの準備のコミットでCHANGELOGの見出しを`## v0.9.1 — 題名`に改め、ユーザーの確認を経てPRをマージし、`RELEASING.md`の手順でタグ`v0.9.1`を付けている。
+- 検証コマンド: CIの全ジョブ、`composer show tmswp/core --available`(Packagistに0.9.1が出る)
+
+### 並列化
+
+- 順序: T0 → {T1 ∥ T2} → T3 → T4 → T5
+- T1とT2は、CHANGELOG.md(§3.1の例外)のほか、文書のファイルは重ならない(T1はdocs/11を、T2はdocs/10を触る)。T1はtests/Unit/に照合のテストを足し、T2はPHPStanの指摘を直すためにtests/を触りうるため、T2を先にマージし、T1の新しいテストもPHPStan 2.3の`composer analyse`を通す。
+- T3は、starters/・docs/11・deploy.mdをT1と、tests/をT2と触るため、T1とT2の後にする。
+- T4は、rules/をT1と、RepositoryScanTest.phpをT3と、src/をT2・T3と触りうるため、T3の後にする。
+
+### 受け入れ条件
+
+1. rules/deploy.mdがあり、スターターから作ったテーマが、その手順で作った`--no-dev`の`vendor/`と`WP_DEBUG`を無効にしたWordPressで起動する。
+2. docs/11の写しとAGENTS.md・starters/theme/AGENTS.mdの一致を、ユニットテストが確かめている。
+3. ルートのPHPStanが2.3以上で、`composer analyse`が通る。
+4. PHP 8.3で、追跡外のファイルがある手元とCIで、ユニットテストのアサーションの数が一致する。
+5. スターターから作ったプロジェクトのユニットテストで、`WP_CONTENT_DIR`が無くても構成の`logChannels`を呼べる。または、公開APIの追加が要るため§3.5の候補に移したことが受け入れ記録にある。
+6. packages/*/src/・phpstan/・bin/に設計文書・決定の番号への参照が無く、それをユニットテストが確かめている。rules/・README.mdの設計文書への参照は、その版のタグのURLで、版の一致をユニットテストが確かめている。
+7. 合算カバレッジが85%以上である(§0.7)。
+8. タグ`v0.9.1`が`RELEASING.md`の手順で付き、Packagistに0.9.1が出ている。
+
+## 3.3 v1.0.0 — 安定版
+
+### 目的
+
+導入先での安定運用を確認して1.0.0を出す。以後はSemVerを厳密に守り、公開ライブラリとして後方互換を既定にする(`01-architecture.md` §4.1)。
+
+### 出す条件
+
+次の3つをすべて満たしたら、v1.0.0に着手する。
+
+1. TMSWPを使った導入先のプロジェクトが、1件以上本番で公開されている。
+2. 本番の公開から4週間、TMSWPが原因のcritical / highの不具合(§3.1のIssue)が出ていない。出た場合は、直した版を出してから4週間を数え直す。
+3. 導入先で必要になった変更が、すべてv0.9.x(v0.10.0を出した場合はv0.10.x)までに出ており、その後に公開APIを変えていない。
+
+### 依存する版
+
+v0.9.1と、その後に出したすべてのv0.9.x(v0.10.0を出した場合は、v0.10.0とその後のv0.10.x)。
+
+### タスク
+
+#### v1.0.0-T0: 出す条件の確認
+
+- 対象ファイル領域: なし(ファイルを変えない。結果はT3で受け入れ記録に書く)
+- 完了条件: 出す条件の3つを、根拠(公開日、§3.1のIssueの一覧、出した版の一覧)で確かめ、ユーザーの確認を経て、v1.0.0に着手すると決めている。
+- 検証コマンド: なし(根拠の確認)
+
+#### v1.0.0-T1: 版の準備
+
+- 対象ファイル領域: v0.9.1-T0と同じ版の箇所とpackages/*/rules/・README.mdの設計文書へのリンク(§3.1)、CHANGELOG.md、docs/acceptance/v1.0.0.md(新設。§3.4の確認の結果)
+- 完了条件:
+  - `Kernel::VERSION`を`1.0.0`に、tmswp/*の制約を`^1.0`に、branch-aliasを`1.0.x-dev`に、sample-siteの版を`1.0.0`に、packages/*/rules/・README.mdの設計文書へのリンクを`blob/v1.0.0/`に、1つのコミットで上げている(`RELEASING.md`)。これがv1.0.0の最初のコミットである。
+  - CHANGELOG.mdの先頭に`## Unreleased`の節を開き、§3.4の上流の事項を確かめている。
+- 検証コマンド: `composer monorepo:validate`、`composer qa`
+
+#### v1.0.0-T2: 1.0.0の後の互換性の規約
+
+- 対象ファイル領域: docs/01-architecture.md §4(版の規約)、docs/10 §6(「0.x期はマイナーで破壊的変更を許容する」の記述)、docs/RELEASING.md、AGENTS.md・docs/11-ai-docs.md §4(配布の説明と「変更の手順」。受け入れ記録の名前の`v0.x.y`の表記を`vX.Y.Z`に改める)、docs/12 §0.1(破壊的変更の扱い)・依存文書の受け入れ記録の名前の表記
+- 完了条件:
+  - 1.0.0の後の破壊的変更の扱い(非推奨の印の付け方、非推奨にしたものを残す期間、消すのはMAJORの版だけであること)を、docs/01 §4に定めている。0.xの間の「破壊的変更では旧名・deprecatedコメント・移行分岐を残さない」(§0.1)が1.0.0の後は当てはまらないことを、同じ変更で書いている。
+  - AGENTS.md・docs/11・docs/10の「0.xの間はマイナーで破壊的変更を許す」等の記述を、1.0.0の後の規約に合わせ、AGENTS.mdとdocs/11 §4を一致させている。
+- 検証コマンド: `composer test:unit`(v0.9.1-T1で足したdocs/11の照合のテストを含む)
+
+#### v1.0.0-T3: 受け入れ確認と記録
+
+- 対象ファイル領域: docs/acceptance/v1.0.0.md、CHANGELOG.md(見出し)
+- 完了条件: T0の出す条件の確認の結果(導入先の案件・クライアントの名前は書かない)と受け入れ条件の結果を受け入れ記録に書き、v0.9.1-T5と同じ手順で、ユーザーの確認を経てPRをマージし、タグ`v1.0.0`を付けている。
+- 検証コマンド: CIの全ジョブ、`composer show tmswp/core --available`(Packagistに1.0.0が出る)
+
+### 並列化
+
+- 順序: T0 → T1 → T2 → T3。T1はT0でv1.0.0に着手すると決めてから行う。
+
+### 受け入れ条件
+
+1. 出す条件の3つを満たし、その根拠が受け入れ記録にある。
+2. 1.0.0の後の互換性の規約がdocs/01 §4にあり、AGENTS.md・docs/10・docs/11がそれに合っている。
+3. 合算カバレッジが85%以上である(§0.7)。
+4. タグ`v1.0.0`が`RELEASING.md`の手順で付き、Packagistに1.0.0が出ている。
+
+## 3.4 上流の更新を待つ事項
+
+次の事項は、上流の更新が出るまで今の回避を続ける。各版の最初のタスクで更新が出たかを確かめ(§3.1)、出ていればその版のタスクに足す。
+
+| 事項 | 待つもの | 更新が出たらすること |
+|---|---|---|
+| WP-CLIのPHP 8.5の非推奨 | WP-CLIのPHP 8.5に対応した版(php-cli-toolsの`Colors.php`の修正) | 統合テストで`TMSWP\Testing\WpCliPharDeprecations`を使うのをやめる。クラスはtmswp/testingの公開APIのため、消すのはMINOR以降の版にする |
+| Patchworkのstream wrapperの不具合 | PR #225が取り込まれたPatchworkの版 | `UsesTempDirectories`とtests/Unit/のファイル操作の回避を見直す |
+| `npm audit`の残り(ルートのqs、sample-siteとstarters/themeの`@wordpress/scripts`経由のserialize-javascript等) | 上流の依存の更新 | 依存を更新し、`npm audit`を測り直す。overridesは足さない |
+
+次の事項は記録だけにして、対応しない(`docs/acceptance/v0.9.0.md` 6章)。
+
+- split.ymlの`concurrency`の待ちの順序。順が入れ替わっても、次の同期で直る。
+- プラグインのスターターの例のテストが、フックの追加を確かめない。利用者がフックを足したときに、例のテストを書き換える前提である。
+
+## 3.5 機能の候補
+
+次の機能は計画に入れない。導入先で必要になったときに、v0.10.0のタスクとして足す(§3.1、原則3)。
+
+| 候補 | 今の状態 | 出どころ |
+|---|---|---|
+| ページキャッシュのプラグイン(WP Super Cache等)への対応 | フォームのあるページを`nocache_headers()`と`DONOTCACHEPAGE`でキャッシュから外すだけ。キャッシュの消去との連携等は無い | §1.3 |
+| Modelのトランザクション・upsert・一括insert | Modelは不具合の修正だけを行う方針 | §1.14 |

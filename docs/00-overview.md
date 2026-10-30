@@ -298,7 +298,7 @@ InquiryModel::query()->where('email', $email)->orderByDesc('id')->limit(10)->get
 | 09 | `09-acf-bridge.md` | acf-json 真実源、コードジェネレータ、AcfMetaStorage、CI ドリフト検知、重複キーエラー | DR-06, 18 | 00, 02, 04 |
 | 10 | `10-quality.md` | PHPStan / php-cs-fixer / PHPUnit 2層 / wp-env / GitHub Actions / composer スクリプト体系 | DR-12 | 00, 01 |
 | 11 | `11-ai-docs.md` | AGENTS.md 仕様、rules/ レシピ体系、app/ スケルトン、starter-theme / starter-plugin | DR-13 | 00〜10(全文書の規約を参照する) |
-| 12 | `12-implementation-plan.md` | ロードマップ(v0.1.0〜v0.9.0 の版構成・タスク・完了条件・受け入れ条件・依存関係) | 全DR(実装順序への写像) | 00〜11(全文書を参照する) |
+| 12 | `12-implementation-plan.md` | ロードマップ(v0.1.0〜v1.0.0 の版構成・タスク・完了条件・受け入れ条件・依存関係) | 全DR(実装順序への写像) | 00〜11(全文書を参照する) |
 
 依存関係の要点:
 
