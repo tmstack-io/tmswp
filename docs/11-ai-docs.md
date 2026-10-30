@@ -652,7 +652,7 @@ starters/theme/
   "license": "GPL-2.0-or-later",
   "require": {
     "php": ">=8.3",
-    "tmswp/core": "^0.9.1"
+    "tmswp/core": "^0.10"
   },
   "require-dev": {
     "brain/monkey": "^2.6",

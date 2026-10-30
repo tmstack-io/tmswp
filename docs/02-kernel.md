@@ -253,7 +253,7 @@ use TMSWP\Core\Container\Container;
 final class Kernel
 {
     /** この tmswp/core の版。boot 時に installed.php の tmswp/core の版と照合する(§3.9)。版の最初のタスクで手で上げ、リリースの前の検査がタグの版との一致を確かめる */
-    public const string VERSION = '0.9.1';
+    public const string VERSION = '0.10.0';
 
     /** @var array<string, self> 正規化済みappNamespace => Kernel のグローバルレジストリ */
     private static array $kernels = [];

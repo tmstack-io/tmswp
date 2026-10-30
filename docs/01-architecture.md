@@ -270,7 +270,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
     "require-dev": {
         "mikey179/vfsstream": "^1.6.12",
         "phpstan/phpstan": "^2.1",
-        "tmswp/testing": "^0.9.1"
+        "tmswp/testing": "^0.10"
     },
     "autoload-dev": {
         "psr-4": {"TMSWP\\Core\\Tests\\": "tests/"}
@@ -280,7 +280,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
     },
     "extra": {
         "phpstan": {"includes": ["phpstan/extension.neon"]},
-        "branch-alias": {"dev-main": "0.9.x-dev"}
+        "branch-alias": {"dev-main": "0.10.x-dev"}
     },
     "minimum-stability": "stable",
     "config": {"sort-packages": true}
@@ -291,7 +291,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 
 - PSR-4 で `TMSWP\Core\PHPStan\` を先に書いても、composer は最長一致で解決するため `src/` 側と衝突しない。
 - PHPStan 拡張の設定ファイルは `phpstan/extension.neon` の 1 枚だけを置く(§3.4)。`extra.phpstan.includes` とルートの phpstan.neon.dist はどちらもこのファイルを直接指す。
-- `branch-alias`は`<major>.<minor>.x-dev`の形で、版の最初のタスクで`Kernel::VERSION`・制約と同じコミットで手で上げ、リリースの前の検査(§4.3)がタグの版との一致を確かめる。リリースの後に次の版へ自動で上げない。branch-aliasを持つのはpackages/*のcomposer.jsonだけで、スターターには無い。上の値は`Kernel::VERSION`が0.9.1の間のもので、`tmswp/core`・`tmswp/testing`の制約(`^0.9.1`)はこの版を満たす。
+- `branch-alias`は`<major>.<minor>.x-dev`の形で、版の最初のタスクで`Kernel::VERSION`・制約と同じコミットで手で上げ、リリースの前の検査(§4.3)がタグの版との一致を確かめる。リリースの後に次の版へ自動で上げない。branch-aliasを持つのはpackages/*のcomposer.jsonだけで、スターターには無い。上の値は`Kernel::VERSION`が0.10.0の間のもので、`tmswp/core`・`tmswp/testing`の制約(`^0.10`)はこの版を満たす。
 - `scripts.test`は、パッケージに置いた`phpunit.xml.dist`(`tests/Unit/`)を走らせる。coreの`phpunit.xml.dist`のbootstrap(`tests/bootstrap.php`)は、Brain MonkeyのPatchworkが`phar://`のストリームを差し替える前にPHPStanのテストのコンテナを作る(PHPStan 2.3のpharは、差し替えた後に初めて読み込むと、同じファイルを別のパスで二度読み込んでクラスの再宣言で止まるため)。
 - `files` オートロードは `src/functions.php` の 1 ファイルのみ(§6)。拡張パッケージがヘルパを持つ場合も同形式(各 1 ファイル)とする。
 - 拡張パッケージのcomposer.jsonは本形式から`require`に`"tmswp/core": "^X.Y"`を加え、`require-dev`を`"tmswp/testing": "^X.Y"`だけにし、psr-4・phpstanエントリを各自のものに差し替えた形とする(thumbnailのみ`"ext-gd": "*"`を追加)。`tmswp/testing`は`require`に`tmswp/core`・PHPUnit・Brain Monkey・Mockery・psr/logを持ち、`require-dev`を持たない。

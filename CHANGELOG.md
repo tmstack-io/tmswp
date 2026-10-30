@@ -3,6 +3,12 @@
 新しい版を上に書く。v0.1.0〜v0.8.0は実装計画(docs/12-implementation-plan.md)の版で、タグを付けて公開していない。各版の詳細は、docs/acceptance/の受け入れ記録にある。
 まだリリースしていない変更は、先頭のUnreleasedの節に書く。リリースの準備のコミットで、この節の見出しを手で`## vX.Y.Z — 題名`(下の各版の見出しと同じ形)に改める。
 
+## Unreleased
+
+### 変更
+
+- `Kernel::VERSION`を0.10.0にし、packages/*・starters/*・examples/sample-siteの`tmswp/*`の制約を`^0.9.1`から`^0.10`に、packages/*のbranch-aliasを`0.9.x-dev`から`0.10.x-dev`にした。利用側のcomposer.jsonの`tmswp/*`の制約は`^0.10`にする(0.xの間は`^0.9.1`が0.10.0を含まないため)。
+
 ## v0.9.1 — 導入の支え
 
 ### 追加
