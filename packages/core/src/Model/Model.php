@@ -93,16 +93,7 @@ abstract class Model
      */
     final public static function insert(array $data): int
     {
-        // DB の違い(MySQL はエラー、MariaDB は値を黙って捨てる)をなくすため、生成カラムへの書き込みは DB に送る前に拒否する
-        // 列名は大小文字を区別しないため、そろえて比べる
-        $keys = array_change_key_case($data);
-
-        foreach (self::definition()->generatedColumns() as $column) {
-            if (\array_key_exists(strtolower($column), $keys)) {
-                throw new InvalidQueryException("insert() cannot write to the generated column {$column}; the database computes its value");
-            }
-        }
-
+        self::assertNoGeneratedColumn($data, 'insert()');
         $connection = static::connection();
 
         if ($data === []) {
@@ -112,6 +103,22 @@ abstract class Model
         }
 
         return $connection->insert(static::bareTableName(), $data);
+    }
+
+    /**
+     * このテーブルへの upsert(INSERT … ON DUPLICATE KEY UPDATE。Connection::upsert())。戻り値は影響行数(1=挿入、2=更新、
+     * 0=変化なし)。insert_id は connection()->insertId() で読む(更新なら更新した行の ID)。
+     *
+     * @param array<string, mixed> $values 挿入する列 => 値
+     * @param non-empty-array<string, UpsertUpdate> $update 重複のときに更新する列。キーは $values にある列に限る
+     *
+     * @throws InvalidQueryException $values に生成カラムのキーがある場合と、Connection::upsert() が拒否する引数の場合
+     */
+    final public static function upsert(array $values, array $update): int
+    {
+        self::assertNoGeneratedColumn($values, 'upsert()');
+
+        return static::connection()->upsert(static::bareTableName(), $values, $update);
     }
 
     /**
@@ -203,6 +210,23 @@ abstract class Model
     private static function definition(): TableDefinition
     {
         return self::$definitionCache[static::class] ??= static::table();
+    }
+
+    /**
+     * $data のキーに生成カラムがあれば InvalidQueryException を投げる。DB の違い(MySQL はエラー、MariaDB は値を黙って
+     * 捨てる)をなくすため、生成カラムへの書き込みは DB に送る前に拒否する。列名は大小文字を区別しないため、そろえて比べる。
+     *
+     * @param array<string, mixed> $data
+     */
+    private static function assertNoGeneratedColumn(array $data, string $method): void
+    {
+        $keys = array_change_key_case($data);
+
+        foreach (self::definition()->generatedColumns() as $column) {
+            if (\array_key_exists(strtolower($column), $keys)) {
+                throw new InvalidQueryException("{$method} cannot write to the generated column {$column}; the database computes its value");
+            }
+        }
     }
 
     /**

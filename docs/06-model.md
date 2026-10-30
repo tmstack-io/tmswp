@@ -159,6 +159,7 @@ Model層が対応するDBは、**MySQL 8.4 LTS以上**と**MariaDB 10.11 LTS以�
 | upsertの影響行数と`insert_id` | 挿入: 1・新しいID、更新: 2・更新した行のID、変化なし: 0・0 | 同じ |
 
 - `DEFAULT CURRENT_TIMESTAMP`だけの列の`Extra`(MariaDBは空、MySQLは`DEFAULT_GENERATED`)と、通常の列とVIRTUALの生成カラムの`MODIFY`による入れ替え(MariaDBは1907、MySQLは3106で失敗)は、v0.10.0-T3で、上の4つの版の使い捨てのコンテナで確かめた。統合テスト`GeneratedColumnIntegrationTest`が、全DBのセルで確かめる。
+- upsertの影響行数と`insert_id`、`VALUES(col)`の警告1287(MySQLだけ)は、統合テスト`UpsertIntegrationTest`と`WpdbTestDoubleParityTest`が、全DBのセルで確かめる。更新になったupsertもAUTO_INCREMENTの値を1つ消費する(IDが飛ぶ)ことは、統合テスト`UpsertIntegrationTest`が全DBのセルで確かめる。
 
 - MySQLの文書は、`LOCK IN SHARE MODE`を後方互換のために残し、`NOWAIT`・`SKIP LOCKED`を`FOR UPDATE`・`FOR SHARE`にだけ付けられるとする(https://dev.mysql.com/doc/refman/9.7/en/innodb-locking-reads.html)。upsertの`VALUES()`は非推奨で、影響行数は挿入が1、更新が2、変化なしが0である(https://dev.mysql.com/doc/refman/9.7/en/insert-on-duplicate.html)。
 
@@ -337,7 +338,9 @@ INSERT INTO wp_t (k, cnt, note) VALUES (%s, %d, %s) ON DUPLICATE KEY UPDATE cnt 
 
 - `$values`の値はR3写像でプレースホルダにし、`null`は`NULL`と書いてバインドしない。
 - `$update`の各列は、`UpsertUpdate::Replace`なら`列 = {プレースホルダ}`、`UpsertUpdate::Increment`なら`列 = 列 + {プレースホルダ}`にし、`$values`のその列の値をもう一度バインドする。`null`の`Replace`は`列 = NULL`、`null`の`Increment`は`InvalidQueryException`。
-- `$update`が空、または`$update`のキーが`$values`に無い場合は`InvalidQueryException`。
+- `Increment`の値は、`int`か`float`に限る(`BackedEnum`を値に戻す前の型で判定する)。文字列(数字だけの文字列を含む)・`bool`・`BackedEnum`・`Stringable`・`DateTimeInterface`は`InvalidQueryException`。wpdbはstrictのsql_modeを外すため(R6)、`列 + '文字列'`は警告だけで数値に変わり、黙って誤った値になるからである。
+- `$update`が空、または`$update`のキーが`$values`に無い場合は`InvalidQueryException`。キーは、`$values`のキーと完全に一致するもの(大小文字を区別する)だけを受け付ける。
+- 列名はクォートしない(QueryBuilderと同じ。予約語はTableDefinitionが宣言の時点で拒否する)。
 - 戻り値は`execute()`と同じ影響行数(1=挿入、2=更新、0=変化なし。R6)。`insertId()`は、挿入なら新しいID、更新なら更新した行のID、変化なしなら0を返す。
 
 #### エッジケース

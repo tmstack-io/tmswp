@@ -11,6 +11,8 @@ use ReflectionMethod;
 use stdClass;
 use Stringable;
 use Throwable;
+use TMSWP\Core\Model\Connection;
+use TMSWP\Core\Model\UpsertUpdate;
 use TMSWP\Testing\IntegrationTestCase;
 use TMSWP\Testing\WpdbTestDouble;
 use wpdb;
@@ -243,6 +245,38 @@ final class WpdbTestDoubleParityTest extends IntegrationTestCase
     }
 
     /**
+     * upsert(実wpdbと代役のそれぞれをConnectionで包んで呼んだConnection::upsert())の戻り値・rows_affected・insert_idが
+     * 実wpdbと同じになる。挿入は1と新しいID、更新は2と更新した行のID、変化なし(同じ値の
+     * Replace・0のIncrement)は0と0。代役には、テストが宣言するのと同じく、影響する行の数とIDを入れる(影響行数0の
+     * ときはIDを入れない)。挿入を先にするのは、重複した挿入が自動採番の値を消費するか(innodb_autoinc_lock_mode)で
+     * 後の挿入のIDが変わらないようにするため。
+     */
+    public function testUpsertReturnsTheSameValuesAsRealWpdb(): void
+    {
+        $double = WpdbTestDouble::create();
+
+        foreach ([1, 1, 2, 0, 0, 2] as $rows) {
+            $double->queueAffectedRows($rows);
+        }
+
+        foreach ([1, 2, 1, 2] as $id) {
+            $double->queueInsertId($id);
+        }
+
+        $expected = [
+            'insertA' => [1, 1, 1],
+            'insertB' => [1, 1, 2],
+            'incrementA' => [2, 2, 1],
+            'replaceWithTheSameNull' => [0, 0, 0],
+            'incrementByZero' => [0, 0, 0],
+            'replaceB' => [2, 2, 2],
+        ];
+
+        self::assertSame($expected, self::upsertRows(self::wpdb()));
+        self::assertSame($expected, self::upsertRows($double));
+    }
+
+    /**
      * 同じインスタンスに操作の列を流したとき、各操作の戻り値と、その後の状態(rows_affected・insert_id・last_errorの
      * 有無)が実wpdbと同じになる。書き込みの後のDDL・読み取り・読み取りの失敗(rows_affectedは0)、0件と失敗の
      * INSERT・insert()(insert_idは0)、AUTO_INCREMENTの列の無いテーブルへのinsert()(insert_idは0)、get_var()の
@@ -466,6 +500,45 @@ final class WpdbTestDoubleParityTest extends IntegrationTestCase
         $result['drop'] = $db->query("DROP TABLE {$table}");
 
         return $result;
+    }
+
+    /**
+     * 一時のテーブル(AUTO_INCREMENTのidと、kの一意キー)を作り、$dbを包んだConnectionのupsert()を流して消す。それぞれの
+     * 戻り値と、rows_affected・insert_idを返す。テーブルはConnectionがベア名に$dbのprefixを付けて解決する。
+     *
+     * @return array<string, array{int, int, int}>
+     */
+    private static function upsertRows(wpdb $db): array
+    {
+        $bare = 'tmswp_parity_upserts';
+        $table = $db->prefix . $bare;
+        $connection = new Connection($db);
+        self::assertTrue($db->query("CREATE TABLE {$table} (id int unsigned NOT NULL AUTO_INCREMENT PRIMARY KEY, k varchar(20) NOT NULL, cnt int NOT NULL DEFAULT 0, note varchar(20) NULL, UNIQUE KEY k (k))"));
+        $result = [];
+        $result['insertA'] = self::upsertOutcome($db, $connection, $bare, ['k' => 'a', 'cnt' => 1, 'note' => null], ['cnt' => UpsertUpdate::Increment]);
+        $result['insertB'] = self::upsertOutcome($db, $connection, $bare, ['k' => 'b', 'cnt' => 1, 'note' => null], ['cnt' => UpsertUpdate::Increment]);
+        $result['incrementA'] = self::upsertOutcome($db, $connection, $bare, ['k' => 'a', 'cnt' => 2, 'note' => null], ['cnt' => UpsertUpdate::Increment]);
+        $result['replaceWithTheSameNull'] = self::upsertOutcome($db, $connection, $bare, ['k' => 'a', 'cnt' => 2, 'note' => null], ['note' => UpsertUpdate::Replace]);
+        $result['incrementByZero'] = self::upsertOutcome($db, $connection, $bare, ['k' => 'b', 'cnt' => 0, 'note' => null], ['cnt' => UpsertUpdate::Increment]);
+        $result['replaceB'] = self::upsertOutcome($db, $connection, $bare, ['k' => 'b', 'cnt' => 5, 'note' => 'x'], ['cnt' => UpsertUpdate::Replace, 'note' => UpsertUpdate::Replace]);
+        self::assertTrue($db->query("DROP TABLE {$table}"));
+
+        return $result;
+    }
+
+    /**
+     * $connectionのupsert()を実行し、その戻り値と、$dbのrows_affected・insert_idを返す。
+     *
+     * @param array<string, mixed> $values
+     * @param non-empty-array<string, UpsertUpdate> $update
+     *
+     * @return array{int, int, int}
+     */
+    private static function upsertOutcome(wpdb $db, Connection $connection, string $bare, array $values, array $update): array
+    {
+        $result = $connection->upsert($bare, $values, $update);
+
+        return [$result, (int) $db->rows_affected, (int) $db->insert_id];
     }
 
     /**

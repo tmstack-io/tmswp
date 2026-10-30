@@ -17,6 +17,7 @@ use TMSWP\Core\Model\MigrationStatus;
 use TMSWP\Core\Model\Migrator;
 use TMSWP\Core\Model\Model;
 use TMSWP\Core\Model\TableDefinition;
+use TMSWP\Core\Model\UpsertUpdate;
 use TMSWP\Core\Tests\Support\AccountsBaseModel;
 use TMSWP\Core\Tests\Support\AccountsChangedExpressionModel;
 use TMSWP\Core\Tests\Support\AccountsModel;
@@ -158,8 +159,9 @@ final class GeneratedColumnIntegrationTest extends IntegrationTestCase
     }
 
     /**
-     * 生成カラムへの書き込み(Model::insert()・update()・query()->update())は、DBに送る前にInvalidQueryExceptionになる
-     * (MariaDBはstrictでないsql_modeで値を黙って捨て、MySQLはエラー3105にするため、DBの違いが出ない)。
+     * 生成カラムへの書き込み(Model::insert()・update()・upsert()・query()->update())は、DBに送る前にInvalidQueryExceptionに
+     * なる(MariaDBはstrictでないsql_modeで値を黙って捨て、MySQLはエラー3105にするため、DBの違いが出ない)。列名の大小文字は
+     * 区別しない。生成カラムを書き込みの対象にしないupsertは通り、更新した行の生成カラムをDBが計算し直す。
      */
     public function testWritesToGeneratedColumnsThrowBeforeTheDatabase(): void
     {
@@ -170,6 +172,8 @@ final class GeneratedColumnIntegrationTest extends IntegrationTestCase
             static fn(): int => AccountsModel::update(['corp_admin_active_key' => 9], $id),
             static fn(): int => AccountsModel::update(['site_role_active_key' => 'office:1'], ['corp_admin_active_key' => 4]),
             static fn(): int => AccountsModel::query()->where('id', $id)->update(['corp_admin_active_key' => null]),
+            static fn(): int => AccountsModel::upsert(['id' => $id, 'corp_admin_active_key' => 4], ['corp_admin_active_key' => UpsertUpdate::Replace]),
+            static fn(): int => AccountsModel::upsert(['id' => $id, 'status' => 'active', 'Site_Role_Active_Key' => 'office:1'], ['status' => UpsertUpdate::Replace]),
         ];
 
         foreach ($writes as $index => $write) {
@@ -185,6 +189,9 @@ final class GeneratedColumnIntegrationTest extends IntegrationTestCase
         self::assertSame(['4', null], $this->activeKeys($id));
         // 条件の生成カラムは拒否しない
         self::assertSame(1, AccountsModel::update(['status' => 'expired'], ['corp_admin_active_key' => 4]));
+        self::assertSame([null, null], $this->activeKeys($id));
+        self::assertSame(2, AccountsModel::upsert(['id' => $id, 'account_type' => 'corp_admin', 'status' => 'active', 'corp_id' => 4], ['status' => UpsertUpdate::Replace]));
+        self::assertSame(['4', null], $this->activeKeys($id));
     }
 
     /**

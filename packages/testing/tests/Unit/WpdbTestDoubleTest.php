@@ -258,6 +258,34 @@ final class WpdbTestDoubleTest extends UnitTestCase
         $wpdb->query('REPLACE INTO wp_t (c) VALUES (1)');
     }
 
+    /**
+     * upsert(INSERT … ON DUPLICATE KEY UPDATE)は、INSERTとしてqueueAffectedRows()で入れた数を返す。影響した行の数が
+     * 1(挿入)・2(更新)ならinsert_idはqueueInsertId()で入れたID(更新では更新した行のID)、0(変化なし)なら0で、
+     * 入れたIDを使わない。
+     */
+    public function testUpsertTakesTheQueuedIdOnlyWhenRowsAreAffected(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $sql = "INSERT INTO wp_t (k, cnt) VALUES ('a', 1) ON DUPLICATE KEY UPDATE cnt = cnt + 1";
+
+        foreach ([1, 2, 0, 2] as $rows) {
+            $wpdb->queueAffectedRows($rows);
+        }
+
+        foreach ([5, 5, 6] as $id) {
+            $wpdb->queueInsertId($id);
+        }
+
+        $outcomes = [];
+
+        for ($i = 0; $i < 4; ++$i) {
+            $outcomes[] = [$wpdb->query($sql), $wpdb->rows_affected, $wpdb->insert_id];
+        }
+
+        self::assertSame([[1, 1, 5], [2, 2, 5], [0, 0, 0], [2, 2, 6]], $outcomes);
+        self::assertSame(array_fill(0, 4, $sql), $wpdb->queries());
+    }
+
     /** JtiStore::claim()と違う形のINSERT IGNOREと、prepare()の結果でないSQL(直前のprepare()と違うSQL)は例外にする。 */
     public function testInsertIgnoreOtherThanTheJtiClaimIsRejected(): void
     {

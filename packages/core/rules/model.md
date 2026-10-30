@@ -420,6 +420,7 @@ require_once __DIR__ . '/vendor/autoload.php';
 |---|---|
 | `find(int $id)` | 主キーで1行。無ければnull |
 | `insert(array $data)` | 1行を入れて`insert_id`を返す。`insert([])`は`INSERT INTO {t} () VALUES ()`(採番だけ) |
+| `upsert(array $values, array $update)` | 同じキーの行が無ければ挿入し、あれば`$update`の列を更新する。影響行数(1=挿入、2=更新、0=変化なし)を返す。下の「upsert」 |
 | `update(array $data, array\|int $where)` | 影響行数を返す |
 | `delete(array\|int $where)` | 影響行数を返す |
 | `count(array $where = [])` | 件数 |
@@ -654,6 +655,150 @@ try {
 6. 接続を文ごとに切り替えるdb.phpのドロップイン(HyperDB・LudicrousDB等)の環境では、`transaction()`を使えない(接続が替わったとして`QueryException`になる)。
 7. `WP_DEBUG_DISPLAY`が真の開発環境では、まれにエラー番号を読めず、デッドロック・ロック待ちの時間切れが素の`QueryException`になることがある。
 
+## upsert
+
+同じキーの行が無ければ挿入し、あれば更新するときは、`Model::upsert(array $values, array $update)`を使う。`$values`の主キーかUNIQUEの索引の列の値が既にある行と重複すると、DBは挿入の代わりに、その行の`$update`の列を更新する(`INSERT … ON DUPLICATE KEY UPDATE`)。読んでから書く(`find()`等で探して、無ければ`insert()`、あれば`update()`)と、2つの処理が同時に同じキーを挿入して重複のエラーになることがある。upsertは1つの文なので、そうならない。
+
+| `UpsertUpdate` | 重複したときの更新 |
+|---|---|
+| `Replace` | `列 = 挿入しようとした値` |
+| `Increment` | `列 = 列 + 挿入しようとした値` |
+
+視聴の進捗を保存する例。利用者と動画の組ごとに1行を持ち、再生位置を置き換え、視聴した秒数を累計に足す。
+
+`app/Model/WatchProgressModel.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Model;
+
+use TMSWP\Core\Attribute\AsModel;
+use TMSWP\Core\Model\Model;
+use TMSWP\Core\Model\TableDefinition;
+
+#[AsModel]
+final class WatchProgressModel extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return TableDefinition::create('watch_progress')
+            ->id()
+            ->bigint('user_id', unsigned: true)
+            ->bigint('video_id', unsigned: true)
+            ->int('position_seconds', unsigned: true)
+            ->int('watched_seconds', unsigned: true)
+            ->datetime('updated_at', default: 'CURRENT_TIMESTAMP', onUpdateCurrentTimestamp: true)
+            // upsertの重複の判定に使うキー
+            ->unique(['user_id', 'video_id'], 'user_video');
+    }
+}
+```
+
+`app/Service/WatchProgressRecorder.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Service;
+
+use App\Model\WatchProgressModel;
+use TMSWP\Core\Model\UpsertUpdate;
+
+final class WatchProgressRecorder
+{
+    /**
+     * 再生位置を保存し、前回の保存から視聴した秒数を累計に足す。その利用者と動画の行が無ければ作る。
+     *
+     * @param int<0, max> $position 再生位置の秒数
+     * @param int<0, max> $watchedSeconds 前回の保存から視聴した秒数
+     */
+    public static function save(int $userId, int $videoId, int $position, int $watchedSeconds): void
+    {
+        // INSERT INTO wp_watch_progress (user_id, video_id, position_seconds, watched_seconds) VALUES (%d, %d, %d, %d)
+        // ON DUPLICATE KEY UPDATE position_seconds = %d, watched_seconds = watched_seconds + %d
+        WatchProgressModel::upsert(
+            ['user_id' => $userId, 'video_id' => $videoId, 'position_seconds' => $position, 'watched_seconds' => $watchedSeconds],
+            ['position_seconds' => UpsertUpdate::Replace, 'watched_seconds' => UpsertUpdate::Increment],
+        );
+    }
+}
+```
+
+APIの利用回数を、APIキーと日ごとに数える例。その日の最初の利用かどうかを、戻り値(1=挿入)で知る。
+
+`app/Model/ApiUsageModel.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Model;
+
+use TMSWP\Core\Attribute\AsModel;
+use TMSWP\Core\Model\Model;
+use TMSWP\Core\Model\TableDefinition;
+
+#[AsModel]
+final class ApiUsageModel extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return TableDefinition::create('api_usage')
+            ->id()
+            ->string('api_key', 64)
+            ->rawColumn('usage_date', 'date NOT NULL')
+            ->int('calls', unsigned: true)
+            ->unique(['api_key', 'usage_date'], 'key_date');
+    }
+}
+```
+
+`app/Service/ApiUsageCounter.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Service;
+
+use App\Model\ApiUsageModel;
+use DateTimeImmutable;
+use TMSWP\Core\Model\UpsertUpdate;
+
+final class ApiUsageCounter
+{
+    /** APIキーの$nowの日の利用回数に1を足す。その日の最初の利用(行を作った)ならtrue。 */
+    public static function record(string $apiKey, DateTimeImmutable $now): bool
+    {
+        // INSERT INTO wp_api_usage (api_key, usage_date, calls) VALUES (%s, %s, %d) ON DUPLICATE KEY UPDATE calls = calls + %d
+        $rows = ApiUsageModel::upsert(
+            ['api_key' => $apiKey, 'usage_date' => $now->format('Y-m-d'), 'calls' => 1],
+            ['calls' => UpsertUpdate::Increment],
+        );
+
+        return $rows === 1;
+    }
+}
+```
+
+- 出すSQLは`INSERT INTO {t} ({$valuesの列}) VALUES ({プレースホルダ}) ON DUPLICATE KEY UPDATE {列} = {プレースホルダ}, {列} = {列} + {プレースホルダ}`で、`$update`の各列に、`$values`のその列の値をもう一度バインドする。値のプレースホルダと前処理は`insert()`と同じ(上の「値の渡し方」)。
+- `VALUES(列)`(MySQLで非推奨。MySQL 8.4・9.7で警告1287)と行の別名(`VALUES (…) AS n … n.列`。MariaDBで構文の誤り)は出さない。DBの種類でSQLを変えない。
+- `$update`のキーは`$values`にある列(キーの文字列が大小文字まで同じもの)に限る。`$update`が空、`$update`のキーが`$values`に無い、不正な列名は`InvalidQueryException`。挿入だけで更新しないなら`insert()`を使う。
+- `$values`のnullはSQLの`NULL`になる。nullの`Replace`は`列 = NULL`、nullの`Increment`は`InvalidQueryException`。
+- `Increment`の値は`int`か`float`だけ。文字列(`'3'`のような数字だけの文字列を含む)・`bool`・backed enum・`Stringable`・`DateTimeInterface`は`InvalidQueryException`。WordPressの接続(strictでないsql_mode)では、`列 + '文字列'`が警告だけで数値に変わり、黙って誤った値になるためである。フォームの入力等の文字列は、数として検証してから(例: `filter_var($value, FILTER_VALIDATE_INT)`が`false`でないことを確かめてから)、その結果のintを渡す。`(int)`での変換は、`'abc'`を0にするため使わない。
+- 戻り値は影響行数で、挿入が1、更新が2、値の変わらない更新(同じ値の`Replace`、0の`Increment`)が0。`Model::connection()->insertId()`は、挿入なら新しいID、更新なら更新した行のID、変化なしなら0を返す。
+- 重複は、主キーとすべてのUNIQUEの索引で判定する。重複の判定に使うUNIQUEの索引は1つにし、`$values`に`id`を入れない。UNIQUEの索引が2つ以上あると、どの索引で重複したかで更新する行が変わる。
+- 生成カラムを`$values`に入れると、`Model::upsert()`は`InvalidQueryException`にする(列名の大小文字を問わない)。`Model::connection()->upsert('ベア名', $values, $update)`はテーブルの定義を持たないため、検査しない(MariaDBは値を黙って捨てる)。生成カラムを持つテーブルには`Model::upsert()`で書く。
+- 更新になったupsertも、AUTO_INCREMENTの値を1つ消費する(どのDBでも同じ)。頻繁にupsertするテーブルのIDは飛び飛びになるため、IDの連番を前提にしない。
+- トランザクションの中でも使える。`ON UPDATE CURRENT_TIMESTAMP`の列は、upsertが行の値を変えたときにDBが更新する。
+
 ## 既存の固定ページで独自テーブルの詳細を出す
 
 固定ページ`catalog-detail`を器にして、`/catalog-detail/?record=123`で独自テーブルの1行を出す場合、WordPressのメインクエリは固定ページを見つけるため、`record`の行が無くても404にならない(200で空のページになる)。次のどちらかにする。
@@ -846,6 +991,53 @@ final class StockReservationTest extends UnitTestCase
 }
 ```
 
+`upsert()`を使うコードも、`WpdbTestDouble`でテストできる。代役は`INSERT … ON DUPLICATE KEY UPDATE`を`INSERT`として受け付け、実行したSQLを`queries()`に残す。行を持たないため、upsertの前に、影響行数(1=挿入、2=更新、0=変化なし)を`queueAffectedRows()`で入れ、影響行数が1か2なら`insert_id`(挿入なら新しいID、更新なら更新した行のID)を`queueInsertId()`で入れる。影響行数が0なら、実際のwpdbと同じく`insert_id`は0になり、`queueInsertId()`は要らない。
+
+`tests/Unit/Service/ApiUsageCounterTest.php`(上の「upsert」の`app/Service/ApiUsageCounter.php`のテスト):
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Unit\Service;
+
+use App\Service\ApiUsageCounter;
+use DateTimeImmutable;
+use TMSWP\Core\Model\Connection;
+use TMSWP\Core\Model\Model;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
+
+final class ApiUsageCounterTest extends UnitTestCase
+{
+    protected function tearDown(): void
+    {
+        Model::useConnection(null);
+        parent::tearDown();
+    }
+
+    public function testRecordIncrementsTheCallsAndTellsTheFirstCallOfTheDay(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        Model::useConnection(new Connection($wpdb));
+        // 代役は行を持たないため、影響行数(1=挿入、2=更新)と、そのときのinsert_idをテストが決める
+        $wpdb->queueAffectedRows(1);
+        $wpdb->queueInsertId(1);
+        $wpdb->queueAffectedRows(2);
+        $wpdb->queueInsertId(1);
+        $now = new DateTimeImmutable('2026-10-30 12:00:00');
+
+        self::assertTrue(ApiUsageCounter::record('key-1', $now));
+        self::assertFalse(ApiUsageCounter::record('key-1', $now));
+        self::assertSame(
+            "INSERT INTO wp_api_usage (api_key, usage_date, calls) VALUES ('key-1', '2026-10-30', 1) ON DUPLICATE KEY UPDATE calls = calls + 1",
+            $wpdb->queries()[1],
+        );
+    }
+}
+```
+
 ## してはいけないこと
 
 - `$wpdb->query()`等を直接呼ばない。`Model::connection()->wpdb()`は、FWで書けない処理の最終手段にする。
@@ -853,7 +1045,8 @@ final class StockReservationTest extends UnitTestCase
 - `register_activation_hook`・`after_switch_theme`・`init`・`admin_init`等でマイグレーションを実行しない。`Migrator::migrateAll()`を自分で呼ばない。
 - raw断片に変数をつながない。値をSQLの文字列に埋め込まない。
 - 予約語の列名、`rawColumn()`の`json`の型を使わない。
-- 生成カラムに`Model::connection()`の`insert()`・`update()`・`execute()`で書き込まない(MariaDBは値を黙って捨てる)。
+- 生成カラムに`Model::connection()`の`insert()`・`update()`・`upsert()`・`execute()`で書き込まない(MariaDBは値を黙って捨てる)。
+- upsertを`execute()`のSQLの文字列で書かない。`VALUES(列)`を使わない(MySQLで非推奨)。`Model::upsert()`を使う。
 - 行の値をModelのプロパティに持たせない。DTOは`rowClass()`か`as()`で指定する。
 - 全行の更新・削除を`whereRaw('1 = 1')`以外の方法で書かない。
 - トランザクションを`$wpdb->query('START TRANSACTION')`等で直接操作しない。`Model::connection()->transaction()`を使う。

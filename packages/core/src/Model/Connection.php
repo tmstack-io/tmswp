@@ -279,6 +279,83 @@ final class Connection
     }
 
     /**
+     * INSERT … ON DUPLICATE KEY UPDATEを実行し、影響行数(1=挿入、2=更新、0=変化なし)を返す。insert_idはinsertId()で
+     * 読む(挿入なら新しいID、更新なら更新した行のID、変化なしなら0)。
+     *
+     * 更新の句には、挿入する値をもう一度バインドする(`cnt = cnt + %d`)。`VALUES(col)`はMySQLで非推奨(警告1287)、
+     * 行の別名(`VALUES (...) AS n`)はMariaDBで構文の誤りのため、どちらも使わない。$valuesのnullはSQLの`NULL`と書き、
+     * バインドしない。nullのReplaceは`列 = NULL`にする。Incrementの値はintかfloatに限る。テーブルの定義を持たないため、生成カラムへの書き込みは検査しない
+     * (Model::upsert()が検査する)。
+     *
+     * @param array<string, mixed> $values 挿入する列 => 値
+     * @param non-empty-array<string, UpsertUpdate> $update 重複のときに更新する列。キーは$valuesにある列に限る
+     *
+     * @throws InvalidQueryException $updateが空、$updateのキーが$valuesに無い(キーは大小文字を区別して比べる)、Incrementの
+     *                               値がintでもfloatでもない(nullを含む)、不正な識別子・値の場合
+     */
+    public function upsert(string $table, array $values, array $update): int
+    {
+        if ($update === []) {
+            throw new InvalidQueryException('Connection::upsert requires at least one column to update');
+        }
+
+        $columns = [];
+        $placeholders = [];
+        $bindings = [];
+
+        foreach ($values as $column => $value) {
+            $columns[] = Identifier::simple($column);
+
+            if ($value === null) {
+                $placeholders[] = 'NULL';
+
+                continue;
+            }
+
+            $placeholders[] = self::placeholderFor($value);
+            $bindings[] = $value;
+        }
+
+        $assignments = [];
+
+        foreach ($update as $column => $mode) {
+            if (!\array_key_exists($column, $values)) {
+                throw new InvalidQueryException("Connection::upsert cannot update {$column}; the columns to update must be in the values (keys are compared case-sensitively)");
+            }
+
+            $value = $values[$column];
+
+            if ($value === null) {
+                if ($mode === UpsertUpdate::Increment) {
+                    throw new InvalidQueryException("Connection::upsert cannot increment {$column} by null");
+                }
+
+                $assignments[] = "{$column} = NULL";
+
+                continue;
+            }
+
+            // wpdbはstrictのsql_modeを外すため、`列 + '文字列'`は警告だけで数値に変わり、黙って誤った値になる。数として
+            // 足せる値(BackedEnumを値に戻す前のintとfloat)に限る
+            if ($mode === UpsertUpdate::Increment && !\is_int($value) && !\is_float($value)) {
+                throw new InvalidQueryException("Connection::upsert cannot increment {$column} by a non-numeric value");
+            }
+
+            $placeholder = self::placeholderFor($value);
+            $assignments[] = match ($mode) {
+                UpsertUpdate::Replace => "{$column} = {$placeholder}",
+                UpsertUpdate::Increment => "{$column} = {$column} + {$placeholder}",
+            };
+            $bindings[] = $value;
+        }
+
+        return $this->execute(
+            'INSERT INTO ' . $this->tableName($table) . ' (' . implode(', ', $columns) . ') VALUES (' . implode(', ', $placeholders) . ') ON DUPLICATE KEY UPDATE ' . implode(', ', $assignments),
+            $bindings,
+        );
+    }
+
+    /**
      * $callbackを1つのトランザクションで実行し、その戻り値を返す。
      *
      * $callbackが例外を投げればROLLBACKして、その例外をそのまま投げる(包まない)。正常に終わればCOMMITする。自動の

@@ -62,7 +62,9 @@ if (!class_exists(wpdb::class, false)) {
  *    SQLのコメント(`/*`・`--`・`#`)が含まれていれば、形を判定せずに例外にする。
  * 3. INSERT・UPDATE・DELETE・REPLACE。代役は行を持たないため、queueAffectedRows()で入れた、影響した行の数を返す。
  *    行を作ったINSERT・REPLACEのinsert_idは、queueInsertId()で入れたIDにする(AUTO_INCREMENTの列の無いテーブル
- *    では0を入れる)。入れていなければ例外にする。
+ *    では0を入れる)。入れていなければ例外にする。upsert(INSERT … ON DUPLICATE KEY UPDATE)もINSERTとして扱う。
+ *    実wpdbと同じく、影響した行の数が1(挿入)なら新しいID、2(更新)なら更新した行のIDを入れ、0(変化なし)なら
+ *    insert_idを0にして入れたIDを使わない。
  * 4. トランザクションの制御。`START TRANSACTION`・`COMMIT`・`ROLLBACK`と`SET SESSION innodb_lock_wait_timeout = N`
  *    (Nは10進の数字)を受け付け、実wpdbと同じく0を返す。トランザクションの実行中かどうかを状態に持ち(inTransaction()
  *    で確かめる)、実行中の`START TRANSACTION`は例外にする(実物は暗黙にコミットして新しいトランザクションを始めるが、
@@ -271,7 +273,8 @@ final class WpdbTestDouble extends wpdb
     /**
      * 次に行を作るINSERT・REPLACE(insert()と、query()で実行して1行以上を作るもの)のinsert_idを入れる。新しいIDか、
      * AUTO_INCREMENTの列の無いテーブルなら0になるかを代役は決められないため、テストが入れる。入れずに行を作ると
-     * 例外になる。0件や失敗のINSERT・REPLACEは、実wpdbと同じくinsert_idを0にし、入れたIDを使わない。
+     * 例外になる。0件や失敗のINSERT・REPLACEは、実wpdbと同じくinsert_idを0にし、入れたIDを使わない。upsertが
+     * 既にある行を更新した場合(影響した行の数が2)は、実wpdbと同じく更新した行のIDを入れる。
      */
     public function queueInsertId(int $id): void
     {
