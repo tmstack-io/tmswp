@@ -71,7 +71,8 @@ abstract class Model
      */
     final public static function query(): QueryBuilder
     {
-        $query = new QueryBuilder(static::connection(), static::bareTableName());
+        // 定義を渡し、update() に生成カラムへの代入を拒否させる
+        $query = new QueryBuilder(static::connection(), static::bareTableName(), null, self::definition());
         $rowClass = static::rowClass();
 
         return $rowClass === null ? $query : $query->as($rowClass);
@@ -87,9 +88,21 @@ abstract class Model
      * INSERT。戻り値は insert_id。$data が空なら 'INSERT INTO {t} () VALUES ()' を発行する(AUTO_INCREMENT の採番のみ)。
      *
      * @param array<string, mixed> $data
+     *
+     * @throws InvalidQueryException $data に生成カラムのキーがある場合
      */
     final public static function insert(array $data): int
     {
+        // DB の違い(MySQL はエラー、MariaDB は値を黙って捨てる)をなくすため、生成カラムへの書き込みは DB に送る前に拒否する
+        // 列名は大小文字を区別しないため、そろえて比べる
+        $keys = array_change_key_case($data);
+
+        foreach (self::definition()->generatedColumns() as $column) {
+            if (\array_key_exists(strtolower($column), $keys)) {
+                throw new InvalidQueryException("insert() cannot write to the generated column {$column}; the database computes its value");
+            }
+        }
+
         $connection = static::connection();
 
         if ($data === []) {
@@ -107,7 +120,8 @@ abstract class Model
      * @param array<string, mixed> $data
      * @param array<string, mixed>|int $where
      *
-     * @throws InvalidQueryException $where が空の配列・整数のキーを含む・配列の値を含む場合
+     * @throws InvalidQueryException $where が空の配列・整数のキーを含む・配列の値を含む場合と、$data に生成カラムのキーが
+     *                               ある場合(query() のビルダの update() が拒否する)。$where の生成カラムは条件なので拒否しない
      */
     final public static function update(array $data, array|int $where): int
     {

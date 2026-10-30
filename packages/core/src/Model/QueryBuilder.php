@@ -84,6 +84,7 @@ final class QueryBuilder
 
     /**
      * @param class-string|null $rowClass
+     * @param TableDefinition|null $definition テーブルの定義。渡すと update() が生成カラムへの代入を拒否する(Model::query() が渡す)
      *
      * @throws HydrationException $rowClass が存在しないクラスの場合
      * @throws InvalidQueryException $rowClass が Model のサブクラスの場合(as() と同じ検査)
@@ -92,6 +93,7 @@ final class QueryBuilder
         private readonly Connection $connection,
         private readonly string $table,
         ?string $rowClass = null,
+        private readonly ?TableDefinition $definition = null,
     ) {
         Identifier::bareTable($table);
         $this->rowClass = $rowClass === null ? null : self::rowClassOrFail($rowClass);
@@ -425,10 +427,25 @@ final class QueryBuilder
         return $this->connection->selectVar($query->sql, $query->bindings) !== null;
     }
 
-    /** @param array<string, mixed> $values */
+    /**
+     * @param array<string, mixed> $values
+     *
+     * @throws InvalidQueryException テーブルの定義を渡して作ったビルダで、生成カラムに代入する場合(ほかの誤用と同じ)
+     */
     public function update(array $values): int
     {
         $this->assertWritableQuery($values);
+
+        // DB の違い(MySQL はエラー、MariaDB は値を黙って捨てる)をなくすため、生成カラムへの代入は DB に送る前に拒否する
+        // 列名は大小文字を区別しないため、そろえて比べる
+        $keys = array_change_key_case($values);
+
+        foreach ($this->definition?->generatedColumns() ?? [] as $column) {
+            if (\array_key_exists(strtolower($column), $keys)) {
+                throw new InvalidQueryException("update() cannot assign the generated column {$column}; the database computes its value");
+            }
+        }
+
         $assignments = [];
         $bindings = [];
 

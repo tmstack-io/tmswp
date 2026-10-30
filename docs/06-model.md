@@ -145,6 +145,7 @@ Model層が対応するDBは、**MySQL 8.4 LTS以上**と**MariaDB 10.11 LTS以�
 | `MODIFY`で生成カラムの式を変える(STORED・VIRTUAL) | できる | できる |
 | `MODIFY`でSTOREDとVIRTUALを入れ替える | 1907で失敗 | 3106で失敗 |
 | 通常の列 → STORED、STORED → 通常の列 | できる | できる |
+| 通常の列 → VIRTUAL、VIRTUAL → 通常の列 | 1907で失敗 | 3106で失敗 |
 | 定義が同じ`MODIFY`(STORED) | 全行を写す(表の作り直し) | 0行 |
 | `LOCK IN SHARE MODE` | 使える | 使える(警告なし) |
 | `FOR SHARE` | 構文の誤り | 使える |
@@ -157,7 +158,7 @@ Model層が対応するDBは、**MySQL 8.4 LTS以上**と**MariaDB 10.11 LTS以�
 | upsertの行の別名`VALUES (...) AS n … n.col` | 構文の誤り | 使える |
 | upsertの影響行数と`insert_id` | 挿入: 1・新しいID、更新: 2・更新した行のID、変化なし: 0・0 | 同じ |
 
-- `DEFAULT CURRENT_TIMESTAMP`だけの列の`Extra`(MariaDBは空、MySQLは`DEFAULT_GENERATED`)は、まだ確かめていない。v0.10.0-T3の統合テストで、全DBのセルについて確かめる。
+- `DEFAULT CURRENT_TIMESTAMP`だけの列の`Extra`(MariaDBは空、MySQLは`DEFAULT_GENERATED`)と、通常の列とVIRTUALの生成カラムの`MODIFY`による入れ替え(MariaDBは1907、MySQLは3106で失敗)は、v0.10.0-T3で、上の4つの版の使い捨てのコンテナで確かめた。統合テスト`GeneratedColumnIntegrationTest`が、全DBのセルで確かめる。
 
 - MySQLの文書は、`LOCK IN SHARE MODE`を後方互換のために残し、`NOWAIT`・`SKIP LOCKED`を`FOR UPDATE`・`FOR SHARE`にだけ付けられるとする(https://dev.mysql.com/doc/refman/9.7/en/innodb-locking-reads.html)。upsertの`VALUES()`は非推奨で、影響行数は挿入が1、更新が2、変化なしが0である(https://dev.mysql.com/doc/refman/9.7/en/insert-on-duplicate.html)。
 
@@ -438,7 +439,7 @@ final class TableDefinition
 
     /**
      * エスケープハッチ。$definitionは型以降の定義文字列(例: 'mediumint(9) NOT NULL')。R2と同じクォート文字禁止検査を行い、
-     * 前後の空白を除いて書く。DBが別の表記で記録する型の表記(下記エッジケース)と、生成カラムの構文(generated()を使う)はSchemaException
+     * 前後の空白を除いて書く。DBが別の表記で記録する型の表記(下記エッジケース)、コメント、生成カラムの構文(generated()を使う)はSchemaException
      */
     public function rawColumn(string $name, string $definition): self;
 
@@ -563,7 +564,8 @@ enum GeneratedColumnStorage: string
   - 種類: `id()`・`int()`・`bigint()`・`decimal()`・`bool()`・`foreignId()`は`number`、`string()`・`text()`・`json()`は`string`、`datetime()`は`temporal`。
 - `rawColumn()`は引用符を拒否するため、文字列の既定値を持てない。NULLの可否は定義に`NOT NULL`が無ければ許すとし、既定値は定義の最後の`DEFAULT`に続く1語(`NULL`ならnull)とする。種類は型の名前で決める(`tinyint`・`smallint`・`mediumint`・`int`・`bigint`・`decimal`・`float`・`double`は`number`、`date`・`datetime`・`timestamp`・`time`・`year`は`temporal`、それ以外は`string`)。
 - 主キーの列は、定義に`NOT NULL`が無くてもDBがNOT NULLにするため、NULLを許さない。
-- ON UPDATE(`columnOnUpdate()`): `datetime()`は`onUpdateCurrentTimestamp`が真なら`CURRENT_TIMESTAMP`、偽ならnull。`rawColumn()`は、定義の最後の`ON UPDATE (\S+)`に続く1語を持つ(既定値の読み方と同じ方法。例: `ON UPDATE CURRENT_TIMESTAMP(6)`なら`CURRENT_TIMESTAMP(6)`)。無ければnull。ほかの組込のメソッドはnull。rawColumnのON UPDATEを属性として読むため、rawColumnでON UPDATEを書いていた既存の定義も、§5の検証3を通る。
+- ON UPDATE(`columnOnUpdate()`): `datetime()`は`onUpdateCurrentTimestamp`が真なら`CURRENT_TIMESTAMP`、偽ならnull。`rawColumn()`は、定義の最後の、日時の関数のON UPDATE(`CURRENT_TIMESTAMP`・`LOCALTIMESTAMP`・`LOCALTIME`と、その括弧と精度の付いた形、`NOW(…)`。`NOW`は括弧が必須で、括弧の無い`now`と`nowx`等の別の語には当たらない)の値を持つ(例: `ON UPDATE CURRENT_TIMESTAMP(6)`なら`CURRENT_TIMESTAMP(6)`)。外部キーの参照の動作(`REFERENCES … ON UPDATE CASCADE`等)には当たらない。無ければnull。ほかの組込のメソッドはnull。rawColumnのON UPDATEを属性として読むため、rawColumnでON UPDATEを書いていた既存の定義も、§5の検証3を通る。
+- 日時の関数の同義語: `NOW()`・`LOCALTIMESTAMP`・`LOCALTIME`は`CURRENT_TIMESTAMP`の同義語で、DBはどれも`CURRENT_TIMESTAMP`(MariaDBは`current_timestamp()`)と記録する。§5の検証3は、既定値(`temporal`)とON UPDATEの比較で、これらを`CURRENT_TIMESTAMP`と同じとみなす(精度は保つ。`NOW(6)`は`CURRENT_TIMESTAMP(6)`と同じ。`NOW`は括弧が必須の関数のため、括弧の無い`now`は同じとみなさない)。`rawColumn('t', 'datetime NOT NULL DEFAULT NOW()')`等の定義も検証3を通る。v0.10.0-T3で、MariaDB 10.11.18・12.3.3、MySQL 8.4.13・9.7.4で確かめた。ただし、MariaDB 12.3.3は、`DEFAULT LOCALTIMESTAMP`を`localtimestamp()`(これも同じとみなす)、`DEFAULT LOCALTIME`を`curtime()`と記録し、`ON UPDATE LOCALTIMESTAMP`・`ON UPDATE LOCALTIME`を構文の誤り(1064)にする。`curtime()`は時刻だけの別の関数なので同じとみなさず、`DEFAULT LOCALTIME`の列はMariaDB 12.3で検証3の既定値の食い違いになる。利用側には`CURRENT_TIMESTAMP`か`NOW()`を書くよう案内する(rules/)。
 - 生成カラム(`generated()`)は、NULLを許し、既定値はnull、ON UPDATEはnullである。種類は`rawColumn()`と同じく型の名前で決める。DBも生成カラムを`Null`が`YES`・`Default`が`NULL`と返すため、§5の検証3で宣言と一致する。
 - `decimal()`の既定値は、SQLにそのまま書くため、10進の数の表記(`-?\d+(\.\d+)?`)だけを受け付ける。指数・空白・`+`の付いた表記は`SchemaException`。
 
@@ -626,9 +628,10 @@ CREATE TABLE {full_table_name} (
   - 精度の引数が1つの`float(p)`・`double(p)`(DBは`float`か`double`と記録する。`double(p)`はCREATEも失敗する): 精度24までは`float`、25〜53は`double`。精度と桁の2つの引数(`float(10,2)`)は収束するため受け付ける。
   - 表示幅の無い整数の型(`tinyint`・`smallint`・`mediumint`・`int`・`bigint`。`unsigned`付きを含む。MariaDBは表示幅付きで記録する): `tinyint(4)`・`smallint(6)`・`mediumint(9)`・`int(11)`・`bigint(20)`(`unsigned`はその後に付ける)。
   - `double precision`はDBが`double`と記録し、dbDeltaも先頭の語だけを比べるため受け付ける。
-  - これ以外の表記でもdbDeltaの差分が残る場合(引数の無い`decimal`・`char`、`timestamp(0)`、型の前のコメント等)は、§5の検証2が`MigrationException`にし、メッセージにdbDeltaの差分の文と、定義の型をDBが記録する表記に合わせる案内を含める。利用側が定義を直せば解消する、明示的な失敗である。
+  - これ以外の表記でもdbDeltaの差分が残る場合(引数の無い`decimal`・`char`、`timestamp(0)`等)は、§5の検証2が`MigrationException`にし、メッセージにdbDeltaの差分の文と、定義の型をDBが記録する表記に合わせる案内を含める。利用側が定義を直せば解消する、明示的な失敗である。
 - `charset()`より前、または`charset()`なしでの`collation()` → 宣言時に`SchemaException`(charset句はcharsetの指定時にだけcollationを出力するため、collationだけの指定は反映できない)。
 - `generated()`の後の通常の列の宣言、`generated()`の型・式の検証の違反、`rawColumn()`の生成カラムの構文 → 宣言時に`SchemaException`(上記「生成カラム」)。
+- `rawColumn()`の定義のコメント(`/*`・`*/`・`#`・`--`) → 宣言時に`SchemaException`。コメントの中に`AS (`等を書いて生成カラムの構文の判定をすり抜けることを防ぐため、生成カラムの構文の判定より先に拒否する。これまでコメントを書けたため、生成カラムの構文の拒否と同じく破壊的変更である。
 
 ---
 
@@ -1254,7 +1257,7 @@ final readonly class MigrationStatus
 - 検証3の既定値の比較は、列の種類(§2「列の属性」)ごとに、DBが返す表記の違いを除いて行う。どちらかが既定値なし(null)なら、両方が既定値なしのときだけ同じとする。
   - `number`: 10進の数として正規化して厳密に比べる。符号・整数部の先頭の0・小数部の末尾の0を除き、`-0`は`0`にする(`decimal(10,2)`の`DEFAULT 1`をDBは`1.00`と返すが、同じとする)。指数の表記(`e`/`E`、指数の符号`+`/`-`/なし、係数の小数)は、floatを使わず、係数の数字の並びと指数による小数点の位置の移動を文字列で扱い、指数の無い正規形にする。DBは`double`・`float`の大きな既定値を指数の表記で返す(`DEFAULT 100000000000000000000`を`1e20`と返す)ため、`1e20`と`100000000000000000000`、`1E-3`と`0.001`、`1e+20`と`1e20`、`1e0`と`1.00`は同じとする。値を丸めないため、`9007199254740992`と`9007199254740993`、`1e20`と`1e21`、`1.5e1`と`16`は別。10進の数として読めない値と、指数の絶対値が400を超える値は、そのまま比べる。`double`・`float`で表せない桁の既定値(例: `DEFAULT 100000000000000000001`)はDBが丸めて記録するため、食い違いとして検出される。定義の既定値を、DBが記録する値に合わせる(既定値の食い違いの例外は、手動のALTER TABLEに加えてこの直し方を案内する)。
   - `string`: そのまま厳密に比べる(`'001'`と`'1'`は別)。
-  - `temporal`: `CURRENT_TIMESTAMP`・`current_timestamp()`・`CURRENT_TIMESTAMP(n)`・`current_timestamp(n)`を、大小文字を無視して`CURRENT_TIMESTAMP`か`CURRENT_TIMESTAMP(n)`にそろえる。精度は保ち、精度の違うものは別とする。空の括弧と精度0は精度なしとする(3つのDBとも、`DEFAULT CURRENT_TIMESTAMP(0)`を精度なしと同じ`CURRENT_TIMESTAMP`・`current_timestamp()`として返す)。それ以外の値(日時の値)はそのまま比べる。
+  - `temporal`: `CURRENT_TIMESTAMP`・`current_timestamp()`・`CURRENT_TIMESTAMP(n)`・`current_timestamp(n)`と、同義語の`NOW()`・`LOCALTIMESTAMP`・`LOCALTIME`(括弧と精度の付いた形を含む。§2「列の属性」)を、大小文字を無視して`CURRENT_TIMESTAMP`か`CURRENT_TIMESTAMP(n)`にそろえる。精度は保ち、精度の違うものは別とする。空の括弧と精度0は精度なしとする(3つのDBとも、`DEFAULT CURRENT_TIMESTAMP(0)`を精度なしと同じ`CURRENT_TIMESTAMP`・`current_timestamp()`として返す)。それ以外の値(日時の値)はそのまま比べる。
   - 照合順序は、`utf8_`で始まる名前をDBが返す`utf8mb3_`にそろえて比べる。charsetだけを宣言した場合と、charsetを宣言しない場合(wpdbの既定)は、照合順序を比べない。
   - MySQL 8.0.44・MariaDB 10.11.18・12.3.3で、組込の全ての列の型・既定値・NULLの可否と、§2で受け付けるrawColumnの型の作成と再適用が検証3を通り、上記の未適用の変更(大きな整数・桁の多いDECIMALの既定値の変更、指数の表記の既定値の変更を含む)が検証3で失敗することと、指数の表記で返る同じ値の既定値が検証3を通ることを確かめた。
   - 組込の全ての列の型・既定値・NULLの可否と、§2で受け付けるrawColumnの型(型の別名や収束しない表記を拒否したときに案内する型を含む)の作成と再適用が検証1〜3を通ることは、統合テスト`MigratorColumnTypeIntegrationTest`で確かめる。このテストは、MySQL 8.4 LTS(8.4.13)・9.7 LTS(9.7.4)・MariaDB 12.3.3で通ることを確かめた。WordPressのテストライブラリはテストの中のCREATE TABLEを一時テーブルに書き換えるが、MySQLのSHOW TABLES・SHOW TABLE STATUSは一時テーブルを返さない(MariaDBは11.2から返す)。検証3はこれらで実際の構造を読むため、Migratorを使う統合テストは、tmswp/testingの`RealTables`(`IntegrationTestCase::useRealTables()`)で実際のテーブルを作る(10-quality.md §4.11)。CIでは、wp-envのMariaDBと、MySQL 8.4 LTS・9.7 LTS・MariaDB 10.11 LTSのジョブで走る(10-quality.md §5.1)。
@@ -1279,19 +1282,22 @@ final readonly class MigrationStatus
 4. 検証2・検証3を行う。
 
 - 3は式が変わっていなくても実行する(Migratorは前の式を持たない)。MySQLでは定義が同じ`MODIFY`は0行で終わるが、MariaDBでは表を作り直して全行を写す(R6)。大きなテーブルでは、ハッシュが変わった適用と`--force`の適用に時間がかかる。
-- 3は、DBの通常の列を定義で`generated()`にした場合にも`MODIFY`を出し、列を生成カラムに変える(R6の「通常の列 → STORED」。通常の列からVIRTUALへの変更は確かめていない。v0.10.0-T3で実測し、結果をこことR6の表に反映する)。
+- 3は、DBの通常の列を定義で`generated()`にした場合にも`MODIFY`を出す。STOREDなら列を生成カラムに変え、既にある行の値も計算する(R6の「通常の列 → STORED」)。VIRTUALにはできず、MariaDBは1907、MySQLは3106で失敗する(R6の「通常の列 → VIRTUAL」)。このときは下の`MigrationException`になる。
 - `MODIFY`の失敗(`execute()`の`QueryException`)は、テーブル名・列名とDBのエラーを含む`MigrationException`にする(元の例外をpreviousにする)。メッセージには次の案内を含める。
-  - STOREDとVIRTUALの入れ替えは`MODIFY`でできない(MariaDBは1907、MySQLは3106。R6)。手動で列を`DROP COLUMN`して`ADD COLUMN`し直す必要がある。
+  - STOREDとVIRTUALの入れ替えと、通常の列からVIRTUALへの変更は、`MODIFY`でできない(MariaDBは1907、MySQLは3106。R6)。手動で列を`DROP COLUMN`して`ADD COLUMN`し直す必要がある。
   - UNIQUEの索引を張った生成カラムで、新しい式の値が重複すると`Duplicate entry`で失敗する。データを直すか式を見直す。
 - 3で失敗したら、検証1〜3の失敗と同じく、そのテーブルのハッシュは更新しない。
 
 **照合(検証3)**: `existingColumns()`は`SHOW FULL COLUMNS`の`Extra`も読み、各列について次を宣言と比べる。食い違いは、手動の`ALTER TABLE`を案内する`unappliedChange`の`MigrationException`にする。案内には、DBに合わせて定義を改める直し方(DBにあるON UPDATEに合わせて`datetime(onUpdateCurrentTimestamp: true)`にする、DBの生成カラムに合わせて`generated()`にする)も含める。
 
+- 比べる順: 各列で、生成カラムかどうかを最初に比べ、次にNULLの可否・既定値・ON UPDATEを比べる。生成カラムと通常の列の食い違いでは、NULLの可否や既定値も食い違う(生成カラムはNULLを許し、既定値を持たない)ため、先にNULLの可否等で失敗すると、原因(生成カラムかどうか)と違う案内になるからである。
 - 生成カラムかどうかと保存の方式: `Extra`を小文字にして`/\b(stored|virtual) generated\b/`で読む。当たらなければ通常の列とする。宣言(`columnGeneration()`)と比べ、通常の列と宣言したのにDBでは生成カラムである場合等は食い違いとする(dbDeltaは型が同じなら列を変えないため)。MySQLが既定値`CURRENT_TIMESTAMP`の列に付ける`DEFAULT_GENERATED`は、この正規表現に当たらない(`stored`・`virtual`と空白で続く`generated`だけを読む)ため、生成カラムと取り違えない。
-- ON UPDATE: `Extra`から`/\bon update (current_timestamp(\(\d*\))?)/i`で取り出し、既定値の`temporal`と同じ正規化(`CURRENT_TIMESTAMP`・`current_timestamp()`・`CURRENT_TIMESTAMP(n)`をそろえ、精度は保つ)をして、宣言(`columnOnUpdate()`)と比べる。当たらなければON UPDATEなしとする。MariaDBは`on update current_timestamp()`、MySQLは`DEFAULT_GENERATED on update CURRENT_TIMESTAMP`と返す(R6)。
+- ON UPDATE: `Extra`から`/\bon update (current_timestamp(\(\d*\))?)/i`で取り出し、既定値の`temporal`と同じ正規化(`CURRENT_TIMESTAMP`・`current_timestamp()`・`CURRENT_TIMESTAMP(n)`と同義語の`NOW()`等をそろえ、精度は保つ)をして、宣言(`columnOnUpdate()`)と比べる。当たらなければON UPDATEなしとする。MariaDBは`on update current_timestamp()`、MySQLは`DEFAULT_GENERATED on update CURRENT_TIMESTAMP`と返す(R6)。
 - 生成カラムのNULLの可否と既定値は、DBが`Null`を`YES`、`Default`を`NULL`と返し、宣言(NULLを許す・既定値なし)と一致する。型は、通常の列と同じく検証2(dbDeltaのdry-run)が比べる。
 
 **ON UPDATEの追加・削除**: テーブルの作成と列の追加では、列の行のまま`ON UPDATE CURRENT_TIMESTAMP`が付く。既にある列への追加・削除はdbDeltaが適用しないため(`CURRENT_TIMESTAMP`の既定値の追加と同じ扱い)、宣言を変えるとdry-runは変更ありを報告し、`wp tmswp migrate`は検証3で手動の`ALTER TABLE … MODIFY COLUMN`を案内して失敗する。
+
+**統合テスト**: `GeneratedColumnIntegrationTest`が、要望の定義(例7の2つの生成カラムとUNIQUEの索引)のテーブルで、Migratorのdry-run(`status()`)と適用(`migrateAll()`)をテストのプロセスで呼び、上の適用と照合、生成カラムへの書き込みの拒否、UNIQUEの索引の効き方、ON UPDATEの自動の更新と追加・削除の失敗を、全DBのセル(10-quality.md §5.1)で確かめる。`wp tmswp migrate`のコマンドとしての確認(`MigrateCommandIntegrationTest`)は、WP-CLIが開発用サイトのDBに接続するため、wp-envのMariaDBで行う。
 
 #### listen() の配線(確定)
 

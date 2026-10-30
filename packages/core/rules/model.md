@@ -158,9 +158,10 @@ CatalogItemModel::delete($id);
 | `bigint($name, $nullable = false, $default = null, $unsigned = false)` | `bigint(20)`(`unsigned`) | 許さない | |
 | `decimal($name, $precision = 10, $scale = 2, $nullable = false, $default = null, $unsigned = false)` | `decimal($precision,$scale)` | 許さない | 既定値は10進の数の文字列(`'0.00'`)。指数・空白・`+`は`SchemaException` |
 | `bool($name, $default = false)` | `tinyint(1) NOT NULL DEFAULT 0/1` | 許さない | 3値が要るなら`int(nullable: true)` |
-| `datetime($name, $nullable = false, $default = null)` | `datetime` | 許さない | 既定値`'CURRENT_TIMESTAMP'`だけが引用符なしで出る |
+| `datetime($name, $nullable = false, $default = null, $onUpdateCurrentTimestamp = false)` | `datetime` | 許さない | 既定値`'CURRENT_TIMESTAMP'`だけが引用符なしで出る。`$onUpdateCurrentTimestamp`は下の「ON UPDATE CURRENT_TIMESTAMP」 |
 | `json($name, $nullable = true)` | `longtext` | 許す | JSONの型は使わない。値はアプリがencodeし、DTOの`array`の引数でdecodeする。索引を張れない |
 | `foreignId($name, $nullable = false)` | `bigint(20) unsigned`と同名の`KEY` | 許さない | 外部キー制約は作らない(dbDeltaが扱えない) |
+| `generated($name, $type, $expression, $storage)` | `$type AS ($expression) STORED`か`VIRTUAL` | 常に許す | 下の「生成カラム」 |
 | `rawColumn($name, $definition)` | 型以降の定義をそのまま | 定義に`NOT NULL`が無ければ許す | 下の「rawColumn」 |
 
 - キーは`primary(...$columns)`(`id()`を使わない場合。複合可)・`unique($columns, $name)`・`index($columns, $name)`で宣言する。キー名を省略すると列名を`_`でつないだ名前になる。
@@ -185,6 +186,9 @@ CatalogItemModel::delete($id);
 組込のメソッドで書けない型にだけ使う。`$definition`は型以降の定義(`'mediumint(9) NOT NULL'`)。前後の空白は除かれる。
 
 - 引用符(`'` `"` `` ` ``)と`;`を含められない。文字列の既定値を持つ列は`string()`等で宣言する。
+- コメント(`/*`・`*/`・`#`・`--`)と、生成カラムの構文(`AS (`・`GENERATED ALWAYS`)は`SchemaException`になる。生成カラムは`generated()`で宣言する(下の「生成カラム」)。
+- 既定値とON UPDATEの`NOW()`・`LOCALTIMESTAMP`・`LOCALTIME`は、`CURRENT_TIMESTAMP`と同じものとして扱われる(DBは`CURRENT_TIMESTAMP`と記録する)。ただし、MariaDB 12.3は`ON UPDATE LOCALTIMESTAMP`・`ON UPDATE LOCALTIME`を構文の誤りにし、`DEFAULT LOCALTIME`を時刻だけの`curtime()`と記録する(`wp tmswp migrate`が既定値の食い違いで止まる)。日時の関数は`CURRENT_TIMESTAMP`か`NOW()`で書く。
+- `ON UPDATE CURRENT_TIMESTAMP`は書ける。`datetime`の列なら`datetime(onUpdateCurrentTimestamp: true)`でも同じ行になる(下の「ON UPDATE CURRENT_TIMESTAMP」)。
 - DBが別の表記で記録する型の表記は、dbDeltaの差分が適用の後も残るため、宣言の時点で`SchemaException`になる。メッセージが案内する表記で書く。
 
 | 拒否する表記 | 使う表記 |
@@ -209,6 +213,115 @@ CatalogItemModel::delete($id);
 
 - `float(10,2)`のような精度と桁の2つの引数と、`double precision`は受け付ける。
 - これ以外の表記でもdbDeltaの差分が残る場合(引数の無い`decimal`・`char`、`timestamp(0)`等)は、`wp tmswp migrate`が`dbDelta left differences on table ...`の`MigrationException`になる。定義の型を、メッセージの差分の文に出るDBの表記に合わせる。
+
+### 生成カラム(generated())
+
+ほかの列の値からDBが計算する列。`generated($name, $type, $expression, $storage)`で宣言し、`{name} {type} AS ({expression}) STORED`(または`VIRTUAL`)の行になる。`GeneratedColumnStorage::Stored`は値を行に保存し、`GeneratedColumnStorage::Virtual`は読むときに計算する。生成カラムには索引を張れる。
+
+よく使うのは「アクティブな行だけで一意にする」形である。アクティブな行だけが値を持ち、非アクティブならNULLになる生成カラムを作り、それにUNIQUEの索引を張る。UNIQUEの索引はNULLを重複とみなさないため、アクティブな行どうしの重複だけをDBが拒否し、非アクティブな行は何行でも共存できる。
+
+`app/Model/AccountModel.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Model;
+
+use TMSWP\Core\Attribute\AsModel;
+use TMSWP\Core\Model\GeneratedColumnStorage;
+use TMSWP\Core\Model\Model;
+use TMSWP\Core\Model\TableDefinition;
+
+#[AsModel]
+final class AccountModel extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return TableDefinition::create('accounts')
+            ->id()
+            ->string('account_type', 20)
+            ->string('status', 20)
+            ->bigint('corp_id', nullable: true, unsigned: true)
+            ->datetime('created_at', default: 'CURRENT_TIMESTAMP')
+            ->datetime('updated_at', default: 'CURRENT_TIMESTAMP', onUpdateCurrentTimestamp: true)
+            // 生成カラムは通常の列の後にまとめて宣言する。会社の管理者のアクティブな行だけが、会社のIDを値に持つ
+            ->generated(
+                'corp_admin_active_key',
+                'bigint(20) unsigned',
+                "CASE WHEN account_type = 'corp_admin' AND status NOT IN ('expired','deleted') THEN corp_id ELSE NULL END",
+                GeneratedColumnStorage::Stored,
+            )
+            // 1つの会社にアクティブな管理者は1人だけ
+            ->unique('corp_admin_active_key', 'uq_corp_admin');
+    }
+}
+```
+
+`app/Service/CorpAdminAssignment.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Service;
+
+use App\Model\AccountModel;
+
+final class CorpAdminAssignment
+{
+    /**
+     * アカウントを会社の管理者としてアクティブにする。その会社にアクティブな管理者が既にいればfalse。
+     * 同時に別の処理が同じ会社の管理者をアクティブにした場合は、UNIQUEの索引の重複でQueryExceptionになる。
+     */
+    public static function activate(int $accountId, int $corpId): bool
+    {
+        // 生成カラムは条件に使える
+        if (AccountModel::count(['corp_admin_active_key' => $corpId]) > 0) {
+            return false;
+        }
+
+        // 生成カラムには書き込まない。account_type・status・corp_idを変えれば、DBが計算し直す
+        return AccountModel::update(['account_type' => 'corp_admin', 'status' => 'active', 'corp_id' => $corpId], $accountId) === 1;
+    }
+}
+```
+
+- 重複はDBの索引が拒否し、`Model::insert()`・`update()`は`QueryException`(メッセージに`Duplicate entry`)を投げる。非アクティブ(`expired`・`deleted`)の行をアクティブに戻すときも、同じ会社にアクティブな管理者がいれば拒否される。
+- `$type`は小文字の型(`bigint(20) unsigned`・`varchar(40)`等)で書く。大文字・`NOT NULL`等の属性を含む型と、`rawColumn()`で拒否する型の表記(型の別名・表示幅の無い整数等)は`SchemaException`。
+- 生成カラムは常にNULLを許す(MariaDBは生成カラムの`NOT NULL`を構文の誤りにする)。既定値は持てない。
+- 生成カラムは、通常の列をすべて宣言した後にまとめて宣言する。生成カラムの後に通常の列(`id()`を含む)を宣言すると`SchemaException`。主キーに生成カラムを含められない。
+- 式は文字列のリテラルで書く(PHPの変数をつなげない。PHPStanが検査する)。式の中に`'corp_admin'`のような文字列のリテラルを書ける(リテラルの中の`'`は`''`)。次は宣言の時点で`SchemaException`になる。
+  - 空の式、改行・タブ・ASCIIでない文字を含む式
+  - `;`・`` ` ``・`"`・`\`(リテラルの中でも)
+  - 閉じていない文字列のリテラル
+  - リテラルの外のコメント(`#`・`--`・`/*`・`*/`)
+  - 括弧の釣り合わない式(`AS (`…`)`の外に出る式)
+  - 語`DEFAULT`(大小文字を問わない。リテラルの中でも)
+- `%`(剰余)は書ける。式の中の列名・関数が正しいかは、`wp tmswp migrate`の適用でDBが確かめる(誤りは`MigrationException`)。
+- 生成カラムへの書き込みは、`Model::insert()`・`Model::update()`・`Model::query()->update()`が、DBに送る前に`InvalidQueryException`にする。MariaDBは、WordPressの接続(strictでないsql_mode)では生成カラムへの書き込みを警告だけで黙って捨て、MySQLはエラーにする。DBの違いを出さないため、生成カラムを持つテーブルにはModelを通して書く。
+- `Model::connection()`の`insert()`・`update()`・`execute()`と、`new QueryBuilder(...)`で作ったビルダは、テーブルの定義を持たないため、生成カラムへの書き込みを検査しない。MariaDBでは値が黙って捨てられる。
+- 条件(`update()`・`delete()`・`count()`の条件のマップ、`where()`)には生成カラムを使える。
+
+適用(`wp tmswp migrate`)での扱い:
+
+- 生成カラムを足すと、`--dry-run`が`changed`を出し、適用で列と索引が足される(既にある行の値も計算される)。
+- 式を変えると、`--dry-run`が`changed`を出し、適用で`ALTER TABLE … MODIFY COLUMN`が式を変える。dbDeltaは既にある生成カラムの式を変えないため、Migratorが、既にある生成カラムのすべてに`MODIFY`を実行する。
+- 式の変更と、その生成カラムへの索引の追加は、2回に分けて適用する(式を変えて`wp tmswp migrate`を実行した後に、索引を足してもう一度実行する)。同じ回に適用すると、dbDeltaの索引の追加が`MODIFY`より先に、古い式の値で走るため、古い式の値が重複していれば索引の追加が失敗する。
+- `MODIFY`は式が変わっていなくても実行する。MariaDBは`MODIFY`のたびに表を作り直して全行を写すため、大きなテーブルでは、定義を変えた後の適用と`--force`に時間がかかる。保守モードの間に実行する。
+- `MODIFY`の失敗は`failed to apply the generated column {t}.{c}: …`の`MigrationException`になる。STOREDとVIRTUALの入れ替えと、通常の列からVIRTUALへの変更は、`MODIFY`でできない(MariaDBは1907、MySQLは3106)。手動の`ALTER TABLE … DROP COLUMN`と`ADD COLUMN`で列を作り直してから、もう一度実行する。通常の列からSTOREDへの変更は`MODIFY`でできる。UNIQUEの索引を張った生成カラムで、新しい式の値が重複すると`Duplicate entry`で失敗する。データを直すか、式を見直す。
+- 定義で通常の列にした列がDBでは生成カラムである場合等の食い違いは、`is expected to be a regular column but the database has a STORED generated column`等の`MigrationException`になる。手動の`ALTER TABLE`でDBを直すか、定義をDBに合わせる(`generated()`で宣言する)。
+
+### ON UPDATE CURRENT_TIMESTAMP
+
+`datetime(..., onUpdateCurrentTimestamp: true)`の列は、行を更新するたびにDBが現在の日時を入れる。
+
+- 例: `->datetime('updated_at', default: 'CURRENT_TIMESTAMP', onUpdateCurrentTimestamp: true)`は`updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`になる(上の`AccountModel`)。
+- これは`rawColumn('updated_at', 'datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP')`とまったく同じ行で、`rawColumn()`から書き換えても定義のハッシュは変わらない(`wp tmswp migrate`は何もしない)。
+- 値はDBが入れるため、`update()`に`updated_at`を渡さない。行の値が1つも変わらない`update()`(同じ値の代入)では、DBは日時を変えない。
+- テーブルを作るときと列を足すときは、そのまま`ON UPDATE`が付く。既にある列にあとから付ける・外すと、dbDeltaは適用しないため、`wp tmswp migrate`は`is expected to have ON UPDATE CURRENT_TIMESTAMP but the database has no ON UPDATE`等の`MigrationException`で止まる。下の「失敗したとき」に従って手動の`ALTER TABLE … MODIFY COLUMN`を実行してから、もう一度実行する。
 
 ## マイグレーション(wp tmswp migrate)
 
@@ -248,7 +361,8 @@ wp tmswp migrate --force     # 定義が同じテーブルにもdbDeltaを実行
 dbDeltaが適用するのは、テーブルの作成、列と索引の追加、列の型の変更、引用符で囲む既定値(文字列等)の変更だけである。
 
 - 列の削除・名前の変更・型の縮小のデータの変換はしない。不要になった列はDBに残る。
-- 数値の既定値(`bool()`・`int()`・`decimal()`等)の変更、既定値の削除、`CURRENT_TIMESTAMP`の追加、NULLの可否の変更、テーブルの照合順序の変更は適用しない。`wp tmswp migrate`は適用の後の構造を定義と照らし合わせ、食い違えば`MigrationException`で止まる。
+- 数値の既定値(`bool()`・`int()`・`decimal()`等)の変更、既定値の削除、`CURRENT_TIMESTAMP`の追加、既にある列への`ON UPDATE`の追加・削除、NULLの可否の変更、テーブルの照合順序の変更は適用しない。`wp tmswp migrate`は適用の後の構造を定義と照らし合わせ、食い違えば`MigrationException`で止まる。
+- 生成カラムの式の変更だけは、dbDeltaの代わりにMigratorが`MODIFY`で適用する(上の「生成カラム」)。
 
 ### 失敗したとき(MigrationException)
 
@@ -258,7 +372,8 @@ dbDeltaが適用するのは、テーブルの作成、列と索引の追加、�
 |---|---|---|
 | `dbDelta failed on table {t}: {DBのエラー}` | dbDeltaのSQLがDBのエラーになった | DBのエラーの原因(既存のデータが新しい型に入らない等)を直す |
 | `dbDelta left differences on table {t}: {差分}; ...` | 適用の後も差分が残った。型の表記をDBが別の表記で記録している | 定義の型を、差分の文に出るDBの表記に合わせる |
-| `table {t}: column {c} is expected to ... but the database has ...; dbDelta does not apply this change, so apply it with a manual ALTER TABLE` | dbDeltaが適用しない変更(既定値・NULLの可否・照合順序) | 手動のALTER TABLEで変更してから、もう一度実行する |
+| `table {t}: column {c} is expected to ... but the database has ...; dbDelta does not apply this change, so apply it with a manual ALTER TABLE` | dbDeltaが適用しない変更(既定値・NULLの可否・ON UPDATE・生成カラムかどうか・照合順序) | 手動のALTER TABLEで変更してから、もう一度実行する。ON UPDATE・生成カラムの食い違いは、メッセージの続きのとおり、定義をDBに合わせてもよい |
+| `failed to apply the generated column {t}.{c}: {DBのエラー}; ...` | 生成カラムの`MODIFY`がDBのエラーになった | 上の「生成カラム」の適用での扱い |
 | 上の文の後に`, or, if the database stored a rounded value, change the definition to the value the database stores`が続く | 既定値の食い違い。DBが既定値を丸めて記録した場合もある(`double`で表せない桁の数等) | ALTER TABLEで直らない(DBがまた丸める)場合は、定義の既定値をメッセージの`the database has DEFAULT`の値に合わせる |
 | `table was not created`・`column was not created`・`index was not created`・`primary key does not match` | 作られるはずのテーブル・列・索引・主キーが無い | dbDeltaが扱えない変更(主キーの変更等)。手動のALTER TABLEで合わせる |
 | `failed to read the schema hashes: ...`・`failed to save the schema hashes` | 保存済みのハッシュの読み書きがDBのエラーになった | DBの状態を直す |
@@ -267,6 +382,13 @@ dbDeltaが適用するのは、テーブルの作成、列と索引の追加、�
 
 ```sh
 wp db query "ALTER TABLE wp_catalog_items ALTER COLUMN price SET DEFAULT 0"
+wp tmswp migrate
+```
+
+既にある`updated_at`に`onUpdateCurrentTimestamp: true`を足した定義が止まったときは、定義の列の行のとおりに列を変える。
+
+```sh
+wp db query "ALTER TABLE wp_accounts MODIFY COLUMN updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
 wp tmswp migrate
 ```
 
@@ -731,6 +853,7 @@ final class StockReservationTest extends UnitTestCase
 - `register_activation_hook`・`after_switch_theme`・`init`・`admin_init`等でマイグレーションを実行しない。`Migrator::migrateAll()`を自分で呼ばない。
 - raw断片に変数をつながない。値をSQLの文字列に埋め込まない。
 - 予約語の列名、`rawColumn()`の`json`の型を使わない。
+- 生成カラムに`Model::connection()`の`insert()`・`update()`・`execute()`で書き込まない(MariaDBは値を黙って捨てる)。
 - 行の値をModelのプロパティに持たせない。DTOは`rowClass()`か`as()`で指定する。
 - 全行の更新・削除を`whereRaw('1 = 1')`以外の方法で書かない。
 - トランザクションを`$wpdb->query('START TRANSACTION')`等で直接操作しない。`Model::connection()->transaction()`を使う。
