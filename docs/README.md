@@ -36,7 +36,7 @@
 | 09 | [`09-acf-bridge.md`](./09-acf-bridge.md) | acf-json 真実源、コードジェネレータ、AcfMetaStorage、CI ドリフト検知、重複キーエラー | DR-06, 18 | 00, 02, 04 |
 | 10 | [`10-quality.md`](./10-quality.md) | PHPStan / php-cs-fixer / PHPUnit 2 層 / wp-env / GitHub Actions / composer スクリプト体系 | DR-12 | 00, 01 |
 | 11 | [`11-ai-docs.md`](./11-ai-docs.md) | AGENTS.md 全文案、rules/ の構成と共通フォーマット(レシピの本文は各パッケージの rules/ が正本)、app/ スケルトン、starter-theme / starter-plugin | DR-13 | 00〜10 |
-| 12 | [`12-implementation-plan.md`](./12-implementation-plan.md) | ロードマップ。v0.1.0〜v0.9.0 の版構成・タスク・完了条件・受け入れ条件・依存関係・並列化 | 全 DR | 00〜11 |
+| 12 | [`12-implementation-plan.md`](./12-implementation-plan.md) | ロードマップ。v0.1.0〜v1.0.0 の版構成・タスク・完了条件・受け入れ条件・依存関係・並列化 | 全 DR | 00〜11 |
 
 このほか、リリース手順を [`RELEASING.md`](./RELEASING.md)、各版の受け入れ記録を [`acceptance/`](./acceptance/)(`v0.x.y.md` 形式)に置く。
 
