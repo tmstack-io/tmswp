@@ -11,6 +11,7 @@ TMStack WordPress Framework(TMSWP)のコアパッケージです。テーマ・�
 
 - PHP 8.3〜8.5
 - WordPress 7.0以上。クラシックテーマ(PHPのテンプレート階層)とプラグインが対象で、ブロックテーマ(フルサイト編集)とマルチサイトは対象外です。
+- MySQL 8.4 LTS以上、またはMariaDB 10.11 LTS以上。独自テーブル(Model)の行ロックの句の`SKIP LOCKED`・`NOWAIT`はMySQL 8.0以上・MariaDB 10.6以上で使え、そのうちサポート(MariaDBはコミュニティのサポート)が続いているLTSで、統合テストを走らせている版を下限にしています。SQLはDBの種類で分けず、どちらのDBでも同じ文を出します。
 - 任意: `ext-mbstring`(`TMSWP\Core\Support\Str`のマルチバイト文字列の処理)、`ext-intl`(フォームの規則`Url`の国際化ドメイン名の検証)
 
 ## 導入

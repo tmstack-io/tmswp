@@ -143,21 +143,33 @@ jobs:
         if: failure()
         run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
 
-  # MySQL 8.4 LTS・9.7 LTSでの統合テスト。wp-env 12はDBをMariaDBに固定するため、servicesでMySQLを立て、
+  # MySQL 8.4 LTS・9.7 LTSと、MariaDBの最低の版の10.11 LTSでの統合テスト。wp-env 12のDBの既定はmariadb:ltsで、MySQLにはできない。
+  # MariaDBの版はmariadbVersionで変えられるが、MySQLのセルと同じ方式にそろえるため、servicesで各版のDBを立て、
   # wp-envのネットワークに別名mysql-under-testで参加させ、wp-envのcliからWP_TESTS_DB_HOSTで接続する。
   # PHPとWordPressは8.3・7.0に固定する。http://wordpress/を叩くテストは、このジョブでも開発用サイト(wp-envのMariaDB)を使う。
   mysql:
-    name: Integration (MySQL ${{ matrix.mysql }} / PHP 8.3 / WP 7.0)
+    name: Integration (${{ matrix.db }} ${{ matrix.version }} / PHP 8.3 / WP 7.0)
     runs-on: ubuntu-24.04
     needs: [unit]
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        mysql: ['8.4', '9.7']
+        include:
+          - db: MySQL
+            version: '8.4'
+            image: mysql:8.4
+          - db: MySQL
+            version: '9.7'
+            image: mysql:9.7
+          - db: MariaDB
+            version: '10.11'
+            image: mariadb:10.11
     services:
+      # MariaDB 10.11のイメージも、MYSQL_*の環境変数とmysqladminを持つ。MariaDB 11以降のイメージはmysqladminを
+      # 持たないため、そのセルを足すときはヘルスチェックをmariadb-adminに替える
       mysql:
-        image: mysql:${{ matrix.mysql }}
+        image: ${{ matrix.image }}
         env:
           MYSQL_ROOT_PASSWORD: password
           MYSQL_DATABASE: wordpress
@@ -192,8 +204,8 @@ jobs:
             fi
             sleep 10
           done
-      # servicesのMySQLは別のネットワークにあるため、wp-envのネットワークに参加させる
-      - name: Connect MySQL to the wp-env network
+      # servicesのDBは別のネットワークにあるため、wp-envのネットワークに参加させる
+      - name: Connect the database to the wp-env network
         run: |
           containers=$(docker ps -q --filter label=com.docker.compose.service=wordpress)
           if [ "$(printf '%s\n' "${containers}" | grep -c .)" -ne 1 ]; then
@@ -206,7 +218,8 @@ jobs:
             exit 1
           fi
           docker network connect --alias mysql-under-test "${networks}" "${{ job.services.mysql.id }}"
-      # tests/wp-tests-config.phpと同じ設定で接続し、wp-envのMariaDBではなくこのセルのMySQLであることを確かめる
+      # tests/wp-tests-config.phpと同じ設定で接続し、wp-envのMariaDBではなくこのセルのDBであることを確かめる
+      # (MariaDBのVERSION()は10.11.19-MariaDB-ubu2204の形で、版の接頭辞で確かめられる)
       - name: Check the database version
         run: |
           # PHPのコードの$はシェルで展開しない
@@ -216,9 +229,9 @@ jobs:
             php -r 'require "tests/wp-tests-config.php"; $db = new mysqli(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); echo $db->query("SELECT VERSION()")->fetch_row()[0];')
           echo "database version: ${version}"
           case "${version}" in
-            "${{ matrix.mysql }}."*) ;;
+            "${{ matrix.version }}."*) ;;
             *)
-              echo "::error::the tests would connect to ${version}, not MySQL ${{ matrix.mysql }}"
+              echo "::error::the tests would connect to ${version}, not ${{ matrix.db }} ${{ matrix.version }}"
               exit 1
               ;;
           esac

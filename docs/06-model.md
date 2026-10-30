@@ -10,6 +10,8 @@ WordPressの独自テーブルを「スキーマ宣言 → `wp tmswp migrate`に
 
 フルORM(リレーション定義・自動ハイドレーション・エンティティ追跡)は実装しない(DR-08)。提供するのは「スキーマ宣言+dbDeltaマイグレーション+prepare強制クエリビルダ+任意の軽量DTOハイドレーション」の4点である。
 
+v0.10.0で、トランザクションの実行単位(§1)、upsert(§1・§3)、行ロックの句(§4)、生成カラムと`ON UPDATE CURRENT_TIMESTAMP`の列(§2・§5)を足した(DR-08)。どれも、テーブルを変える唯一の経路(`wp tmswp migrate`)とMigratorの差分の検出、またはwpdbの境界(`Connection`)に関わり、アプリ側で`Connection::execute()`で回避するとMigratorと食い違うか、案件ごとに同じ回避が複製されるためである。これらの機能が要るDBの最低の版は、R6で定める。
+
 ## スコープ(対象パッケージ)
 
 - `packages/core` — `TMSWP\Core\Model\` 名前空間の全クラス、関連例外(`TMSWP\Core\Exception\`)、およびクエリ語彙enum(`TMSWP\Core\Query\`)。
@@ -21,7 +23,8 @@ WordPressの独自テーブルを「スキーマ宣言 → `wp tmswp migrate`に
   - `TMSWP\Core\Model\Connection`
   - `TMSWP\Core\Model\MigrateCommand`(WP-CLI、本文書で新設定義)
   - クエリ語彙enum: `TMSWP\Core\Query\Compare` / `TMSWP\Core\Query\CastType` / `TMSWP\Core\Query\SortOrder`(QueryBuilder節で完全定義。03-entities.mdのエンティティクエリビルダ3種と共有)
-  - 例外: `SchemaException` / `MigrationException` / `InvalidQueryException` / `QueryException` / `HydrationException`
+  - Model層のenum: `TMSWP\Core\Model\GeneratedColumnStorage`(§2)・`TMSWP\Core\Model\UpsertUpdate`(§1)・`TMSWP\Core\Model\RowLock`(§4)
+  - 例外: `SchemaException` / `MigrationException` / `InvalidQueryException` / `QueryException` / `DeadlockException` / `LockWaitTimeoutException` / `HydrationException`
 - 対象外: `#[AsModel]`属性そのものの定義(Attribute設計書)、Discoveryによる走査機構(Kernel設計書)。本文書はそれらとの統合契約のみ規定する。
 
 ## 依存文書
@@ -56,8 +59,8 @@ Connection(wpdbラッパ) ←── QueryBuilder(全クエリをprepare経由で
 | `Model` | 1テーブル=1クラスの静的ファサード。スキーマ宣言の置き場とCRUDショートカット |
 | `TableDefinition` | fluentなスキーマ宣言とdbDelta互換`CREATE TABLE`文の生成 |
 | `Migrator` | スキーマハッシュ比較によるマイグレーション実行と、管理画面の通知・CLIの配線 |
-| `QueryBuilder` | SELECT/UPDATE/DELETEの組み立て。プレースホルダ強制 |
-| `Connection` | wpdbの薄いラッパ。prefix解決・prepare実行・テスト時差し替え点 |
+| `QueryBuilder` | SELECT/UPDATE/DELETEの組み立て。プレースホルダ強制。行ロックの句 |
+| `Connection` | wpdbの薄いラッパ。prefix解決・prepare実行・テスト時差し替え点。トランザクションの実行単位とupsert |
 
 ---
 
@@ -105,19 +108,58 @@ SQLに埋め込まれる識別子(テーブル名・カラム名・エイリア�
 
 ### R4. 例外体系
 
-すべて`TMSWP\Core\Exception\`配下。実行前に検出される誤り(`SchemaException`・`InvalidQueryException`)はFWの基底`LogicException`を、実行時の失敗(`MigrationException`・`QueryException`・`HydrationException`)はFWの基底`RuntimeException`を継承する。FWの基底とマーカーinterface`TmswpExceptionInterface`はKernel設計書の例外章(`02-kernel.md` §9)が定義する。`QueryException`はエンティティ層(`03-entities.md` §1.7)と共有するため`final`にせず、他は`final`とする。
+すべて`TMSWP\Core\Exception\`配下。実行前に検出される誤り(`SchemaException`・`InvalidQueryException`)はFWの基底`LogicException`を、実行時の失敗(`MigrationException`・`QueryException`・`HydrationException`)はFWの基底`RuntimeException`を継承する。FWの基底とマーカーinterface`TmswpExceptionInterface`はKernel設計書の例外章(`02-kernel.md` §9)が定義する。`QueryException`はエンティティ層(`03-entities.md` §1.7)と共有するため`final`にせず、他は`final`とする。`DeadlockException`と`LockWaitTimeoutException`は`QueryException`を継承する(`catch (QueryException $e)`で両方を捕まえられる)。
 
 | 例外 | 投げる状況 |
 |---|---|
 | `SchemaException` | TableDefinitionの定義不正(識別子不正・PK未定義・名前長超過・デフォルト値にクォート文字等) |
-| `MigrationException` | dbDelta実行後にエラーまたは残差分が検出された場合 |
-| `InvalidQueryException` | QueryBuilderのAPI誤用(不正演算子・raw断片規約違反・offset単独指定・WHEREなしupdate/delete等)。**実行前**に検出される静的な誤り。エンティティのクエリ3種の矛盾する指定(`03-entities.md` §7.5)にも使う |
+| `MigrationException` | dbDelta実行後にエラーまたは残差分が検出された場合。生成カラムの式を適用する`MODIFY`(§5の手順7a)が失敗した場合 |
+| `InvalidQueryException` | QueryBuilderのAPI誤用(不正演算子・raw断片規約違反・offset単独指定・WHEREなしupdate/delete等)。**実行前**に検出される静的な誤り。エンティティのクエリ3種の矛盾する指定(`03-entities.md` §7.5)にも使う。Connection・Model・QueryBuilderの次の誤用にも使う: トランザクションの入れ子と範囲外のロック待ちの秒数、トランザクションの実行中の`execute()`の制限(§1)、トランザクションの外の行ロックと`lock()`の誤った併用(§4)、生成カラムへの書き込み(§2〜§4)、upsertの引数の誤り(§1) |
 | `QueryException` | クエリ**実行時**のDBエラー(`wpdb->last_error`非空、`query()`がfalse等)。メッセージに失敗SQL(prepare適用後)と`last_error`を含める |
+| `DeadlockException` | 実行時のDBエラーのうち、エラー番号が1213(デッドロック)のもの(§1「トランザクション」) |
+| `LockWaitTimeoutException` | 実行時のDBエラーのうち、エラー番号が1205(ロック待ちの時間切れ)と3572(MySQLの`NOWAIT`でロックを得られない)のもの(§1「トランザクション」) |
 | `HydrationException` | DTOハイドレーション失敗(列欠落・型変換不能・コンストラクタ非public等) |
 
 ### R5. wpdbエラーモード
 
 Connectionは構築時に`$wpdb->suppress_errors()`等のグローバル状態を変更**しない**。エラー判定は各操作直後の戻り値と`$wpdb->last_error`で行う。
+
+### R6. 対応するDBの版とDBごとの違い
+
+Model層が対応するDBは、**MySQL 8.4 LTS以上**と**MariaDB 10.11 LTS以上**である(DR-02、01-architecture.md §5.5)。
+
+- 根拠: 行ロックの句の`SKIP LOCKED`・`NOWAIT`(§4)は、MySQL 8.0以上・MariaDB 10.6以上で使える。MySQL 8.0のサポートと、MariaDB 10.6のコミュニティのサポートは終わっている。CIの統合テストのセルが無い版は、最低の版にしない。CIは、MySQL 8.4 LTS・9.7 LTS、MariaDB 10.11 LTS、wp-envのMariaDB(その時点のLTS)で統合テストを走らせる(10-quality.md §4.11・§5.1)。MariaDB 10.11は、v0.10.0の機能を求めた導入先の本番の版でもある。
+- SQLはDBの種類で分けず、対応するすべてのDBで同じ文を出す。一方のDBで使えない構文(MariaDBの`FOR SHARE`、MySQLの`LOCK IN SHARE MODE SKIP LOCKED`、MariaDBの行の別名`VALUES (...) AS n`)は出さない。
+- wpdbは、接続のsql_modeからstrictのモード(`STRICT_TRANS_TABLES`・`STRICT_ALL_TABLES`等)を外す(WordPress 7.0の`wpdb::set_sql_mode()`)。そのため、strictのモードなら誤りになる書き込みが、警告だけで通ることがある(下の表の生成カラムへの書き込み)。
+- wpdbはエラー番号を公開しない。`wpdb::query()`は内部で`mysqli_errno($this->dbh)`を読むが、`last_error`には文言だけを入れ、`$dbh`はprotectedである。Connectionがエラー番号を得る方法は§1「トランザクション」に書く。
+
+次の表は、使い捨てのコンテナ(MariaDB 10.11.18・12.3、MySQL 8.4.13・9.7.4)で、WordPressと同じくstrictのモードを外したsql_modeで確かめた結果である。
+
+| 項目 | MariaDB 10.11・12.3 | MySQL 8.4・9.7 |
+|---|---|---|
+| 生成カラムへの書き込み(INSERT・UPDATE) | 警告1906だけで、値は黙って捨てられる | エラー3105 |
+| 生成カラムに`NOT NULL` | 構文の誤り(1064) | 書ける |
+| `SHOW FULL COLUMNS`の`Extra`(生成カラム) | `STORED GENERATED` / `VIRTUAL GENERATED` | 同じ |
+| `Extra`(`DEFAULT CURRENT_TIMESTAMP`だけの列) | 空 | `DEFAULT_GENERATED` |
+| `Extra`(`DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`の列) | `on update current_timestamp()` | `DEFAULT_GENERATED on update CURRENT_TIMESTAMP` |
+| `MODIFY`で生成カラムの式を変える(STORED・VIRTUAL) | できる | できる |
+| `MODIFY`でSTOREDとVIRTUALを入れ替える | 1907で失敗 | 3106で失敗 |
+| 通常の列 → STORED、STORED → 通常の列 | できる | できる |
+| 定義が同じ`MODIFY`(STORED) | 全行を写す(表の作り直し) | 0行 |
+| `LOCK IN SHARE MODE` | 使える | 使える(警告なし) |
+| `FOR SHARE` | 構文の誤り | 使える |
+| `FOR UPDATE NOWAIT` / `FOR UPDATE SKIP LOCKED` | 使える | 使える |
+| `LOCK IN SHARE MODE SKIP LOCKED` | 使える | 構文の誤り |
+| ロック待ちの時間切れ | 1205(その文だけを取り消し、トランザクションは続く) | 同じ |
+| `NOWAIT`でロックを得られない | 1205 | 3572 |
+| デッドロック | 1213 | 1213 |
+| upsertの`VALUES(col)` | 使える | 使える(警告1287。非推奨) |
+| upsertの行の別名`VALUES (...) AS n … n.col` | 構文の誤り | 使える |
+| upsertの影響行数と`insert_id` | 挿入: 1・新しいID、更新: 2・更新した行のID、変化なし: 0・0 | 同じ |
+
+- `DEFAULT CURRENT_TIMESTAMP`だけの列の`Extra`(MariaDBは空、MySQLは`DEFAULT_GENERATED`)は、まだ確かめていない。v0.10.0-T3の統合テストで、全DBのセルについて確かめる。
+
+- MySQLの文書は、`LOCK IN SHARE MODE`を後方互換のために残し、`NOWAIT`・`SKIP LOCKED`を`FOR UPDATE`・`FOR SHARE`にだけ付けられるとする(https://dev.mysql.com/doc/refman/9.7/en/innodb-locking-reads.html)。upsertの`VALUES()`は非推奨で、影響行数は挿入が1、更新が2、変化なしが0である(https://dev.mysql.com/doc/refman/9.7/en/insert-on-duplicate.html)。
 
 ---
 
@@ -201,6 +243,30 @@ final class Connection
     /** DELETE。$tableはinsert()と同じ。$whereは等値条件のみ(null値はIS NULL)。影響行数を返す。失敗時QueryException */
     public function delete(string $table, array $where): int;
 
+    /**
+     * INSERT … ON DUPLICATE KEY UPDATE(下記「upsert」)。$tableはinsert()と同じ。
+     * 戻り値は影響行数(1=挿入、2=更新、0=変化なし)。insert_idはinsertId()で読む(更新のときは更新した行のID)。
+     * 生成カラムへの書き込みは検査しない(Model::upsert()が検査する。§3)。
+     * @param array<string, mixed> $values 挿入する列(R1検証) => 値(R3写像。nullはNULL)
+     * @param non-empty-array<string, UpsertUpdate> $update 重複のときに更新する列。キーは$valuesにある列に限る
+     * @throws InvalidQueryException
+     */
+    public function upsert(string $table, array $values, array $update): int;
+
+    /**
+     * $callbackを1つのトランザクションで実行し、その戻り値を返す(下記「トランザクション」)。
+     * @template T
+     * @param callable(): T $callback
+     * @param int<1, 1073741824>|null $lockWaitTimeout ロック待ちの上限の秒数。nullならinnodb_lock_wait_timeoutを変えない
+     * @return T
+     * @throws InvalidQueryException 入れ子・範囲外の秒数
+     * @throws DeadlockException|LockWaitTimeoutException|QueryException
+     */
+    public function transaction(callable $callback, ?int $lockWaitTimeout = null): mixed;
+
+    /** このwpdb(セッション)でtransaction()の実行中か */
+    public function inTransaction(): bool;
+
     public function insertId(): int;
 
     public function lastError(): string;
@@ -211,6 +277,16 @@ final class Connection
     /** R3写像の前処理を適用した値。写像できない値はInvalidQueryException */
     public static function normalizeValue(mixed $value): int|float|string;
 }
+
+/** upsertで、キーが重複したときに列をどう更新するか */
+enum UpsertUpdate
+{
+    /** 列 = 挿入しようとした値 */
+    case Replace;
+
+    /** 列 = 列 + 挿入しようとした値 */
+    case Increment;
+}
 ```
 
 #### 振る舞い仕様
@@ -220,11 +296,50 @@ final class Connection
 - `insert/update/delete`: `$table`は常にベアテーブル名として`tableName()`で解決する。prefix付きのフルテーブル名は受け付けない(R1のベア名に合わなければ`InvalidQueryException`、合えばprefixが二重に付く)。prefixの無いテーブルへの書き込みは`execute()`を使う。
 - `insert/update/delete`: `$data`と`$where`の値はR3写像の前処理(`normalizeValue()`)で正規化し、format配列はR3写像(`placeholderFor()`)から導出して`$wpdb->insert/update/delete`に渡す。null値は正規化せずにそのまま渡し、wpdbが`$data`ではSQLの`NULL`、`$where`では`IS NULL`にする。`$where`に配列値が含まれる場合は`InvalidQueryException`(IN条件は`QueryBuilder`を使う)。
 - wpdbの戻り値は数値もstringで返るが、Connectionはこの段階では変換しない(型の正規化はDTOハイドレーションの責務)。
+- 実行時のDBエラーの判定(`last_error`が空でないか)は、`assertNoLastError()`(private)の1か所で行う。ここでエラー番号を読み、1213なら`DeadlockException`、1205・3572なら`LockWaitTimeoutException`、それ以外は`QueryException`を投げる。エラー番号は、`ReflectionProperty`で読んだwpdbの`$dbh`(protected)が`mysqli`のときだけ`mysqli_errno()`で得る。`mysqli`でなければ(テストの代役等)0とみなし、`QueryException`にする。この読み方がwpdbの実物で働くことは、統合テストで確かめる。
+
+#### トランザクション(確定)
+
+`transaction()`は、wpdbの接続(セッション)をそのまま使い、次の順に実行する。`transaction()`が出す`SELECT @@SESSION.innodb_lock_wait_timeout`・`SET SESSION`・`START TRANSACTION`・`COMMIT`・`ROLLBACK`は、`execute()`の制限(下記)を通さないprivateの経路(wpdbの`query()`・`get_var()`と`assertNoLastError()`)で実行する。秒数は、検証済みのintを`sprintf('SET SESSION innodb_lock_wait_timeout = %d', …)`で埋める。元に戻す値は、`get_var()`が返した文字列をintにしてから同じ形で埋める。
+
+1. このwpdbで`transaction()`の実行中なら、`InvalidQueryException`(入れ子は拒否する。SAVEPOINTによる入れ子は作らない)。実行中かどうかは、Connectionの`private static WeakMap<\wpdb, true>`に持つ。Kernelごとに`Connection`のインスタンスは違うが、どれも同じ`$wpdb`を使うため、インスタンスではなくwpdbごとに持つ。`$lockWaitTimeout`が1〜1073741824の範囲の外でも`InvalidQueryException`。
+2. `$lockWaitTimeout`を指定したら、`SELECT @@SESSION.innodb_lock_wait_timeout`で元の値を読み、`SET SESSION innodb_lock_wait_timeout = %d`で指定の秒数にする。
+3. `START TRANSACTION`を実行し、実行中であることを記録する。`START TRANSACTION`が失敗したときも、手順6で秒数を元に戻す。
+4. `$callback`を引数なしで呼ぶ。正常に終われば`COMMIT`し、`$callback`の戻り値を返す。`COMMIT`が失敗したら、`ROLLBACK`を試みてから、`COMMIT`の失敗を`QueryException`(エラー番号に応じて`DeadlockException`・`LockWaitTimeoutException`)で投げる。`ROLLBACK`も失敗した場合は、`COMMIT`の失敗を優先して投げる。
+5. `$callback`が例外を投げたら`ROLLBACK`し、元の例外をそのまま投げる(包まない)。`ROLLBACK`も失敗した場合は、元の例外を優先して投げる。
+6. 最後に(手順2の`SET SESSION`の後の手順3〜5の全体を囲むfinallyで)、実行中の記録を消す。秒数を指定していれば、`SET SESSION innodb_lock_wait_timeout = %d`で元の値に戻す。正常に終わった後に元に戻せなければ`QueryException`、例外を投げている途中なら元の例外を優先する。
+
+- 自動の再試行はしない。デッドロック(`DeadlockException`)とロック待ちの時間切れ(`LockWaitTimeoutException`)をどう扱うか(再試行するか、利用者にエラーを見せるか)は、呼び出し側が決める。
+- Modelにトランザクションのファサードは作らない。`Model::connection()->transaction(...)`を使う。トランザクションはテーブルではなく接続全体に効くため、特定のテーブルに限ったように見える名前(`InquiryModel::transaction()`)を避ける。
+- トランザクションの実行中の`execute()`は、SQLの先頭の語(大小文字を問わない)が次のものを`InvalidQueryException`で拒否する。トランザクションを暗黙に終える文(DDLは暗黙にコミットする)と、トランザクションの状態を直接変える文である。
+  - `START`・`BEGIN`・`COMMIT`・`ROLLBACK`・`SAVEPOINT`・`SET autocommit`・`LOCK TABLES`・`UNLOCK TABLES`・`CREATE`・`ALTER`・`DROP`・`TRUNCATE`・`RENAME`
+  - 判定は、prepareを適用する前のSQLに次の正規表現を当てて行う: `/^\s*(start|begin|commit|rollback|savepoint|lock\s+tables|unlock\s+tables|create|alter|drop|truncate|rename)\b|^\s*set\s+(session\s+|@@(session\.)?)?autocommit\b/i`
+  - 先頭のコメント(`/* … */`等)や括弧は、判定の前に除かない。それらで始まる文がすり抜けた場合は、DB側の挙動とエラーに任せる。
+- 利用者が`Connection::wpdb()`や`$wpdb->query('START TRANSACTION')`でトランザクションを直接操作すると、Connectionはそれを検出できない。rules/で、トランザクションは`transaction()`だけで扱うと書く。
+- ロック待ちの時間切れ(1205)は、その文だけを取り消し、トランザクションを続ける(MariaDB・MySQLとも。R6)。`$callback`の中で`LockWaitTimeoutException`を捕まえて処理を続けると、それまでの書き込みは残ったままコミットされる。
+- デッドロック(1213)では、DBがトランザクション全体を取り消す。`$callback`の中で`DeadlockException`を捕まえて処理を続けると、以降の文はトランザクションの外で実行される。そのため捕まえずに外へ出し、呼び出し側で`transaction()`の全体をやり直す。
+- トランザクションの中でWordPressのAPI(`update_option()`等)を呼ぶと、ロールバックしてもWordPressのオブジェクトキャッシュは戻らない。この3つの注意(1205・1213・オブジェクトキャッシュ)をrules/に書く。
+
+#### upsert(確定)
+
+`upsert()`は、`INSERT … ON DUPLICATE KEY UPDATE`を、挿入する値を更新の句にもう一度バインドする形で出す。`VALUES(col)`(MySQLで非推奨。R6)と行の別名(MariaDBで構文の誤り)は使わない。
+
+```sql
+-- upsert('t', ['k' => 'a', 'cnt' => 2, 'note' => 'x'], ['cnt' => UpsertUpdate::Increment, 'note' => UpsertUpdate::Replace])
+INSERT INTO wp_t (k, cnt, note) VALUES (%s, %d, %s) ON DUPLICATE KEY UPDATE cnt = cnt + %d, note = %s
+-- bindings: ['a', 2, 'x', 2, 'x']
+```
+
+- `$values`の値はR3写像でプレースホルダにし、`null`は`NULL`と書いてバインドしない。
+- `$update`の各列は、`UpsertUpdate::Replace`なら`列 = {プレースホルダ}`、`UpsertUpdate::Increment`なら`列 = 列 + {プレースホルダ}`にし、`$values`のその列の値をもう一度バインドする。`null`の`Replace`は`列 = NULL`、`null`の`Increment`は`InvalidQueryException`。
+- `$update`が空、または`$update`のキーが`$values`に無い場合は`InvalidQueryException`。
+- 戻り値は`execute()`と同じ影響行数(1=挿入、2=更新、0=変化なし。R6)。`insertId()`は、挿入なら新しいID、更新なら更新した行のID、変化なしなら0を返す。
 
 #### エッジケース
 
 - `prepare()`にプレースホルダ数≠bindings数、またはR2規約2が受け付けない`%`の並び → `InvalidQueryException`(wpdbのnotice発生前に検出)。
 - `insert()`に空配列、`update()`に空の`$data`または`$where`、`delete()`に空の`$where` → `InvalidQueryException`。AUTO_INCREMENTのみの行を作る場合は`Model::insert([])`を使う(後述。Connectionレベルでは`execute('INSERT INTO ... () VALUES ()')`で表現される)。
+- `insert()`・`update()`・`upsert()`は生成カラムへの書き込みを検査しない(テーブルの定義を持たないため)。生成カラムへの書き込みは、MySQLではエラー3105で`QueryException`になり、MariaDBでは警告だけで値が黙って捨てられる(R6)。生成カラムを持つテーブルへは`Model`の`insert()`・`update()`・`upsert()`か`Model::query()`で書く(§3・§4)。この違いをrules/に書く。
 
 ---
 
@@ -292,8 +407,11 @@ final class TableDefinition
     /** tinyint(1) NOT NULL DEFAULT 0|1。3値が必要な場合はint(nullable: true)を使う */
     public function bool(string $name, bool $default = false): self;
 
-    /** $default === 'CURRENT_TIMESTAMP' のみ非クォートで出力。それ以外はクォート付きリテラル */
-    public function datetime(string $name, bool $nullable = false, ?string $default = null): self;
+    /**
+     * $default === 'CURRENT_TIMESTAMP' のみ非クォートで出力。それ以外はクォート付きリテラル。
+     * $onUpdateCurrentTimestampが真なら、行の更新のときにDBが現在の日時を入れる(ON UPDATE CURRENT_TIMESTAMP)
+     */
+    public function datetime(string $name, bool $nullable = false, ?string $default = null, bool $onUpdateCurrentTimestamp = false): self;
 
     /**
      * longtextとして生成する(JSON型は使わない)。
@@ -306,8 +424,17 @@ final class TableDefinition
     public function foreignId(string $name, bool $nullable = false): self;
 
     /**
+     * 生成カラム(下記「生成カラム」)。NULLを常に許す(MariaDBは生成カラムのNOT NULLを受け付けない)。
+     * 生成カラムの後に通常の列を宣言するとSchemaException。
+     * @param string $type 型(例: 'bigint(20) unsigned'・'varchar(40)')。rawColumn()と同じ表記の規則で検証する
+     * @param literal-string $expression 式。下記の字句の検証を通す
+     * @throws SchemaException
+     */
+    public function generated(string $name, string $type, string $expression, GeneratedColumnStorage $storage): self;
+
+    /**
      * エスケープハッチ。$definitionは型以降の定義文字列(例: 'mediumint(9) NOT NULL')。R2と同じクォート文字禁止検査を行い、
-     * 前後の空白を除いて書く。DBが別の表記で記録する型の表記(下記エッジケース)はSchemaException
+     * 前後の空白を除いて書く。DBが別の表記で記録する型の表記(下記エッジケース)と、生成カラムの構文(generated()を使う)はSchemaException
      */
     public function rawColumn(string $name, string $definition): self;
 
@@ -362,6 +489,18 @@ final class TableDefinition
     /** @return 'number'|'string'|'temporal' 既定値の比べ方を決める種類(下記「列の属性」)。未宣言のカラムはSchemaException */
     public function columnKind(string $name): string;
 
+    /** toSql()と同じ列の行(例: 'updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP')。Migratorの生成カラムのMODIFYが使う(§5)。未宣言のカラムはSchemaException */
+    public function columnSql(string $name): string;
+
+    /** ON UPDATEの値('CURRENT_TIMESTAMP'等。下記「列の属性」)。無ければnull。未宣言のカラムはSchemaException */
+    public function columnOnUpdate(string $name): ?string;
+
+    /** 生成カラムならその保存の方式、通常の列ならnull。未宣言のカラムはSchemaException */
+    public function columnGeneration(string $name): ?GeneratedColumnStorage;
+
+    /** @return list<string> 生成カラムの名前(宣言順) */
+    public function generatedColumns(): array;
+
     /** collation()で宣言した照合順序。宣言していなければnull */
     public function declaredCollation(): ?string;
 
@@ -370,6 +509,16 @@ final class TableDefinition
 
     /** sha256ハッシュ: hash('sha256', $this->toSql($connection)) */
     public function hash(Connection $connection): string;
+}
+
+/** 生成カラムの保存の方式 */
+enum GeneratedColumnStorage: string
+{
+    /** 値を行に保存する */
+    case Stored = 'STORED';
+
+    /** 値を保存せず、読むときに計算する */
+    case Virtual = 'VIRTUAL';
 }
 ```
 
@@ -387,6 +536,7 @@ final class TableDefinition
 | `datetime()` | `datetime` |
 | `json()` | `longtext` |
 | `foreignId()` | `bigint(20) unsigned` |
+| `generated($n, $type, ...)` | `{$type}`(引数のまま。下記「生成カラム」) |
 
 表示幅(`(11)`/`(20)`)はWPコアスキーマの慣習に合わせて出力する(MySQL 8系のDESCRIBE正規化はWPコアのdbDelta側が吸収する)。`string()`のデフォルト長191はutf8mb4でユニークインデックスを張れる上限(767バイト/4)に由来する。
 
@@ -396,6 +546,8 @@ final class TableDefinition
 - `nullable: true` かつ `$default === null` → ` DEFAULT NULL`。
 - `nullable: true` かつ `$default`非null → ` DEFAULT {literal}`。
 - 文字列デフォルトのリテラル化: `'`を含む場合は`SchemaException`。それ以外は`'{$default}'`とシングルクォートで包む。`datetime`の`'CURRENT_TIMESTAMP'`のみ非クォート。int/bool/decimalはそのまま数値表記。
+- `datetime()`の`onUpdateCurrentTimestamp: true` → 上の出力の後に` ON UPDATE CURRENT_TIMESTAMP`を付加。例: `datetime('updated_at', default: 'CURRENT_TIMESTAMP', onUpdateCurrentTimestamp: true)`は`updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`になる。これは`rawColumn('updated_at', 'datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP')`とバイト単位で同じ行であり、rawColumnから移しても定義のハッシュは変わらない。引数の既定値は`false`で、既存の定義の`toSql()`とハッシュは変わらない。
+- `generated()` → `{name} {type} AS ({expression}) {STORED|VIRTUAL}`。`NOT NULL`・`DEFAULT`を付けない(下記「生成カラム」)。
 
 #### 列の属性(確定)
 
@@ -407,7 +559,28 @@ final class TableDefinition
   - 種類: `id()`・`int()`・`bigint()`・`decimal()`・`bool()`・`foreignId()`は`number`、`string()`・`text()`・`json()`は`string`、`datetime()`は`temporal`。
 - `rawColumn()`は引用符を拒否するため、文字列の既定値を持てない。NULLの可否は定義に`NOT NULL`が無ければ許すとし、既定値は定義の最後の`DEFAULT`に続く1語(`NULL`ならnull)とする。種類は型の名前で決める(`tinyint`・`smallint`・`mediumint`・`int`・`bigint`・`decimal`・`float`・`double`は`number`、`date`・`datetime`・`timestamp`・`time`・`year`は`temporal`、それ以外は`string`)。
 - 主キーの列は、定義に`NOT NULL`が無くてもDBがNOT NULLにするため、NULLを許さない。
+- ON UPDATE(`columnOnUpdate()`): `datetime()`は`onUpdateCurrentTimestamp`が真なら`CURRENT_TIMESTAMP`、偽ならnull。`rawColumn()`は、定義の最後の`ON UPDATE (\S+)`に続く1語を持つ(既定値の読み方と同じ方法。例: `ON UPDATE CURRENT_TIMESTAMP(6)`なら`CURRENT_TIMESTAMP(6)`)。無ければnull。ほかの組込のメソッドはnull。rawColumnのON UPDATEを属性として読むため、rawColumnでON UPDATEを書いていた既存の定義も、§5の検証3を通る。
+- 生成カラム(`generated()`)は、NULLを許し、既定値はnull、ON UPDATEはnullである。種類は`rawColumn()`と同じく型の名前で決める。DBも生成カラムを`Null`が`YES`・`Default`が`NULL`と返すため、§5の検証3で宣言と一致する。
 - `decimal()`の既定値は、SQLにそのまま書くため、10進の数の表記(`-?\d+(\.\d+)?`)だけを受け付ける。指数・空白・`+`の付いた表記は`SchemaException`。
+
+#### 生成カラム(確定)
+
+`generated($name, $type, $expression, $storage)`は、`{name} {type} AS ({expression}) {STORED|VIRTUAL}`の列の行を出す。`$storage`に既定値を付けない。生成カラムには索引(`index()`・`unique()`)を張れる。
+
+- NULLの可否: 常にNULLを許し、`NOT NULL`を出さない。MariaDBは生成カラムの`NOT NULL`を構文の誤り(1064)にする(R6)。
+- 型の検証: `$type`が、小文字に変えずにそのまま`^[a-z]+(\(\d+(,\d+)?\))?( unsigned)?$`に合うこと。大文字を含む型は、黙って書き換えずに`SchemaException`にする(`$type`はそのまま列の行に出すため、`toSql()`の型名を小文字にする規則に合わせる)。加えて、`rawColumn()`と同じ型の表記の規則(型の別名と、DBが別の表記で記録する表記の拒否。下記エッジケース)を使う。合わなければ`SchemaException`。
+- 宣言の順序: 生成カラムの後に通常の列を宣言すると`SchemaException`(生成カラムは、通常の列をすべて宣言した後にまとめて宣言する)。dbDeltaは足りない列を宣言の順に1列ずつ`ALTER TABLE … ADD COLUMN`で足すため、生成カラムが後に宣言した列を参照していると、その列より先に足そうとしてADDが失敗する。
+- 式(`$expression`)は`literal-string`(R2規約4と同じく、PHP変数の連結を静的に禁止する)で受け、先頭から1文字ずつ走査して次の字句の検証を行う。違反は`SchemaException`。式に文字列のリテラル(`'corp_admin'`等)を書けるようにしたうえで、文の連結やコメントでDDLを壊せないようにするための検証である。
+  1. 前後の空白を除いて空でなく、印字できるASCII(0x20〜0x7E)だけからなる(改行を含まない。dbDeltaは列の行を改行で分ける)。
+  2. 次の文字は、どこにあっても拒否する: `;`(dbDeltaはSQL全体を`;`で分ける)、`` ` ``、`"`、`\`。
+  3. `'`で文字列のリテラルの内外を切り替え、式の最後はリテラルの外で終わる(`''`は内外を2回切り替えるため、リテラルの中の`'`として書ける)。
+  4. リテラルの外で、`#`・`--`・`/*`・`*/`を拒否する(コメント)。
+  5. リテラルの外で括弧の深さを数え、途中で負にならず、最後が0である(`AS (` … `)`の外へ出られない)。
+  6. 語`DEFAULT`(大小文字を問わない)を拒否する。dbDeltaは既定値を列の行全体から`| DEFAULT '(.*?)'|i`で探すため、式の中の` DEFAULT '`を既定値と取り違える。
+  - `%`(剰余の演算子)は受け付ける。Migratorが`Connection::execute()`で`MODIFY`を出すとき、`%`を`%%`にする(§5)。
+  - 式の中の識別子・関数の妥当性は検証せず、DBに任せる(誤りは`wp tmswp migrate`の適用で`MigrationException`になる)。
+- `rawColumn()`は、生成カラムの構文を`SchemaException`で拒否し、`generated()`を案内する。判定は、定義に`/\bas\s*\(/i`か`/\bgenerated\s+always\b/i`が当たるかで行う。生成カラムは§5の適用と照合で特別に扱うため、宣言を`generated()`に限る。これまで`rawColumn()`で生成カラムを書けたため、これは破壊的変更であり、v0.10.0-T3でCHANGELOGの「変更」に、利用側の直し方(`generated()`に書き換える)と一緒に書く。
+- 生成カラムへの書き込みは、DBの違い(MySQLはエラー3105、MariaDBは警告だけで値を黙って捨てる。R6)をなくすため、FWが実行の前に拒否する。`Model::insert()`・`Model::update()`・`Model::upsert()`(§3)と、`Model::query()`で作った`QueryBuilder`の`update()`(§4)が、`generatedColumns()`に当たる列への書き込みを`InvalidQueryException`にする。テーブルの定義を持たない`Connection`の`insert()`・`update()`・`upsert()`と、定義を渡さずに作った`new QueryBuilder(...)`は検査しない(§1エッジケース)。
 
 #### toSql() 生成仕様(dbDelta互換要件、確定手順)
 
@@ -423,6 +596,7 @@ dbDeltaのパーサ要件を生成側で全て満たす。**実装はこの手�
    - カラム名・テーブル名にバッククォート・アポストロフィを付けない。
    - 型名はすべて小文字、`NOT NULL`/`DEFAULT`/`AUTO_INCREMENT`等のキーワードは大文字。
    - 長さ指定可能な型には必ず長さを明記する(`int(11)`等)。
+   - 生成カラムの式は宣言のまま書く(大小文字を変えない)。
 5. charset句: `charset()`が未指定なら`$connection->charsetCollate()`をそのまま使用。指定時は`DEFAULT CHARACTER SET {charset}`+(collation指定時)` COLLATE {collation}`を合成(値は`/^[A-Za-z0-9_]+$/`で検証)。charsetを指定しないcollationは宣言時に拒否する(エッジケース参照)。
 6. 最終形:
 
@@ -439,8 +613,9 @@ CREATE TABLE {full_table_name} (
 - 同名カラムの二重宣言 → `SchemaException`。
 - `index()`/`unique()`/`primary()`に未宣言カラム名 → `SchemaException`(`rawColumn`で宣言したカラムは`$name`が登録されるため参照可)。
 - `id()`と`primary()`の併用 → `SchemaException`。
+- `primary()`に生成カラムを含める → `SchemaException`。`id()`の列は常に通常の列で、同じ名前の生成カラムは同名カラムの二重宣言として拒否される。
 - `text`/`json`(longtext)カラムへの`index()` → `SchemaException`(プレフィックスインデックスは非対応。必要なら`rawColumn`+明示キーではなく`string`への変更を促すメッセージ)。
-- カラム名・インデックス名(`id()`の`$name`、`rawColumn()`、`index()`/`unique()`の`$name`を含む)にSQLの予約語(`order`・`key`・`group`・`desc`・`range`等。大文字小文字不問) → 宣言時に`SchemaException`。生成するSQLは識別子をクォートしない(dbDeltaの要件)ため、予約語はCREATE TABLEやクエリの実行時に構文エラーになる。予約語の集合は、MySQL(8.0・8.4 LTS・9.7 LTS)の予約語(`information_schema.KEYWORDS`の`RESERVED = 1`。8.4 LTSで`qualify`・`tablesample`、9.7 LTSで`external`・`library`が増えた)と、MariaDB(10.11・12.3)でクォートせずにカラム名に使えない語の和集合とする(`Identifier`が保持する)。統合テスト`IdentifierReservedWordIntegrationTest`が、接続したDBの`information_schema.KEYWORDS`の全語(MariaDBのこの表には`RESERVED`の列が無いため、`RESERVED`で絞らない)でクォートしないカラム名の作成を試し、作成に失敗する語がすべて宣言の時点で拒否されることを確かめる。CIでは、wp-envのMariaDBと、MySQL 8.4 LTS・9.7 LTSのジョブで走る(10-quality.md §5.1)。ベアテーブル名はprefixが付くため対象外。
+- カラム名・インデックス名(`id()`の`$name`、`rawColumn()`、`index()`/`unique()`の`$name`を含む)にSQLの予約語(`order`・`key`・`group`・`desc`・`range`等。大文字小文字不問) → 宣言時に`SchemaException`。生成するSQLは識別子をクォートしない(dbDeltaの要件)ため、予約語はCREATE TABLEやクエリの実行時に構文エラーになる。予約語の集合は、MySQL(8.0・8.4 LTS・9.7 LTS)の予約語(`information_schema.KEYWORDS`の`RESERVED = 1`。8.4 LTSで`qualify`・`tablesample`、9.7 LTSで`external`・`library`が増えた)と、MariaDB(10.11・12.3)でクォートせずにカラム名に使えない語の和集合とする(`Identifier`が保持する)。統合テスト`IdentifierReservedWordIntegrationTest`が、接続したDBの`information_schema.KEYWORDS`の全語(MariaDBのこの表には`RESERVED`の列が無いため、`RESERVED`で絞らない)でクォートしないカラム名の作成を試し、作成に失敗する語がすべて宣言の時点で拒否されることを確かめる。CIでは、wp-envのMariaDBと、MySQL 8.4 LTS・9.7 LTS・MariaDB 10.11 LTSのジョブで走る(10-quality.md §5.1)。ベアテーブル名はprefixが付くため対象外。
 - `rawColumn()`で、DBが別の表記で記録し、dbDeltaの差分が残り続ける型の表記 → 宣言時に`SchemaException`(使う表記をメッセージで案内する)。dbDeltaは宣言の型とDBの型を文字列で比べるため、そのままでは適用の後に差分が永久に残り、`wp tmswp migrate`が必ず失敗する。照らし合わせるのは、小文字にして空白をそろえた定義の先頭である。MySQL 8.0.44・MariaDB 10.11.18・12.3.3のすべてで、拒否する表記は少なくとも1つのDBで差分が残り、案内する表記は3つのDBで収束することを確かめた。
   - 型の別名(案内する型): `integer`→`int`、`int1`→`tinyint`、`int2`→`smallint`、`int3`・`middleint`→`mediumint`、`int4`→`int`、`int8`→`bigint`、`numeric`・`dec`・`fixed`→`decimal`、`real`・`float8`→`double`、`float4`→`float`、`boolean`・`bool`→`tinyint(1)`、`character`・`nchar`→`char`、`character varying`・`char varying`・`varcharacter`・`nvarchar`→`varchar`、`national`→`char`か`varchar`、`long`・`long varchar`→`mediumtext`、`json`→`longtext`(MariaDBが`longtext`として記録する)。
   - `serial`(DBは`bigint unsigned`とAUTO_INCREMENTで記録する): `id()`か`bigint(20) unsigned NOT NULL AUTO_INCREMENT`。
@@ -449,6 +624,7 @@ CREATE TABLE {full_table_name} (
   - `double precision`はDBが`double`と記録し、dbDeltaも先頭の語だけを比べるため受け付ける。
   - これ以外の表記でもdbDeltaの差分が残る場合(引数の無い`decimal`・`char`、`timestamp(0)`、型の前のコメント等)は、§5の検証2が`MigrationException`にし、メッセージにdbDeltaの差分の文と、定義の型をDBが記録する表記に合わせる案内を含める。利用側が定義を直せば解消する、明示的な失敗である。
 - `charset()`より前、または`charset()`なしでの`collation()` → 宣言時に`SchemaException`(charset句はcharsetの指定時にだけcollationを出力するため、collationだけの指定は反映できない)。
+- `generated()`の後の通常の列の宣言、`generated()`の型・式の検証の違反、`rawColumn()`の生成カラムの構文 → 宣言時に`SchemaException`(上記「生成カラム」)。
 
 ---
 
@@ -509,14 +685,24 @@ abstract class Model
      * INSERT。$dataはカラム名=>値(R3写像)。戻り値はinsert_id。
      * $dataが空配列の場合は 'INSERT INTO {t} () VALUES ()' を発行する
      * (AUTO_INCREMENT IDの採番のみ行うテーブル向け)。失敗時QueryException。
+     * 生成カラム(§2)のキーがあればInvalidQueryException。
      * @param array<string, mixed> $data
      */
     final public static function insert(array $data): int;
 
     /**
+     * このテーブルへのupsert(Connection::upsert()。§1「upsert」)。戻り値は影響行数(1=挿入、2=更新、0=変化なし)。
+     * $valuesに生成カラム(§2)のキーがあればInvalidQueryException。
+     * @param array<string, mixed> $values
+     * @param non-empty-array<string, UpsertUpdate> $update
+     */
+    final public static function upsert(array $values, array $update): int;
+
+    /**
      * UPDATE。$whereがintなら主キー等値条件。配列なら等値条件マップ
      * (値null→IS NULL。配列値はInvalidQueryException、IN条件はquery()を使う)。
      * 戻り値は影響行数。$whereが空配列ならInvalidQueryException(全行更新事故防止)。
+     * $dataに生成カラム(§2)のキーがあればInvalidQueryException。
      * @param array<string, mixed> $data
      * @param array<string, mixed>|int $where
      */
@@ -548,7 +734,9 @@ abstract class Model
 - **Connection解決順序**(`connection()`): (1) `useConnection()`で設定された`$sharedConnection`、(2) Modelクラスが属するKernel(`Kernel::forClass(static::class)`)のContainerの`Connection`。どちらも得られない(`useConnection()`が未指定で、どのKernelにも属さない)場合は`KernelException`を投げる。Kernelの外(プラグインの`uninstall.php`等)では`Model::useConnection(Connection::fromGlobal())`で接続先を明示する。WP非依存のユニットテスト(Brain Monkey + wpdbフェイク)も`useConnection()`だけで成立する。
 - `useConnection()`は呼び出したクラスに関係なく全Modelに効く(`InquiryModel::useConnection($c)`も`Model::useConnection($c)`と同じ)。テストはtearDownで`Model::useConnection(null)`を呼んで解除する。
 - `table()`の結果は`$definitionCache[static::class]`にキャッシュする(1リクエスト中の再構築防止)。`table()`は同一内容を返す純粋関数として実装する規約(rules/に記載)。
-- `query()`は`new QueryBuilder(static::connection(), static::bareTableName())`を返し、`rowClass()`が非nullなら`as(static::rowClass())`を適用する。毎回新規インスタンス(ビルダはミュータブルなので共有しない)。
+- `query()`は`new QueryBuilder(static::connection(), static::bareTableName(), null, static::definition())`を返し(4つ目の引数はキャッシュした`table()`の結果。生成カラムへの代入の拒否に使う。§4)、`rowClass()`が非nullなら`as(static::rowClass())`を適用する。毎回新規インスタンス(ビルダはミュータブルなので共有しない)。
+- 生成カラムへの書き込みの拒否: `insert()`・`update()`・`upsert()`は、`$data`・`$values`のキーに、`static::definition()`(キャッシュした`table()`の結果)の`generatedColumns()`に当たるものがあれば、DBに送る前に`InvalidQueryException`を投げる(§2「生成カラム」)。`update()`の`$where`の生成カラムは条件なので拒否しない。
+- トランザクションのファサードは持たない。`Model::connection()->transaction(...)`を使う(§1「トランザクション」)。
 - `find()`は`static::query()->where(static::primaryKey(), $id)->first()`と等価。
 - `update()`/`delete()`/`count()`の条件マップは文字列キー必須(整数キーが含まれたら`InvalidQueryException`。旧FWの「整数キー=生SQL断片」仕様は採らない)。`update()`/`delete()`は値null→`whereNull`、それ以外→`where(key, value)`(配列値は`where()`が`InvalidQueryException`にする)。`count()`は値が配列→`whereIn`(listでなければ`InvalidQueryException`)、null→`whereNull`、それ以外→`where(key, value)`。
 - 行用のコンストラクタの禁止: Modelのコンストラクタは引数のない`final`であり、サブクラスは行の値を受けるコンストラクタを宣言できない(宣言するとクラスの読み込み時にPHPの致命的エラー)。`rowClass()`がModelのサブクラスを返すと、`query()`(と、それを使う`find()`/`update()`/`delete()`/`count()`)が適用する`as()`が`InvalidQueryException`を投げる(§4の`as()`)。`private`にしないのは、Discoveryが`#[AsModel]`のクラスにインスタンス化できること(抽象クラスでないこと)を求めるため。
@@ -675,15 +863,19 @@ final class QueryBuilder
     /** @var class-string|null */
     private ?string $rowClass;
 
+    private ?RowLock $lock = null;
+
     /**
      * @param string $table ベアテーブル名
      * @param class-string|null $rowClass 既定ハイドレーション先。as()と同じ検査を行う
      *        (存在しないクラスはHydrationException、ModelのサブクラスはInvalidQueryException)
+     * @param TableDefinition|null $definition テーブルの定義。渡すとupdate()が生成カラムへの代入を拒否する(Model::query()が渡す)
      */
     public function __construct(
         private readonly Connection $connection,
         private readonly string $table,
         ?string $rowClass = null,
+        private readonly ?TableDefinition $definition = null,
     ) {}
 
     // ---- FROM ----
@@ -780,6 +972,11 @@ final class QueryBuilder
     /** 負数はInvalidQueryException。limit()なしのままビルドするとInvalidQueryException */
     public function offset(int $offset): self;
 
+    // ---- 行ロック ----
+
+    /** 行ロックの句(下記「行ロックの句」)。2回目の呼び出しは上書きする。toSql()にも出す */
+    public function lock(RowLock $lock): self;
+
     // ---- ハイドレーション ----
 
     /**
@@ -823,6 +1020,7 @@ final class QueryBuilder
     /**
      * UPDATE実行。$valuesはカラム=>値(R3写像。null値は{col} = NULLを代入)。
      * 制約: JOINとの併用不可・WHERE必須(違反はInvalidQueryException)。影響行数を返す。
+     * テーブルの定義を渡して作ったビルダ(Model::query())では、生成カラムへの代入もInvalidQueryException。
      */
     public function update(array $values): int;
 
@@ -831,6 +1029,15 @@ final class QueryBuilder
 
     /** prepare適用後の最終SQL(デバッグ・ログ用)。終端メソッドと同じ組み立てを行うが実行しない */
     public function toSql(): string;
+}
+
+/** 行ロックの句。backing valueがそのままSQLの句 */
+enum RowLock: string
+{
+    case ForUpdate = 'FOR UPDATE';
+    case ForUpdateNoWait = 'FOR UPDATE NOWAIT';
+    case ForUpdateSkipLocked = 'FOR UPDATE SKIP LOCKED';
+    case Shared = 'LOCK IN SHARE MODE';
 }
 ```
 
@@ -842,7 +1049,7 @@ final class QueryBuilder
 - 引数2個: `where($column, $value)`。`$value === null`なら`{col} IS NULL`にコンパイル。それ以外はR3写像で`{col} = {placeholder}`。
 - 引数3個: 演算子を大文字正規化し許可リストと照合。`=`+null→`IS NULL`、`!=`/`<>`+null→`IS NOT NULL`。それ以外の演算子+null、および値が配列の場合は`InvalidQueryException`。
 
-**グループ(Closure)**: 子の`QueryBuilder`(同一Connection・同一テーブル)を生成してClosureに渡す。Closureの実行後、子のwhere断片を`(...)`で括って親に連結し、子のbindingsを親に連結する。子でwhere系以外(`select`/`selectRaw`/`alias`/`join`/`groupBy`/`orderBy`/`limit`/`offset`)が呼ばれていた場合は、そのグループを追加する`where()`/`orWhere()`の呼び出しで`InvalidQueryException`。
+**グループ(Closure)**: 子の`QueryBuilder`(同一Connection・同一テーブル)を生成してClosureに渡す。Closureの実行後、子のwhere断片を`(...)`で括って親に連結し、子のbindingsを親に連結する。子でwhere系以外(`select`/`selectRaw`/`alias`/`join`/`groupBy`/`orderBy`/`limit`/`offset`/`lock`)が呼ばれていた場合は、そのグループを追加する`where()`/`orWhere()`の呼び出しで`InvalidQueryException`。
 
 **条件はメソッド呼び出し時に即コンパイル**する(`['AND', 'email = %s']` + bindings `['a@b.c']`の形で蓄積)。遅延コンパイルは行わない。仕様が単純になり、`toSql()`が常に現状態を反映する。
 
@@ -854,7 +1061,7 @@ final class QueryBuilder
 2. FROM句: `{$connection->tableName($table)}`+(alias指定時)` AS {alias}`。
 3. JOIN句: 蓄積順に連結。
 4. WHERE句: 先頭断片の論理演算子を捨て、以降を` AND `/` OR `で連結。
-5. GROUP BY、ORDER BY、`LIMIT %d`、`OFFSET %d`(limit/offsetの値もbindingsに積む)。
+5. GROUP BY、ORDER BY、`LIMIT %d`、`OFFSET %d`(limit/offsetの値もbindingsに積む)、行ロックの句(`lock()`の指定時。OFFSETの後の最後)。
 6. bindingsの最終順序は **SELECT句 → JOIN句 → WHERE句 → LIMIT/OFFSET**(SQL内の出現順と一致させる)。
 7. `Connection::select($sql, $bindings)`等で実行。
 
@@ -862,7 +1069,15 @@ final class QueryBuilder
 
 **count()**: select/selectRaw(とそのbindings)・orderBy・limit・offsetを捨てて組み立てる。`$groups`が空なら`SELECT COUNT(*) {from以降 whereまで}`に、非空なら`SELECT COUNT(*) FROM (SELECT 1 {from以降 group byまで}) AS tmswp_count`にコンパイルする(サブクエリにもORDER BY・LIMIT・OFFSETを含めない。ページ送りの総件数に使える)。offsetを捨てるため、`limit()`なしで`offset()`を指定したビルダでも例外にしない。`Connection::selectVar()`の値が整数を表さなければ`QueryException`、表せばintにして返す。
 
-**update()/delete()の組み立て**: `UPDATE {full} SET {col} = {ph}, ... WHERE ...` / `DELETE FROM {full} WHERE ...`。null値は`{col} = NULL`とし、bindingsに積まない。bindingsはSET句→WHERE句の順。alias・JOIN・groupBy・orderBy・limitが設定されていたら`InvalidQueryException`(最小限仕様)。「本当に全行を対象にしたい」場合のみ`whereRaw('1 = 1')`を書く規約とし、rules/に記載する。
+**update()/delete()の組み立て**: `UPDATE {full} SET {col} = {ph}, ... WHERE ...` / `DELETE FROM {full} WHERE ...`。null値は`{col} = NULL`とし、bindingsに積まない。bindingsはSET句→WHERE句の順。alias・JOIN・groupBy・orderBy・limitが設定されていたら`InvalidQueryException`(最小限仕様)。「本当に全行を対象にしたい」場合のみ`whereRaw('1 = 1')`を書く規約とし、rules/に記載する。コンストラクタにテーブルの定義を渡したビルダの`update()`は、`$values`のキーに定義の`generatedColumns()`に当たるものがあれば`InvalidQueryException`(§2「生成カラム」)。
+
+**行ロックの句(確定)**: `lock(RowLock $lock)`は、SELECT文の最後(OFFSETの後)に`$lock->value`を付ける。`get()`・`first()`・`value()`・`pluck()`・`exists()`に効く。
+
+- 句は4つ(`FOR UPDATE`・`FOR UPDATE NOWAIT`・`FOR UPDATE SKIP LOCKED`・`LOCK IN SHARE MODE`)だけである。共有ロックは、MariaDBで構文の誤りになる`FOR SHARE`ではなく、MariaDB・MySQLの両方で使える`LOCK IN SHARE MODE`を出す。共有ロックに`NOWAIT`・`SKIP LOCKED`を付けた組み合わせは作らない(MySQLで`LOCK IN SHARE MODE SKIP LOCKED`が構文の誤りになる。R6)。DBの種類で句を分けない。
+- 実行の時点(`toSql()`は除く)で、ビルダのConnectionの`inTransaction()`が偽なら`InvalidQueryException`。トランザクションの外の行ロックは、文の終わりで解けて意味が無いためである。
+- `count()`・`update()`・`delete()`と`lock()`の併用は`InvalidQueryException`。
+- 例: 例2のキューで`QueueModel::query()->where('completed', false)->orderBy('queued_at')->limit(10)->lock(RowLock::ForUpdateSkipLocked)->get()`は、`SELECT * FROM wp_queue WHERE completed = %d ORDER BY queued_at ASC LIMIT %d FOR UPDATE SKIP LOCKED`を実行する(ほかの処理がロックしている行を飛ばして10件を取る)。
+- ロック待ちの時間切れ・`NOWAIT`でロックを得られない場合は`LockWaitTimeoutException`、デッドロックは`DeadlockException`になる(§1)。
 
 **ハイドレーション**: 実行結果(連想配列リスト)を行クラスへ変換する。
 
@@ -1006,15 +1221,20 @@ final readonly class MigrationStatus
    読み取りのDBエラーはMigrationException("failed to read the schema hashes: {last_error}")
 4. if (!$force && $stored === $hash) → MigrationAction::Skipped(dbDeltaを実行しない)
 5. require_once ABSPATH . 'wp-admin/includes/upgrade.php'  // dbDeltaが未定義のときだけ
+5a. $existing = 定義に生成カラムがあり、テーブルがあれば SHOW FULL COLUMNS で読んだ既にある列の名前
+   (それ以外は読まずに空)
 6. dbDelta($sql)                                          // 実行
 7. 検証1: $this->connection->lastError() が非空 →
    MigrationException("dbDelta failed on table {table}: {last_error}")
+7a. 生成カラムの適用: 定義の生成カラム(generatedColumns())のうち、$existingにあった列ごとに
+   $this->connection->execute("ALTER TABLE {フルテーブル名} MODIFY COLUMN {columnSql(列)の%を%%にしたもの}")。
+   dbDeltaが今回ADDした列には出さない。失敗はMigrationException(下記「生成カラムとON UPDATEの適用と照合」)
 8. 検証2: dbDelta($sql, false)(dry-run)の戻り配列が非空 →
    MigrationException("dbDelta left differences on table {table}: {残差分を'; 'で連結}; if the database records
    a column type in another notation, write the type in the table definition as the database records it")
 9. 検証3: 実際の構造を定義と照らし合わせる(SHOW FULL COLUMNS・SHOW INDEX・SHOW TABLE STATUS)。
-   テーブル・列・主キー・索引があること、各列のNULLの可否と既定値、collation()で宣言した
-   テーブルの照合順序が定義と同じであること。食い違えばMigrationException
+   テーブル・列・主キー・索引があること、各列のNULLの可否と既定値、生成カラムかどうかとその保存の方式、
+   ON UPDATEの値、collation()で宣言したテーブルの照合順序が定義と同じであること。食い違えばMigrationException
    ("table {table}: column {列} is expected to have DEFAULT 1 but the database has DEFAULT 0;
     dbDelta does not apply this change, so apply it with a manual ALTER TABLE, or, if the database stored
     a rounded value, change the definition to the value the database stores" 等。丸めの案内は既定値の
@@ -1026,16 +1246,48 @@ final readonly class MigrationStatus
 - 保存済みのハッシュの読み書き(`status()`・`migrateAll()`・`dropTable()`)は、`get_option()`の`false`(optionが無い)とDBのエラーを区別する。`get_option()`は読み込みのクエリが失敗しても`false`を返すため、メタ・オプションの読み取り(04-meta-options.md §4.6)と同じ`WpDatabaseGuard`で、呼び出しの間に`num_queries`が増え、かつ`last_error`が空でない場合をDBのエラーとして`MigrationException`にする(呼び出しの前の無関係なエラーは拾わない)。失敗した読み込みでWPが書いた「optionが無い」のキャッシュ(notoptions)も消す。管理画面の通知では、この例外を下記の通知の失敗として扱う。
 - 検証1〜3のどれかで失敗したら、そのテーブルのハッシュは更新しない。原因を直して`wp tmswp migrate`をもう一度実行すれば、そのテーブルから適用し直す。
 - dbDeltaは1つの定義に複数の文(DESCRIBE・SHOW INDEX・ALTER等)を発行し、wpdbは文ごとに`last_error`を消すため、適用後の`last_error`は最後の文のエラーしか表さない。途中の文の失敗と、エラーを残さずに反映されなかった変更は、検証2の残差分で検出する。本FWのtoSql()生成規則はdbDeltaの比較器と整合するため、正常時の残差分は空になる(MySQL 8.0.17以降の整数型の表示幅は、dbDeltaが比較から除く)。
-- dbDeltaが適用するのは、テーブルの作成、列・索引の追加、列の型の変更、引用符で囲んだ既定値の変更だけである。数値の既定値(`bool()`・`int()`・`decimal()`等)の変更、既定値の削除、`CURRENT_TIMESTAMP`の追加、NULLの可否の変更、テーブルの照合順序の変更は、適用せず、検証2の残差分にも出ない。検証3はこれらの食い違いを検出してハッシュを更新しない。足りない変更はMigratorが自動でALTERせず、利用側が`Connection::execute()`等で手動のALTERを実行してから、`wp tmswp migrate`をもう一度実行する。
+- dbDeltaが適用するのは、テーブルの作成、列・索引の追加、列の型の変更、引用符で囲んだ既定値の変更だけである。数値の既定値(`bool()`・`int()`・`decimal()`等)の変更、既定値の削除、`CURRENT_TIMESTAMP`の追加、既にある列へのON UPDATEの追加・削除、NULLの可否の変更、テーブルの照合順序の変更は、適用せず、検証2の残差分にも出ない。検証3はこれらの食い違いを検出してハッシュを更新しない。足りない変更はMigratorが自動でALTERせず、利用側が`Connection::execute()`等で手動のALTERを実行してから、`wp tmswp migrate`をもう一度実行する。例外は生成カラムの式で、手順7aのMODIFYでMigratorが適用する(下記「生成カラムとON UPDATEの適用と照合」)。
 - 検証3の既定値の比較は、列の種類(§2「列の属性」)ごとに、DBが返す表記の違いを除いて行う。どちらかが既定値なし(null)なら、両方が既定値なしのときだけ同じとする。
   - `number`: 10進の数として正規化して厳密に比べる。符号・整数部の先頭の0・小数部の末尾の0を除き、`-0`は`0`にする(`decimal(10,2)`の`DEFAULT 1`をDBは`1.00`と返すが、同じとする)。指数の表記(`e`/`E`、指数の符号`+`/`-`/なし、係数の小数)は、floatを使わず、係数の数字の並びと指数による小数点の位置の移動を文字列で扱い、指数の無い正規形にする。DBは`double`・`float`の大きな既定値を指数の表記で返す(`DEFAULT 100000000000000000000`を`1e20`と返す)ため、`1e20`と`100000000000000000000`、`1E-3`と`0.001`、`1e+20`と`1e20`、`1e0`と`1.00`は同じとする。値を丸めないため、`9007199254740992`と`9007199254740993`、`1e20`と`1e21`、`1.5e1`と`16`は別。10進の数として読めない値と、指数の絶対値が400を超える値は、そのまま比べる。`double`・`float`で表せない桁の既定値(例: `DEFAULT 100000000000000000001`)はDBが丸めて記録するため、食い違いとして検出される。定義の既定値を、DBが記録する値に合わせる(既定値の食い違いの例外は、手動のALTER TABLEに加えてこの直し方を案内する)。
   - `string`: そのまま厳密に比べる(`'001'`と`'1'`は別)。
   - `temporal`: `CURRENT_TIMESTAMP`・`current_timestamp()`・`CURRENT_TIMESTAMP(n)`・`current_timestamp(n)`を、大小文字を無視して`CURRENT_TIMESTAMP`か`CURRENT_TIMESTAMP(n)`にそろえる。精度は保ち、精度の違うものは別とする。空の括弧と精度0は精度なしとする(3つのDBとも、`DEFAULT CURRENT_TIMESTAMP(0)`を精度なしと同じ`CURRENT_TIMESTAMP`・`current_timestamp()`として返す)。それ以外の値(日時の値)はそのまま比べる。
   - 照合順序は、`utf8_`で始まる名前をDBが返す`utf8mb3_`にそろえて比べる。charsetだけを宣言した場合と、charsetを宣言しない場合(wpdbの既定)は、照合順序を比べない。
   - MySQL 8.0.44・MariaDB 10.11.18・12.3.3で、組込の全ての列の型・既定値・NULLの可否と、§2で受け付けるrawColumnの型の作成と再適用が検証3を通り、上記の未適用の変更(大きな整数・桁の多いDECIMALの既定値の変更、指数の表記の既定値の変更を含む)が検証3で失敗することと、指数の表記で返る同じ値の既定値が検証3を通ることを確かめた。
-  - 組込の全ての列の型・既定値・NULLの可否と、§2で受け付けるrawColumnの型(型の別名や収束しない表記を拒否したときに案内する型を含む)の作成と再適用が検証1〜3を通ることは、統合テスト`MigratorColumnTypeIntegrationTest`で確かめる。このテストは、MySQL 8.4 LTS(8.4.13)・9.7 LTS(9.7.4)・MariaDB 12.3.3で通ることを確かめた。WordPressのテストライブラリはテストの中のCREATE TABLEを一時テーブルに書き換えるが、MySQLのSHOW TABLES・SHOW TABLE STATUSは一時テーブルを返さない(MariaDBは11.2から返す)。検証3はこれらで実際の構造を読むため、Migratorを使う統合テストは、tmswp/testingの`RealTables`(`IntegrationTestCase::useRealTables()`)で実際のテーブルを作る(10-quality.md §4.11)。CIでは、wp-envのMariaDBと、MySQL 8.4 LTS・9.7 LTSのジョブで走る(10-quality.md §5.1)。
+  - 組込の全ての列の型・既定値・NULLの可否と、§2で受け付けるrawColumnの型(型の別名や収束しない表記を拒否したときに案内する型を含む)の作成と再適用が検証1〜3を通ることは、統合テスト`MigratorColumnTypeIntegrationTest`で確かめる。このテストは、MySQL 8.4 LTS(8.4.13)・9.7 LTS(9.7.4)・MariaDB 12.3.3で通ることを確かめた。WordPressのテストライブラリはテストの中のCREATE TABLEを一時テーブルに書き換えるが、MySQLのSHOW TABLES・SHOW TABLE STATUSは一時テーブルを返さない(MariaDBは11.2から返す)。検証3はこれらで実際の構造を読むため、Migratorを使う統合テストは、tmswp/testingの`RealTables`(`IntegrationTestCase::useRealTables()`)で実際のテーブルを作る(10-quality.md §4.11)。CIでは、wp-envのMariaDBと、MySQL 8.4 LTS・9.7 LTS・MariaDB 10.11 LTSのジョブで走る(10-quality.md §5.1)。
 - dbDeltaの既知の制約 — **カラム削除・カラム名変更・型縮小のデータ変換は行われない** — はそのまま引き継ぐ。不要カラムはDBに残置される(削除が必要な運用は利用側が`Connection::execute()`で明示ALTERを書く)。この制約はrules/とPHPDocに明記する。
 - 同時実行で`wp tmswp migrate`が二重に走っても、dbDeltaは差分適用型なので冪等であり整合性は壊れない。ロックは設けない。
+
+#### 生成カラムとON UPDATEの適用と照合(確定)
+
+**変更の検出**: ほかの変更と同じく、テーブル全体の定義のハッシュ(`toSql()`のsha256)で行う。生成カラムの式を変えると`toSql()`が変わるため、`status()`・`--dry-run`・管理画面の通知が変更ありを報告する。DBが正規化して保存した式(`information_schema.COLUMNS`の`GENERATION_EXPRESSION`)とは比べない。正規化の結果がMariaDBとMySQLで違い、宣言の表記と比べられないためである。
+
+**dbDeltaと生成カラム**(WordPress 7.0の`wp-admin/includes/upgrade.php`):
+
+- テーブルが無ければ、`CREATE TABLE`で生成カラムごと作る。足りない列は`ALTER TABLE {t} ADD COLUMN {列の行}`で足し、`AS (…) STORED`等のまま正しく足される。
+- 列の型は`列名 ([^ ]*( unsigned)?)`で読み、DBの型と比べる。生成カラムでも型が同じなら`CHANGE COLUMN`を出さない(式の変更を検出も適用もしない)。
+- SQL全体を`;`で、列の行を改行で分け、既定値を列の行全体から`| DEFAULT '(.*?)'|i`で探す。式の字句の検証(§2「生成カラム」)は、これらで式が壊れないようにする。
+
+**適用(手順5a・7a)**: dbDeltaは既にある生成カラムの式を変えないため、Migratorが`MODIFY`で適用する。
+
+1. dbDeltaの前に、定義に生成カラムがあり、テーブルがあれば、`SHOW FULL COLUMNS`で既にある列の名前を読む。定義に生成カラムが無ければ読まない(3で使わないため)。
+2. dbDeltaを実行し、検証1を行う。
+3. 定義の生成カラムのうち、1で既にあった列ごとに、`ALTER TABLE {フルテーブル名} MODIFY COLUMN {列の行}`を`Connection::execute()`で実行する。列の行は`columnSql()`(`toSql()`と同じ列の行)で得て、`%`を`%%`にして渡す(`execute()`はbindingsが空でも`%`の並びを検証し、`%%`を`%`に戻す。§1)。dbDeltaが今回ADDした列には出さない。
+4. 検証2・検証3を行う。
+
+- 3は式が変わっていなくても実行する(Migratorは前の式を持たない)。MySQLでは定義が同じ`MODIFY`は0行で終わるが、MariaDBでは表を作り直して全行を写す(R6)。大きなテーブルでは、ハッシュが変わった適用と`--force`の適用に時間がかかる。
+- 3は、DBの通常の列を定義で`generated()`にした場合にも`MODIFY`を出し、列を生成カラムに変える(R6の「通常の列 → STORED」。通常の列からVIRTUALへの変更は確かめていない。v0.10.0-T3で実測し、結果をこことR6の表に反映する)。
+- `MODIFY`の失敗(`execute()`の`QueryException`)は、テーブル名・列名とDBのエラーを含む`MigrationException`にする(元の例外をpreviousにする)。メッセージには次の案内を含める。
+  - STOREDとVIRTUALの入れ替えは`MODIFY`でできない(MariaDBは1907、MySQLは3106。R6)。手動で列を`DROP COLUMN`して`ADD COLUMN`し直す必要がある。
+  - UNIQUEの索引を張った生成カラムで、新しい式の値が重複すると`Duplicate entry`で失敗する。データを直すか式を見直す。
+- 3で失敗したら、検証1〜3の失敗と同じく、そのテーブルのハッシュは更新しない。
+
+**照合(検証3)**: `existingColumns()`は`SHOW FULL COLUMNS`の`Extra`も読み、各列について次を宣言と比べる。食い違いは、手動の`ALTER TABLE`を案内する`unappliedChange`の`MigrationException`にする。案内には、DBに合わせて定義を改める直し方(DBにあるON UPDATEに合わせて`datetime(onUpdateCurrentTimestamp: true)`にする、DBの生成カラムに合わせて`generated()`にする)も含める。
+
+- 生成カラムかどうかと保存の方式: `Extra`を小文字にして`/\b(stored|virtual) generated\b/`で読む。当たらなければ通常の列とする。宣言(`columnGeneration()`)と比べ、通常の列と宣言したのにDBでは生成カラムである場合等は食い違いとする(dbDeltaは型が同じなら列を変えないため)。MySQLが既定値`CURRENT_TIMESTAMP`の列に付ける`DEFAULT_GENERATED`は、この正規表現に当たらない(`stored`・`virtual`と空白で続く`generated`だけを読む)ため、生成カラムと取り違えない。
+- ON UPDATE: `Extra`から`/\bon update (current_timestamp(\(\d*\))?)/i`で取り出し、既定値の`temporal`と同じ正規化(`CURRENT_TIMESTAMP`・`current_timestamp()`・`CURRENT_TIMESTAMP(n)`をそろえ、精度は保つ)をして、宣言(`columnOnUpdate()`)と比べる。当たらなければON UPDATEなしとする。MariaDBは`on update current_timestamp()`、MySQLは`DEFAULT_GENERATED on update CURRENT_TIMESTAMP`と返す(R6)。
+- 生成カラムのNULLの可否と既定値は、DBが`Null`を`YES`、`Default`を`NULL`と返し、宣言(NULLを許す・既定値なし)と一致する。型は、通常の列と同じく検証2(dbDeltaのdry-run)が比べる。
+
+**ON UPDATEの追加・削除**: テーブルの作成と列の追加では、列の行のまま`ON UPDATE CURRENT_TIMESTAMP`が付く。既にある列への追加・削除はdbDeltaが適用しないため(`CURRENT_TIMESTAMP`の既定値の追加と同じ扱い)、宣言を変えるとdry-runは変更ありを報告し、`wp tmswp migrate`は検証3で手動の`ALTER TABLE … MODIFY COLUMN`を案内して失敗する。
 
 #### listen() の配線(確定)
 
@@ -1140,6 +1392,18 @@ final class MigrateCommand
 4. `#[AsModel]`クラスは`Model`のサブクラスであること。違反はModelInitializerが`DiscoveryException`で報告する(Discoveryの探索失敗エラー方針と整合)。`Migrator::register()`を直接呼んだ場合の違反は`SchemaException`。
 
 Modelクラス自体は登録以外の初期化を必要としない(静的ファサードのため、利用時に`connection()`が遅延解決する)。
+
+### 8. テストの代役(tmswp/testingの`WpdbTestDouble`)での扱い
+
+ユニットテスト(WordPressなし)では、`Model::useConnection(new Connection(WpdbTestDouble::create()))`のようにwpdbの代役を使う。v0.10.0で足す機能は、代役で次のように扱う。代役で再現しない挙動は、統合テストで確かめる。
+
+| 機能 | `WpdbTestDouble`での扱い |
+|---|---|
+| トランザクション | `query()`で`START TRANSACTION`・`COMMIT`・`ROLLBACK`を受け付け、0を返す。トランザクションの中の`START TRANSACTION`は例外にする。`SET SESSION innodb_lock_wait_timeout = N`を受け付けて値を状態に持ち(既定は`'50'`)、`get_var('SELECT @@SESSION.innodb_lock_wait_timeout')`でその値を返す。確かめ用に`inTransaction()`を持つ。デッドロック・ロック待ちの時間切れは再現しない。代役はmysqliの接続を持たず、エラー番号は0になる(§1)ため、デッドロック等の扱いのテストは、利用者が`new DeadlockException(...)`等をコールバックから投げて書く(rules/testing.mdに書く) |
+| 行ロックの句 | 変更なし。句は`toSql()`と、代役が受け取るSQLで確かめる。ロックの競合は再現しない |
+| upsert | `INSERT`で始まるため、今の書き込みの扱いで受け付ける。影響行数が0なら`insert_id`を0にする。テストとrules/testing.mdに書く |
+| 生成カラム | 変更なし。書き込みの拒否はDBに届く前に行う(§2・§3・§4)。生成カラムを含む`CREATE TABLE`・`ALTER TABLE`は受け付ける |
+| ON UPDATE CURRENT_TIMESTAMP | 変更なし。値の自動の更新は再現しない |
 
 ---
 
@@ -1439,6 +1703,74 @@ $migrator = new \TMSWP\Core\Model\Migrator(\TMSWP\Core\Model\Connection::fromGlo
 $migrator->dropTable(\App\Model\InquiryModel::class);
 ```
 
+### 例7: アクティブな行だけで一意にする — 生成カラム・トランザクション・行ロック・upsert
+
+アカウントの種類と状態から、アクティブな行だけが値を持つ(非アクティブならNULLの)生成カラムを作り、それにUNIQUEの索引を張る。UNIQUEの索引はNULLを重複とみなさないため、アクティブな行どうしの重複だけを拒否し、非アクティブな行は複数共存できる。
+
+```php
+<?php
+// app/Model/AccountModel.php
+
+declare(strict_types=1);
+
+namespace App\Model;
+
+use TMSWP\Core\Attribute\AsModel;
+use TMSWP\Core\Model\GeneratedColumnStorage;
+use TMSWP\Core\Model\Model;
+use TMSWP\Core\Model\TableDefinition;
+
+#[AsModel]
+final class AccountModel extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return TableDefinition::create('accounts')
+            ->id()
+            ->string('account_type', 20)
+            ->string('status', 20)
+            ->bigint('corp_id', nullable: true, unsigned: true)
+            ->datetime('created_at', default: 'CURRENT_TIMESTAMP')
+            ->datetime('updated_at', default: 'CURRENT_TIMESTAMP', onUpdateCurrentTimestamp: true)
+            // 生成カラムは通常の列の後にまとめて宣言する
+            ->generated(
+                'corp_admin_active_key',
+                'bigint(20) unsigned',
+                "CASE WHEN account_type = 'corp_admin' AND status NOT IN ('expired','deleted') THEN corp_id ELSE NULL END",
+                GeneratedColumnStorage::Stored,
+            )
+            ->unique('corp_admin_active_key', 'uq_corp_admin');
+    }
+}
+```
+
+```php
+// 生成されるCREATE TABLE文の列の行(抜粋)
+// updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+// corp_admin_active_key bigint(20) unsigned AS (CASE WHEN account_type = 'corp_admin' AND status NOT IN ('expired','deleted') THEN corp_id ELSE NULL END) STORED,
+
+use TMSWP\Core\Model\RowLock;
+use TMSWP\Core\Model\UpsertUpdate;
+
+// 行ロックはトランザクションの中で使う。ロック待ちの上限は5秒(この間だけ)
+$account = AccountModel::connection()->transaction(static function () use ($accountId): ?object {
+    $row = AccountModel::query()->where('id', $accountId)->lock(RowLock::ForUpdate)->first();
+    if ($row !== null) {
+        AccountModel::update(['status' => 'active'], $accountId);
+        // AccountModel::update(['corp_admin_active_key' => 1], $accountId) は InvalidQueryException(生成カラム)
+    }
+
+    return $row;
+}, lockWaitTimeout: 5);
+
+// upsert: 同じキーなら件数を足す(DailyCountModelは(stat_date, account_id)のUNIQUEの索引を持つ別のModel)
+DailyCountModel::upsert(
+    ['stat_date' => '2026-10-30', 'account_id' => 1, 'hits' => 1],
+    ['hits' => UpsertUpdate::Increment],
+);
+// INSERT INTO wp_daily_counts (stat_date, account_id, hits) VALUES (%s, %d, %d) ON DUPLICATE KEY UPDATE hits = hits + %d
+```
+
 ---
 
 ## 旧iwf2bからの設計根拠(簡潔に)
@@ -1497,6 +1829,15 @@ $migrator->dropTable(\App\Model\InquiryModel::class);
 - [ ] WordPressなしのユニットテストで、グローバルの`$wpdb`を置かずにKernelをbootできる
 - [ ] `wp tmswp migrate` / `--force` / `--dry-run`が§6の出力どおり動作し、`MigrationException`は`WP_CLI::error()`で非0終了する(ユニットテストとwp-envでの実行)
 - [ ] 利用例2(キュー)・例3(自己結合JOIN/LEFT JOIN+集計)のコードが動作する統合テストが存在する(旧生SQLフォールバック事例の置換実証)
+
+**v0.10.0の拡張(トランザクション・行ロックの句・upsert・生成カラム・ON UPDATE CURRENT_TIMESTAMP)**
+- [ ] トランザクション: `Connection::transaction()`のコールバックが例外を投げると、その中のINSERT・UPDATEがすべて取り消され、例外がそのまま送出される。正常に終わればコミットされ、戻り値が返る。入れ子は`InvalidQueryException`。2つの接続でロックを競合させると、指定した秒数で`LockWaitTimeoutException`になり、終わった後に`innodb_lock_wait_timeout`が元の値に戻っている。実行中の`execute()`のDDL・トランザクションの制御の文は`InvalidQueryException`(統合テスト)
+- [ ] 行ロックの句: `lock()`の`toSql()`が`FOR UPDATE`・`FOR UPDATE NOWAIT`・`FOR UPDATE SKIP LOCKED`・`LOCK IN SHARE MODE`をOFFSETの後に出し(`FOR SHARE`を出さない)、対応するすべてのDBで実行できる。トランザクションの外での実行と、`count()`・`update()`・`delete()`との併用は`InvalidQueryException`(統合テスト)
+- [ ] upsert: `Connection::upsert()`・`Model::upsert()`が`INSERT … ON DUPLICATE KEY UPDATE`を、`VALUES()`と行の別名を使わずに出し、同じキーで2回実行すると1行だけが残り、`UpsertUpdate::Increment`の加算が反映される。戻り値が1・2・0の影響行数である(統合テスト)
+- [ ] 生成カラム: `generated()`の`toSql()`が`{name} {type} AS ({expression}) {STORED|VIRTUAL}`を出す。式の字句の検証・宣言の順序・`rawColumn()`の生成カラムの構文の拒否が`SchemaException`になる。`Model::insert()`・`update()`・`upsert()`と`Model::query()->update()`の生成カラムへの書き込みが`InvalidQueryException`になる。dry-run → 適用 → dry-runの最後が変更なしになり、既にあるテーブルへの生成カラムの追加と式の変更が適用され、アクティブな行どうしの重複だけがUNIQUEの索引で拒否される(統合テスト)
+- [ ] ON UPDATE CURRENT_TIMESTAMP: `datetime(onUpdateCurrentTimestamp: true)`の行が同じ定義の`rawColumn()`の行とバイト単位で同じで、適用の後のdry-runが変更なしになり、UPDATEで値が自動で更新される。既にある列への追加・削除は検証3が手動のALTERを案内する`MigrationException`にする(統合テスト)
+- [ ] 上の統合テストが、MySQL 8.4 LTS・9.7 LTS、MariaDB 10.11 LTS、wp-envのMariaDBのすべてで通る(R6)
+- [ ] `WpdbTestDouble`で、トランザクション・行ロックの句・upsertを使うコードのユニットテストが書ける(§8)
 
 **品質ゲート**
 - [ ] 本層の全クラスが`declare(strict_types=1)`・`final`(Model基底と、R4によりfinalにしない`QueryException`を除く)・全シグネチャ型宣言済みで、`__callStatic`等のマジックメソッドを含まない(WP-CLIがコマンドのクラスに`__invoke`を要求するため、`MigrateCommand::__invoke`(§6)を除く)

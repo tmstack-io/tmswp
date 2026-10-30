@@ -8,6 +8,11 @@
 ### 変更
 
 - `Kernel::VERSION`を0.10.0にし、packages/*・starters/*・examples/sample-siteの`tmswp/*`の制約を`^0.9.1`から`^0.10`に、packages/*のbranch-aliasを`0.9.x-dev`から`0.10.x-dev`にした。利用側のcomposer.jsonの`tmswp/*`の制約は`^0.10`にする(0.xの間は`^0.9.1`が0.10.0を含まないため)。
+- 対応するDBを、MySQL 8.4 LTS以上とMariaDB 10.11 LTS以上と定め、README.md・packages/core/README.mdの要件に書いた。これまでDBの版の要件は書いていなかった。v0.10.0でModelに足す行ロックの句の`SKIP LOCKED`・`NOWAIT`はMySQL 8.0以上・MariaDB 10.6以上で使え、そのうちサポート(MariaDBはコミュニティのサポート)が続いているLTSで、CIで統合テストを走らせている版を下限にした。SQLはDBの種類で分けない。MySQL 8.4より前、またはMariaDB 10.11より前のDBで動かしているサイトは、DBを上げる。
+
+### 開発
+
+- CIの`Integration (MySQL …)`のジョブ(`.github/workflows/qa.yml`の`mysql`)のmatrixを、DBの名前・版・イメージの組(`include`)にし、MariaDB 10.11 LTS(イメージ`mariadb:10.11`)のセル`Integration (MariaDB 10.11 / PHP 8.3 / WP 7.0)`を足した。MySQL 8.4・9.7のセルと同じく、servicesで立てたDBをwp-envのネットワークに別名`mysql-under-test`で参加させ、wp-envのcliから`WP_TESTS_DB_HOST`で接続して統合テストの全体を実行し、その前に`SELECT VERSION()`で接続先の版を確かめる。wp-envのDBの既定はMariaDBの最新のLTS(`mariadb:lts`)のため、対応する最も古いMariaDBはこのセルで確かめる(wp-envの`mariadbVersion`でも版を変えられるが、MySQLのセルと同じ方式にそろえた)。MySQLのセルのジョブ名は変わらない。docs/10の写し、AGENTS.mdのCIの表とdocs/11 §4の写しも改めた。AGENTS.md(とdocs/11 §4の写し)の開発ルールの対応範囲に、DBの範囲(MySQL 8.4以上・MariaDB 10.11以上)を足した。
 
 ## v0.9.1 — 導入の支え
 

@@ -2,7 +2,7 @@
 
 ## 目的
 
-TMStack WordPress Framework 全体の物理構成を確定する。すなわち、monorepo のディレクトリツリー、全パッケージの composer 名・名前空間・責務・runtime 依存、依存ポリシー、SemVer とリリースフロー(read-only split 配布)、PHP 8.3〜8.5 / WP 7.0 以上の対応範囲と WP API 下限棚卸し、グローバルヘルパポリシー、i18n 方針、利用側(テーマ・プラグイン)の標準ディレクトリレイアウトを、この文書だけで実装・構築できる粒度で定義する。
+TMStack WordPress Framework 全体の物理構成を確定する。すなわち、monorepo のディレクトリツリー、全パッケージの composer 名・名前空間・責務・runtime 依存、依存ポリシー、SemVer とリリースフロー(read-only split 配布)、PHP 8.3〜8.5 / WP 7.0 以上 / DB(MySQL 8.4 LTS以上・MariaDB 10.11 LTS以上)の対応範囲と WP API 下限棚卸し、グローバルヘルパポリシー、i18n 方針、利用側(テーマ・プラグイン)の標準ディレクトリレイアウトを、この文書だけで実装・構築できる粒度で定義する。
 
 各モジュール(Kernel、Form、Model 等)の内部 API 仕様は本書のスコープ外であり、各担当文書が定義する。本書はそれらが収まる「器」と「配布の仕組み」を確定する。
 
@@ -494,7 +494,7 @@ jobs:
 
 ---
 
-## 5. PHP 8.3〜8.5 / WordPress 7.0 以上の対応範囲
+## 5. PHP 8.3〜8.5 / WordPress 7.0 以上 / DBの対応範囲
 
 ### 5.1 PHP 8.3〜8.5
 
@@ -572,6 +572,15 @@ FW 各機能が使う主要 WP API と導入バージョンの棚卸し。「★
 
 - CI は WP の最新版でもテストする(DR-12)。**init フックより前の翻訳ロード・翻訳関数呼び出しは `_doing_it_wrong` 通知を出す**(WP 6.7 で入った just-in-time translation loading。下限の 7.0 を含む全対応版の挙動)。FW の翻訳ロードとラベル生成は必ず init 以降に行う(§7.3。実装拘束は Kernel / PostType 設計書に課す)。
 - PHP 8.4 の暗黙 nullable 非推奨(`function f(Type $x = null)` 形式)に該当するシグネチャを書かない(明示 `?Type` を使う)。PHP 8.5 で非推奨の書き方(非正準のキャスト名 `(integer)` / `(boolean)` / `(double)` 等)も使わない。
+
+### 5.5 DB(MySQL 8.4 LTS以上・MariaDB 10.11 LTS以上)
+
+対応するDBは、MySQL 8.4 LTS以上とMariaDB 10.11 LTS以上である(DR-02)。
+
+- 根拠: Modelの行ロックの句の`SKIP LOCKED`・`NOWAIT`(06-model §4)は、MySQL 8.0以上・MariaDB 10.6以上で使える。MySQL 8.0のサポートと、MariaDB 10.6のコミュニティのサポートは終わっている。CIの統合テストのセルが無い版は、最低の版にしない。MariaDB 10.11は、Modelの拡張(v0.10.0)を求めた導入先の本番の版でもある。
+- CIは、MySQL 8.4 LTS・9.7 LTS、MariaDB 10.11 LTS、wp-envのMariaDB(その時点のLTS)で統合テストを走らせる(10-quality §4.11・§5.1)。
+- FWはDBの種類と版でSQLを分けない。一方のDBで使えない構文は出さない(06-model R6)。最低の版より前のDBのための分岐やフォールバックも書かない。
+- FWは起動時にDBの版を検査しない(WordPressの版と違い、要件として文書に書くだけにする)。DBの版はKernelの起動を止める理由にならない。必要な機能(`SKIP LOCKED`等)が使えないDBでは、そのクエリのDBのエラー(`QueryException`)で止まる。
 
 ---
 
