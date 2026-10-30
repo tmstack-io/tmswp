@@ -58,7 +58,7 @@ final class NewsletterOptionTest extends UnitTestCase
 | `UsesTempDirectories` | テストごとの一時ディレクトリを、テストごとに専用の親ディレクトリの下に作り、テストの後に親ディレクトリごと消す |
 | `MemoryMetaStorage`・`MemoryOptionStorage`・`StorageExtension` | メタ・オプションの保存先をメモリに差し替える |
 | `RecordingLogger` | 書かれたログを記録するPSR-3のロガー |
-| `WpdbTestDouble` | ユニット層用の`wpdb`の代役。実行したSQLを記録し、読み取りの結果と、書き込みが影響する行の数・作る行のIDをキューから返す。戻り値と状態(`rows_affected`・`insert_id`・`last_error`)は実際の`wpdb`と同じ意味にし、代役が対応しない形のSQLと、影響する行の数・IDを入れていない書き込みは例外にする |
+| `WpdbTestDouble` | ユニット層用の`wpdb`の代役。実行したSQLを記録し、読み取りの結果と、書き込みが影響する行の数・作る行のIDをキューから返す。戻り値と状態(`rows_affected`・`insert_id`・`last_error`)は実際の`wpdb`と同じ意味にし、代役が対応しない形のSQLと、影響する行の数・IDを入れていない書き込みは例外にする。トランザクションの文(`START TRANSACTION`・`COMMIT`・`ROLLBACK`・`SET SESSION innodb_lock_wait_timeout`)を受け付け、実行中かどうかとロック待ちの秒数を持つ(ロールバックの効果・ロックの競合・デッドロックは再現しない) |
 | `MetaStorageContract` | `MetaStorageInterface`の実装が契約を満たすかを確かめるテストの共通部分(データベースに依存しない部分) |
 | `WpCliPharDeprecations` | TMSWPのmonorepoの統合テストで、本物のWP-CLIのプロセスの標準エラーから、WP-CLIのphar自身が出したPHPの非推奨の行(WP-CLI 2.12.0がPHP 8.5で出すもの)だけを取り除く |
 | `RealTables` | WordPressのテストライブラリ(`WP_UnitTestCase`)の統合テストで、CREATE TABLEの一時テーブルへの書き換えを外して実際のテーブルを作り、テストの後に、`start()`で宣言したテーブル(接頭辞を除いた名前)のうち、その時点に無かったものだけを名前で消す。DB全体の差分は使わないため、ほかの接続が作ったテーブルと宣言していないテーブルは消さない。MySQLのSHOW TABLESは一時テーブルを返さないため、MySQLでMigratorを使うテストに要る。DDLは暗黙にコミットするので、DDLより前に書いた行は`onTearDown()`で消す |

@@ -146,7 +146,7 @@ final class WpdbTestDoubleTest extends UnitTestCase
         $wpdb = WpdbTestDouble::create();
 
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage("WpdbTestDouble does not emulate the query: {$sql}; it emulates DDL, INSERT, UPDATE, DELETE, REPLACE and the queries of JtiStore");
+        $this->expectExceptionMessage("WpdbTestDouble does not emulate the query: {$sql}; it emulates DDL, INSERT, UPDATE, DELETE, REPLACE, START TRANSACTION, COMMIT, ROLLBACK, SET SESSION innodb_lock_wait_timeout and the queries of JtiStore");
 
         $wpdb->query($sql);
     }
@@ -157,7 +157,69 @@ final class WpdbTestDoubleTest extends UnitTestCase
         yield 'SELECT' => ['SELECT * FROM wp_t'];
         yield 'SHOW' => ['SHOW TABLES'];
         yield 'SET' => ['SET NAMES utf8mb4'];
-        yield 'トランザクション' => ['START TRANSACTION'];
+        yield 'BEGIN' => ['BEGIN'];
+        yield 'SAVEPOINT' => ['SAVEPOINT a'];
+        yield 'ROLLBACK TO SAVEPOINT' => ['ROLLBACK TO SAVEPOINT a'];
+        yield 'ほかのセッションの変数' => ['SET SESSION sql_mode = \'\''];
+        yield '数字でないロック待ちの秒数' => ['SET SESSION innodb_lock_wait_timeout = @x'];
+    }
+
+    /**
+     * START TRANSACTION・COMMIT・ROLLBACKは、実wpdbと同じく0を返し、トランザクションの実行中かどうかを状態に持つ。
+     * COMMIT・ROLLBACKは実行中でなくても受け付ける。実行した文はqueries()に残る。
+     */
+    public function testTransactionControlReturnsZeroAndTracksTheState(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $states = [];
+
+        foreach (['START TRANSACTION', 'COMMIT', ' start  transaction ', 'rollback', 'COMMIT', 'ROLLBACK'] as $sql) {
+            $states[] = [$wpdb->query($sql), $wpdb->inTransaction()];
+        }
+
+        self::assertSame([[0, true], [0, false], [0, true], [0, false], [0, false], [0, false]], $states);
+        self::assertSame(['START TRANSACTION', 'COMMIT', ' start  transaction ', 'rollback', 'COMMIT', 'ROLLBACK'], $wpdb->queries());
+    }
+
+    /** トランザクションの実行中のSTART TRANSACTIONは、実物の暗黙のコミットを再現せずに例外にする。 */
+    public function testStartTransactionInsideATransactionIsRejected(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $wpdb->query('START TRANSACTION');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('WpdbTestDouble does not emulate the query: START TRANSACTION; START TRANSACTION inside a transaction implicitly commits it');
+
+        $wpdb->query('START TRANSACTION');
+    }
+
+    /**
+     * SET SESSION innodb_lock_wait_timeoutは0を返して秒数を状態に持ち、get_var('SELECT @@SESSION.innodb_lock_wait_timeout')
+     * がキューではなくその値を返す。既定は実物の既定値と同じ'50'。
+     */
+    public function testLockWaitTimeoutIsKeptAsSessionState(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $wpdb->queueVar('queued');
+
+        $initial = $wpdb->get_var('SELECT @@SESSION.innodb_lock_wait_timeout');
+        $set = $wpdb->query('SET SESSION innodb_lock_wait_timeout = 7');
+        $changed = $wpdb->get_var('select @@session.innodb_lock_wait_timeout');
+
+        self::assertSame(['50', 0, '7'], [$initial, $set, $changed]);
+        self::assertSame('queued', $wpdb->get_var('SELECT 1'));
+    }
+
+    /** failNextWrite()の予約は、トランザクションの制御の文も失敗させ、状態を変えない。 */
+    public function testFailNextWriteFailsTransactionControlWithoutChangingTheState(): void
+    {
+        $wpdb = WpdbTestDouble::create();
+        $wpdb->query('START TRANSACTION');
+        $wpdb->failNextWrite('commit failed');
+
+        self::assertFalse($wpdb->query('COMMIT'));
+        self::assertSame('commit failed', $wpdb->last_error);
+        self::assertTrue($wpdb->inTransaction());
     }
 
     /**
@@ -550,7 +612,7 @@ final class WpdbTestDoubleTest extends UnitTestCase
         yield 'TRUNCATE PARTITION' => ['ALTER TABLE wp_a TRUNCATE PARTITION p0', $alter];
         yield 'DROP PARTITION' => ['ALTER TABLE wp_a DROP PARTITION p0', $alter];
         yield 'DISCARD TABLESPACE' => ['ALTER TABLE wp_a DISCARD TABLESPACE', $alter];
-        yield 'RENAME TABLE' => ['RENAME TABLE wp_a TO wp_b', 'it emulates DDL, INSERT, UPDATE, DELETE, REPLACE and the queries of JtiStore'];
+        yield 'RENAME TABLE' => ['RENAME TABLE wp_a TO wp_b', 'it emulates DDL, INSERT, UPDATE, DELETE, REPLACE, START TRANSACTION, COMMIT, ROLLBACK, SET SESSION innodb_lock_wait_timeout and the queries of JtiStore'];
     }
 
     /**

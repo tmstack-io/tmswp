@@ -302,21 +302,25 @@ enum UpsertUpdate
 
 `transaction()`は、wpdbの接続(セッション)をそのまま使い、次の順に実行する。`transaction()`が出す`SELECT @@SESSION.innodb_lock_wait_timeout`・`SET SESSION`・`START TRANSACTION`・`COMMIT`・`ROLLBACK`は、`execute()`の制限(下記)を通さないprivateの経路(wpdbの`query()`・`get_var()`と`assertNoLastError()`)で実行する。秒数は、検証済みのintを`sprintf('SET SESSION innodb_lock_wait_timeout = %d', …)`で埋める。元に戻す値は、`get_var()`が返した文字列をintにしてから同じ形で埋める。
 
-1. このwpdbで`transaction()`の実行中なら、`InvalidQueryException`(入れ子は拒否する。SAVEPOINTによる入れ子は作らない)。実行中かどうかは、Connectionの`private static WeakMap<\wpdb, true>`に持つ。Kernelごとに`Connection`のインスタンスは違うが、どれも同じ`$wpdb`を使うため、インスタンスではなくwpdbごとに持つ。`$lockWaitTimeout`が1〜1073741824の範囲の外でも`InvalidQueryException`。
+1. このwpdbで`transaction()`の実行中なら、`InvalidQueryException`(入れ子は拒否する。SAVEPOINTによる入れ子は作らない)。実行中かどうかは、Connectionの`private static WeakMap<\wpdb, object|false>`に持つ(値は手順3の接続のオブジェクト)。Kernelごとに`Connection`のインスタンスは違うが、どれも同じ`$wpdb`を使うため、インスタンスではなくwpdbごとに持つ。`$lockWaitTimeout`が1〜1073741824の範囲の外でも`InvalidQueryException`。
 2. `$lockWaitTimeout`を指定したら、`SELECT @@SESSION.innodb_lock_wait_timeout`で元の値を読み、`SET SESSION innodb_lock_wait_timeout = %d`で指定の秒数にする。
-3. `START TRANSACTION`を実行し、実行中であることを記録する。`START TRANSACTION`が失敗したときも、手順6で秒数を元に戻す。
-4. `$callback`を引数なしで呼ぶ。正常に終われば`COMMIT`し、`$callback`の戻り値を返す。`COMMIT`が失敗したら、`ROLLBACK`を試みてから、`COMMIT`の失敗を`QueryException`(エラー番号に応じて`DeadlockException`・`LockWaitTimeoutException`)で投げる。`ROLLBACK`も失敗した場合は、`COMMIT`の失敗を優先して投げる。
-5. `$callback`が例外を投げたら`ROLLBACK`し、元の例外をそのまま投げる(包まない)。`ROLLBACK`も失敗した場合は、元の例外を優先して投げる。
-6. 最後に(手順2の`SET SESSION`の後の手順3〜5の全体を囲むfinallyで)、実行中の記録を消す。秒数を指定していれば、`SET SESSION innodb_lock_wait_timeout = %d`で元の値に戻す。正常に終わった後に元に戻せなければ`QueryException`、例外を投げている途中なら元の例外を優先する。
+3. `START TRANSACTION`を実行し、実行中であることと、その直後のwpdbの`$dbh`(エラー番号と同じくリフレクションで読む)のオブジェクトを記録する。オブジェクトは強い参照で持つ。`$dbh`がオブジェクトでなければ(テストの代役等。nullやプロパティが無い場合)falseを記録し、照合しない。`START TRANSACTION`が失敗したときも、手順6で秒数を元に戻す。
+4. `$callback`を引数なしで呼ぶ。正常に終われば`COMMIT`し、`$callback`の戻り値を返す。`COMMIT`の直前に、`$dbh`を手順3のオブジェクトと照合する(下記「接続が替わったとき」)。`COMMIT`が失敗したら、`ROLLBACK`を試みてから、`COMMIT`の失敗を`QueryException`(エラー番号に応じて`DeadlockException`・`LockWaitTimeoutException`)で投げる。`ROLLBACK`も失敗した場合は、`ROLLBACK`の失敗を捨てて、`COMMIT`の失敗を投げる。
+5. `$callback`が例外を投げたら`ROLLBACK`し、元の例外をそのまま投げる(包まない)。`ROLLBACK`も失敗した場合は、`ROLLBACK`の失敗を捨てて、元の例外を投げる。
+6. 最後に(手順2の`SET SESSION`の後の手順3〜5の全体を囲むfinallyで)、実行中の記録を消す。秒数を指定していれば、`SET SESSION innodb_lock_wait_timeout = %d`で元の値に戻す。正常に終わった後に元に戻せなければ`QueryException`(このときはコミット済みなので、呼び出し側はやり直さない)、例外を投げている途中なら、元に戻す失敗を捨てて元の例外を投げる。
+
+- 2つ目の失敗(手順4・5の`ROLLBACK`の失敗、手順6の例外を投げている途中の秒数の復元の失敗)は、例外の種類を問わず捨て、先に起きた失敗を投げる。2つ目の失敗を記録する手段は持たない。
+- 接続が替わったとき: wpdbの`query()`は、接続が切れる(エラー番号2006)と`check_connection()`で再接続し(`mysqli_init()`で新しい`mysqli`を作る)、同じ文を新しいセッションで実行し直す。新しいセッションはトランザクションの外(自動コミット)なので、そのまま続けると、再接続の前の書き込みは取り消されたまま、再接続の後の文は確定し、`COMMIT`が成功したように見える。そこで、トランザクションの実行中は、各文の後(`assertNoLastError()`。`COMMIT`の後を含む)と`COMMIT`の直前に、`$dbh`を手順3のオブジェクトと`!==`で照合し(nullになった場合も違うとみなす)、違っていれば`COMMIT`せずに(`COMMIT`の実行中に替わった場合は、その`COMMIT`を成功として扱わずに)`QueryException`(「接続が替わった(再接続、または接続を文ごとに切り替えるdb.phpのドロップイン)ため、トランザクションを続けられない。新しい接続で実行した文は確定している可能性がある」の趣旨)を投げる。スレッドのIDではなくオブジェクトで比べるのは、IDの偶然の一致で見逃さないためである。実行中の記録は手順6で消える。
+- 接続を文ごとに切り替えるdb.phpのドロップイン(HyperDB・LudicrousDB等)の環境では、`transaction()`を使えない(文が別の接続で実行され、上の照合で`QueryException`になるか、トランザクションが効かない)。rules/に書く。
 
 - 自動の再試行はしない。デッドロック(`DeadlockException`)とロック待ちの時間切れ(`LockWaitTimeoutException`)をどう扱うか(再試行するか、利用者にエラーを見せるか)は、呼び出し側が決める。
 - Modelにトランザクションのファサードは作らない。`Model::connection()->transaction(...)`を使う。トランザクションはテーブルではなく接続全体に効くため、特定のテーブルに限ったように見える名前(`InquiryModel::transaction()`)を避ける。
 - トランザクションの実行中の`execute()`は、SQLの先頭の語(大小文字を問わない)が次のものを`InvalidQueryException`で拒否する。トランザクションを暗黙に終える文(DDLは暗黙にコミットする)と、トランザクションの状態を直接変える文である。
-  - `START`・`BEGIN`・`COMMIT`・`ROLLBACK`・`SAVEPOINT`・`SET autocommit`・`LOCK TABLES`・`UNLOCK TABLES`・`CREATE`・`ALTER`・`DROP`・`TRUNCATE`・`RENAME`
-  - 判定は、prepareを適用する前のSQLに次の正規表現を当てて行う: `/^\s*(start|begin|commit|rollback|savepoint|lock\s+tables|unlock\s+tables|create|alter|drop|truncate|rename)\b|^\s*set\s+(session\s+|@@(session\.)?)?autocommit\b/i`
+  - `START`・`BEGIN`・`COMMIT`・`ROLLBACK`・`SAVEPOINT`・`SET autocommit`(`SESSION`・`LOCAL`・`@@`・`@@session.`・`@@local.`の形を含む)・`LOCK TABLE(S)`・`UNLOCK TABLE(S)`・`CREATE`・`ALTER`・`DROP`・`TRUNCATE`・`RENAME`・`OPTIMIZE`・`ANALYZE [NO_WRITE_TO_BINLOG|LOCAL] TABLE(S)`(`ANALYZE SELECT`は通す)・`REPAIR`・`CHECK TABLE`・`FLUSH`・`GRANT`・`REVOKE`
+  - 判定は、prepareを適用する前のSQLに次の正規表現を当てて行う: `/^\s*(start|begin|commit|rollback|savepoint|lock\s+tables?|unlock\s+tables?|create|alter|drop|truncate|rename|optimize|analyze\s+(no_write_to_binlog\s+|local\s+)?tables?|repair|check\s+table|flush|grant|revoke)\b|^\s*set\s+(session\s+|local\s+|@@((session|local)\.)?)?autocommit\b/i`
   - 先頭のコメント(`/* … */`等)や括弧は、判定の前に除かない。それらで始まる文がすり抜けた場合は、DB側の挙動とエラーに任せる。
 - 利用者が`Connection::wpdb()`や`$wpdb->query('START TRANSACTION')`でトランザクションを直接操作すると、Connectionはそれを検出できない。rules/で、トランザクションは`transaction()`だけで扱うと書く。
-- ロック待ちの時間切れ(1205)は、その文だけを取り消し、トランザクションを続ける(MariaDB・MySQLとも。R6)。`$callback`の中で`LockWaitTimeoutException`を捕まえて処理を続けると、それまでの書き込みは残ったままコミットされる。
+- ロック待ちの時間切れ(1205)は、`innodb_rollback_on_timeout`が既定のOFFのとき、その文だけを取り消し、トランザクションを続ける(MariaDB・MySQLとも。R6)。`$callback`の中で`LockWaitTimeoutException`を捕まえて処理を続けると、それまでの書き込みは残ったままコミットされる。
 - デッドロック(1213)では、DBがトランザクション全体を取り消す。`$callback`の中で`DeadlockException`を捕まえて処理を続けると、以降の文はトランザクションの外で実行される。そのため捕まえずに外へ出し、呼び出し側で`transaction()`の全体をやり直す。
 - トランザクションの中でWordPressのAPI(`update_option()`等)を呼ぶと、ロールバックしてもWordPressのオブジェクトキャッシュは戻らない。この3つの注意(1205・1213・オブジェクトキャッシュ)をrules/に書く。
 

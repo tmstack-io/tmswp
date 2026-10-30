@@ -5,6 +5,14 @@
 
 ## Unreleased
 
+### 追加
+
+- tmswp/coreの`Connection`に、トランザクションの`transaction(callable $callback, ?int $lockWaitTimeout = null)`と`inTransaction()`を足した。コールバックが例外を投げればROLLBACKしてその例外をそのまま投げ、正常に終わればCOMMITして戻り値を返す。入れ子は`InvalidQueryException`にする(SAVEPOINTによる入れ子は作らない)。`$lockWaitTimeout`(1〜1073741824の秒数)を渡すと、この間だけ`innodb_lock_wait_timeout`を変え、終わった後に元の値に戻す。自動の再試行はしない。Modelにトランザクションのファサードは無く、`Model::connection()->transaction(...)`と書く。トランザクションの実行中の`Connection::execute()`は、トランザクションを暗黙に終える文と状態を直接変える文(`START`・`BEGIN`・`COMMIT`・`ROLLBACK`・`SAVEPOINT`・`SET autocommit`・`LOCK TABLE(S)`・`UNLOCK TABLE(S)`・`CREATE`・`ALTER`・`DROP`・`TRUNCATE`・`RENAME`・`OPTIMIZE`・`ANALYZE TABLE`・`REPAIR`・`CHECK TABLE`・`FLUSH`・`GRANT`・`REVOKE`で始まる文)を`InvalidQueryException`で拒否する。実行中にwpdbの接続が替わった場合(接続が切れて再接続した場合、または接続を文ごとに切り替えるdb.phpのドロップインの環境)は、それを検出してCOMMITせずに`QueryException`を投げる(新しい接続で実行した文は確定している可能性がある)。HyperDB・LudicrousDB等のそうしたドロップインの環境では、`transaction()`を使えない。
+- tmswp/coreの`QueryBuilder`に、行ロックの句の`lock(RowLock $lock)`と、enumの`TMSWP\Core\Model\RowLock`(`ForUpdate`・`ForUpdateNoWait`・`ForUpdateSkipLocked`・`Shared`。SQLは`FOR UPDATE`・`FOR UPDATE NOWAIT`・`FOR UPDATE SKIP LOCKED`・`LOCK IN SHARE MODE`)を足した。句はSELECT文の最後(OFFSETの後)に付き、`get()`・`first()`・`value()`・`pluck()`・`exists()`に効く。トランザクションの外での実行と、`count()`・`update()`・`delete()`・`where()`のグループとの併用は`InvalidQueryException`にする。共有ロックはMariaDB・MySQLの両方で使える`LOCK IN SHARE MODE`を出し、`FOR SHARE`は出さない。
+- tmswp/coreに、`QueryException`の派生の`DeadlockException`(エラー番号1213)と`LockWaitTimeoutException`(1205と、MySQLの`NOWAIT`でロックを得られない3572)を足した。`Connection`は、実行時のDBエラーのエラー番号で例外を分ける。`catch (QueryException $e)`は、これまでどおり両方を捕まえる。
+- tmswp/testingの`WpdbTestDouble`が、`query()`で`START TRANSACTION`・`COMMIT`・`ROLLBACK`と`SET SESSION innodb_lock_wait_timeout = N`を受け付けて0を返し、トランザクションの実行中かどうか(確かめ用の`inTransaction()`)とロック待ちの秒数(既定は`'50'`。`get_var('SELECT @@SESSION.innodb_lock_wait_timeout')`が返す)を持つようにした。実行中の`START TRANSACTION`は`InvalidArgumentException`にする。ロールバックの効果・ロックの競合・デッドロック・ロック待ちの時間切れは再現しない。
+- tmswp/coreのレシピ`rules/model.md`に「トランザクションと行ロック」の節(在庫の引き当ての完全な実装例と、ロック待ちの時間切れ・デッドロック・オブジェクトキャッシュの注意)と、`WpdbTestDouble`でのテストの例を足した。tmswp/testingの`rules/testing.md`とREADME.mdに、`WpdbTestDouble`のトランザクションの扱いを書いた。
+
 ### 変更
 
 - `Kernel::VERSION`を0.10.0にし、packages/*・starters/*・examples/sample-siteの`tmswp/*`の制約を`^0.9.1`から`^0.10`に、packages/*のbranch-aliasを`0.9.x-dev`から`0.10.x-dev`にした。利用側のcomposer.jsonの`tmswp/*`の制約は`^0.10`にする(0.xの間は`^0.9.1`が0.10.0を含まないため)。

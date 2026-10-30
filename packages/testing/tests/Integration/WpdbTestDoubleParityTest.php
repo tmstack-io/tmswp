@@ -130,6 +130,43 @@ final class WpdbTestDoubleParityTest extends IntegrationTestCase
     }
 
     /**
+     * トランザクションの制御の文とロック待ちの秒数の設定・読み取りの戻り値と、その後のrows_affectedが実wpdbと同じになる。
+     * 実wpdbでは、最初のROLLBACKで、テストライブラリが張ったトランザクションの中の書き込み(あれば)を、テストの後と
+     * 同じく取り消してから始める(START TRANSACTIONの暗黙のコミットで確定させない)。秒数は最後に元に戻す。
+     */
+    public function testTransactionControlAndLockWaitTimeoutReturnTheSameValuesAsRealWpdb(): void
+    {
+        $run = static function (wpdb $db): array {
+            $results = [];
+
+            foreach (['ROLLBACK', 'START TRANSACTION', 'COMMIT', 'START TRANSACTION', 'ROLLBACK'] as $sql) {
+                $results[] = [$sql, $db->query($sql), $db->rows_affected];
+            }
+
+            $results[] = ['default', $db->get_var('SELECT @@SESSION.innodb_lock_wait_timeout')];
+            $results[] = ['set', $db->query('SET SESSION innodb_lock_wait_timeout = 7'), $db->rows_affected];
+            $results[] = ['changed', $db->get_var('SELECT @@SESSION.innodb_lock_wait_timeout')];
+            $db->query('SET SESSION innodb_lock_wait_timeout = 50');
+
+            return $results;
+        };
+
+        $expected = [
+            ['ROLLBACK', 0, 0],
+            ['START TRANSACTION', 0, 0],
+            ['COMMIT', 0, 0],
+            ['START TRANSACTION', 0, 0],
+            ['ROLLBACK', 0, 0],
+            ['default', '50'],
+            ['set', 0, 0],
+            ['changed', '7'],
+        ];
+
+        self::assertSame($expected, $run(self::wpdb()));
+        self::assertSame($expected, $run(WpdbTestDouble::create()));
+    }
+
+    /**
      * JtiStoreの獲得(INSERT IGNORE)と掃除(LIKEと期限のDELETE)を、実wpdbと代役に同じ順で流し、返す件数と、
      * 掃除の後に残った名前(獲得のやり直しが重複の0になる)が同じになる。期限内・期限ちょうど・期限切れ、大文字の名前、
      * esc_like()で戻した`_`の位置に別の文字がある名前、前に文字が付いた名前、別の名前を混ぜる。

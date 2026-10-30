@@ -403,6 +403,135 @@ try {
 - `update()`・`delete()`はWHEREが必須。全行を対象にするときだけ`whereRaw('1 = 1')`を書く。`alias()`・JOIN・`groupBy()`・`orderBy()`・`limit()`とは併用できない。`update()`の値のnullは`= NULL`を代入する。
 - 終端のメソッドを同じビルダで何度呼んでもよい(ビルダの状態は変わらない)。乱択(`ORDER BY RAND()`)はできない。`pluck()`の後にPHPで選ぶ。
 
+## トランザクションと行ロック
+
+複数の書き込みをまとめて取り消したいときと、読んだ行をほかの処理に変えさせたくないときは、`Model::connection()->transaction()`で1つのトランザクションにする。行のロックは、トランザクションの中で`QueryBuilder::lock()`を付けたSELECTで取る。対応するDBは、MySQL 8.4以上とMariaDB 10.11以上である。
+
+在庫を引き当てる例。在庫の行をロックして読み、足りれば減らす。
+
+`app/Model/StockModel.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Model;
+
+use TMSWP\Core\Attribute\AsModel;
+use TMSWP\Core\Model\Model;
+use TMSWP\Core\Model\TableDefinition;
+
+#[AsModel]
+final class StockModel extends Model
+{
+    public static function table(): TableDefinition
+    {
+        return TableDefinition::create('stocks')
+            ->id()
+            ->string('sku', 40)
+            ->int('quantity', unsigned: true)
+            ->unique('sku', 'sku_unique');
+    }
+}
+```
+
+`app/Service/StockReservation.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Service;
+
+use App\Model\StockModel;
+use TMSWP\Core\Exception\DeadlockException;
+use TMSWP\Core\Exception\LockWaitTimeoutException;
+use TMSWP\Core\Model\RowLock;
+
+final class StockReservation
+{
+    /**
+     * 在庫を$quantityだけ引き当てる。行が無いか在庫が足りなければfalse。
+     *
+     * @throws LockWaitTimeoutException ほかの処理が5秒を超えて行をロックしている場合
+     * @throws DeadlockException DBがこのトランザクションを取り消した場合(全体をやり直せる)
+     */
+    public static function reserve(string $sku, int $quantity): bool
+    {
+        // ロック待ちの上限は5秒(この間だけ)。コールバックが例外を投げればROLLBACKし、正常に終わればCOMMITする
+        return StockModel::connection()->transaction(static function () use ($sku, $quantity): bool {
+            $available = StockModel::query()->where('sku', $sku)->lock(RowLock::ForUpdate)->value('quantity');
+
+            if (!\is_string($available) || (int) $available < $quantity) {
+                return false;
+            }
+
+            StockModel::query()->where('sku', $sku)->update(['quantity' => (int) $available - $quantity]);
+
+            return true;
+        }, lockWaitTimeout: 5);
+    }
+}
+```
+
+呼び出し側で、デッドロックならやり直し、ロック待ちの時間切れなら利用者に知らせる:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+use App\Service\StockReservation;
+use TMSWP\Core\Exception\DeadlockException;
+use TMSWP\Core\Exception\LockWaitTimeoutException;
+
+try {
+    try {
+        $reserved = StockReservation::reserve('A-100', 1);
+    } catch (DeadlockException) {
+        $reserved = StockReservation::reserve('A-100', 1); // transaction()の全体を1回だけやり直す
+    }
+} catch (LockWaitTimeoutException) {
+    $reserved = false; // 混み合っている。時間を置いて試すよう利用者に知らせる
+}
+```
+
+### transaction()
+
+- `transaction(callable $callback, ?int $lockWaitTimeout = null)`は、`$callback`を引数なしで呼び、その戻り値を返す。`$callback`が例外を投げればROLLBACKして、同じ例外を包まずに投げる。正常に終わればCOMMITする。COMMITの失敗は`QueryException`になる。
+- Modelに`transaction()`は無い。トランザクションはテーブルではなく接続の全体に効くため、`StockModel::connection()->transaction(...)`と書く。どのModelの`connection()`から呼んでも同じ接続である。
+- 入れ子は`InvalidQueryException`になる(SAVEPOINTによる入れ子は作らない)。`transaction()`を使うメソッドを、ほかの`transaction()`のコールバックから呼ばない。実行中かどうかは`Model::connection()->inTransaction()`で分かる。
+- `$lockWaitTimeout`(1〜1073741824の秒数)を渡すと、この間だけ`innodb_lock_wait_timeout`をその秒数にし、終わった後(例外のときも)に元の値に戻す。省くとDBの設定のまま(既定は50秒)。範囲の外は`InvalidQueryException`。COMMITの後に元の値に戻せなかった場合も`QueryException`になる。このときはコミット済みなので、やり直さない。
+- 自動の再試行はしない。デッドロック(`DeadlockException`)とロック待ちの時間切れ(`LockWaitTimeoutException`)をどう扱うか(やり直すか、利用者にエラーを見せるか)は、呼び出し側で決める。2つとも`QueryException`の派生なので、`catch (QueryException $e)`でも捕まえられる。
+- トランザクションの中の`Model::connection()->execute()`は、トランザクションを暗黙に終える文と、トランザクションの状態を直接変える文を`InvalidQueryException`で拒否する。先頭の語が`START`・`BEGIN`・`COMMIT`・`ROLLBACK`・`SAVEPOINT`・`LOCK TABLE(S)`・`UNLOCK TABLE(S)`・`CREATE`・`ALTER`・`DROP`・`TRUNCATE`・`RENAME`・`OPTIMIZE`・`ANALYZE TABLE`・`REPAIR`・`CHECK TABLE`・`FLUSH`・`GRANT`・`REVOKE`の文と、`SET autocommit`(`SET SESSION`・`SET LOCAL`・`SET @@`の形を含む)である(DDL等は暗黙にコミットする)。
+- トランザクションは`transaction()`だけで扱う。`$wpdb->query('START TRANSACTION')`や`Model::connection()->wpdb()`でトランザクションを直接操作すると、Connectionはそれを検出できない(入れ子の拒否・`lock()`の検査が働かない)。
+
+### 行ロックの句(lock())
+
+| `RowLock` | SQLの句 | 動き |
+|---|---|---|
+| `ForUpdate` | `FOR UPDATE` | 排他ロック。ほかの処理がロックしていれば、ロック待ちの秒数まで待つ |
+| `ForUpdateNoWait` | `FOR UPDATE NOWAIT` | 排他ロック。ほかの処理がロックしていれば、待たずに`LockWaitTimeoutException` |
+| `ForUpdateSkipLocked` | `FOR UPDATE SKIP LOCKED` | 排他ロック。ほかの処理がロックしている行を飛ばす(キューから未処理の行を取る等) |
+| `Shared` | `LOCK IN SHARE MODE` | 共有ロック。読んだ行をほかの処理に変えさせない(ほかの処理も共有ロックで読める) |
+
+- 句はSELECT文の最後(OFFSETの後)に付く。`toSql()`にも出る。2回目の`lock()`は上書きする。例: `QueueModel::query()->where('completed', false)->orderBy('queued_at')->limit(10)->lock(RowLock::ForUpdateSkipLocked)->get()`は`SELECT * FROM wp_queue WHERE completed = 0 ORDER BY queued_at ASC LIMIT 10 FOR UPDATE SKIP LOCKED`を実行する。
+- `get()`・`first()`・`value()`・`pluck()`・`exists()`に効く。トランザクションの外で実行すると`InvalidQueryException`(トランザクションの外の行ロックは、文の終わりで解けて意味が無い)。`count()`・`update()`・`delete()`と、`where()`のグループの中では使えない(`InvalidQueryException`)。
+- 共有ロックは、MariaDBで構文の誤りになる`FOR SHARE`ではなく、MariaDB・MySQLの両方で使える`LOCK IN SHARE MODE`を出す。共有ロックに`NOWAIT`・`SKIP LOCKED`を付けた句は無い(MySQLで構文の誤りになる)。DBの種類で句を変えない。
+- ロック待ちの時間切れ(エラー番号1205)と、`NOWAIT`でロックを得られないとき(MariaDBは1205、MySQLは3572)は`LockWaitTimeoutException`、デッドロック(1213)は`DeadlockException`になる。
+
+### 注意
+
+1. ロック待ちの時間切れ(`LockWaitTimeoutException`)では、DBの`innodb_rollback_on_timeout`が既定のOFFのとき、DBはその文だけを取り消し、トランザクションは続く。コールバックの中でこの例外を捕まえて処理を続けると、それまでの書き込みは残ったままコミットされる。全体を取り消すなら、コールバックの中で捕まえずに`transaction()`の外へ出す。
+2. デッドロック(`DeadlockException`)では、DBがトランザクションの全体を取り消している。コールバックの中でこの例外を捕まえて処理を続けると、以降の文はトランザクションの外で実行される。捕まえずに`transaction()`の外へ出し、呼び出し側で`transaction()`の全体をやり直す。
+3. トランザクションの中でWordPressのAPI(`update_option()`・`wp_insert_post()`等)を呼ぶと、ロールバックしても、WordPressのオブジェクトキャッシュ(永続化のキャッシュを含む)は戻らない。WordPressのAPIは、`transaction()`が戻った後(コミットの後)に呼ぶ。
+4. コールバックの中で`exit`・`wp_die()`・`wp_send_json*()`・リダイレクト(`wp_safe_redirect()`の後の`exit`)をしない。COMMITされずに書き込みが失われる。応答は`transaction()`が戻った後に返す。
+5. トランザクションの実行中にDBとの接続が切れると、wpdbは再接続して文を新しいセッション(トランザクションの外)で実行し直す。`transaction()`はこれを検出して、COMMITせずに`QueryException`を投げる。再接続の前の書き込みは失われ、再接続の後の文は確定している可能性がある。
+6. 接続を文ごとに切り替えるdb.phpのドロップイン(HyperDB・LudicrousDB等)の環境では、`transaction()`を使えない(接続が替わったとして`QueryException`になる)。
+7. `WP_DEBUG_DISPLAY`が真の開発環境では、まれにエラー番号を読めず、デッドロック・ロック待ちの時間切れが素の`QueryException`になることがある。
+
 ## 既存の固定ページで独自テーブルの詳細を出す
 
 固定ページ`catalog-detail`を器にして、`/catalog-detail/?record=123`で独自テーブルの1行を出す場合、WordPressのメインクエリは固定ページを見つけるため、`record`の行が無くても404にならない(200で空のページになる)。次のどちらかにする。
@@ -542,6 +671,59 @@ final class CatalogItemModelTest extends UnitTestCase
 }
 ```
 
+`transaction()`と`lock()`を使うコードも、`WpdbTestDouble`でテストできる。代役は`START TRANSACTION`・`COMMIT`・`ROLLBACK`と`SET SESSION innodb_lock_wait_timeout = N`を受け付け(ロック待ちの秒数の既定は`'50'`)、実行した順に`queries()`に残す。行を持たないため、ロールバックで書き込みが消えることと、ロックの競合・デッドロック・ロック待ちの時間切れは再現しない。代役はmysqliの接続を持たず、DBのエラーは常に`QueryException`になる。デッドロック等の扱いのテストは、コールバックが呼ぶ処理から`new DeadlockException('...')`等を投げて書く(vendor/tmswp/testing/rules/testing.md)。
+
+`tests/Unit/Service/StockReservationTest.php`(上の「トランザクションと行ロック」の`app/Service/StockReservation.php`のテスト):
+
+```php
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Unit\Service;
+
+use App\Service\StockReservation;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
+use TMSWP\Core\Model\Connection;
+use TMSWP\Core\Model\Model;
+use TMSWP\Testing\UnitTestCase;
+use TMSWP\Testing\WpdbTestDouble;
+
+final class StockReservationTest extends UnitTestCase
+{
+    protected function tearDown(): void
+    {
+        Model::useConnection(null);
+        parent::tearDown();
+    }
+
+    // value()は行を読むためwpdbの定数ARRAY_Aを使う。定数を別のプロセスの中でだけ定義する
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testReserveLocksTheRowAndDecreasesTheQuantityInATransaction(): void
+    {
+        WpdbTestDouble::defineOutputConstants();
+        $wpdb = WpdbTestDouble::create();
+        Model::useConnection(new Connection($wpdb));
+        $wpdb->queueRow(['quantity' => '3']);
+        $wpdb->queueAffectedRows(1);
+
+        self::assertTrue(StockReservation::reserve('A-100', 2));
+        self::assertFalse($wpdb->inTransaction());
+        self::assertSame([
+            'SELECT @@SESSION.innodb_lock_wait_timeout',
+            'SET SESSION innodb_lock_wait_timeout = 5',
+            'START TRANSACTION',
+            "SELECT quantity FROM wp_stocks WHERE sku = 'A-100' LIMIT 1 FOR UPDATE",
+            "UPDATE wp_stocks SET quantity = 1 WHERE sku = 'A-100'",
+            'COMMIT',
+            'SET SESSION innodb_lock_wait_timeout = 50',
+        ], $wpdb->queries());
+    }
+}
+```
+
 ## してはいけないこと
 
 - `$wpdb->query()`等を直接呼ばない。`Model::connection()->wpdb()`は、FWで書けない処理の最終手段にする。
@@ -551,6 +733,9 @@ final class CatalogItemModelTest extends UnitTestCase
 - 予約語の列名、`rawColumn()`の`json`の型を使わない。
 - 行の値をModelのプロパティに持たせない。DTOは`rowClass()`か`as()`で指定する。
 - 全行の更新・削除を`whereRaw('1 = 1')`以外の方法で書かない。
+- トランザクションを`$wpdb->query('START TRANSACTION')`等で直接操作しない。`Model::connection()->transaction()`を使う。
+- 行ロックの句をSQLの文字列やraw断片で書かない。`lock()`を使う。
+- `transaction()`のコールバックの中で`DeadlockException`を捕まえて処理を続けない。WordPressのAPIをコールバックの中で呼ばない(上の「注意」)。
 
 ## 確認方法
 

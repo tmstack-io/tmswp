@@ -80,6 +80,8 @@ final class QueryBuilder
     /** @var class-string|null */
     private ?string $rowClass;
 
+    private ?RowLock $lock = null;
+
     /**
      * @param class-string|null $rowClass
      *
@@ -280,6 +282,18 @@ final class QueryBuilder
     }
 
     /**
+     * 行ロックの句を、SELECT文の最後(OFFSETの後)に付ける。2回目の呼び出しは上書きする。get()・first()・value()・
+     * pluck()・exists()は、Connectionのtransaction()の中でだけ実行できる(トランザクションの外の行ロックは文の終わりで
+     * 解けて意味が無いため)。count()・update()・delete()とは併用できない。toSql()にも句を出す。
+     */
+    public function lock(RowLock $lock): self
+    {
+        $this->lock = $lock;
+
+        return $this;
+    }
+
+    /**
      * @param class-string<object> $class
      *
      * @throws HydrationException $class が存在しないクラスの場合
@@ -295,6 +309,7 @@ final class QueryBuilder
     /** @return list<object> */
     public function get(): array
     {
+        $this->assertLockInTransaction();
         $query = $this->buildSelect();
         $rows = $this->connection->select($query->sql, $query->bindings);
         $objects = [];
@@ -320,6 +335,7 @@ final class QueryBuilder
      */
     public function value(string $column): mixed
     {
+        $this->assertLockInTransaction();
         $key = $this->resultKey($column);
         $clone = clone $this;
 
@@ -347,6 +363,7 @@ final class QueryBuilder
      */
     public function pluck(string $column, ?string $keyColumn = null): array
     {
+        $this->assertLockInTransaction();
         $valueKey = $this->resultKey($column);
         $keyKey = $keyColumn === null ? null : $this->resultKey($keyColumn);
         $values = [];
@@ -382,6 +399,10 @@ final class QueryBuilder
 
     public function count(): int
     {
+        if ($this->lock !== null) {
+            throw new InvalidQueryException('count() cannot be used with lock()');
+        }
+
         $query = $this->buildCount();
         $value = $this->connection->selectVar($query->sql, $query->bindings);
 
@@ -398,6 +419,7 @@ final class QueryBuilder
 
     public function exists(): bool
     {
+        $this->assertLockInTransaction();
         $query = $this->buildSelect('1', 1);
 
         return $this->connection->selectVar($query->sql, $query->bindings) !== null;
@@ -526,7 +548,7 @@ final class QueryBuilder
         $child = new self($this->connection, $this->table, $this->rowClass);
         $group($child);
 
-        if ($child->selects !== [] || $child->fromAlias !== null || $child->joins !== [] || $child->groups !== [] || $child->orders !== [] || $child->limitValue !== null || $child->offsetValue !== null) {
+        if ($child->selects !== [] || $child->fromAlias !== null || $child->joins !== [] || $child->groups !== [] || $child->orders !== [] || $child->limitValue !== null || $child->offsetValue !== null || $child->lock !== null) {
             throw new InvalidQueryException('where group can contain only where clauses');
         }
 
@@ -637,7 +659,7 @@ final class QueryBuilder
     }
 
     /**
-     * ORDER BY・LIMIT・OFFSET までの SELECT 文。$selectOverride を渡すと SELECT 句とその値を置き換え、
+     * ORDER BY・LIMIT・OFFSET と行ロックの句までの SELECT 文。$selectOverride を渡すと SELECT 句とその値を置き換え、
      * $limitOverride を渡すと limit() の値を置き換える。
      */
     private function buildSelect(?string $selectOverride = null, ?int $limitOverride = null): SqlQuery
@@ -666,6 +688,10 @@ final class QueryBuilder
         if ($this->offsetValue !== null) {
             $sql .= ' OFFSET %d';
             $bindings[] = $this->offsetValue;
+        }
+
+        if ($this->lock !== null) {
+            $sql .= ' ' . $this->lock->value;
         }
 
         return new SqlQuery($sql, $bindings);
@@ -730,6 +756,18 @@ final class QueryBuilder
 
         if ($this->wheres === []) {
             throw new InvalidQueryException('write query requires where clause');
+        }
+
+        if ($this->lock !== null) {
+            throw new InvalidQueryException('update() and delete() cannot be used with lock()');
+        }
+    }
+
+    /** 行ロックの句を付けたSELECTを、トランザクションの外で実行させない。 */
+    private function assertLockInTransaction(): void
+    {
+        if ($this->lock !== null && !$this->connection->inTransaction()) {
+            throw new InvalidQueryException('lock() requires Connection::transaction(); a row lock outside a transaction is released at the end of the statement');
         }
     }
 
