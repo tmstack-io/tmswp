@@ -63,7 +63,7 @@ return KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App', extens
 | ユーザー | `UserFields` |
 | オプションページ(`options_page == theme-settings`) | `ThemeSettingsOptions` |
 
-ほかに、ACFで管理するメタのキーの一覧`AcfManifest.php`を生成します。acf-bridgeは実行時にacf-jsonを読まず、この生成物を使います。`acf-json/`の変更と`app/Acf/`の生成物は同じコミットに入れ、CIで`composer acf:check -- --strict`を実行し、生成物をデプロイに含めてください。
+ほかに、ACFで管理するメタのキーの一覧`AcfManifest.php`を生成します。acf-bridgeは実行時にacf-jsonを読まず、この生成物を使います。`acf-json/`の変更と`app/Acf/`の生成物は同じコミットに入れ、CIで`composer acf:check -- --strict`を実行し、生成物をデプロイに含めてください(本番へ上げるものと手順は`vendor/tmswp/core/rules/deploy.md`)。
 
 ## ACFが無効なとき
 

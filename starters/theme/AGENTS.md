@@ -25,9 +25,11 @@
 | 独自DBテーブルを作って読み書きする | `vendor/tmswp/core/rules/model.md` |
 | サイト設定値(オプション)を定義する | `vendor/tmswp/core/rules/options.md` |
 | add_action・add_filterをまとめて登録する | `vendor/tmswp/core/rules/hooks.md` |
+| REST APIのルートを追加する | `vendor/tmswp/core/rules/rest.md` |
 | テンプレートパーツを読み込む | `vendor/tmswp/core/rules/view.md` |
 | 独自ブロックを追加する | `vendor/tmswp/core/rules/blocks.md` |
 | 公式の拡張(acf-bridge・settings-page・thumbnail・ja-toolkit・testing)を導入する | `vendor/tmswp/core/rules/extensions.md` |
+| 本番へデプロイする(FTP) | `vendor/tmswp/core/rules/deploy.md` |
 | ACFの生成アクセサを生成・照合する(tmswp/acf-bridge) | `vendor/tmswp/acf-bridge/rules/sync-check.md` |
 | 管理画面に設定ページを作る(tmswp/settings-page) | `vendor/tmswp/settings-page/rules/settings-page.md` |
 | 署名付きのURLでサムネイルを出す(tmswp/thumbnail) | `vendor/tmswp/thumbnail/rules/thumbnail.md` |
@@ -144,8 +146,8 @@ npm run build       # blocks/をbuild/blocks/にビルドし、続けて探索�
   1. クラス名とファイルのパスがPSR-4で一致しているか(`app/Post/NewsPost.php`なら`TmswpStarterTheme\Post\NewsPost`)。
   2. Attribute(`#[AsPostType]`等)を付け忘れていないか。
   3. `wp tmswp discover --check`で探索結果ファイルが最新か。古ければ`composer discover`で作り直す。
-- **探索結果ファイルとキャッシュ:** FWは探索の結果をtransient・オブジェクトキャッシュに持たず、探索結果ファイルだけを使う。そのため、消すべきFWのキャッシュは無く、反映されないときは探索結果ファイルを作り直す。`wp tmswp discover`は、そのサイトで起動したすべてのKernel(このテーマと、TMSWPを使うプラグイン)の探索結果ファイルを作り直し、書いたファイルのOPcacheを無効にする。FTPで上げた探索結果ファイルが本番で反映されない場合は、サーバーのOPcacheが更新を検知しない設定(`opcache.validate_timestamps`が0等)になっていないかを確かめ、OPcacheを空にする。ページキャッシュのプラグインを使うサイトでは、デプロイの後にページキャッシュも消す。
-- **起動時のエラー:** 同じサイトのTMSWPの版が食い違う場合(別のテーマ・プラグインが別の版の`tmswp/core`を入れている等)と、他のプラグインが互換の無い`psr/log`・`psr/container`を先に読み込んだ場合は、Kernelが起動時に明示のエラーにする。メッセージに従って版をそろえる。
+- **探索結果ファイルとキャッシュ:** FWは探索の結果をtransient・オブジェクトキャッシュに持たず、探索結果ファイルだけを使う。そのため、消すべきFWのキャッシュは無く、反映されないときは探索結果ファイルを作り直す。`wp tmswp discover`は、そのサイトで起動したすべてのKernel(このテーマと、TMSWPを使うプラグイン)の探索結果ファイルを作り直す。本番へ上げた探索結果ファイルが反映されない場合のOPcacheとページキャッシュの扱いは、`vendor/tmswp/core/rules/deploy.md`にある。
+- **起動時のエラー:** 同じサイトのTMSWPの版が食い違う場合(別のテーマ・プラグインが別の版の`tmswp/core`を入れている等)と、他のプラグインが互換の無い`psr/log`・`psr/container`を先に読み込んだ場合は、Kernelが起動時に明示のエラーにする。メッセージに従って版をそろえる(そろえ方は`vendor/tmswp/core/rules/deploy.md`)。
 
 ## 完了条件
 

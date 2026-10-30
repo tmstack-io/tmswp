@@ -72,7 +72,7 @@ tmswp/ (monorepo)
 ├── AGENTS.md                       … §4 全文(コントリビュータ向け。monorepoの開発ルールの正本を含む)
 ├── packages/
 │   ├── core/
-│   │   └── rules/                  … §6 レシピ14本(パッケージに同梱して配布。本文はこのディレクトリが正本)
+│   │   └── rules/                  … §6 レシピ16本(パッケージに同梱して配布。本文はこのディレクトリが正本)
 │   │       ├── post-type.md
 │   │       ├── taxonomy.md
 │   │       ├── user-role.md
@@ -86,7 +86,9 @@ tmswp/ (monorepo)
 │   │       ├── hooks.md
 │   │       ├── view.md
 │   │       ├── blocks.md
-│   │       └── extensions.md
+│   │       ├── extensions.md
+│   │       ├── rest.md
+│   │       └── deploy.md
 │   ├── acf-bridge/rules/sync-check.md        … §6 拡張のレシピ(各パッケージに同梱)
 │   ├── settings-page/rules/settings-page.md
 │   ├── thumbnail/rules/thumbnail.md
@@ -296,7 +298,7 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 
 実物のAGENTS.mdには、スターターの名前空間(`TmswpStarterTheme\`・`TmswpStarterPlugin\`)を書き、create-projectのsetup.phpがスラッグから生成した名前空間に書き換える(§10)。実物のAGENTS.mdは、レシピ(`vendor/tmswp/*/rules/`)のコード例の名前空間`App\`を、その名前空間に読み替える旨を示す。テキストドメイン(`{{project_slug}}`)とブロック名の名前空間(`tmswp-starter/`)も、setup.phpがスラッグに書き換える。そのため、AGENTS.mdにはこの3つを、書き換えた後もそのまま読める形でだけ書き、ほかの`{{`(setup.phpが置き換えないプレースホルダ)を書かない(`tests/Unit/StarterSetupTest.php`が、作ったプロジェクトに`{{`とスターターの名前空間が残らないことを確かめる)。
 
-AGENTS.mdは次の節を持つ。タスク→レシピの対応表(coreの14本と拡張の5本)、プロジェクト構成、ロジックの置き場(配置決定木)、クラス追加の基本手順、必須コマンド、コーディング規約、禁止事項、デバッグ(ログ・探索の不調・探索結果ファイルとキャッシュ・起動時のエラー)、完了条件。
+AGENTS.mdは次の節を持つ。タスク→レシピの対応表(coreの16本と拡張の5本)、プロジェクト構成、ロジックの置き場(配置決定木)、クラス追加の基本手順、必須コマンド、コーディング規約、禁止事項、デバッグ(ログ・探索の不調・探索結果ファイルとキャッシュ・起動時のエラー)、完了条件。
 
 ### 5.1 theme版全文(starters/theme/AGENTS.md)
 
@@ -330,9 +332,11 @@ AGENTS.mdは次の節を持つ。タスク→レシピの対応表(coreの14本�
 | 独自DBテーブルを作って読み書きする | `vendor/tmswp/core/rules/model.md` |
 | サイト設定値(オプション)を定義する | `vendor/tmswp/core/rules/options.md` |
 | add_action・add_filterをまとめて登録する | `vendor/tmswp/core/rules/hooks.md` |
+| REST APIのルートを追加する | `vendor/tmswp/core/rules/rest.md` |
 | テンプレートパーツを読み込む | `vendor/tmswp/core/rules/view.md` |
 | 独自ブロックを追加する | `vendor/tmswp/core/rules/blocks.md` |
 | 公式の拡張(acf-bridge・settings-page・thumbnail・ja-toolkit・testing)を導入する | `vendor/tmswp/core/rules/extensions.md` |
+| 本番へデプロイする(FTP) | `vendor/tmswp/core/rules/deploy.md` |
 | ACFの生成アクセサを生成・照合する(tmswp/acf-bridge) | `vendor/tmswp/acf-bridge/rules/sync-check.md` |
 | 管理画面に設定ページを作る(tmswp/settings-page) | `vendor/tmswp/settings-page/rules/settings-page.md` |
 | 署名付きのURLでサムネイルを出す(tmswp/thumbnail) | `vendor/tmswp/thumbnail/rules/thumbnail.md` |
@@ -449,8 +453,8 @@ npm run build       # blocks/をbuild/blocks/にビルドし、続けて探索�
   1. クラス名とファイルのパスがPSR-4で一致しているか(`app/Post/NewsPost.php`なら`TmswpStarterTheme\Post\NewsPost`)。
   2. Attribute(`#[AsPostType]`等)を付け忘れていないか。
   3. `wp tmswp discover --check`で探索結果ファイルが最新か。古ければ`composer discover`で作り直す。
-- **探索結果ファイルとキャッシュ:** FWは探索の結果をtransient・オブジェクトキャッシュに持たず、探索結果ファイルだけを使う。そのため、消すべきFWのキャッシュは無く、反映されないときは探索結果ファイルを作り直す。`wp tmswp discover`は、そのサイトで起動したすべてのKernel(このテーマと、TMSWPを使うプラグイン)の探索結果ファイルを作り直し、書いたファイルのOPcacheを無効にする。FTPで上げた探索結果ファイルが本番で反映されない場合は、サーバーのOPcacheが更新を検知しない設定(`opcache.validate_timestamps`が0等)になっていないかを確かめ、OPcacheを空にする。ページキャッシュのプラグインを使うサイトでは、デプロイの後にページキャッシュも消す。
-- **起動時のエラー:** 同じサイトのTMSWPの版が食い違う場合(別のテーマ・プラグインが別の版の`tmswp/core`を入れている等)と、他のプラグインが互換の無い`psr/log`・`psr/container`を先に読み込んだ場合は、Kernelが起動時に明示のエラーにする。メッセージに従って版をそろえる。
+- **探索結果ファイルとキャッシュ:** FWは探索の結果をtransient・オブジェクトキャッシュに持たず、探索結果ファイルだけを使う。そのため、消すべきFWのキャッシュは無く、反映されないときは探索結果ファイルを作り直す。`wp tmswp discover`は、そのサイトで起動したすべてのKernel(このテーマと、TMSWPを使うプラグイン)の探索結果ファイルを作り直す。本番へ上げた探索結果ファイルが反映されない場合のOPcacheとページキャッシュの扱いは、`vendor/tmswp/core/rules/deploy.md`にある。
+- **起動時のエラー:** 同じサイトのTMSWPの版が食い違う場合(別のテーマ・プラグインが別の版の`tmswp/core`を入れている等)と、他のプラグインが互換の無い`psr/log`・`psr/container`を先に読み込んだ場合は、Kernelが起動時に明示のエラーにする。メッセージに従って版をそろえる(そろえ方は`vendor/tmswp/core/rules/deploy.md`)。
 
 ## 完了条件
 
@@ -502,7 +506,7 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所だけを
 
 ### 6.1 構成
 
-`packages/core/rules/`に以下14ファイルを置く。tmswp/coreパッケージの配布物に含める(composer.jsonのarchive excludeに入れない)。
+`packages/core/rules/`に以下16ファイルを置く。tmswp/coreパッケージの配布物に含める(composer.jsonのarchive excludeに入れない)。
 
 | ファイル | 対象タスク | 主依存文書 |
 |---|---|---|
@@ -520,6 +524,8 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所だけを
 | view.md | テンプレートパーツ運用 | 07-support |
 | blocks.md | 独自ブロック(置き場・npmのビルドと探索コマンドの連結・対象外) | 02-kernel・03-entities |
 | extensions.md | 拡張パッケージ導入(拡張のレシピへの入口) | 08-extensions |
+| rest.md | REST APIのルート(WordPress標準の`register_rest_route()`を`#[AsHook]`のクラスで書く。権限の判定・引数の検証・応答とエラー・Cookie認証) | 02-kernel |
+| deploy.md | 本番へのデプロイ(FTP。`--no-dev`の`vendor/`・上げるもの・版の照合・保守モード・マイグレーション・OPcache・ページキャッシュ) | 01-architecture・02-kernel |
 
 拡張パッケージの使い方のレシピは、その拡張パッケージの`rules/`に同じ共通フォーマット(§6.2)で置き、そのパッケージの配布物に含める。
 
@@ -543,6 +549,8 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所だけを
 ## 確認方法      … composer qa + WP上での目視確認手順
 ## 発展         … 他レシピ・設計書への参照(任意)
 ```
+
+deploy.mdはコードの例を持たない手順のレシピのため、「完全な実装例」の節と、下の名前空間の読み替えの1行を省く。ほかの節は同じ形にする。
 
 レシピ内のコード例の名前空間は`App\`とする。スターターから作ったプロジェクトの名前空間は、create-projectのsetup.phpがスラッグから生成するため(§10)、プロジェクトごとに違う。各レシピの冒頭に、`App\`をプロジェクトの名前空間(`KernelConfig`の`appNamespace`)に読み替える旨を1行で示す。スターターのAGENTS.mdも、そのプロジェクトの名前空間と読み替えを示す(§5)。
 
@@ -1998,8 +2006,8 @@ function writeTextFile(string $file, string $contents): void
 ### 12.1 成果物の存在と形式
 
 - [ ] monorepoルートに`AGENTS.md`(§4の全文。冒頭にmonorepoの開発ルールを含む)が存在し、`CLAUDE.md`はmonorepo・スターター・examples/sample-siteのどこにも存在しない(`git ls-files | grep -i 'claude.md'`が0件)。
-- [ ] `packages/core/rules/`に14ファイル(post-type/taxonomy/user-role/meta/acf/form/form-mail/page/model/options/hooks/view/blocks/extensions)が存在し、拡張パッケージの`rules/`に§6.1の5ファイルが存在し、composer配布物に含まれる(`composer archive`の内容で確認)。
-- [ ] 各レシピが共通フォーマット(§6.2: 手順/完全な実装例/してはいけないこと/確認方法)を満たす。
+- [ ] `packages/core/rules/`に16ファイル(post-type/taxonomy/user-role/meta/acf/form/form-mail/page/model/options/hooks/view/blocks/extensions/rest/deploy)が存在し、拡張パッケージの`rules/`に§6.1の5ファイルが存在し、composer配布物に含まれる(`composer archive`の内容で確認)。
+- [ ] 各レシピが共通フォーマット(§6.2: 手順/完全な実装例/してはいけないこと/確認方法)を満たす(コードの例を持たないdeploy.mdは「完全な実装例」を省く)。
 - [ ] `starters/theme` / `starters/plugin` が§8/§9のツリーどおりに存在する。
 - [ ] スターター直下に `README.md`(§8.7)が存在し、セットアップ手順・create-project例・AGENTS.md/rules/への導線を含む(規約本文の転載はないこと)。
 - [ ] スターターのAGENTS.mdのタスク対応表のパス(`vendor/tmswp/<パッケージ>/rules/*.md`)が、`packages/<パッケージ>/rules/`の実在ファイルと一致する。

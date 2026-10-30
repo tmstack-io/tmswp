@@ -26,9 +26,11 @@
 | 独自DBテーブルを作って読み書きする | `vendor/tmswp/core/rules/model.md` |
 | サイト設定値(オプション)を定義する | `vendor/tmswp/core/rules/options.md` |
 | add_action・add_filterをまとめて登録する | `vendor/tmswp/core/rules/hooks.md` |
+| REST APIのルートを追加する | `vendor/tmswp/core/rules/rest.md` |
 | テンプレートパーツを読み込む | `vendor/tmswp/core/rules/view.md` |
 | 独自ブロックを追加する | `vendor/tmswp/core/rules/blocks.md` |
 | 公式の拡張を導入する | `vendor/tmswp/core/rules/extensions.md` |
+| 本番へデプロイする(FTP) | `vendor/tmswp/core/rules/deploy.md` |
 | ACFの生成アクセサを生成・照合する(tmswp/acf-bridge) | `vendor/tmswp/acf-bridge/rules/sync-check.md` |
 | 管理画面に設定ページを作る(tmswp/settings-page) | `vendor/tmswp/settings-page/rules/settings-page.md` |
 | 署名付きのURLでサムネイルを出す(tmswp/thumbnail) | `vendor/tmswp/thumbnail/rules/thumbnail.md` |

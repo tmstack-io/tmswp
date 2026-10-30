@@ -5,6 +5,12 @@
 
 ## Unreleased
 
+### 追加
+
+- tmswp/coreのレシピに`rules/deploy.md`を足した。FTPで本番へ上げる手順(`composer install --no-dev --optimize-autoloader`で作った`vendor/`、上げるもの・上げないもの、同じサイトのテーマ・プラグインの`tmswp/*`の版をそろえること、バックアップと元に戻す手順、保守モード、`wp tmswp discover --check`・`wp tmswp migrate`、OPcache、ページキャッシュ)を1か所にまとめた。rules/model.md・blocks.md・acf.md、スターターとexamples/sample-siteのAGENTS.md、packages/acf-bridge/README.mdのデプロイの記述は、このレシピを参照する形にした。
+- tmswp/coreのレシピに`rules/rest.md`を足した。TMSWPはRESTのルートを宣言する仕組みを持たず、WordPress標準の`register_rest_route()`を`#[AsHook]`のクラスの`rest_api_init`に書く。`permission_callback`を必ず書くこと、`args`のすべての引数に`type`と`'validate_callback' => 'rest_validate_request_arg'`を書き、`sanitize_callback`を書かないこと(`sanitize_callback`を書くと型等が検証されず、整数への変換も外れる)、`permission_callback`は検証の前の値でも呼ばれること、例外をKernelのロガーに記録して500の応答に変え、debugでないときは詳細を出さないこと、Cookie認証(`X-WP-Nonce`)をそのまま使うことを、完全な実装例とともに示した。
+- スターター(テーマ・プラグイン)とexamples/sample-siteのAGENTS.mdの「最初に読むもの」の表と、packages/core/README.mdのレシピの表に、`rules/rest.md`と`rules/deploy.md`の行を足した。既存のプロジェクトでは、AGENTS.mdの表に同じ2行を足す。
+
 ### 変更
 
 - `Kernel::VERSION`を0.9.1にし、packages/*・starters/*・examples/sample-siteの`tmswp/*`の制約を`^0.9`から`^0.9.1`にした。packages/*のbranch-aliasは`0.9.x-dev`のままである。
@@ -12,6 +18,7 @@
 ### 開発
 
 - ルートのlockのPHPStanを2.2.2から2.3.4に上げ(制約は`^2.1`のまま。phpstan-deprecation-rules 2.0.5・phpstan-phpunit 2.1.1・phpstan-strict-rules 2.1.0・phpstan-wordpress 2.0.4も上げた)、ルートの`tests/bootstrap-unit.php`でも、coreの`tests/bootstrap.php`と同じく、Patchworkが`phar://`のストリームを差し替える前にPHPStanのテストのコンテナを作るようにした(しないと、PHPStanの拡張のテストがクラスの再宣言で止まる)。2.3で新しく出た指摘(FormRuntimeTestとWpdbTestDoubleParityTestの10件)は、テストのコードを直して解消した。lockの拡張(phpstan-strict-rules 2.1.0・phpstan-phpunit 2.1.1)が`phpstan/phpstan ^2.3`を要求するため、実際の下限は2.3になる。制約を`^2.3`に上げると、packages/core・starters/*の`^2.1`と食い違って`composer monorepo:validate`が失敗するため、制約はそろえたまま据え置いた。
+- docs/11の全文の写し(monorepoのAGENTS.mdと、テーマのスターターのAGENTS.md)が実物と同じであることを確かめるユニットテスト(`tests/Unit/Docs/AgentsDocumentCopyTest.php`)を足した。
 
 ## v0.9.0 — 導入できる版
 
