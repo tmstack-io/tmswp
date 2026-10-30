@@ -154,7 +154,7 @@ acf-bridgeは、WordPressを起動せずにテーマ・プラグインのルー�
 
 このリポジトリは TMStack WordPress Framework 本体の開発用 monorepo です。実装は `docs/12-implementation-plan.md` のロードマップに従い、版とタスクの順に進めます。
 
-- 対応範囲は PHP 8.3〜8.5、WordPress 7.0 以上とする。
+- 対応範囲は PHP 8.3〜8.5、WordPress 7.0 以上、MySQL 8.4 以上・MariaDB 10.11 以上とする。
 - `tmswp/core` の runtime 依存は `psr/log` と `psr/container` のみに限定する。
 - 旧 iwf2b 互換のシム、別名、移行用 API は追加しない。
 - すべての PHP ファイルに `declare(strict_types=1)` を置き、公開 API は型宣言を必須とする。
@@ -235,7 +235,7 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 | Rules Code Examples | `packages/*/rules/`のコード例の抽出と検査(`tools/extract-rules-code.php`・`tools/verify-rules-code.php`) |
 | Unit | `composer test:unit`(PHP 8.3と8.5) |
 | Integration | `composer test:integration`(PHP 8.3と8.5 × WordPress 7.0と最新版の4セル) |
-| Integration (MySQL) | servicesのMySQL 8.4 LTSと9.7 LTS(2セル。PHP 8.3・WordPress 7.0)に、wp-envのcliから`WP_TESTS_DB_HOST`で接続した統合テスト。接続先の版を`SELECT VERSION()`で確かめる |
+| Integration (MySQL・MariaDB) | servicesのMySQL 8.4 LTS・9.7 LTSとMariaDB 10.11 LTS(3セル。PHP 8.3・WordPress 7.0)に、wp-envのcliから`WP_TESTS_DB_HOST`で接続した統合テスト。接続先の版を`SELECT VERSION()`で確かめる |
 | Coverage | 翻訳ファイルと探索結果ファイルの照合、合算カバレッジの閾値の判定(PHP 8.3・WordPress最新版) |
 | Sample Site QA | `examples/sample-site`の`composer qa`(専用のwp-env) |
 | Starter Projects | スターターからcreate-projectで作ったテーマ・プラグインの`composer qa`と、テーマのスターターのブロックのビルドと探索結果ファイルの照合 |
@@ -652,7 +652,7 @@ starters/theme/
   "license": "GPL-2.0-or-later",
   "require": {
     "php": ">=8.3",
-    "tmswp/core": "^0.9.1"
+    "tmswp/core": "^0.10"
   },
   "require-dev": {
     "brain/monkey": "^2.6",

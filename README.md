@@ -31,6 +31,7 @@ TMStack WordPress Framework(TMSWP)は、PHP 8.3〜8.5・WordPress 7.0以上を�
 
 - PHP 8.3〜8.5
 - WordPress 7.0以上(クラシックテーマとプラグイン。ブロックテーマとマルチサイトは対象外)
+- MySQL 8.4 LTS以上、またはMariaDB 10.11 LTS以上。Modelの行ロックの句の`SKIP LOCKED`・`NOWAIT`はMySQL 8.0以上・MariaDB 10.6以上で使え、そのうちサポート(MariaDBはコミュニティのサポート)が続いているLTSで、CIで統合テストを走らせている版(MySQL 8.4・9.7、MariaDB 10.11)を下限にした
 - Composer 2
 
 ## 使い始め方

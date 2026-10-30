@@ -5,11 +5,11 @@
   "license": "proprietary",
   "require": {
     "php": ">=8.3",
-    "tmswp/acf-bridge": "^0.9.1",
-    "tmswp/core": "^0.9.1",
-    "tmswp/ja-toolkit": "^0.9.1",
-    "tmswp/settings-page": "^0.9.1",
-    "tmswp/thumbnail": "^0.9.1"
+    "tmswp/acf-bridge": "^0.10",
+    "tmswp/core": "^0.10",
+    "tmswp/ja-toolkit": "^0.10",
+    "tmswp/settings-page": "^0.10",
+    "tmswp/thumbnail": "^0.10"
   },
   "require-dev": {
     "brain/monkey": "^2.6",
@@ -18,7 +18,7 @@
     "phpstan/phpstan": "^2.1",
     "phpunit/phpunit": "^11.5",
     "szepeviktor/phpstan-wordpress": "^2.0",
-    "tmswp/testing": "^0.9.1"
+    "tmswp/testing": "^0.10"
   },
   "repositories": [
     {
@@ -27,12 +27,12 @@
       "options": {
         "symlink": true,
         "versions": {
-          "tmswp/acf-bridge": "0.9.1",
-          "tmswp/core": "0.9.1",
-          "tmswp/ja-toolkit": "0.9.1",
-          "tmswp/settings-page": "0.9.1",
-          "tmswp/testing": "0.9.1",
-          "tmswp/thumbnail": "0.9.1"
+          "tmswp/acf-bridge": "0.10.0",
+          "tmswp/core": "0.10.0",
+          "tmswp/ja-toolkit": "0.10.0",
+          "tmswp/settings-page": "0.10.0",
+          "tmswp/testing": "0.10.0",
+          "tmswp/thumbnail": "0.10.0"
         }
       }
     }

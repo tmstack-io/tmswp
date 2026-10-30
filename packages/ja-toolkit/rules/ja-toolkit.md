@@ -155,4 +155,4 @@ final class ReservationForm
 - 拡張の登録の仕方と制約: vendor/tmswp/core/rules/extensions.md
 - フォームの画面の流れ・メール: vendor/tmswp/core/rules/form.md・form-mail.md
 - 管理画面・`wp_head`の整理: vendor/tmswp/core/rules/hooks.md
-- 設計の正本: TMSWPのmonorepoの[docs/08-extensions.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/08-extensions.md)の「tmswp/ja-toolkit — 日本語サイト対応」の節
+- 設計の正本: TMSWPのmonorepoの[docs/08-extensions.md](https://github.com/tmstack-io/tmswp/blob/v0.10.0/docs/08-extensions.md)の「tmswp/ja-toolkit — 日本語サイト対応」の節

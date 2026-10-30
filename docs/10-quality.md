@@ -1016,7 +1016,7 @@ define('WP_PHP_BINARY', 'php');
 define('WP_DEBUG', true);
 ```
 
-- DBの接続先はwp-envの環境(mysqlコンテナの`wordpress`データベース。中身はMariaDB)を既定値とし、環境変数で上書きできる。MySQLでの実行は4.11のとおり`WP_TESTS_DB_HOST`で接続先を変える。テーブル接頭辞`wptests_`で開発用サイトのテーブル(`wp_`)と分ける。
+- DBの接続先はwp-envの環境(mysqlコンテナの`wordpress`データベース。中身はMariaDB)を既定値とし、環境変数で上書きできる。MySQLとMariaDB 10.11での実行は4.11のとおり`WP_TESTS_DB_HOST`で接続先を変える。テーブル接頭辞`wptests_`で開発用サイトのテーブル(`wp_`)と分ける。
 - `error_reporting()` はここで設定しない。`WP_DEBUG` が true のとき WordPress の `wp_debug_mode()` が `error_reporting(E_ALL)` に設定し直すため、ここでの設定はテストの実行時には効かない。非推奨の扱いは 4.5・4.6 のとおりである。
 
 `.wp-env.json`(リポジトリ既定。CI では `.wp-env.override.json` で core / phpVersion を差し替える):
@@ -1148,24 +1148,28 @@ composer test:e2e -- --grep Thumbnail
 - CIでは、`sample-site`ジョブ(5.1)が`composer qa`の後に、ブラウザを入れて(`node node_modules/@playwright/test/cli.js install --with-deps chromium`。キャッシュしない)`composer test:e2e`を実行する。失敗したときだけ、`var/e2e/test-results/`を成果物`e2e-traces`に保存する。
 - 対象のWordPressは、sample-siteの`.wp-env.json`の`core: null`(wp-envの既定の最新版)である。エディタの画面の変化(ボタンの名前等)で失敗したときは、補助かテストの要素の指定を直す。
 
-### 4.11 MySQLでの統合テスト(DBの構成)
+### 4.11 MySQL・MariaDBの各版での統合テスト(DBの構成)
 
-wp-env(12)は、開発用サイトのDB(`mysql`のサービス)をMariaDBに固定し、設定でMySQLにできない。統合テストの既定の接続先はこのMariaDBである(4.7)。MySQL 8.4 LTSと9.7 LTSでの確認は、MySQLのコンテナを別に立て、wp-envのcliから`WP_TESTS_DB_HOST`(tests/wp-tests-config.php)で接続して、統合テストの全体を実行する。CIでは`mysql`ジョブ(5.1。2セル)が毎回行う。一度きりの確認にしないのは、識別子の予約語がDBの版で増え(8.4の`qualify`・`tablesample`、9.7の`external`・`library`等)、一度きりの確認ではDBの版が上がったときに気づけないためである。
+wp-env(12)の開発用サイトのDB(`mysql`のサービス)は、既定がMariaDBの最新のLTS(イメージ`mariadb:lts`)で、設定でMySQLにはできない。MariaDBの版は、`.wp-env.json`の`mariadbVersion`か環境変数`WP_ENV_MARIADB_VERSION`で変えられる(イメージは`mariadb:{版}`)。統合テストの既定の接続先は、既定の版のこのMariaDBである(4.7)。MySQL 8.4 LTS・9.7 LTSと、MariaDBの最低の版の10.11 LTS(01-architecture.md §5.5)での確認は、そのDBのコンテナを別に立て、wp-envのcliから`WP_TESTS_DB_HOST`(tests/wp-tests-config.php)で接続して、統合テストの全体を実行する。CIでは`mysql`ジョブ(5.1。3セル)が毎回行う。一度きりの確認にしないのは、識別子の予約語がDBの版で増え(8.4の`qualify`・`tablesample`、9.7の`external`・`library`等)、一度きりの確認ではDBの版が上がったときに気づけないためである。MariaDB 10.11のセルは、対応する最も古いMariaDBで、Modelの機能(行ロックの句等。06-model.md R6)と予約語の照合が通ることを確かめる。wp-envの`mariadbVersion`でも10.11にできるが、MySQLのセルと同じ方式(servicesのDBに`WP_TESTS_DB_HOST`で接続する)にそろえるため、servicesで立てる。
 
 | 接続先 | 使う場面 | 版 |
 |---|---|---|
-| wp-envのMariaDB(ホスト`mysql`・DB`wordpress`) | `composer test:integration`、CIの`integration`・`coverage`、`http://wordpress/`を叩くテストのサイト側 | wp-envの既定(手元の確認では12.3.3) |
-| servicesのMySQL(別名`mysql-under-test`・DB`wordpress`) | CIの`mysql`ジョブの統合テスト(WordPressのテストライブラリと、テストのプロセスのwpdb) | `mysql:8.4`・`mysql:9.7`のイメージ(LTSの系列のタグ) |
+| wp-envのMariaDB(ホスト`mysql`・DB`wordpress`) | `composer test:integration`、CIの`integration`・`coverage`、`http://wordpress/`を叩くテストのサイト側 | wp-envの既定(`mariadb:lts`。手元の確認では12.3.3) |
+| servicesのDB(別名`mysql-under-test`・DB`wordpress`) | CIの`mysql`ジョブの統合テスト(WordPressのテストライブラリと、テストのプロセスのwpdb) | `mysql:8.4`・`mysql:9.7`・`mariadb:10.11`のイメージ(LTSの系列のタグ) |
 
+- `mysql`ジョブは、MariaDBのセルも含めてジョブ名・サービス名・別名に`mysql`を使う(wp-envの`mysql`のサービスの中身がMariaDBであるのと同じく、MySQLのプロトコルのDBの意味)。
 - `mysql`ジョブのPHPは8.3、WordPressは7.0に固定する(DBの違いを確かめるジョブのため、PHP・WordPressの版の軸は`integration`の4セルに任せる)。
-- `http://wordpress/`を叩くテスト(Formのページ・一時ファイルのURL等。`FormIntegrationTest`・`FormFileIntegrationTest`・`FormTempFileIntegrationTest`)のサイト側は、wp-envの`wordpress`のコンテナで動き、開発用サイトのMariaDBを使う。本物のWP-CLIを別のプロセスで実行するテスト(`MigrateCommandIntegrationTest`・`DiscoverCommandIntegrationTest`等。開発用サイトに対して実行する)も同じである。`mysql`ジョブでも、これらの部分はMySQLで確かめていない。テストのプロセス(cli)の側のwpdbだけがMySQLに接続する。
-- 一時テーブルとMySQLの違い: WordPressのテストライブラリは、テストの中のCREATE TABLE・DROP TABLEを一時テーブルの文に書き換える。MySQLのSHOW TABLES・SHOW TABLE STATUSは一時テーブルを返さず(MariaDBは11.2から返す)、MySQLは1つの文で同じ一時テーブルを2回参照できない。Migratorは適用の後にSHOW TABLESでテーブルの有無を確かめるため、Migratorを使う統合テスト(`ModelIntegrationTest`・`MigratorIntegrationTest`・`MigratorColumnTypeIntegrationTest`)は、`IntegrationTestCase::useRealTables()`(tmswp/testingの`RealTables`)で実際のテーブルを作る。作るテーブル(接頭辞を除いた名前)は`useRealTables()`に宣言し、そのテストのtear_downで、宣言したテーブルのうち`useRealTables()`の時点に無かったものだけを名前で消す。DB全体の差分は使わない(ほかの接続が作ったテーブルを消さないため)。
+- `http://wordpress/`を叩くテスト(Formのページ・一時ファイルのURL等。`FormIntegrationTest`・`FormFileIntegrationTest`・`FormTempFileIntegrationTest`)のサイト側は、wp-envの`wordpress`のコンテナで動き、開発用サイトのMariaDBを使う。本物のWP-CLIを別のプロセスで実行するテスト(`MigrateCommandIntegrationTest`・`DiscoverCommandIntegrationTest`等。開発用サイトに対して実行する)も同じである。`mysql`ジョブでも、これらの部分はservicesのDBで確かめていない。テストのプロセス(cli)の側のwpdbだけがservicesのDBに接続する。
+- 一時テーブルとMySQLの違い: WordPressのテストライブラリは、テストの中のCREATE TABLE・DROP TABLEを一時テーブルの文に書き換える。MySQLのSHOW TABLES・SHOW TABLE STATUSは一時テーブルを返さず(MariaDBは11.2から返す)、MySQLは1つの文で同じ一時テーブルを2回参照できない。Migratorは適用の後にSHOW TABLESでテーブルの有無を確かめるため、Migratorを使う統合テスト(`ModelIntegrationTest`・`MigratorIntegrationTest`・`MigratorColumnTypeIntegrationTest`・`GeneratedColumnIntegrationTest`)は、`IntegrationTestCase::useRealTables()`(tmswp/testingの`RealTables`)で実際のテーブルを作る。作るテーブル(接頭辞を除いた名前)は`useRealTables()`に宣言し、そのテストのtear_downで、宣言したテーブルのうち`useRealTables()`の時点に無かったものだけを名前で消す。DB全体の差分は使わない(ほかの接続が作ったテーブルを消さないため)。
+- トランザクションと行ロックの句の統合テスト(`TransactionIntegrationTest`)も、`useRealTables()`で実際のテーブルを作る。一時テーブルはほかの接続から見えず、ロックの競合を起こせないためである。ロックの競合・デッドロックとコミットの確認は、テストの中でtests/wp-tests-config.phpと同じ設定(`DB_USER`・`DB_PASSWORD`・`DB_NAME`・`DB_HOST`)で作った2つ目の`wpdb`の接続(自動コミット)で行い、tear_downで、テーブルを消す前にロールバックして閉じる(閉じないと、テーブルの削除がメタデータのロックを待つ)。デッドロックは、2つ目の接続の待つ文を`mysqli_query()`の`MYSQLI_ASYNC`で送って起こす。テストライブラリはテストごとに`SET autocommit = 0`と`START TRANSACTION`を実行するため、1つ目の接続の`transaction()`の`START TRANSACTION`は、それまでの書き込みを暗黙にコミットする(テーブルのDDLの後に書いた行だけで確かめる)。
 - DDLは暗黙にコミットする。DDLより前にテストが書いた行(Migratorのハッシュのoption、利用者、WordPressが保存したtransient等)はロールバックで戻らないため、`useRealTables()`が返す`RealTables`の`onTearDown()`で、作ったIDや名前を控えて消す(ロールバックの後・テーブルの削除の前に動く)。統合テストの全体の実行で、各テストの前後に、別の接続で`wptests_`の主なテーブル(users・usermeta・terms・term_taxonomy・term_relationships・posts・postmeta・options・comments・termmeta)の件数・optionの名前・実際のテーブルの一覧が変わらないことを、MariaDBとMySQL 8.4・9.7で確かめた(v0.9.0-T3a)。
-- 接続先の取り違えを防ぐため、`mysql`ジョブは統合テストの前に、tests/wp-tests-config.phpと同じ設定で接続して`SELECT VERSION()`を実行し、版がそのセルのMySQL(`8.4.`・`9.7.`で始まる)でなければ失敗する。
-- MySQLのコンテナは、servicesのネットワークからwp-envのネットワークへ、`docker network connect --alias mysql-under-test`で参加させる。servicesで公開したポートへ`host.docker.internal`(wp-envの`extra_hosts`のhost-gateway)経由で接続する方法は、手元(macOSのDocker Desktop)では届くが、Linuxのrunnerでは届き方がDockerのネットワークの分離とファイアウォールの設定に依存し、手元で確かめられないため使わない。
+- 接続先の取り違えを防ぐため、`mysql`ジョブは統合テストの前に、tests/wp-tests-config.phpと同じ設定で接続して`SELECT VERSION()`を実行し、版がそのセルのDB(`8.4.`・`9.7.`・`10.11.`で始まる。MariaDBは`10.11.19-MariaDB-ubu2204`の形で返す)でなければ失敗する。
+- servicesのDBのコンテナは、servicesのネットワークからwp-envのネットワークへ、`docker network connect --alias mysql-under-test`で参加させる。servicesで公開したポートへ`host.docker.internal`(wp-envの`extra_hosts`のhost-gateway)経由で接続する方法は、手元(macOSのDocker Desktop)では届くが、Linuxのrunnerでは届き方がDockerのネットワークの分離とファイアウォールの設定に依存し、手元で確かめられないため使わない。
 - MySQL 8.4・9.7の既定の認証(`caching_sha2_password`)で、wp-envのPHP(mysqli)から接続できる。9.7には`mysql_native_password`が無い。
+- `mariadb:10.11`のイメージは、`MYSQL_ROOT_PASSWORD`・`MYSQL_DATABASE`の環境変数と`mysqladmin`を持つため、MySQLのセルと同じサービスの定義とヘルスチェックで立てられる。MariaDB 11以降のイメージは`mysqladmin`を持たないため、そのセルを足すときはヘルスチェックを`mariadb-admin ping`に替える。
+- MariaDB 10.11.19で、この時点(v0.10.0-T1)の統合テストの全体が通ることを、手元で下の手順で確かめた(`OK (496 tests, 1779638 assertions)`。予約語の照合の`IdentifierReservedWordIntegrationTest`を含む)。
 
-手元で再現する手順(ルートのwp-envを起動した状態。コンテナ名とポートは手元の他の環境と重ねない):
+手元で再現する手順(ルートのwp-envを起動した状態。コンテナ名とポートは手元の他の環境と重ねない。MariaDB 10.11は、イメージを`mariadb:10.11`、コンテナ名を`tmswp-mariadb1011`等にして同じ手順で行う):
 
 ```bash
 docker run -d --name tmswp-mysql84 -e MYSQL_ROOT_PASSWORD=password -e MYSQL_DATABASE=wordpress mysql:8.4
@@ -1327,21 +1331,33 @@ jobs:
         if: failure()
         run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
 
-  # MySQL 8.4 LTS・9.7 LTSでの統合テスト。wp-env 12はDBをMariaDBに固定するため、servicesでMySQLを立て、
+  # MySQL 8.4 LTS・9.7 LTSと、MariaDBの最低の版の10.11 LTSでの統合テスト。wp-env 12のDBの既定はmariadb:ltsで、MySQLにはできない。
+  # MariaDBの版はmariadbVersionで変えられるが、MySQLのセルと同じ方式にそろえるため、servicesで各版のDBを立て、
   # wp-envのネットワークに別名mysql-under-testで参加させ、wp-envのcliからWP_TESTS_DB_HOSTで接続する。
   # PHPとWordPressは8.3・7.0に固定する。http://wordpress/を叩くテストは、このジョブでも開発用サイト(wp-envのMariaDB)を使う。
   mysql:
-    name: Integration (MySQL ${{ matrix.mysql }} / PHP 8.3 / WP 7.0)
+    name: Integration (${{ matrix.db }} ${{ matrix.version }} / PHP 8.3 / WP 7.0)
     runs-on: ubuntu-24.04
     needs: [unit]
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        mysql: ['8.4', '9.7']
+        include:
+          - db: MySQL
+            version: '8.4'
+            image: mysql:8.4
+          - db: MySQL
+            version: '9.7'
+            image: mysql:9.7
+          - db: MariaDB
+            version: '10.11'
+            image: mariadb:10.11
     services:
+      # MariaDB 10.11のイメージも、MYSQL_*の環境変数とmysqladminを持つ。MariaDB 11以降のイメージはmysqladminを
+      # 持たないため、そのセルを足すときはヘルスチェックをmariadb-adminに替える
       mysql:
-        image: mysql:${{ matrix.mysql }}
+        image: ${{ matrix.image }}
         env:
           MYSQL_ROOT_PASSWORD: password
           MYSQL_DATABASE: wordpress
@@ -1376,8 +1392,8 @@ jobs:
             fi
             sleep 10
           done
-      # servicesのMySQLは別のネットワークにあるため、wp-envのネットワークに参加させる
-      - name: Connect MySQL to the wp-env network
+      # servicesのDBは別のネットワークにあるため、wp-envのネットワークに参加させる
+      - name: Connect the database to the wp-env network
         run: |
           containers=$(docker ps -q --filter label=com.docker.compose.service=wordpress)
           if [ "$(printf '%s\n' "${containers}" | grep -c .)" -ne 1 ]; then
@@ -1390,7 +1406,8 @@ jobs:
             exit 1
           fi
           docker network connect --alias mysql-under-test "${networks}" "${{ job.services.mysql.id }}"
-      # tests/wp-tests-config.phpと同じ設定で接続し、wp-envのMariaDBではなくこのセルのMySQLであることを確かめる
+      # tests/wp-tests-config.phpと同じ設定で接続し、wp-envのMariaDBではなくこのセルのDBであることを確かめる
+      # (MariaDBのVERSION()は10.11.19-MariaDB-ubu2204の形で、版の接頭辞で確かめられる)
       - name: Check the database version
         run: |
           # PHPのコードの$はシェルで展開しない
@@ -1400,9 +1417,9 @@ jobs:
             php -r 'require "tests/wp-tests-config.php"; $db = new mysqli(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); echo $db->query("SELECT VERSION()")->fetch_row()[0];')
           echo "database version: ${version}"
           case "${version}" in
-            "${{ matrix.mysql }}."*) ;;
+            "${{ matrix.version }}."*) ;;
             *)
-              echo "::error::the tests would connect to ${version}, not MySQL ${{ matrix.mysql }}"
+              echo "::error::the tests would connect to ${version}, not ${{ matrix.db }} ${{ matrix.version }}"
               exit 1
               ;;
           esac
@@ -1648,12 +1665,12 @@ jobs:
 
 - マトリクスは DR-12 のとおり、ユニットが PHP 8.3 / 8.5、統合が **PHP 8.3 / 8.5 × WP 7.0 / 最新版** の 4 セル。ユニットは WP 非依存のため PHP 軸のみ。
 - 統合の各セルは、検証する WP の版を先に確定し(WP 7.0 のセルは 7.0、最新版のセルは WordPress.org の版情報 API の最新版)、wp-env の `core` をその版の zip にする。テストライブラリは wp-env がその版と同じタグから取得する(§4.2)。API の取得に失敗したセルは、その時点で失敗する。
-- `mysql`ジョブは、MySQL 8.4 LTSと9.7 LTSの2セルで統合テストを実行する(4.11)。予約語がDBの版で増えるため、一度きりではなく毎回確かめる。PHPは8.3、WordPressは7.0に固定する(DBの違いを確かめるジョブなので、PHP・WordPressの軸は`integration`に任せる)。MySQLはservicesのイメージ`mysql:8.4`・`mysql:9.7`(LTSの系列のタグ。`latest`は使わない)で立て、ヘルスチェック(`mysqladmin ping`)が通ってから段を始める。wp-envの起動の後に、MySQLのコンテナをwp-envのネットワークに別名`mysql-under-test`で参加させ(`docker network connect`)、wp-envのcliから`WP_TESTS_DB_HOST=mysql-under-test`で統合テストの全体を実行する。テストの前に、tests/wp-tests-config.phpと同じ設定で接続して`SELECT VERSION()`を実行し、版がそのセルのMySQL(`8.4.`・`9.7.`で始まる)でなければ失敗させる(wp-envのMariaDBに接続して成功してしまうことを防ぐ)。
+- `mysql`ジョブは、MySQL 8.4 LTS・9.7 LTSとMariaDB 10.11 LTSの3セルで統合テストを実行する(4.11)。セルはmatrixの`include`で、DBの名前(`db`)・版(`version`)・イメージ(`image`)の組を並べ、ジョブ名は`Integration ({db} {version} / PHP 8.3 / WP 7.0)`とする。予約語がDBの版で増えるため、一度きりではなく毎回確かめる。MariaDB 10.11は、対応するMariaDBの最低の版である(01-architecture.md §5.5)。PHPは8.3、WordPressは7.0に固定する(DBの違いを確かめるジョブなので、PHP・WordPressの軸は`integration`に任せる)。DBはservicesのイメージ`mysql:8.4`・`mysql:9.7`・`mariadb:10.11`(LTSの系列のタグ。`latest`・`lts`は使わない)で立て、ヘルスチェック(`mysqladmin ping`)が通ってから段を始める。wp-envの起動の後に、DBのコンテナをwp-envのネットワークに別名`mysql-under-test`で参加させ(`docker network connect`)、wp-envのcliから`WP_TESTS_DB_HOST=mysql-under-test`で統合テストの全体を実行する。テストの前に、tests/wp-tests-config.phpと同じ設定で接続して`SELECT VERSION()`を実行し、版がそのセルのDB(`8.4.`・`9.7.`・`10.11.`で始まる)でなければ失敗させる(wp-envのMariaDBに接続して成功してしまうことを防ぐ)。
 - wp-env は `npm ci` で package-lock.json どおりに導入し(`actions/setup-node` の npm キャッシュを使う)、composer スクリプト経由でローカルの wp-env だけを呼ぶ(§1.1 補足)。
 - npm(11.19以降)は、依存のインストールスクリプトを、package.jsonの`allowScripts`に無いかぎり実行せず、警告を出す。ルートのpackage.jsonは、@wordpress/envの依存の`fs-ext-extra-prebuilt`(@wp-playground/cliが使う)のインストールスクリプトを`false`で拒否する(`npm install-scripts deny fs-ext-extra-prebuilt`で書く)。このパッケージは各OS・Node.jsの版のビルド済みのバイナリを同梱し、インストールスクリプトはそのバイナリの確認かnode-gypでのビルドだけを行う。wp-envのDockerの実行環境はこのパッケージを使わない。@wordpress/envを更新して、インストールスクリプトを持つ依存が増えた場合は、中身を確かめてから`allowScripts`に許可か拒否を書く。
 - `lint` / `analyse` / `monorepo` / `rules-verify` は下限の PHP 8.3 で実行する(php-cs-fixer の推奨と依存解決の下限に合わせる。§1.1 補足)。PHP 8.5 での解析は PHPStan の `phpVersion`(8.3〜8.5。§2.1)が担う。
 - 全ジョブのrunnerを`ubuntu-24.04`に固定する(`ubuntu-latest`は使わない)。`ubuntu-latest`の指す版は予告のうえで新しいUbuntuへ移るため、名前で指定すると、ワークフローを変えなくてもrunnerの版が変わりうる。runnerの版を上げる場合は、全ジョブが新しい版で通ることを確かめてから、qa.yml・split.ymlの`runs-on`と5.1・5.2の完全版を同時に改訂する。
-- wp-envを起動するジョブは、`integration`・`mysql`・`coverage`・`starters`を`timeout-minutes: 20`、E2Eを含む`sample-site`を`timeout-minutes: 30`で打ち切る。wp-envの起動は、Dockerイメージの取得の一時的な失敗に備えて10秒の間隔で3回まで再試行し、3回目の失敗でジョブを失敗させる。失敗時はwp-envのログ(`logs development --no-watch`)を出力する(`mysql`はMySQLのコンテナのログも出力する)。
+- wp-envを起動するジョブは、`integration`・`mysql`・`coverage`・`starters`を`timeout-minutes: 20`、E2Eを含む`sample-site`を`timeout-minutes: 30`で打ち切る。wp-envの起動は、Dockerイメージの取得の一時的な失敗に備えて10秒の間隔で3回まで再試行し、3回目の失敗でジョブを失敗させる。失敗時はwp-envのログ(`logs development --no-watch`)を出力する(`mysql`はservicesのDBのコンテナのログも出力する)。
 - `lint` ジョブが baseline ファイルの不存在を機械的に強制する。
 - `unit`ジョブと`coverage`ジョブのユニットテストの段は、`--testdox`(`composer test:unit -- --testdox`・`composer test:coverage:unit -- --testdox`)で実行し、ログにテストの名前を出す。
 - 合算カバレッジの判定は `coverage` ジョブ(PHP 8.3 / WordPress 最新版の 1 セル)だけで行う(4.8)。このジョブは pcov で unit を、`wp:start:coverage` で起動した wp-env の Xdebug で integration を計測し、2 つの clover を artifact `coverage-clover` に保存してから `test:coverage:check` で判定する。clover はジョブ内で生成して使うため、ジョブ間の受け渡しは無い。`unit` と `integration` の各セルはカバレッジを計測しない。
