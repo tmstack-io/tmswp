@@ -158,7 +158,7 @@ Model層が対応するDBは、**MySQL 8.4 LTS以上**と**MariaDB 10.11 LTS以�
 | upsertの行の別名`VALUES (...) AS n … n.col` | 構文の誤り | 使える |
 | upsertの影響行数と`insert_id` | 挿入: 1・新しいID、更新: 2・更新した行のID、変化なし: 0・0 | 同じ |
 
-- `DEFAULT CURRENT_TIMESTAMP`だけの列の`Extra`(MariaDBは空、MySQLは`DEFAULT_GENERATED`)と、通常の列とVIRTUALの生成カラムの`MODIFY`による入れ替え(MariaDBは1907、MySQLは3106で失敗)は、v0.10.0-T3で、上の4つの版の使い捨てのコンテナで確かめた。統合テスト`GeneratedColumnIntegrationTest`が、全DBのセルで確かめる。
+- `DEFAULT CURRENT_TIMESTAMP`だけの列の`Extra`(MariaDBは空、MySQLは`DEFAULT_GENERATED`)と、通常の列とVIRTUALの生成カラムの`MODIFY`による入れ替え(MariaDBは1907、MySQLは3106で失敗)、STOREDとVIRTUALの入れ替えは、v0.10.0-T3で、上の4つの版の使い捨てのコンテナで確かめた。統合テスト`GeneratedColumnIntegrationTest`は、そのうち`DEFAULT CURRENT_TIMESTAMP`だけの列の`Extra`、通常の列からVIRTUALへの`MODIFY`の失敗と、通常の列からSTOREDへの`MODIFY`を、全DBのセルで確かめる。VIRTUALから通常の列へと、STOREDとVIRTUALの入れ替えは、統合テストでは確かめていない。
 - upsertの影響行数と`insert_id`、`VALUES(col)`の警告1287(MySQLだけ)は、統合テスト`UpsertIntegrationTest`と`WpdbTestDoubleParityTest`が、全DBのセルで確かめる。更新になったupsertもAUTO_INCREMENTの値を1つ消費する(IDが飛ぶ)ことは、統合テスト`UpsertIntegrationTest`が全DBのセルで確かめる。
 
 - MySQLの文書は、`LOCK IN SHARE MODE`を後方互換のために残し、`NOWAIT`・`SKIP LOCKED`を`FOR UPDATE`・`FOR SHARE`にだけ付けられるとする(https://dev.mysql.com/doc/refman/9.7/en/innodb-locking-reads.html)。upsertの`VALUES()`は非推奨で、影響行数は挿入が1、更新が2、変化なしが0である(https://dev.mysql.com/doc/refman/9.7/en/insert-on-duplicate.html)。
