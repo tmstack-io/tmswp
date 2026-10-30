@@ -285,7 +285,7 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 ## リリース
 
 - 手順の正本は`docs/RELEASING.md`である。mainへの反映は、PR(`rewrite/v0`→`main`)のマージで行う。`vendor/bin/monorepo-builder release vX.Y.Z`は、mainで`tools/release/`の2つのワーカーを実行し、リリースの前の検査(mainであること・origin/mainと同じであること・作業ツリーが空であること・タグが無いこと・版の一致・CHANGELOGの`## vX.Y.Z — 題名`の見出し)に通れば、注釈付きのタグを作ってそのタグだけをpushする。mainへのcommit・pushと版の書き換えはしない。`split.yml`がmainとタグを各読み取り専用リポジトリへ同期する(`SPLIT_ACCESS_TOKEN`が空なら失敗する)。
-- 版(`Kernel::VERSION`・`tmswp/*`の制約・branch-alias・sample-siteの版)は、版の最初のタスクで1つのコミットで手で上げる。リリースの後に次の版へ自動で上げない。
+- 版(`Kernel::VERSION`・`tmswp/*`の制約・branch-alias・sample-siteの版・packages/*のrules/とREADME.mdの設計文書へのリンクの版)は、版の最初のタスクで1つのコミットで手で上げる。リリースの後に次の版へ自動で上げない。
 - 同期先でプルリクエストを閉じるワークフローの正本は`.github/split/close-pull-request.yml`で、`split.yml`が同期の前に各パッケージの`.github/workflows/`へ写す。packages/*・starters/*には置かない。
 - PRのマージとタグ付けは、毎回ユーザーに確認してから行う。
 ````
@@ -553,6 +553,8 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所だけを
 deploy.mdはコードの例を持たない手順のレシピのため、「完全な実装例」の節と、下の名前空間の読み替えの1行を省く。ほかの節は同じ形にする。
 
 レシピ内のコード例の名前空間は`App\`とする。スターターから作ったプロジェクトの名前空間は、create-projectのsetup.phpがスラッグから生成するため(§10)、プロジェクトごとに違う。各レシピの冒頭に、`App\`をプロジェクトの名前空間(`KernelConfig`の`appNamespace`)に読み替える旨を1行で示す。スターターのAGENTS.mdも、そのプロジェクトの名前空間と読み替えを示す(§5)。
+
+レシピとパッケージのREADME.mdから設計文書(`docs/`)を指すときは、その版のタグのmonorepoのURLへのMarkdownのリンクにする(例: `[docs/02-kernel.md](https://github.com/tmstack-io/tmswp/blob/vX.Y.Z/docs/02-kernel.md)`。`vX.Y.Z`はその版のタグ)。利用者がComposerで受け取るパッケージには`docs/`が入らないため、相対パスやファイル名だけでは辿れない。タグのURLにするのは、利用者が入れた版の設計文書を指すためである。リンクの版は、版の準備で`Kernel::VERSION`と同じコミットで上げる(ユニットテストが一致を確かめる)。節を示すときは、節の番号(`§4`等)やアンカーのURLではなく、節の名前を文で書く(例: `docs/02-kernel.md`の「Discovery」の節)。日本語の見出しのアンカーは、見出しを変えると壊れるためである。配布物のソース(src/・phpstan/・bin/)のコメントには、設計文書(ファイル名・節の番号)と、公開していないファイルの決定の番号への参照を書かない。参照していた内容(エラーの扱い等)は、その箇所に書く(ユニットテストが確かめる)。
 
 レシピの本文は各パッケージの `rules/*.md` が正本であり、本文書は構成と共通フォーマットだけを定める。レシピのコード例が担当文書(02〜10)の確定APIと食い違う場合は **担当文書を正としてレシピ側を修正** する。拡張パッケージ固有のレシピは、そのパッケージの `rules/` に同じ共通フォーマットで置く。
 

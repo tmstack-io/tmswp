@@ -143,7 +143,7 @@ jobs:
         if: failure()
         run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
 
-  # MySQL 8.4 LTS・9.7 LTSでの統合テスト(D-56)。wp-env 12はDBをMariaDBに固定するため、servicesでMySQLを立て、
+  # MySQL 8.4 LTS・9.7 LTSでの統合テスト。wp-env 12はDBをMariaDBに固定するため、servicesでMySQLを立て、
   # wp-envのネットワークに別名mysql-under-testで参加させ、wp-envのcliからWP_TESTS_DB_HOSTで接続する。
   # PHPとWordPressは8.3・7.0に固定する。http://wordpress/を叩くテストは、このジョブでも開発用サイト(wp-envのMariaDB)を使う。
   mysql:

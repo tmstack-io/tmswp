@@ -76,7 +76,7 @@ return KernelConfig::theme(appDir: __DIR__ . '/app', appNamespace: 'App', extens
 - ACFでフィールドを管理する(導入・使い分け・テンプレートでの読み方・flexible_content・`value()`・禁止事項): `vendor/tmswp/core/rules/acf.md`
 - sync・checkの報告(E*・W*・I002・差分)への対処と`BridgeConfig`: `vendor/tmswp/acf-bridge/rules/sync-check.md`
 
-設計の正本は、TMSWPのmonorepo([tmstack-io/tmswp](https://github.com/tmstack-io/tmswp))の`docs/09-acf-bridge.md`です。
+設計の正本は、TMSWPのmonorepo([tmstack-io/tmswp](https://github.com/tmstack-io/tmswp))の[docs/09-acf-bridge.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/09-acf-bridge.md)です。
 
 ## ライセンス
 

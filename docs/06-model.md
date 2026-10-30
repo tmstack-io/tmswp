@@ -1023,7 +1023,7 @@ final readonly class MigrationStatus
     MigrationException("failed to save the schema hashes: {last_error}")。MigrationAction::Migrated
 ```
 
-- 保存済みのハッシュの読み書き(`status()`・`migrateAll()`・`dropTable()`)は、`get_option()`の`false`(optionが無い)とDBのエラーを区別する。`get_option()`は読み込みのクエリが失敗しても`false`を返すため、メタ・オプションの読み取り(04-meta-options.md §4.6。D-47)と同じ`WpDatabaseGuard`で、呼び出しの間に`num_queries`が増え、かつ`last_error`が空でない場合をDBのエラーとして`MigrationException`にする(呼び出しの前の無関係なエラーは拾わない)。失敗した読み込みでWPが書いた「optionが無い」のキャッシュ(notoptions)も消す。管理画面の通知では、この例外を下記の通知の失敗として扱う。
+- 保存済みのハッシュの読み書き(`status()`・`migrateAll()`・`dropTable()`)は、`get_option()`の`false`(optionが無い)とDBのエラーを区別する。`get_option()`は読み込みのクエリが失敗しても`false`を返すため、メタ・オプションの読み取り(04-meta-options.md §4.6)と同じ`WpDatabaseGuard`で、呼び出しの間に`num_queries`が増え、かつ`last_error`が空でない場合をDBのエラーとして`MigrationException`にする(呼び出しの前の無関係なエラーは拾わない)。失敗した読み込みでWPが書いた「optionが無い」のキャッシュ(notoptions)も消す。管理画面の通知では、この例外を下記の通知の失敗として扱う。
 - 検証1〜3のどれかで失敗したら、そのテーブルのハッシュは更新しない。原因を直して`wp tmswp migrate`をもう一度実行すれば、そのテーブルから適用し直す。
 - dbDeltaは1つの定義に複数の文(DESCRIBE・SHOW INDEX・ALTER等)を発行し、wpdbは文ごとに`last_error`を消すため、適用後の`last_error`は最後の文のエラーしか表さない。途中の文の失敗と、エラーを残さずに反映されなかった変更は、検証2の残差分で検出する。本FWのtoSql()生成規則はdbDeltaの比較器と整合するため、正常時の残差分は空になる(MySQL 8.0.17以降の整数型の表示幅は、dbDeltaが比較から除く)。
 - dbDeltaが適用するのは、テーブルの作成、列・索引の追加、列の型の変更、引用符で囲んだ既定値の変更だけである。数値の既定値(`bool()`・`int()`・`decimal()`等)の変更、既定値の削除、`CURRENT_TIMESTAMP`の追加、NULLの可否の変更、テーブルの照合順序の変更は、適用せず、検証2の残差分にも出ない。検証3はこれらの食い違いを検出してハッシュを更新しない。足りない変更はMigratorが自動でALTERせず、利用側が`Connection::execute()`等で手動のALTERを実行してから、`wp tmswp migrate`をもう一度実行する。

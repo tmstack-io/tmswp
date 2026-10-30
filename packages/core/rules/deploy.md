@@ -112,4 +112,4 @@ TMSWPを使うテーマ・プラグインを、FTPで本番のサーバーへ上
 - マイグレーションの実行と失敗したときの直し方: rules/model.md
 - ブロックのビルドと探索コマンドの連結: rules/blocks.md
 - acf-jsonと生成物を同じコミットにする: rules/acf.md
-- 版の照合と探索結果ファイルの仕様: TMSWPの設計文書 docs/01-architecture.md・docs/02-kernel.md
+- 版の照合と探索結果ファイルの仕様: TMSWPの設計文書[docs/01-architecture.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/01-architecture.md)・[docs/02-kernel.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/02-kernel.md)

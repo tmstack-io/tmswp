@@ -76,7 +76,7 @@ FormDefinition::create('contact')
 - 各モジュールの有効化と設定・JapaneseSlugの形式の規則・KanaTextField: `vendor/tmswp/ja-toolkit/rules/ja-toolkit.md`
 - 拡張の登録の仕方: `vendor/tmswp/core/rules/extensions.md`
 
-設計の正本は、TMSWPのmonorepo([tmstack-io/tmswp](https://github.com/tmstack-io/tmswp))の`docs/08-extensions.md`の§3です。
+設計の正本は、TMSWPのmonorepo([tmstack-io/tmswp](https://github.com/tmstack-io/tmswp))の[docs/08-extensions.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/08-extensions.md)の「tmswp/ja-toolkit — 日本語サイト対応」の節です。
 
 ## ライセンス
 

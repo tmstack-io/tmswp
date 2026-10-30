@@ -15,6 +15,7 @@ use ReflectionClass;
 use SplFileInfo;
 use TMSWP\AcfBridge\AcfBridge;
 use TMSWP\Core\Kernel\ExtensionInterface;
+use TMSWP\Core\Kernel\Kernel;
 use TMSWP\JaToolkit\JaToolkit;
 use TMSWP\SettingsPage\SettingsPages;
 use TMSWP\Testing\UnitTestCase;
@@ -113,6 +114,28 @@ final class RepositoryScanTest extends UnitTestCase
 
     /** ディレクトリを列挙するクラス(小文字) */
     private const array DIRECTORY_LISTING_CLASSES = ['directoryiterator', 'filesystemiterator', 'recursivedirectoryiterator', 'globiterator'];
+
+    /**
+     * 設計文書(docs/)と決定・規則の番号への参照。節の記号(`§`)、`docs/`、`NN-name.md`(設計文書のファイル名)、
+     * 拡張子の無い設計文書の名前(`06-model`等)、`文書NN`、`D-NN`・`DR-NN`(決定の番号)、`RN`(設計文書の規則の番号)。
+     * `-alpha-12345-src`・`BSD-3-Clause`・`PSR-3`のように、英数字か`-`の直後に続くものは当てない。
+     */
+    private const array DESIGN_REFERENCE_PATTERNS = [
+        '/§/u',
+        '#(?<![\w/.-])docs/#',
+        '#tmstack-io/tmswp/(?:blob|tree)/#',
+        '/(?<![\w.-])\d{2}-[a-z]+(?:-[a-z]+)*\.md\b/',
+        '/(?<![\w-])\d{2}-(?:overview|architecture|kernel|entities|meta-options|form|model|support|extensions|acf-bridge|quality|ai-docs|implementation-plan)\b/',
+        '/文書\s?\d{2}/u',
+        '/(?<![\w-])DR?-\d+\b/',
+        '/(?<![\w-])R\d{1,2}\b/',
+    ];
+
+    /**
+     * rules/・README.mdの、設計文書へのMarkdownのリンク。リンクの文字列は、URLのタグの後のパス(`docs/…`)と同じにする。
+     * 1つ目のグループはタグ(`vX.Y.Z`)。
+     */
+    private const string DESIGN_DOCUMENT_LINK = '#\[(docs/[^\]]*)\]\(https://github\.com/tmstack-io/tmswp/(?:blob|tree)/([^/)\s]+)/\1\)#';
 
     /**
      * docs/12のv0.1.0の受け入れ条件2: コマンド名`wp-env`をnpx等で名前解決する呼び出しが、composerスクリプト・CI・文書に
@@ -725,6 +748,147 @@ final class RepositoryScanTest extends UnitTestCase
 
         self::assertSame(['packages/core/src/functions.php' => ['tms_log'], 'packages/thumbnail/src/functions.php' => ['tms_thumb']], $declared);
         self::assertSame([], $guarded);
+    }
+
+    /**
+     * docs/12のv0.9.1-T4: 配布物のソース(packages/*\/src・packages/*\/phpstan・packages/*\/bin)に、設計文書と決定の番号への
+     * 参照が無い。利用者がComposerで受け取るパッケージにはdocs/が入らず、決定の番号は公開していないファイルの番号のため、
+     * 利用者が辿れないからである。コメントだけでなく、利用者に見えるメッセージの文字列も対象にするため、トークンではなく
+     * ファイルの行で調べる。packages/*\/testsは配布物に入らないため対象にしない。
+     */
+    public function testDistributedSourcesDoNotReferenceDesignDocumentsOrDecisionNumbers(): void
+    {
+        $files = [];
+
+        foreach (['packages/*/src', 'packages/*/phpstan', 'packages/*/bin'] as $pattern) {
+            foreach (self::trackedDirectories($pattern) as $directory) {
+                $files = array_merge($files, self::filesUnder(self::relative($directory), static fn(string $path): bool => true));
+            }
+        }
+
+        // 3種類のディレクトリを走査していること(この検査が空振りしていないことの確かめ)
+        self::assertContains(self::root() . '/packages/core/src/Kernel/Kernel.php', $files);
+        self::assertContains(self::root() . '/packages/core/phpstan/src/KernelResetOutsideTestRule.php', $files);
+        self::assertContains(self::root() . '/packages/acf-bridge/bin/tms-acf', $files);
+        $violations = [];
+
+        foreach ($files as $file) {
+            $contents = self::read($file);
+
+            if (str_contains($contents, "\0")) {
+                // バイナリのファイル
+                continue;
+            }
+
+            foreach (self::lines($contents) as $index => $line) {
+                if (self::matchesAny(self::DESIGN_REFERENCE_PATTERNS, $line)) {
+                    $violations[] = self::relative($file) . ':' . ($index + 1) . " {$line}";
+                }
+            }
+        }
+
+        self::assertSame([], $violations);
+    }
+
+    /**
+     * docs/12のv0.9.1-T4: packages/*\/rules・packages/*\/README.mdの設計文書への参照は、その版のタグのmonorepoのURLへの
+     * Markdownのリンク(`[docs/02-kernel.md](https://github.com/tmstack-io/tmswp/blob/vX.Y.Z/docs/02-kernel.md)`)にし、
+     * タグは`Kernel::VERSION`の版である(版の準備でリンクを上げ忘れると失敗する)。リンクを除いた本文に、設計文書と
+     * 決定の番号への参照と、この形でないmonorepoのblob・treeのURLが無い。
+     */
+    public function testRulesAndReadmesLinkDesignDocumentsToTheTagOfKernelVersion(): void
+    {
+        $files = self::trackedPaths('packages/*/README.md');
+
+        foreach (self::trackedDirectories('packages/*/rules') as $directory) {
+            $files = array_merge($files, self::filesUnder(self::relative($directory), static fn(string $path): bool => str_ends_with($path, '.md')));
+        }
+
+        self::assertContains(self::root() . '/packages/core/README.md', $files);
+        self::assertContains(self::root() . '/packages/core/rules/blocks.md', $files);
+        $tag = 'v' . Kernel::VERSION;
+        $links = 0;
+        $violations = [];
+
+        foreach ($files as $file) {
+            foreach (self::lines(self::read($file)) as $index => $line) {
+                $location = self::relative($file) . ':' . ($index + 1);
+                $count = preg_match_all(self::DESIGN_DOCUMENT_LINK, $line, $matches);
+                $rest = preg_replace(self::DESIGN_DOCUMENT_LINK, '', $line);
+
+                // 行ごとのアサーションにしない(アサーションの数が文書の行数で変わらないようにする)
+                if ($count === false || $rest === null) {
+                    self::fail(preg_last_error_msg());
+                }
+
+                $links += $count;
+
+                foreach ($matches[2] as $version) {
+                    if ($version !== $tag) {
+                        $violations[] = "{$location} links to {$version} instead of {$tag}";
+                    }
+                }
+
+                if (self::matchesAny(self::DESIGN_REFERENCE_PATTERNS, $rest) || str_contains($rest, 'github.com/tmstack-io/tmswp/blob/') || str_contains($rest, 'github.com/tmstack-io/tmswp/tree/')) {
+                    $violations[] = "{$location} {$line}";
+                }
+            }
+        }
+
+        // リンクを見つけていること(この検査が空振りしていないことの確かめ)
+        self::assertGreaterThan(0, $links);
+        self::assertSame([], $violations);
+    }
+
+    /** @return iterable<string, array{string}> 設計文書・決定の番号への参照の行 */
+    public static function designReferenceLines(): iterable
+    {
+        yield 'ファイル名と節' => ['スラッグに解決する(03-entities.md §1.5)。'];
+        yield 'docs/NNと節' => ['保存名(docs/09 §6.6)'];
+        yield '節だけ' => ['キャッチアップ(§3.3)'];
+        yield '拡張子の無いファイル名と節' => ['(06-model §5)'];
+        yield 'ファイル名だけ' => ['TMSWPの設計文書 docs/05-form.md'];
+        yield '決定の番号' => ['WpDatabaseGuard(D-47)'];
+        yield '設計判断の番号' => ['マトリクスは DR-12 のとおり'];
+        yield 'メッセージの文字列' => ['"build custom blocks as described in docs/12 §1.11 (D-26)"'];
+        yield 'docs/だけ' => ['手順は docs/RELEASING.md にある'];
+        yield '拡張子の無い設計文書の名前' => ['Kernelの設計(02-kernel)の節'];
+        yield '文書の番号' => ['独自ブロックは文書12の方式で作る'];
+        yield '規則の番号' => ['値を R3 で正規化し'];
+        yield '規則の番号(括弧の中)' => ['ベアテーブル名(R1)'];
+    }
+
+    /** 参照の検出の正の対照: 書き換える前のソースにあった形の参照を検出する。 */
+    #[DataProvider('designReferenceLines')]
+    public function testDesignReferencePatternsDetectReferences(string $line): void
+    {
+        self::assertTrue(self::matchesAny(self::DESIGN_REFERENCE_PATTERNS, $line));
+    }
+
+    /** @return iterable<string, array{string}> 設計文書・決定の番号への参照ではない行 */
+    public static function nonDesignReferenceLines(): iterable
+    {
+        yield '版の接尾辞' => ['`-alpha-12345-src` 等)を除いて比べる'];
+        yield 'ライセンス' => ['"license": "BSD-3-Clause"'];
+        yield '日付の書式' => ["date('Y-m-d H:i:s')"];
+        yield 'sprintfの書式' => ["sprintf('%1\$s-%2\$s', \$a, \$b)"];
+        yield 'HTTPのヘッダ' => ['X-WP-Nonce'];
+        yield 'レシピのファイル' => ['vendor/tmswp/core/rules/blocks.md'];
+        yield 'RFCの番号' => ['RFC 3986の形'];
+        yield 'エラーコード' => ['E101・W006'];
+        yield 'PSRの番号' => ['PSR-3のロガー・PSR-11のコンテナ'];
+        yield '英数字の続く名前' => ['R2D2・ARRAY_A・utf8mb4・sha256'];
+        yield '外部の文書のURL' => ['https://developer.mozilla.org/en-US/docs/Web/HTTP'];
+        yield '版の番号' => ['PHPUnit 11・WordPress 7.0'];
+        yield 'ログの出力先' => ['wp-content/tmswp-logs/'];
+        yield '日付' => ['2026-10-30'];
+    }
+
+    /** 参照の検出の負の対照: 参照ではない文字列(版・ライセンス・書式・レシピのファイル)を検出しない。 */
+    #[DataProvider('nonDesignReferenceLines')]
+    public function testDesignReferencePatternsIgnoreNonReferences(string $line): void
+    {
+        self::assertFalse(self::matchesAny(self::DESIGN_REFERENCE_PATTERNS, $line));
     }
 
     /**

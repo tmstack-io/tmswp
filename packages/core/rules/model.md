@@ -564,4 +564,4 @@ final class CatalogItemModelTest extends UnitTestCase
 - テーブルの値をテンプレートで使う前処理: rules/page.md
 - 本番へのデプロイの手順: rules/deploy.md
 - テストの書き方の全体(PHPUnitの設定・Brain Monkey): vendor/tmswp/testing/rules/testing.md
-- Model・QueryBuilder・Migratorの仕様: TMSWPの設計文書 docs/06-model.md
+- Model・QueryBuilder・Migratorの仕様: TMSWPの設計文書[docs/06-model.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/06-model.md)

@@ -101,12 +101,12 @@ return KernelConfig::theme(
 
 ### 利用条件と制約
 
-- **REST APIが使えること**(D-37)。未生成のサムネイルのURLは、RESTのルート`/wp-json/tmswp/v1/thumb`(パーマリンクの設定が基本なら`/?rest_route=/tmswp/v1/thumb`)を指す。REST以外の経路は無い。訪問者(ログインしていないユーザー)からこのルートが使えないと、未生成のサムネイルは表示されない。
+- **REST APIが使えること**。未生成のサムネイルのURLは、RESTのルート`/wp-json/tmswp/v1/thumb`(パーマリンクの設定が基本なら`/?rest_route=/tmswp/v1/thumb`)を指す。REST以外の経路は無い。訪問者(ログインしていないユーザー)からこのルートが使えないと、未生成のサムネイルは表示されない。
   - 起動の後、管理画面の表示(`admin_notices`)ごとに、`RestRouteCheck`が訪問者としてルートが使えるかを確かめ、使えなければ`manage_options`の権限のユーザーに通知する(§1.4)。検出するのは、`rest_authentication_errors`のフィルタが訪問者の要求をエラーにする場合(REST APIを無効化するプラグインの多く)と、ルートのコールバックまで届かない場合(`rest_endpoints`のフィルタによるルートの削除、`rest_pre_dispatch`での遮断等)である。Webサーバーの設定による`/wp-json/`の遮断は、PHPに届かないため検出しない。
-- **thumbnailを登録できるKernelは、サイトに1つ**(D-50)。2つ目のKernelの`register()`は`TMSWP\Core\Exception\LogicException`になる(設定の誤り。debugに関係なく起動を止める)。RESTのルートの名前空間とキャッシュのディレクトリはサイトに1つであり、複数のKernelが登録すると、どの設定と鍵が効くかが決まらないためである。
+- **thumbnailを登録できるKernelは、サイトに1つ**。2つ目のKernelの`register()`は`TMSWP\Core\Exception\LogicException`になる(設定の誤り。debugに関係なく起動を止める)。RESTのルートの名前空間とキャッシュのディレクトリはサイトに1つであり、複数のKernelが登録すると、どの設定と鍵が効くかが決まらないためである。
   - `tms_thumb()`・RESTのルート・`wp tmswp thumb`は、登録したKernelのdebug・ロガーと、そのKernelに渡した`Thumbnail`の設定に従う。thumbnailを登録したKernelが無い状態で`tms_thumb()`を呼ぶと`LogicException`になる。
-- **uploadsはローカルのファイルシステムにあること**(D-19)。外部ストレージ(オブジェクトストレージへのオフロード等)には対応しない。元画像の読み込みとキャッシュの書き込みは`wp_upload_dir()['basedir']`のローカルのパスに対して行い、キャッシュの静的なURLは`baseurl`から作る。
-- キャッシュの書き込みは、同じディレクトリの中の`rename()`と`flock()`に頼る(ApacheとLinuxのローカルのファイルシステムを想定する。D-19)。
+- **uploadsはローカルのファイルシステムにあること**。外部ストレージ(オブジェクトストレージへのオフロード等)には対応しない。元画像の読み込みとキャッシュの書き込みは`wp_upload_dir()['basedir']`のローカルのパスに対して行い、キャッシュの静的なURLは`baseurl`から作る。
+- キャッシュの書き込みは、同じディレクトリの中の`rename()`と`flock()`に頼る(ApacheとLinuxのローカルのファイルシステムを想定する)。
 - 未生成のサムネイルの初回の表示は、RESTを経由する(WordPressが起動する)。生成の後は、静的なファイルを直接返す。
 - ページキャッシュ(WP Super Cache等)のHTMLに残る静的なURLへのアクセスは、GCの判定に使われない(§1.3)。`--days`はページキャッシュの寿命より長くする。
 - `srcset`や`width`・`height`の属性を出すヘルパは持たない(必要なら案件で作る)。
@@ -220,10 +220,10 @@ cacheKey = substr(hash('sha256', serialize(
 - 許可拡張子(元画像): `jpg, jpeg, png, gif, webp, avif`。それ以外のsrcは `SourceResolver` が拒否する。
 - ネガティブキャッシュ: 失敗の印は、キーが変わる(元画像の差し替え・指定・既定値の変更)か、GCで消えるまで有効である。消えた後の最初の要求で1回だけ生成を試し直す。
 - 302のキャッシュ: 生成済みのファイルへの302は`Cache-Control: public, max-age={redirectMaxAge}`(既定3600秒)。長期のキャッシュは、生成済みの静的なファイル(Webサーバーが返す。ヘッダはWebサーバーの設定による)の側で行う。元画像への302(失敗・劣化・ロックの競合)は`no-store`。
-- GC(D-51): WP-CLI `wp tmswp thumb clear [--days=<n>]`。
-  - RESTのルートが既存のキャッシュのファイルを返すたびに、そのファイルの更新日時を今にする(手順6)。ファイルの更新日時は、最後にREST経由で返した(または生成した)日時になる。
+- GC: WP-CLI `wp tmswp thumb clear [--days=<n>]`。
+  - RESTのルートが既存のキャッシュのファイルを返すたびに、そのファイルの更新日時を今にする(手順6)。ファイルの更新日時は、最後にREST経由で返した(または生成した)日時になる。生成した時の更新日時のままGCすると、使用中のファイルも消えるためである。
   - `--days=<n>`を指定すると、更新日時がn日より前のファイル(サムネイル・失敗の印・残った一時ファイル)だけを消す。指定しなければすべて消す。どちらも`index.html`は消さない。
-  - GCと`status`は、キャッシュのディレクトリが無ければ0件である。あるのに印が無ければ、何も消さずに`TMSWP\Core\Exception\RuntimeException`にする(D-29。`cacheDirName`の誤りを知らせる)。印のファイルは、GCと`status`の対象にしない。
+  - GCと`status`は、キャッシュのディレクトリが無ければ0件である。あるのに印が無ければ、何も消さずに`TMSWP\Core\Exception\RuntimeException`にする(`cacheDirName`の誤りを知らせる)。印のファイルは、GCと`status`の対象にしない。
   - GCと`status`が扱うのは、キャッシュ自身が作ったファイルだけである。shardのディレクトリの直下にあり、名前が40桁の16進のキーで始まり、そのキーの先頭2文字がshardのディレクトリ名と同じ、シンボリックリンクでない通常のファイルに限る。それ以外のファイル・ディレクトリ(キャッシュのディレクトリの直下のファイル、`cacheDirName`がuploadsの既存のディレクトリと同じ名前のときの元画像等)には触れない。
   - キーのファイル(`{key}.*`)は、キーごとにそのキーのロックを待たずに取り、取れたキーのファイルだけを消す。生成中(ロックを持たれている)のキーは飛ばすため、生成中のロックと一時ファイルは消えない。ロックのファイルは、ロックを持ったまま手放す前に消す(異常終了で残ったロックのファイルも消える)。
   - `n`は正の整数で、n日は`redirectMaxAge`秒より長くなければならない(違えば、何も消さずに`WP_CLI::error()`で`Error:`を出し、終了コード1で終わる)。ブラウザ等にキャッシュされた302が、消したファイルを指さないためである。
@@ -258,7 +258,7 @@ final class Thumbnail implements \TMSWP\Core\Kernel\ExtensionInterface
 
 `register()`の振る舞い(登録したKernelのbootの中で1回):
 
-1. このインスタンスを登録済みなら`TMSWP\Core\Exception\LogicException`。起動したほかのKernelにthumbnailを登録済みなら`LogicException`(D-50)。
+1. このインスタンスを登録済みなら`TMSWP\Core\Exception\LogicException`。起動したほかのKernelにthumbnailを登録済みなら`LogicException`(サイトに1つの制約。§1.1)。
 2. 訳の読み込み(`init` priority 1。`load_textdomain('tmswp', <thumbnail>/languages/tmswp-{$locale}.mo)`)、RESTのルートの登録(`rest_api_init` priority 10)、RESTのルートの確認と通知(`admin_notices` priority 10。`RestRouteCheck`)を、`$kernel->defer()`で予約する。
 3. WP-CLIの環境なら、`WP_CLI::add_command('tmswp thumb', new ThumbCommand($this))`で登録する。
 
@@ -271,12 +271,12 @@ final class Thumbnail implements \TMSWP\Core\Kernel\ExtensionInterface
 5. キャッシュファイルが既に存在すれば**キャッシュファイルの静的URLを返す**(エンドポイントを経由させない)。
 6. それ以外は署名付きRESTエンドポイントURLを返す(値はURLエンコードする。§1.2)。
 
-エラー方針(00-overview.md §5.6。D-29):
+エラー方針(00-overview.md §5.6):
 
 - 画像が無いこと(1と4の`null`)はエラーにしない。debugでも例外にせず、記録もしない。
 - 引数とオプションの誤り(`InvalidThumbSourceException`・`InvalidThumbOptionException`)は、debugに関係なく例外のまま投げる。
 - 実行時の失敗(元画像の更新日時が読めない、`wp_upload_dir()`の異常等。`TMSWP\Core\Exception\RuntimeException`)は、登録したKernelがdebugなら例外のまま投げ、本番ならKernelのロガーにerrorで記録して`null`を返す。文脈は例外のクラス・場所・previousのクラスだけ(§1.2)。ただし、4で解決した元画像がその後に消えていたら、画像が無いとして`null`を返す。
-- debugの判定は、登録したKernelの`config()->debug`である。`WP_DEBUG`を直接見ない(D-33)。
+- debugの判定は、登録したKernelの`config()->debug`である。`WP_DEBUG`を直接見ない。
 
 ### `TMSWP\Thumbnail\ThumbnailConfig`
 
@@ -293,7 +293,7 @@ final readonly class ThumbnailConfig
 }
 ```
 
-- コンストラクタで値を確かめ、範囲・形の外なら`TMSWP\Core\Exception\InvalidArgumentException`(設定の誤り。D-29)。`cacheDirName`は、英数字で始まり英数字・`.`・`_`・`-`だけの1つの名前(`/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/`。空・`.`・`..`・パスの区切り・`../victim`・末尾の改行等を拒む)。
+- コンストラクタで値を確かめ、範囲・形の外なら`TMSWP\Core\Exception\InvalidArgumentException`(設定の誤り)。`cacheDirName`は、英数字で始まり英数字・`.`・`_`・`-`だけの1つの名前(`/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/`。空・`.`・`..`・パスの区切り・`../victim`・末尾の改行等を拒む)。
 - キャッシュのディレクトリは`{uploadsの実パス}/{cacheDirName}`である。`Thumbnail`は、キャッシュを操作する前に、そのディレクトリが既にあるならその実パスが同じ(シンボリックリンク等でuploadsの外を指していない)ことを確かめ、違えば`TMSWP\Core\Exception\RuntimeException`にする。
 
 ### `TMSWP\Thumbnail\UrlSigner`
@@ -468,7 +468,7 @@ function tms_thumb(int|string $src, ?int $width = null, ?int $height = null, arr
 }
 ```
 
-旧 `iwf_thumb()`(5プロジェクト44箇所で利用)と同じ書き味を `tms_` 接頭辞で踏襲する。thumbnailを登録したKernelが無ければ`LogicException`(D-50)。
+旧 `iwf_thumb()`(5プロジェクト44箇所で利用)と同じ書き味を `tms_` 接頭辞で踏襲する。thumbnailを登録したKernelが無ければ`LogicException`。
 
 ## 1.5 利用例(app側)
 
@@ -697,7 +697,7 @@ load-{hook_suffix}(画面出力前):
   4. $result->step === FormStep::Complete のとき:
      a. onSubmit($result) を呼ぶ(保存処理)
      b. wp_safe_redirect(url(['tmswp-settings-saved' => '1'])); exit  — PRGで再POST防止
-        (このexitは設計原則1のexit禁止の例外。00-overview.md §3、D-35)
+        (このexitは設計原則1のexit禁止の例外。00-overview.md §3)
   5. Formをインスタンスに保持し output() へ引き継ぐ
 
 output():
@@ -882,7 +882,7 @@ final class JaToolkit implements \TMSWP\Core\Kernel\ExtensionInterface
 
 `init`の後のboot(遅延boot)の扱いは、Kernelに従う(文書02 §3.3。debugなら`register()`より前にKernelが例外にし、本番ならKernelが記録してキャッチアップする)。JaToolkitは独自の`did_action('init')`の検査を持たない。
 
-ja-toolkitには、debugで振る舞いを変える処理とログを記録する処理が無く、`WP_DEBUG`も見ない(D-33)。検査の失敗は、どれも設定の誤りとしてdebugに関係なく例外になる。
+ja-toolkitには、debugで振る舞いを変える処理とログを記録する処理が無く、`WP_DEBUG`も見ない。検査の失敗は、どれも設定の誤りとしてdebugに関係なく例外になる。
 
 ### `TMSWP\JaToolkit\ModuleInterface`
 
@@ -1101,7 +1101,7 @@ FormDefinition::create('contact')
 - [ ] 3パッケージとも `composer.json` が共通規約(php>=8.3、tmswp/core ^0.9.1、PSR-4)に従い、固有依存(ext-gd/ext-mbstring)が正しいパッケージにのみ存在する
 - [ ] 全クラスが `declare(strict_types=1)`・PSR-12・final優先・全シグネチャ型宣言・マジックメソッド不使用・`extract()` 不使用
 - [ ] 3パッケージとも、1つのインスタンス(`SettingsPages`・`Thumbnail`・`JaToolkit`)を2つのKernelの`KernelConfig`の`extensions`に渡すと、2つ目のKernelのbootが`LogicException`になる(debugに関係なく。ユニットテスト)
-- [ ] 同じ種類の拡張を、2つのKernelにそれぞれ別のインスタンスで登録すると、settings-pageとja-toolkitはどちらのKernelでも有効になり、thumbnailは2つ目のKernelのbootが`LogicException`になる(D-50。debugに関係なく。ユニットテスト)
+- [ ] 同じ種類の拡張を、2つのKernelにそれぞれ別のインスタンスで登録すると、settings-pageとja-toolkitはどちらのKernelでも有効になり、thumbnailは2つ目のKernelのbootが`LogicException`になる(debugに関係なく。ユニットテスト)
 - [ ] PHPStan level max(szepeviktor/phpstan-wordpress)をbaselineなしで通過: `composer analyse`
 - [ ] `composer lint` / `composer test` / `composer qa` が成功
 

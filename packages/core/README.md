@@ -107,7 +107,7 @@ Kernel::boot(KernelConfig::load(__DIR__ . '/tmswp-kernel.php'));
 | `rules/rest.md` | REST APIのルート(WordPress標準の`register_rest_route()`) |
 | `rules/deploy.md` | 本番へのデプロイ(FTP) |
 
-各APIの設計と仕様は、TMSWPのmonorepo([tmstack-io/tmswp](https://github.com/tmstack-io/tmswp))の`docs/`にあります(Kernel・探索は`docs/02-kernel.md`、エンティティは`docs/03-entities.md`、メタ・オプションは`docs/04-meta-options.md`、フォームは`docs/05-form.md`、Modelは`docs/06-model.md`、テンプレート・ログ等は`docs/07-support.md`)。
+各APIの設計と仕様は、TMSWPのmonorepo([tmstack-io/tmswp](https://github.com/tmstack-io/tmswp))の[docs/](https://github.com/tmstack-io/tmswp/tree/v0.9.1/docs/)にあります(Kernel・探索は[docs/02-kernel.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/02-kernel.md)、エンティティは[docs/03-entities.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/03-entities.md)、メタ・オプションは[docs/04-meta-options.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/04-meta-options.md)、フォームは[docs/05-form.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/05-form.md)、Modelは[docs/06-model.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/06-model.md)、テンプレート・ログ等は[docs/07-support.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/07-support.md))。
 
 ## WP-CLIコマンド
 

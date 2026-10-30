@@ -71,7 +71,7 @@ final class NewsletterOptionTest extends UnitTestCase
 - ユニットテストを書く(PHPUnitの設定・bootstrap・Brain Monkey・Kernelをbootするテスト)と、MySQLでMigratorを使う統合テスト(`RealTables`): `vendor/tmswp/testing/rules/testing.md`
 - オプション・メタのテスト: `vendor/tmswp/core/rules/options.md`・`vendor/tmswp/core/rules/meta.md`の「テスト」
 
-テストの層の設計は、TMSWPのmonorepo([tmstack-io/tmswp](https://github.com/tmstack-io/tmswp))の`docs/10-quality.md`の§4にあります。
+テストの層の設計は、TMSWPのmonorepo([tmstack-io/tmswp](https://github.com/tmstack-io/tmswp))の[docs/10-quality.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/10-quality.md)の「テスト構成(PHPUnit 2 層)」の節にあります。
 
 ## 開発
 

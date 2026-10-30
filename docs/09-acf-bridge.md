@@ -387,7 +387,7 @@ ACF の `location` は「ORグループの配列 × 各ORグループ内は AND 
 | `user_form`, `user_role` | `User` / subtype = `''`(role 別にクラスは分けない。全ユーザーグループは単一の `UserFields` に集約) |
 | `options_page` | `Options` / subtype = value(menu_slug) |
 | `current_user`, `current_user_role` | 表示者条件。保存先を決めないため無視(`!=` と同じ扱い) |
-| `block` | 非対応。W006でそのANDグループをスキップする。acf-bridgeはACF Blocksのアクセサを生成しない。独自ブロックは文書12 §1.11(D-26)の方式で作る |
+| `block` | 非対応。W006でそのANDグループをスキップする。acf-bridgeはACF Blocksのアクセサを生成しない。独自ブロックは文書12 §1.11の方式で作る |
 | `comment`, `widget`, `nav_menu`, `nav_menu_item` | 非対応。W006でそのANDグループをスキップ |
 | 未知のparam | W006でスキップ |
 
@@ -740,7 +740,7 @@ final class Report
 | W003 | 警告 | `post`(個別 ID)条件は静的解決不能 |
 | W004 | 警告 | 同一 AND グループ内の複数対象条件に優先順位を適用した |
 | W005 | 警告 | 未知のフィールド型(サブフィールドを含む)を`mixed`として生成した |
-| W006 | 警告 | 非対応locationパラメータ(comment/widget/block等)をスキップ。blockは独自ブロックの方式(文書12 §1.11)を案内する |
+| W006 | 警告 | 非対応locationパラメータ(comment/widget/block等)をスキップ。blockは独自ブロックの方式(文書12 §1.11)を、tmswp/coreのレシピ`rules/blocks.md`で案内する |
 | W007 | 警告 | 不成立AND条件(同じ値源の`all`でない違う値の`==`、同じ値の`==`と`!=`、`!= all`。§4.2) |
 | W009 | 警告 | ASCII snake_case でないフィールド名のためアクセサ未生成 |
 | W010 | 警告 | 複数ディレクトリに同じkeyのJSON(jsonDirsの先のディレクトリのものを使う。§3.1) |

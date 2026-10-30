@@ -73,7 +73,7 @@ wp tmswp thumb status            # 件数・合計サイズ・扱えなかった
 - サムネイルのURLを作る(引数・設定・キャッシュ・WP-CLI・RESTとセキュリティの注意): `vendor/tmswp/thumbnail/rules/thumbnail.md`
 - 拡張の登録の仕方と制約: `vendor/tmswp/core/rules/extensions.md`
 
-設計の正本は、TMSWPのmonorepo([tmstack-io/tmswp](https://github.com/tmstack-io/tmswp))の`docs/08-extensions.md`の§1です。
+設計の正本は、TMSWPのmonorepo([tmstack-io/tmswp](https://github.com/tmstack-io/tmswp))の[docs/08-extensions.md](https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/08-extensions.md)の「tmswp/thumbnail — 署名付きURLサムネイル」の節です。
 
 ## ライセンス
 

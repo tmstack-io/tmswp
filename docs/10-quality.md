@@ -1041,7 +1041,7 @@ define('WP_DEBUG', true);
 
 - `core: null` は最新安定版。特定バージョンは `"core": "https://wordpress.org/wordpress-7.0.zip"` 形式で override する。`phpVersion` の既定は下限の 8.3。
 - `testsEnvironment: false` により、wp-env は開発用の環境(`wordpress` / `cli` / `mysql`)だけを作る。@wordpress/env では11から(package.jsonで固定した12.0.0も同じ)、development と tests の 2 環境を同時に作る既定の動作が非推奨のため、統合テストはこの環境の `cli` コンテナで実行し、テーブル接頭辞 `wptests_` で開発用サイトのテーブルと分ける。
-- `plugins` に wordpress.org の無料版 ACF(本家 WP Engine の `advanced-custom-fields`)を、版を固定した zip で入れる(D-11)。ACF Pro 限定機能のテストは CI では行わず、手元で隔離した環境で走らせる(4.9)。
+- `plugins` に wordpress.org の無料版 ACF(本家 WP Engine の `advanced-custom-fields`)を、版を固定した zip で入れる。ACF Pro 限定機能のテストは CI では行わず、手元で隔離した環境で走らせる(4.9)。
 - `mappings` により monorepo 全体が `wp-content/plugins/tmswp` にマウントされ、コンテナ内からルートの `vendor/` / `vendor-bin/` / 各設定ファイルにそのままアクセスできる。これが `composer test:integration` の `--env-cwd=wp-content/plugins/tmswp` の前提。
 - スターターから作ったテーマ・プラグインのためのマウントは足さない。スターターの統合テスト(4.6)は、写しを`var/starter-site/`(このマウントの中)に作り、別のプロセスの中だけ有効にするため、開発用サイトの設定とマウントを変えずに済む。
 - `.wp-env.override.json` は `.gitignore` に追加する。
@@ -1094,7 +1094,7 @@ define('WP_DEBUG', true);
 
 ### 4.9 ACF Proでの統合テスト(手元だけ)
 
-CIは無料版ACFで確かめる。ACF Pro専用の型(repeater・flexible_content・gallery・clone)とPro限定機能のテストは、ACF Proのzipのパスを環境変数`TMSWP_ACF_PRO_ZIP`で渡したときだけ、手元で走らせる(D-49)。
+CIは無料版ACFで確かめる。ACF Pro専用の型(repeater・flexible_content・gallery・clone)とPro限定機能のテストは、ACF Proのzipのパスを環境変数`TMSWP_ACF_PRO_ZIP`で渡したときだけ、手元で走らせる。ライセンスキーは使わない。ライセンスキー等の秘密情報を、スクリプト・ログに持ち込まないためである。
 
 ```bash
 TMSWP_ACF_PRO_ZIP=/path/to/advanced-custom-fields-pro.zip composer test:integration:acf-pro
@@ -1113,7 +1113,7 @@ TMSWP_ACF_PRO_ZIP=/path/to/advanced-custom-fields-pro.zip composer test:integrat
 
 ### 4.10 E2E(Playwright。examples/sample-site)
 
-FWの主な機能を、examples/sample-site(専用のwp-env、ポート8882)の画面とHTTPの応答で確かめる(D-55)。ユニット・統合の2層とは別の確認で、カバレッジの計測には含めない。
+FWの主な機能を、examples/sample-site(専用のwp-env、ポート8882)の画面とHTTPの応答で確かめる。ユニット・統合の2層とは別の確認で、カバレッジの計測には含めない。
 
 ```bash
 cd examples/sample-site
@@ -1150,7 +1150,7 @@ composer test:e2e -- --grep Thumbnail
 
 ### 4.11 MySQLでの統合テスト(DBの構成)
 
-wp-env(12)は、開発用サイトのDB(`mysql`のサービス)をMariaDBに固定し、設定でMySQLにできない。統合テストの既定の接続先はこのMariaDBである(4.7)。MySQL 8.4 LTSと9.7 LTSでの確認は、MySQLのコンテナを別に立て、wp-envのcliから`WP_TESTS_DB_HOST`(tests/wp-tests-config.php)で接続して、統合テストの全体を実行する(D-56)。CIでは`mysql`ジョブ(5.1。2セル)が毎回行う。
+wp-env(12)は、開発用サイトのDB(`mysql`のサービス)をMariaDBに固定し、設定でMySQLにできない。統合テストの既定の接続先はこのMariaDBである(4.7)。MySQL 8.4 LTSと9.7 LTSでの確認は、MySQLのコンテナを別に立て、wp-envのcliから`WP_TESTS_DB_HOST`(tests/wp-tests-config.php)で接続して、統合テストの全体を実行する。CIでは`mysql`ジョブ(5.1。2セル)が毎回行う。一度きりの確認にしないのは、識別子の予約語がDBの版で増え(8.4の`qualify`・`tablesample`、9.7の`external`・`library`等)、一度きりの確認ではDBの版が上がったときに気づけないためである。
 
 | 接続先 | 使う場面 | 版 |
 |---|---|---|
@@ -1327,7 +1327,7 @@ jobs:
         if: failure()
         run: node node_modules/@wordpress/env/bin/wp-env logs development --no-watch
 
-  # MySQL 8.4 LTS・9.7 LTSでの統合テスト(D-56)。wp-env 12はDBをMariaDBに固定するため、servicesでMySQLを立て、
+  # MySQL 8.4 LTS・9.7 LTSでの統合テスト。wp-env 12はDBをMariaDBに固定するため、servicesでMySQLを立て、
   # wp-envのネットワークに別名mysql-under-testで参加させ、wp-envのcliからWP_TESTS_DB_HOSTで接続する。
   # PHPとWordPressは8.3・7.0に固定する。http://wordpress/を叩くテストは、このジョブでも開発用サイト(wp-envのMariaDB)を使う。
   mysql:
@@ -1646,9 +1646,9 @@ jobs:
 
 設計上の要点:
 
-- マトリクスは D-09 のとおり、ユニットが PHP 8.3 / 8.5、統合が **PHP 8.3 / 8.5 × WP 7.0 / 最新版** の 4 セル。ユニットは WP 非依存のため PHP 軸のみ。
+- マトリクスは DR-12 のとおり、ユニットが PHP 8.3 / 8.5、統合が **PHP 8.3 / 8.5 × WP 7.0 / 最新版** の 4 セル。ユニットは WP 非依存のため PHP 軸のみ。
 - 統合の各セルは、検証する WP の版を先に確定し(WP 7.0 のセルは 7.0、最新版のセルは WordPress.org の版情報 API の最新版)、wp-env の `core` をその版の zip にする。テストライブラリは wp-env がその版と同じタグから取得する(§4.2)。API の取得に失敗したセルは、その時点で失敗する。
-- `mysql`ジョブは、MySQL 8.4 LTSと9.7 LTSの2セルで統合テストを実行する(D-56。4.11)。PHPは8.3、WordPressは7.0に固定する(DBの違いを確かめるジョブなので、PHP・WordPressの軸は`integration`に任せる)。MySQLはservicesのイメージ`mysql:8.4`・`mysql:9.7`(LTSの系列のタグ。`latest`は使わない)で立て、ヘルスチェック(`mysqladmin ping`)が通ってから段を始める。wp-envの起動の後に、MySQLのコンテナをwp-envのネットワークに別名`mysql-under-test`で参加させ(`docker network connect`)、wp-envのcliから`WP_TESTS_DB_HOST=mysql-under-test`で統合テストの全体を実行する。テストの前に、tests/wp-tests-config.phpと同じ設定で接続して`SELECT VERSION()`を実行し、版がそのセルのMySQL(`8.4.`・`9.7.`で始まる)でなければ失敗させる(wp-envのMariaDBに接続して成功してしまうことを防ぐ)。
+- `mysql`ジョブは、MySQL 8.4 LTSと9.7 LTSの2セルで統合テストを実行する(4.11)。予約語がDBの版で増えるため、一度きりではなく毎回確かめる。PHPは8.3、WordPressは7.0に固定する(DBの違いを確かめるジョブなので、PHP・WordPressの軸は`integration`に任せる)。MySQLはservicesのイメージ`mysql:8.4`・`mysql:9.7`(LTSの系列のタグ。`latest`は使わない)で立て、ヘルスチェック(`mysqladmin ping`)が通ってから段を始める。wp-envの起動の後に、MySQLのコンテナをwp-envのネットワークに別名`mysql-under-test`で参加させ(`docker network connect`)、wp-envのcliから`WP_TESTS_DB_HOST=mysql-under-test`で統合テストの全体を実行する。テストの前に、tests/wp-tests-config.phpと同じ設定で接続して`SELECT VERSION()`を実行し、版がそのセルのMySQL(`8.4.`・`9.7.`で始まる)でなければ失敗させる(wp-envのMariaDBに接続して成功してしまうことを防ぐ)。
 - wp-env は `npm ci` で package-lock.json どおりに導入し(`actions/setup-node` の npm キャッシュを使う)、composer スクリプト経由でローカルの wp-env だけを呼ぶ(§1.1 補足)。
 - npm(11.19以降)は、依存のインストールスクリプトを、package.jsonの`allowScripts`に無いかぎり実行せず、警告を出す。ルートのpackage.jsonは、@wordpress/envの依存の`fs-ext-extra-prebuilt`(@wp-playground/cliが使う)のインストールスクリプトを`false`で拒否する(`npm install-scripts deny fs-ext-extra-prebuilt`で書く)。このパッケージは各OS・Node.jsの版のビルド済みのバイナリを同梱し、インストールスクリプトはそのバイナリの確認かnode-gypでのビルドだけを行う。wp-envのDockerの実行環境はこのパッケージを使わない。@wordpress/envを更新して、インストールスクリプトを持つ依存が増えた場合は、中身を確かめてから`allowScripts`に許可か拒否を書く。
 - `lint` / `analyse` / `monorepo` / `rules-verify` は下限の PHP 8.3 で実行する(php-cs-fixer の推奨と依存解決の下限に合わせる。§1.1 補足)。PHP 8.5 での解析は PHPStan の `phpVersion`(8.3〜8.5。§2.1)が担う。
@@ -1809,7 +1809,7 @@ return static function (MBConfig $mbConfig): void {
         ],
     ]);
 
-    // `monorepo-builder release vX.Y.Z`が順に実行するワーカーは、tools/release/の2つだけにする(D-54・docs/RELEASING.md)。
+    // `monorepo-builder release vX.Y.Z`が順に実行するワーカーは、tools/release/の2つだけにする(docs/RELEASING.md)。
     // monorepo-builderが既定で登録するワーカーを外し、版の書き換え・mainへのcommitとpush・次の版への引き上げを行わない
     MBConfig::disableDefaultWorkers();
 
@@ -1823,7 +1823,7 @@ return static function (MBConfig $mbConfig): void {
 
 ### 6.2 パッケージ間依存の規律
 
-- 各拡張パッケージとスターターのcomposer.jsonは`"tmswp/core": "^X.Y"`、packages/*のrequire-devは`"tmswp/testing": "^X.Y"`を宣言する。版の最初のタスクで、`Kernel::VERSION`・branch-alias・examples/sample-siteの版と同じコミットで、その版の`^X.Y`(PATCHが0より大きければ`^X.Y.Z`)に手で上げる(D-54)。リリースの前の検査(6.1の`CheckReleaseReadinessReleaseWorker`)が、タグの版との一致を確かめる。リリースの後に次の版へ自動で上げない。`^X.Y`は`Kernel::VERSION`と、packages/*の`branch-alias`(`dev-main` → `X.Y.x-dev`)を満たす。
+- 各拡張パッケージとスターターのcomposer.jsonは`"tmswp/core": "^X.Y"`、packages/*のrequire-devは`"tmswp/testing": "^X.Y"`を宣言する。版の最初のタスクで、`Kernel::VERSION`・branch-alias・examples/sample-siteの版と同じコミットで、その版の`^X.Y`(PATCHが0より大きければ`^X.Y.Z`)に手で上げる。リリースの前の検査(6.1の`CheckReleaseReadinessReleaseWorker`)が、タグの版との一致を確かめる。リリースの後に次の版へ自動で上げない。`^X.Y`は`Kernel::VERSION`と、packages/*の`branch-alias`(`dev-main` → `X.Y.x-dev`)を満たす。
 - ルートcomposer.jsonの`replace`にpackages/*の全パッケージを列挙する(1.1参照)。これによりmonorepo内開発ではvendorを介さずローカル`packages/*`のコードが使われる。
 - `composer monorepo:validate` が「各パッケージの require と ルートの require の整合」「相互依存バージョンの不一致」を検査する。CI 必須(qa.yml の `monorepo` ジョブ)。
 - 新パッケージ追加手順: `packages/<name>/`に`composer.json`(license・require・require-devの`tmswp/testing`・`scripts.test`・`extra.branch-alias`)、`LICENSE`(ルートと同じGPL-2.0-or-later)、`README.md`、`phpunit.xml.dist`、`.gitattributes`を置く → ルートcomposer.jsonの`replace`・`autoload`・`autoload-dev`に手で足す → `phpstan.neon.dist`のpaths、`phpunit.*.xml.dist`のtestsuiteとカバレッジの計測の対象(`phpunit.unit.xml.dist`の`<source><include>`・`phpunit.integration.xml.dist`の`<coverage><include>`の`packages/<name>/src`)、`split.yml`のmatrixに追記する。計測の対象に足すのと同時に、ルートcomposer.jsonの`test:coverage:check`に`--package=<name>:80`を足す(足さないと`bin/coverage-check.php`が`No package minimum for …`でexit 2になる。4.8) → 01 §2・§3.1・§4.4、本書5.2・受け入れ基準、`RELEASING.md`のパッケージの数を改める。同期先のリポジトリ(`tmstack-io/tmswp-<name>`)は、最初の同期の前にmainに初期コミットを1つ置く(`RELEASING.md`の「新しい同期先のリポジトリ」)。パッケージをsplit相当で取り出して`composer install && composer test`が通ること(`RELEASING.md`)と、`composer monorepo:validate`で確かめる。
