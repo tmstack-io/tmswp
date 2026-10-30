@@ -14,11 +14,14 @@
 ### 変更
 
 - `Kernel::VERSION`を0.9.1にし、packages/*・starters/*・examples/sample-siteの`tmswp/*`の制約を`^0.9`から`^0.9.1`にした。packages/*のbranch-aliasは`0.9.x-dev`のままである。
+- スターター(テーマ・プラグイン)とexamples/sample-siteの`tests/bootstrap.php`が、WordPressが起動時に定義する`WP_CONTENT_DIR`を、システムの一時ディレクトリの下のプロジェクトごとのディレクトリ(`sys_get_temp_dir() . '/tmswp-unit-tests/' . md5(dirname(__DIR__)) . '/wp-content'`)に定義する。`tmswp-kernel.php`の`SimpleLogger`は出力先を省くと`WP_CONTENT_DIR`の下に書くため、これまでは、ユニットテストで`tmswp-kernel.php`を`KernelConfig::load()`で読んだ構成の`logChannels`を呼ぶと例外になった。本番のログの出力先(`wp-content/tmswp-logs/`)は変わらない。あわせて、それを確かめる例のユニットテスト(`tests/Unit/TmswpKernelTest.php`)を置いた。既存のプロジェクトで同じテストを書くには、`tests/bootstrap.php`に同じ`define()`を足す。
+- tmswp/testingのレシピ(`rules/testing.md`)の`tests/bootstrap.php`の完全な実装例を、スターターと同じ`WP_CONTENT_DIR`の定義付きにした。「してはいけないこと」の、WordPressの定数を`tests/bootstrap.php`で定義しない規則は、`WP_CONTENT_DIR`だけを例外にし、代わりに「`app/`のコードから`WP_CONTENT_DIR`を直接読まない」規則を足した(定義したことで、`app/`のコードがこの定数を読んでもユニットテストで検出されなくなるため)。スターターとexamples/sample-siteのAGENTS.mdの「ログ」の項にも、同じ規則を書いた。
 
 ### 開発
 
 - ルートのlockのPHPStanを2.2.2から2.3.4に上げ(制約は`^2.1`のまま。phpstan-deprecation-rules 2.0.5・phpstan-phpunit 2.1.1・phpstan-strict-rules 2.1.0・phpstan-wordpress 2.0.4も上げた)、ルートの`tests/bootstrap-unit.php`でも、coreの`tests/bootstrap.php`と同じく、Patchworkが`phar://`のストリームを差し替える前にPHPStanのテストのコンテナを作るようにした(しないと、PHPStanの拡張のテストがクラスの再宣言で止まる)。2.3で新しく出た指摘(FormRuntimeTestとWpdbTestDoubleParityTestの10件)は、テストのコードを直して解消した。lockの拡張(phpstan-strict-rules 2.1.0・phpstan-phpunit 2.1.1)が`phpstan/phpstan ^2.3`を要求するため、実際の下限は2.3になる。制約を`^2.3`に上げると、packages/core・starters/*の`^2.1`と食い違って`composer monorepo:validate`が失敗するため、制約はそろえたまま据え置いた。
 - docs/11の全文の写し(monorepoのAGENTS.mdと、テーマのスターターのAGENTS.md)が実物と同じであることを確かめるユニットテスト(`tests/Unit/Docs/AgentsDocumentCopyTest.php`)を足した。
+- tests/Unit/RepositoryScanTest.phpのファイルの走査を、gitの追跡するファイル(`git ls-files`のうち作業ツリーにあるもの)に限った。これまでは作業ツリーのすべてのファイルを読んでいたため、追跡外のファイル(`.DS_Store`、作業の道具の状態のファイル、examples/sample-siteの`composer.lock`等)の数だけ、手元のユニットテストのアサーションの数がCIより多くなっていた。テキストのファイルは1つにつき2件(読み込みと行への分割)、バイナリのファイルは1件増え、packages/core/srcの`acf`の文字列の検査も、ドットで始まるディレクトリの下の追跡外のファイルを1件ずつ数えていた。調べるファイルとディレクトリ(`packages/*/src`等)を列挙する`glob()`も、すべて追跡するファイルからの選択に替えた(追跡していない新しいディレクトリで、分かりにくい失敗にならない)。`git ls-files`の一覧に`composer.json`が無ければ止め、マージの競合の間の重複したパスは除く。追跡するファイルの中の規約違反は、ステージしていない変更を含めて引き続き検出する。新しく作ったファイルは、`git add`の後に検査の対象になる。
 
 ## v0.9.0 — 導入できる版
 

@@ -158,7 +158,7 @@ composer wp:stop    # wp-envを止める
 
 ## デバッグ
 
-- **ログ:** `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`で書く(処理の種類を示すときは`Log::scope('mail')->error(...)`。例: `app/Mail/ContactMailer.php`)。出力先は`tmswp-kernel.php`の`logChannels`で決める。`SimpleLogger`は既定でwp-envのコンテナの`wp-content/tmswp-logs/`に書く。
+- **ログ:** `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`で書く(処理の種類を示すときは`Log::scope('mail')->error(...)`。例: `app/Mail/ContactMailer.php`)。出力先は`tmswp-kernel.php`の`logChannels`で決める。`SimpleLogger`は既定でwp-envのコンテナの`wp-content/tmswp-logs/`に書く。ユニットテストでは、`tests/bootstrap.php`が`WP_CONTENT_DIR`をシステムの一時ディレクトリの下に定義するため、`tmswp-kernel.php`を`KernelConfig::load()`で読んだ構成の`logChannels`を呼べる(例: `tests/Unit/TmswpKernelTest.php`)。この定数はユニットテストだけで定義するため、`app/`のコードから`WP_CONTENT_DIR`を直接読まない。
 - **メール:** wp-envでは`dev/mu-plugins/sample-site-mail-capture.php`が`wp_mail()`のメールを送らずにオプション`sample_site_captured_mails`に記録する。`node ../../node_modules/@wordpress/env/bin/wp-env run cli wp option get sample_site_captured_mails --format=json`で読む。
 - **クラスを置いたのに有効にならない:** クラス名とファイルのパスのPSR-4の一致、Attributeの付け忘れ、探索結果ファイルが最新か(`composer discover`で作り直す)の順に確かめる。
 - **探索結果ファイルとキャッシュ:** FWは探索の結果をtransient・オブジェクトキャッシュに持たず、探索結果ファイルだけを使う。そのため、消すべきFWのキャッシュは無く、反映されないときは探索結果ファイルを作り直す。

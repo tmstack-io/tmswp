@@ -141,7 +141,7 @@ npm run build       # blocks/をbuild/blocks/にビルドし、続けて探索�
 ## デバッグ
 
 - **開発環境は`WP_DEBUG`を有効にする。** Kernelのdebug(`tmswp-kernel.php`の`KernelConfig`の`debug`。省略すると`WP_DEBUG`の値)が真なら、設定の誤りと実行時のデータの取得の失敗が例外になり、起動のたびに`app/`と`build/blocks/`を走査する。debugが偽(本番)では、実行時の失敗をKernelのロガーに`error`で記録して既定値で続ける。
-- **ログ:** `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`で書く(処理の種類を示すときは`Log::scope('mail')->error(...)`)。どのチャンネル(出力先)に書くかは、`tmswp-kernel.php`の`logChannels`の各`LogChannel`の`levels`・`scopes`で決める。宣言したチャンネルへ直接書くときは`Log::channel('<名前>')`を使う(宣言していない名前は例外になる)。スターターの`SimpleLogger`は既定で`wp-content/tmswp-logs/`に書く。`var_dump`・`print_r`をコミットに残さない。
+- **ログ:** `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`で書く(処理の種類を示すときは`Log::scope('mail')->error(...)`)。どのチャンネル(出力先)に書くかは、`tmswp-kernel.php`の`logChannels`の各`LogChannel`の`levels`・`scopes`で決める。宣言したチャンネルへ直接書くときは`Log::channel('<名前>')`を使う(宣言していない名前は例外になる)。スターターの`SimpleLogger`は既定で`wp-content/tmswp-logs/`に書く。ユニットテストでは、`tests/bootstrap.php`が`WP_CONTENT_DIR`をシステムの一時ディレクトリの下に定義するため、`tmswp-kernel.php`を`KernelConfig::load()`で読んだ構成の`logChannels`を呼べる(例: `tests/Unit/TmswpKernelTest.php`)。この定数はユニットテストだけで定義するため、`app/`のコードから`WP_CONTENT_DIR`を直接読まない(読んでもユニットテストでは検出されない)。`var_dump`・`print_r`をコミットに残さない。
 - **クラスを置いたのに有効にならない:** 次の順に確かめる。
   1. クラス名とファイルのパスがPSR-4で一致しているか(`app/Post/NewsPost.php`なら`TmswpStarterTheme\Post\NewsPost`)。
   2. Attribute(`#[AsPostType]`等)を付け忘れていないか。

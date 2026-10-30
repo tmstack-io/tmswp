@@ -448,7 +448,7 @@ npm run build       # blocks/をbuild/blocks/にビルドし、続けて探索�
 ## デバッグ
 
 - **開発環境は`WP_DEBUG`を有効にする。** Kernelのdebug(`tmswp-kernel.php`の`KernelConfig`の`debug`。省略すると`WP_DEBUG`の値)が真なら、設定の誤りと実行時のデータの取得の失敗が例外になり、起動のたびに`app/`と`build/blocks/`を走査する。debugが偽(本番)では、実行時の失敗をKernelのロガーに`error`で記録して既定値で続ける。
-- **ログ:** `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`で書く(処理の種類を示すときは`Log::scope('mail')->error(...)`)。どのチャンネル(出力先)に書くかは、`tmswp-kernel.php`の`logChannels`の各`LogChannel`の`levels`・`scopes`で決める。宣言したチャンネルへ直接書くときは`Log::channel('<名前>')`を使う(宣言していない名前は例外になる)。スターターの`SimpleLogger`は既定で`wp-content/tmswp-logs/`に書く。`var_dump`・`print_r`をコミットに残さない。
+- **ログ:** `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`で書く(処理の種類を示すときは`Log::scope('mail')->error(...)`)。どのチャンネル(出力先)に書くかは、`tmswp-kernel.php`の`logChannels`の各`LogChannel`の`levels`・`scopes`で決める。宣言したチャンネルへ直接書くときは`Log::channel('<名前>')`を使う(宣言していない名前は例外になる)。スターターの`SimpleLogger`は既定で`wp-content/tmswp-logs/`に書く。ユニットテストでは、`tests/bootstrap.php`が`WP_CONTENT_DIR`をシステムの一時ディレクトリの下に定義するため、`tmswp-kernel.php`を`KernelConfig::load()`で読んだ構成の`logChannels`を呼べる(例: `tests/Unit/TmswpKernelTest.php`)。この定数はユニットテストだけで定義するため、`app/`のコードから`WP_CONTENT_DIR`を直接読まない(読んでもユニットテストでは検出されない)。`var_dump`・`print_r`をコミットに残さない。
 - **クラスを置いたのに有効にならない:** 次の順に確かめる。
   1. クラス名とファイルのパスがPSR-4で一致しているか(`app/Post/NewsPost.php`なら`TmswpStarterTheme\Post\NewsPost`)。
   2. Attribute(`#[AsPostType]`等)を付け忘れていないか。
@@ -624,8 +624,9 @@ starters/theme/
 │   ├── Model/.gitkeep
 │   └── Option/.gitkeep
 ├── tests/
-│   ├── bootstrap.php         # §8.6(require vendor/autoload のみ)
+│   ├── bootstrap.php         # §8.6(vendor/autoloadの読み込みと、一時ディレクトリの下のWP_CONTENT_DIRの定義)
 │   └── Unit/
+│       ├── TmswpKernelTest.php  # tmswp-kernel.phpをKernelConfig::load()で読み、logChannelsを呼ぶ例のユニットテスト
 │       └── Hook/
 │           └── ThemeSetupHookTest.php  # ThemeSetupHookの例のユニットテスト(Brain Monkey。利用者のテストの手本)
 ├── bin/
@@ -916,6 +917,7 @@ return (new Config())
 
 - `failOnRisky`から`displayDetailsOnTestsThatTriggerWarnings`までの属性は、packages/*/phpunit.xml.dist(10-quality.md §4.3)と同じである。加えて`failOnEmptyTestSuite`で、テストが1件も無いときも失敗にする。
 - テストの例は`tests/Unit/Hook/ThemeSetupHookTest.php`(プラグインは`PluginSetupHookTest.php`)で、tmswp/testingを使わず、Brain MonkeyとPHPUnitの`TestCase`だけで書く。Brain Monkeyの準備(`Brain\Monkey\setUp()`・`tearDown()`)はテストのクラスの`setUp()`・`tearDown()`で行い、`tests/bootstrap.php`には要らない(Brain MonkeyとPatchworkは、Composerのオートローダが読み込む)。
+- `tests/bootstrap.php`は、WordPressが起動時に定義する`WP_CONTENT_DIR`を、システムの一時ディレクトリの下の、プロジェクトごとのディレクトリ(プロジェクトのパスのmd5)に定義する。`tmswp-kernel.php`の`SimpleLogger`は、出力先を省くと`WP_CONTENT_DIR`の下(`tmswp-logs/`)を使い、この定数が無いと例外になるためである。ログの出力先は、本番では変わらず`wp-content/tmswp-logs/`である。ユニットテストだけで定数を定義するため、`app/`のコードが`WP_CONTENT_DIR`を直接読んでも、ユニットテストでは検出されない。`app/`のコードからこの定数を直接読まない(packages/testingのrules/testing.mdの「してはいけないこと」)。`tests/Unit/TmswpKernelTest.php`は、`tmswp-kernel.php`を`KernelConfig::load()`で読み、`logChannels`のクロージャを呼べることを確かめる例である。
 
 `tests/bootstrap.php`:
 
@@ -925,6 +927,11 @@ return (new Config())
 declare(strict_types=1);
 
 require __DIR__ . '/../vendor/autoload.php';
+
+// WordPressが起動時に定義するWP_CONTENT_DIRを、ユニットテストではシステムの一時ディレクトリの下の、プロジェクトごとの
+// ディレクトリにする。tmswp-kernel.phpのSimpleLoggerは、出力先を省くとWP_CONTENT_DIRの下(tmswp-logs/)に書くため、
+// この定数が無いと、ユニットテストでlogChannelsのクロージャを呼べない。app/のコードからこの定数を直接読まない
+define('WP_CONTENT_DIR', sys_get_temp_dir() . '/tmswp-unit-tests/' . md5(dirname(__DIR__)) . '/wp-content');
 ```
 
 ### 8.7 README.md(全文)
@@ -1157,6 +1164,7 @@ starters/plugin/
 ├── tests/
 │   ├── bootstrap.php         # theme版と同一
 │   └── Unit/
+│       ├── TmswpKernelTest.php  # theme版と同じ例(名前空間だけが違う)
 │       └── Hook/
 │           └── PluginSetupHookTest.php  # 雛形のPluginSetupHookの例のユニットテスト(Brain Monkeyの準備の形を示す出発点)
 ├── bin/
