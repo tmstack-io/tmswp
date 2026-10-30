@@ -33,9 +33,10 @@ final class Kernel
 {
     /**
      * この tmswp/core の版。boot 時に、読み込まれたすべての vendor の installed.php にある tmswp/core の版と照合する
-     * (InstalledVersionCheck)。リリースのたびに、タグの版(先頭の v を除く)に合わせて更新する。
+     * (InstalledVersionCheck)。版の最初のタスクで、その版(タグの版から先頭のvを除いたもの)に手で上げる。リリースの道具は
+     * 書き換えず、リリースの前の検査がタグの版との一致を確かめる。
      */
-    public const string VERSION = '0.9.0';
+    public const string VERSION = '0.9.1';
 
     /** 対応する WordPress の下限の版(D-09) */
     private const string MIN_WORDPRESS_VERSION = '7.0';

@@ -5,7 +5,7 @@ TMStack WordPress Framework(TMSWP)のパッケージと、TMSWPを使うテー�
 ## 動作環境
 
 - PHP 8.3〜8.5
-- tmswp/core `^0.9`(composer.jsonの`require`)
+- tmswp/core `^0.9.1`(composer.jsonの`require`)
 - PHPUnit `^11.5`・Brain Monkey `^2.6`・Mockery `^1.6`・psr/log `^3.0`を依存として持ちます。
 
 ## 導入

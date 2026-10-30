@@ -641,7 +641,7 @@ starters/theme/
   "license": "GPL-2.0-or-later",
   "require": {
     "php": ">=8.3",
-    "tmswp/core": "^0.9"
+    "tmswp/core": "^0.9.1"
   },
   "require-dev": {
     "brain/monkey": "^2.6",
@@ -692,7 +692,7 @@ starters/theme/
 - `name` はPackagist登録名のまま配布し、create-project後に `bin/setup.php` が `local/<slug>` へ書き換える(§10)。licenseは、スターター自身はGPL-2.0-or-laterで、setup.phpが作ったプロジェクトでは`proprietary`にする。
 - `autoload`・`autoload-dev`の名前空間`TmswpStarterTheme\`は、setup.phpがスラッグから作った名前空間に書き換える(§10)。
 - `phpstan/extension-installer` がPHPStan拡張(szepeviktor/phpstan-wordpress と tmswp/core 同梱拡張)を自動登録する(10-quality.md §7 項目2)。`allow-plugins` を事前記載しているため、create-project後の `composer install` は承認プロンプトなしで完了する。
-- `tmswp/core`の制約は、リリースのときに`monorepo-builder release`がその版の`^X.Y`に同期する(10-quality.md §6.2)。
+- `tmswp/core`の制約は、版の最初のタスクで`Kernel::VERSION`と同じコミットで、その版の`^X.Y`(PATCHが0より大きい版では`^X.Y.Z`)に手で上げる。`monorepo-builder release`は制約を書き換えず、リリースの前の検査がタグの版との一致を確かめる(10-quality.md §6.2、`RELEASING.md`)。
 - `qa`は`lint` → `analyse` → `discover:check` → `test`の順で、`discover:check`(`wp tmswp discover --check`)は探索結果ファイルの照合である。`discover`・`discover:check`は、WP-CLIの`wp`がこのテーマを有効にしたサイトに届く場所で実行する(10-quality.md §7の項目5)。
 - `post-create-project-cmd`は、`bin/setup.php`と、書き換えた名前空間でオートローダを作り直す`composer dump-autoload`の2つである(§10.1)。
 - 統合テスト(`test:integration`)はスターターには含めない(利用側プロジェクトのテストはユニット層のみを既定とする。必要なプロジェクトはコアのwp-env構成を参考に追加する)。したがってスターターの `test` はユニット層のみを指す(コアmonorepoとの範囲差はAGENTS.mdに注記済み。§2参照)。

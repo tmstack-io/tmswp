@@ -252,8 +252,8 @@ use TMSWP\Core\Container\Container;
 
 final class Kernel
 {
-    /** この tmswp/core の版。boot 時に installed.php の tmswp/core の版と照合する(§3.9)。リリースごとにタグの版へ更新する */
-    public const string VERSION = '0.9.0';
+    /** この tmswp/core の版。boot 時に installed.php の tmswp/core の版と照合する(§3.9)。版の最初のタスクで手で上げ、リリースの前の検査がタグの版との一致を確かめる */
+    public const string VERSION = '0.9.1';
 
     /** @var array<string, self> 正規化済みappNamespace => Kernel のグローバルレジストリ */
     private static array $kernels = [];
@@ -563,7 +563,7 @@ boot は手順0で、`InstalledVersionCheck::assertInstalledVersions(Kernel::VER
 - **dev 版は照合の対象外とする。** `dev-*` のブランチ、monorepo の path repository、`x.y.x-dev` のブランチの別名、プレリリース(`x.y.z-beta1` 等)は、`Kernel::VERSION` と比べられる版を持たないためである。replace・provide だけの記載(monorepo のルートが `tmswp/core` を replace する等)も、tmswp/core を入れたものではないため対象外とする。これは黙った代替経路ではなく、照合の範囲の定義である。
 - 対象の版が `Kernel::VERSION` と食い違えば、debug に関係なく `KernelException` を投げる。メッセージには、食い違う版と、その記載の `install_path`(`{vendor}/composer/../tmswp/core` の形で、どの vendor かが分かる)を含める。
 - `Composer\InstalledVersions` が無い(Composer 2 のオートローダを通さずに読み込んだ)場合は、照合できないため `KernelException` を投げる。
-- `Kernel::VERSION` は、リリースのたびにタグの版(先頭の `v` を除く)へ更新する。
+- `Kernel::VERSION`は、版の最初のタスクで、tmswp/*の制約(MINORの版ではbranch-aliasも)と同じコミットで、その版(タグの`vX.Y.Z`の先頭の`v`を除いたもの)に手で上げる。リリースの道具は書き換えず、リリースの前の検査(`RELEASING.md`)がタグの版との一致を確かめる。
 
 #### 3.10 拡張の登録
 

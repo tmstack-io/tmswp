@@ -5,7 +5,7 @@ Advanced Custom Fields(ACF)をTMStack WordPress Frameworkで使うための拡�
 ## 動作環境
 
 - PHP 8.3〜8.5、WordPress 7.0以上
-- tmswp/core `^0.9`(composer.jsonの`require`)
+- tmswp/core `^0.9.1`(composer.jsonの`require`)
 - ACF 6.2以上(無料版・Pro)。ACFはWordPressのプラグインとして入れます(Composerの依存にはしません)。repeater・flexible_content・gallery・clone・オプションページはACF Proの機能です。
 
 ## 提供するもの
