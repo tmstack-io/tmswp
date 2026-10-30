@@ -15,6 +15,7 @@ use ReflectionClass;
 use SplFileInfo;
 use TMSWP\AcfBridge\AcfBridge;
 use TMSWP\Core\Kernel\ExtensionInterface;
+use TMSWP\Core\Kernel\Kernel;
 use TMSWP\JaToolkit\JaToolkit;
 use TMSWP\SettingsPage\SettingsPages;
 use TMSWP\Testing\UnitTestCase;
@@ -26,18 +27,30 @@ use TMSWP\Thumbnail\Thumbnail;
  *
  * - PHPのソースは、コメントや文字列に反応しないよう、PhpToken::tokenize()のトークンで調べる(actions/規約の痕跡の検査を除く)。
  * - 文書・設定は行単位の正規表現で調べる。
- * - 走査はvendor/・node_modules/・.git/を除き、gitのコマンドには依存しない(作業ツリーのファイルをそのまま読む)。
+ * - 調べるファイルとディレクトリ(`packages/*\/src`等)の列挙は、gitの追跡するファイル(`git ls-files`)のうち作業ツリーに
+ *   あるものから選び(globは使わない)、内容は作業ツリーのものを読む。.DS_Store・作業の道具の状態のファイル・キャッシュ等の
+ *   追跡外のファイルで、手元とCIの結果とアサーションの数が変わらないようにするためである。新しく作ったファイルと
+ *   ディレクトリは、`git add`で追跡した時点で対象になる。
+ * - actions/規約のディレクトリの有無の検査だけは、ディレクトリをvendor/・node_modules/・.git/を除いて走査する
+ *   (gitはディレクトリを追跡しない)。
  * - このファイル自身は禁止の語を文字列で持つため、走査の対象から外す。
- * - ディレクトリの走査の結果はクラスの中でキャッシュし、テストの間で同じ走査を繰り返さない。走査とファイルの読み込みは、
- *   Patchworkのstream wrapperを外して行う(withoutPatchworkStreamWrapper())。
+ * - 追跡するファイルの一覧とディレクトリごとの絞り込みの結果はクラスの中でキャッシュし、テストの間で同じ走査を繰り返さない。
+ *   走査とファイルの読み込みは、Patchworkのstream wrapperを外して行う(withoutPatchworkStreamWrapper())。
  */
 final class RepositoryScanTest extends UnitTestCase
 {
-    /** 走査で下りないディレクトリの名前 */
+    /** ディレクトリの走査で下りないディレクトリの名前 */
     private const array SKIPPED_DIRECTORIES = ['vendor', 'node_modules', '.git'];
 
     /**
-     * filesUnder()の走査の結果。ルートからの相対のディレクトリ => その下のファイルの絶対パス(昇順。このファイル自身を除く)。
+     * trackedFiles()の結果。gitの追跡するファイルのうち作業ツリーにあるもの(ルートからの相対パス。昇順。このファイル自身を除く)。
+     *
+     * @var list<string>|null
+     */
+    private static ?array $trackedFiles = null;
+
+    /**
+     * filesUnder()の走査の結果。ルートからの相対のディレクトリ => その下の追跡するファイルの絶対パス(昇順。このファイル自身を除く)。
      *
      * @var array<string, list<string>>
      */
@@ -103,6 +116,28 @@ final class RepositoryScanTest extends UnitTestCase
     private const array DIRECTORY_LISTING_CLASSES = ['directoryiterator', 'filesystemiterator', 'recursivedirectoryiterator', 'globiterator'];
 
     /**
+     * 設計文書(docs/)と決定・規則の番号への参照。節の記号(`§`)、`docs/`、`NN-name.md`(設計文書のファイル名)、
+     * 拡張子の無い設計文書の名前(`06-model`等)、`文書NN`、`D-NN`・`DR-NN`(決定の番号)、`RN`(設計文書の規則の番号)。
+     * `-alpha-12345-src`・`BSD-3-Clause`・`PSR-3`のように、英数字か`-`の直後に続くものは当てない。
+     */
+    private const array DESIGN_REFERENCE_PATTERNS = [
+        '/§/u',
+        '#(?<![\w/.-])docs/#',
+        '#tmstack-io/tmswp/(?:blob|tree)/#',
+        '/(?<![\w.-])\d{2}-[a-z]+(?:-[a-z]+)*\.md\b/',
+        '/(?<![\w-])\d{2}-(?:overview|architecture|kernel|entities|meta-options|form|model|support|extensions|acf-bridge|quality|ai-docs|implementation-plan)\b/',
+        '/文書\s?\d{2}/u',
+        '/(?<![\w-])DR?-\d+\b/',
+        '/(?<![\w-])R\d{1,2}\b/',
+    ];
+
+    /**
+     * rules/・README.mdの、設計文書へのMarkdownのリンク。リンクの文字列は、URLのタグの後のパス(`docs/…`)と同じにする。
+     * 1つ目のグループはタグ(`vX.Y.Z`)。
+     */
+    private const string DESIGN_DOCUMENT_LINK = '#\[(docs/[^\]]*)\]\(https://github\.com/tmstack-io/tmswp/(?:blob|tree)/([^/)\s]+)/\1\)#';
+
+    /**
      * docs/12のv0.1.0の受け入れ条件2: コマンド名`wp-env`をnpx等で名前解決する呼び出しが、composerスクリプト・CI・文書に
      * 残っていない。
      *
@@ -148,7 +183,7 @@ final class RepositoryScanTest extends UnitTestCase
      * docs/12のv0.5.0の受け入れ条件3: actions/規約の痕跡(コード・設定・テスト・文書)が無い。
      *
      * 痕跡には文書とコメントでの言及を含むため、PHPのファイルもトークンではなく、ファイルの文字列で調べる。
-     * 対象は、packages・starters・examples・tests・tools・bin・.githubの下のすべてのテキストのファイル、ルートの設定
+     * 対象は、packages・starters・examples・tests・tools・bin・.githubの下のすべての追跡するテキストのファイル、ルートの設定
      * (composer.json・package.json・*.neon・*.dist・*.dist.php・monorepo-builder.php・playwright.config.mjs・.wp-env.json・
      * .gitattributes・.gitignore・.editorconfig)、docs/の.md(docs/12を除く)、README.md・AGENTS.mdである。
      * CHANGELOG.md・docs/12・docs/acceptance/は、削除したことと、その経緯の記録として名前を残す文書のため、対象にしない。
@@ -490,7 +525,7 @@ final class RepositoryScanTest extends UnitTestCase
      */
     public function testAcfBridgeRuntimeClassesDoNotDependOnSyncOrCheckCode(): void
     {
-        $runtimeFiles = self::glob(self::root() . '/packages/acf-bridge/src/*.php');
+        $runtimeFiles = self::trackedPaths('packages/acf-bridge/src/*.php');
         $runtimeFiles[] = self::root() . '/packages/acf-bridge/src/Manifest/ManagedKey.php';
         self::assertContains(self::root() . '/packages/acf-bridge/src/AcfBridge.php', $runtimeFiles);
 
@@ -542,7 +577,7 @@ final class RepositoryScanTest extends UnitTestCase
         $violations = [];
         $files = [];
 
-        foreach (self::glob(self::root() . '/packages/*/src', GLOB_ONLYDIR) as $directory) {
+        foreach (self::trackedDirectories('packages/*/src') as $directory) {
             $files = array_merge($files, self::phpFilesUnder(self::relative($directory)));
         }
 
@@ -568,14 +603,14 @@ final class RepositoryScanTest extends UnitTestCase
     }
 
     /**
-     * docs/01の受け入れ基準「手で書いた全PHPファイルが`declare(strict_types=1)`を持つ」。リポジトリの作業ツリーの.phpの
-     * ファイル(vendor/・node_modules/・.git/を除く)を調べる。生成物の、wp-scriptsが`build/`に書く`*.asset.php`と、
+     * docs/01の受け入れ基準「手で書いた全PHPファイルが`declare(strict_types=1)`を持つ」。gitの追跡する.phpのファイルを
+     * 調べる。生成物の、wp-scriptsが`build/`に書く`*.asset.php`と、
      * `composer i18n:build`(`wp i18n make-php`)が`languages/`に書く`*.l10n.php`は対象にしない。
      */
     public function testEveryHandWrittenPhpFileDeclaresStrictTypes(): void
     {
         $generated = static fn(string $path): bool => preg_match('#/build/.+\.asset\.php\z|/languages/[^/]+\.l10n\.php\z#', $path) === 1;
-        $files = array_merge(self::glob(self::root() . '/*.php'), self::glob(self::root() . '/.*.php'));
+        $files = array_merge(self::trackedPaths('*.php'), self::trackedPaths('.*.php'));
 
         foreach (['bin', 'examples', 'packages', 'starters', 'tests', 'tools'] as $directory) {
             $files = array_merge($files, self::filesUnder($directory, static fn(string $path): bool => str_ends_with($path, '.php') && !$generated($path)));
@@ -637,7 +672,7 @@ final class RepositoryScanTest extends UnitTestCase
             'TMSWP\\Core\\Tests\\Unit\\PHPStan\\ModelTypeInferenceTest' => 'PHPStan\\Testing\\TypeInferenceTestCase',
             'TMSWP\\Core\\Tests\\Unit\\PHPStan\\TypeInferenceTest' => 'PHPStan\\Testing\\TypeInferenceTestCase',
         ];
-        $directories = array_merge(self::glob(self::root() . '/packages/*/tests/Unit', GLOB_ONLYDIR), [self::root() . '/tests/Unit']);
+        $directories = array_merge(self::trackedDirectories('packages/*/tests/Unit'), [self::root() . '/tests/Unit']);
         $others = [];
         $exceptions = [];
 
@@ -675,7 +710,7 @@ final class RepositoryScanTest extends UnitTestCase
         $declared = [];
         $guarded = [];
 
-        foreach (self::glob(self::root() . '/packages/*/src', GLOB_ONLYDIR) as $directory) {
+        foreach (self::trackedDirectories('packages/*/src') as $directory) {
             foreach (self::phpFilesUnder(self::relative($directory)) as $file) {
                 $tokens = self::significantTokens($file);
                 $depth = 0;
@@ -713,6 +748,147 @@ final class RepositoryScanTest extends UnitTestCase
 
         self::assertSame(['packages/core/src/functions.php' => ['tms_log'], 'packages/thumbnail/src/functions.php' => ['tms_thumb']], $declared);
         self::assertSame([], $guarded);
+    }
+
+    /**
+     * docs/12のv0.9.1-T4: 配布物のソース(packages/*\/src・packages/*\/phpstan・packages/*\/bin)に、設計文書と決定の番号への
+     * 参照が無い。利用者がComposerで受け取るパッケージにはdocs/が入らず、決定の番号は公開していないファイルの番号のため、
+     * 利用者が辿れないからである。コメントだけでなく、利用者に見えるメッセージの文字列も対象にするため、トークンではなく
+     * ファイルの行で調べる。packages/*\/testsは配布物に入らないため対象にしない。
+     */
+    public function testDistributedSourcesDoNotReferenceDesignDocumentsOrDecisionNumbers(): void
+    {
+        $files = [];
+
+        foreach (['packages/*/src', 'packages/*/phpstan', 'packages/*/bin'] as $pattern) {
+            foreach (self::trackedDirectories($pattern) as $directory) {
+                $files = array_merge($files, self::filesUnder(self::relative($directory), static fn(string $path): bool => true));
+            }
+        }
+
+        // 3種類のディレクトリを走査していること(この検査が空振りしていないことの確かめ)
+        self::assertContains(self::root() . '/packages/core/src/Kernel/Kernel.php', $files);
+        self::assertContains(self::root() . '/packages/core/phpstan/src/KernelResetOutsideTestRule.php', $files);
+        self::assertContains(self::root() . '/packages/acf-bridge/bin/tms-acf', $files);
+        $violations = [];
+
+        foreach ($files as $file) {
+            $contents = self::read($file);
+
+            if (str_contains($contents, "\0")) {
+                // バイナリのファイル
+                continue;
+            }
+
+            foreach (self::lines($contents) as $index => $line) {
+                if (self::matchesAny(self::DESIGN_REFERENCE_PATTERNS, $line)) {
+                    $violations[] = self::relative($file) . ':' . ($index + 1) . " {$line}";
+                }
+            }
+        }
+
+        self::assertSame([], $violations);
+    }
+
+    /**
+     * docs/12のv0.9.1-T4: packages/*\/rules・packages/*\/README.mdの設計文書への参照は、その版のタグのmonorepoのURLへの
+     * Markdownのリンク(`[docs/02-kernel.md](https://github.com/tmstack-io/tmswp/blob/vX.Y.Z/docs/02-kernel.md)`)にし、
+     * タグは`Kernel::VERSION`の版である(版の準備でリンクを上げ忘れると失敗する)。リンクを除いた本文に、設計文書と
+     * 決定の番号への参照と、この形でないmonorepoのblob・treeのURLが無い。
+     */
+    public function testRulesAndReadmesLinkDesignDocumentsToTheTagOfKernelVersion(): void
+    {
+        $files = self::trackedPaths('packages/*/README.md');
+
+        foreach (self::trackedDirectories('packages/*/rules') as $directory) {
+            $files = array_merge($files, self::filesUnder(self::relative($directory), static fn(string $path): bool => str_ends_with($path, '.md')));
+        }
+
+        self::assertContains(self::root() . '/packages/core/README.md', $files);
+        self::assertContains(self::root() . '/packages/core/rules/blocks.md', $files);
+        $tag = 'v' . Kernel::VERSION;
+        $links = 0;
+        $violations = [];
+
+        foreach ($files as $file) {
+            foreach (self::lines(self::read($file)) as $index => $line) {
+                $location = self::relative($file) . ':' . ($index + 1);
+                $count = preg_match_all(self::DESIGN_DOCUMENT_LINK, $line, $matches);
+                $rest = preg_replace(self::DESIGN_DOCUMENT_LINK, '', $line);
+
+                // 行ごとのアサーションにしない(アサーションの数が文書の行数で変わらないようにする)
+                if ($count === false || $rest === null) {
+                    self::fail(preg_last_error_msg());
+                }
+
+                $links += $count;
+
+                foreach ($matches[2] as $version) {
+                    if ($version !== $tag) {
+                        $violations[] = "{$location} links to {$version} instead of {$tag}";
+                    }
+                }
+
+                if (self::matchesAny(self::DESIGN_REFERENCE_PATTERNS, $rest) || str_contains($rest, 'github.com/tmstack-io/tmswp/blob/') || str_contains($rest, 'github.com/tmstack-io/tmswp/tree/')) {
+                    $violations[] = "{$location} {$line}";
+                }
+            }
+        }
+
+        // リンクを見つけていること(この検査が空振りしていないことの確かめ)
+        self::assertGreaterThan(0, $links);
+        self::assertSame([], $violations);
+    }
+
+    /** @return iterable<string, array{string}> 設計文書・決定の番号への参照の行 */
+    public static function designReferenceLines(): iterable
+    {
+        yield 'ファイル名と節' => ['スラッグに解決する(03-entities.md §1.5)。'];
+        yield 'docs/NNと節' => ['保存名(docs/09 §6.6)'];
+        yield '節だけ' => ['キャッチアップ(§3.3)'];
+        yield '拡張子の無いファイル名と節' => ['(06-model §5)'];
+        yield 'ファイル名だけ' => ['TMSWPの設計文書 docs/05-form.md'];
+        yield '決定の番号' => ['WpDatabaseGuard(D-47)'];
+        yield '設計判断の番号' => ['マトリクスは DR-12 のとおり'];
+        yield 'メッセージの文字列' => ['"build custom blocks as described in docs/12 §1.11 (D-26)"'];
+        yield 'docs/だけ' => ['手順は docs/RELEASING.md にある'];
+        yield '拡張子の無い設計文書の名前' => ['Kernelの設計(02-kernel)の節'];
+        yield '文書の番号' => ['独自ブロックは文書12の方式で作る'];
+        yield '規則の番号' => ['値を R3 で正規化し'];
+        yield '規則の番号(括弧の中)' => ['ベアテーブル名(R1)'];
+    }
+
+    /** 参照の検出の正の対照: 書き換える前のソースにあった形の参照を検出する。 */
+    #[DataProvider('designReferenceLines')]
+    public function testDesignReferencePatternsDetectReferences(string $line): void
+    {
+        self::assertTrue(self::matchesAny(self::DESIGN_REFERENCE_PATTERNS, $line));
+    }
+
+    /** @return iterable<string, array{string}> 設計文書・決定の番号への参照ではない行 */
+    public static function nonDesignReferenceLines(): iterable
+    {
+        yield '版の接尾辞' => ['`-alpha-12345-src` 等)を除いて比べる'];
+        yield 'ライセンス' => ['"license": "BSD-3-Clause"'];
+        yield '日付の書式' => ["date('Y-m-d H:i:s')"];
+        yield 'sprintfの書式' => ["sprintf('%1\$s-%2\$s', \$a, \$b)"];
+        yield 'HTTPのヘッダ' => ['X-WP-Nonce'];
+        yield 'レシピのファイル' => ['vendor/tmswp/core/rules/blocks.md'];
+        yield 'RFCの番号' => ['RFC 3986の形'];
+        yield 'エラーコード' => ['E101・W006'];
+        yield 'PSRの番号' => ['PSR-3のロガー・PSR-11のコンテナ'];
+        yield '英数字の続く名前' => ['R2D2・ARRAY_A・utf8mb4・sha256'];
+        yield '外部の文書のURL' => ['https://developer.mozilla.org/en-US/docs/Web/HTTP'];
+        yield '版の番号' => ['PHPUnit 11・WordPress 7.0'];
+        yield 'ログの出力先' => ['wp-content/tmswp-logs/'];
+        yield '日付' => ['2026-10-30'];
+    }
+
+    /** 参照の検出の負の対照: 参照ではない文字列(版・ライセンス・書式・レシピのファイル)を検出しない。 */
+    #[DataProvider('nonDesignReferenceLines')]
+    public function testDesignReferencePatternsIgnoreNonReferences(string $line): void
+    {
+        self::assertFalse(self::matchesAny(self::DESIGN_REFERENCE_PATTERNS, $line));
     }
 
     /**
@@ -807,7 +983,7 @@ final class RepositoryScanTest extends UnitTestCase
         $root = self::root();
         $targets = [];
 
-        $manifestDirs = array_merge([$root, $root . '/examples/sample-site'], self::glob($root . '/starters/*', GLOB_ONLYDIR));
+        $manifestDirs = array_merge([$root, $root . '/examples/sample-site'], self::trackedDirectories('starters/*'));
         self::assertCount(4, $manifestDirs);
 
         foreach ($manifestDirs as $dir) {
@@ -833,15 +1009,15 @@ final class RepositoryScanTest extends UnitTestCase
         }
 
         $documents = array_merge(
-            self::glob($root . '/.github/workflows/*.yml'),
-            self::glob($root . '/docs/*.md'),
+            self::trackedPaths('.github/workflows/*.yml'),
+            self::trackedPaths('docs/*.md'),
             [$root . '/README.md', $root . '/AGENTS.md'],
-            self::glob($root . '/packages/*/README.md'),
-            self::glob($root . '/starters/*/*.md'),
-            self::glob($root . '/examples/sample-site/*.md'),
+            self::trackedPaths('packages/*/README.md'),
+            self::trackedPaths('starters/*/*.md'),
+            self::trackedPaths('examples/sample-site/*.md'),
         );
 
-        foreach (self::glob($root . '/packages/*/rules', GLOB_ONLYDIR) as $rules) {
+        foreach (self::trackedDirectories('packages/*/rules') as $rules) {
             $documents = array_merge($documents, self::filesUnder(self::relative($rules), static fn(string $path): bool => str_ends_with($path, '.md')));
         }
 
@@ -911,9 +1087,9 @@ final class RepositoryScanTest extends UnitTestCase
                 $root . '/.php-cs-fixer.dist.php', $root . '/.wp-env.json', $root . '/.gitattributes', $root . '/.gitignore',
                 $root . '/.editorconfig', $root . '/README.md', $root . '/AGENTS.md',
             ],
-            self::glob($root . '/*.neon'),
-            self::glob($root . '/*.dist'),
-            array_filter(self::glob($root . '/docs/*.md'), static fn(string $path): bool => basename($path) !== '12-implementation-plan.md'),
+            self::trackedPaths('*.neon'),
+            self::trackedPaths('*.dist'),
+            array_filter(self::trackedPaths('docs/*.md'), static fn(string $path): bool => basename($path) !== '12-implementation-plan.md'),
         );
 
         foreach ($configs as $config) {
@@ -935,7 +1111,7 @@ final class RepositoryScanTest extends UnitTestCase
     private static function testPhpFiles(): array
     {
         $root = self::root();
-        $directories = array_merge(self::glob($root . '/packages/*/tests', GLOB_ONLYDIR), [$root . '/tests'], self::glob($root . '/starters/*/tests', GLOB_ONLYDIR), [$root . '/examples/sample-site/tests']);
+        $directories = array_merge(self::trackedDirectories('packages/*/tests'), [$root . '/tests'], self::trackedDirectories('starters/*/tests'), [$root . '/examples/sample-site/tests']);
         $files = [];
 
         foreach ($directories as $directory) {
@@ -960,9 +1136,8 @@ final class RepositoryScanTest extends UnitTestCase
     }
 
     /**
-     * ルートからの相対のディレクトリの下で、$acceptが真を返すファイルの絶対パス(昇順)。vendor/・node_modules/・.git/には
-     * 下りず、このファイル自身を除く。ディレクトリの走査は、ディレクトリごとに1回だけ行う(テストの実行の間にリポジトリの
-     * ファイルは変わらない)。
+     * ルートからの相対のディレクトリの下の追跡するファイルのうち、$acceptが真を返すものの絶対パス(昇順)。このファイル自身を
+     * 除く。絞り込みは、ディレクトリごとに1回だけ行う(テストの実行の間にリポジトリのファイルは変わらない)。
      *
      * @param callable(string): bool $accept
      *
@@ -977,8 +1152,7 @@ final class RepositoryScanTest extends UnitTestCase
     }
 
     /**
-     * ルートからの相対のディレクトリの下のファイルの絶対パス(昇順)。vendor/・node_modules/・.git/には下りず、
-     * このファイル自身を除く。
+     * ルートからの相対のディレクトリの下の追跡するファイルの絶対パス(昇順)。このファイル自身を除く。
      *
      * @return list<string>
      */
@@ -986,22 +1160,66 @@ final class RepositoryScanTest extends UnitTestCase
     {
         $path = self::root() . '/' . $directory;
         self::assertDirectoryExists($path);
-        $self = realpath(__FILE__);
-        $files = self::withoutPatchworkStreamWrapper(static function () use ($path, $self): array {
+        $files = [];
+
+        foreach (self::trackedFiles() as $relative) {
+            if (str_starts_with($relative, $directory . '/')) {
+                $files[] = self::root() . '/' . $relative;
+            }
+        }
+
+        return $files;
+    }
+
+    /**
+     * gitの追跡するファイルのうち作業ツリーにあるもの(ルートからの相対パス。昇順。このファイル自身を除く)。
+     * `git ls-files`は1回だけ実行する。作業ツリーで消してまだコミットしていないファイルは、読めないため除く。
+     *
+     * @return list<string>
+     */
+    private static function trackedFiles(): array
+    {
+        if (self::$trackedFiles !== null) {
+            return self::$trackedFiles;
+        }
+
+        $root = self::root();
+        $self = self::relative(__FILE__);
+        self::$trackedFiles = self::withoutPatchworkStreamWrapper(static function () use ($root, $self): array {
+            $process = proc_open(['git', 'ls-files', '-z'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $root);
+
+            if (!\is_resource($process)) {
+                self::fail('cannot run git ls-files');
+            }
+
+            $output = stream_get_contents($pipes[1]);
+            $error = stream_get_contents($pipes[2]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+
+            if (proc_close($process) !== 0 || !\is_string($output)) {
+                self::fail('git ls-files failed: ' . (\is_string($error) ? $error : ''));
+            }
+
             $files = [];
 
-            foreach (new RecursiveIteratorIterator(self::directoryIterator($path)) as $file) {
-                if ($file instanceof SplFileInfo && $file->isFile() && $file->getRealPath() !== $self) {
-                    $files[] = $file->getPathname();
+            // マージの競合の間は、同じパスがステージごとに出るため、重複を除く
+            foreach (array_unique(explode("\0", $output)) as $relative) {
+                // 空の要素は、出力の末尾のNULの後ろである
+                if ($relative !== '' && $relative !== $self && is_file($root . '/' . $relative)) {
+                    $files[] = $relative;
                 }
+            }
+
+            // 一覧が空・別のリポジトリのものなら、走査の対象が無いまま成功しないよう止める
+            if (!\in_array('composer.json', $files, true)) {
+                self::fail("git ls-files did not list composer.json in {$root}");
             }
 
             return $files;
         });
 
-        sort($files);
-
-        return $files;
+        return self::$trackedFiles;
     }
 
     /**
@@ -1070,16 +1288,59 @@ final class RepositoryScanTest extends UnitTestCase
     }
 
     /**
-     * glob()の結果。失敗(false)はアサーションで止める。
+     * 追跡するファイルのうち、ルートからの相対パスが$patternに一致するものの絶対パス(昇順)。$patternの`*`は`/`を越えず、
+     * glob()と同じく、`*`で始まる部分はドットで始まる名前に一致しない(例: `docs/*.md`、`.*.php`)。
      *
      * @return list<string>
      */
-    private static function glob(string $pattern, int $flags = 0): array
+    private static function trackedPaths(string $pattern): array
     {
-        $paths = glob($pattern, $flags);
-        self::assertIsArray($paths, $pattern);
+        $regex = '#\A' . self::patternRegex($pattern) . '\z#';
+        $paths = [];
+
+        foreach (self::trackedFiles() as $relative) {
+            if (preg_match($regex, $relative) === 1) {
+                $paths[] = self::root() . '/' . $relative;
+            }
+        }
 
         return $paths;
+    }
+
+    /**
+     * 追跡するファイルを含むディレクトリのうち、ルートからの相対パスが$patternに一致するものの絶対パス(昇順。重複なし)。
+     * $patternの書き方はtrackedPaths()と同じ(例: `packages/*\/src`)。
+     *
+     * @return list<string>
+     */
+    private static function trackedDirectories(string $pattern): array
+    {
+        $regex = '#\A(' . self::patternRegex($pattern) . ')/#';
+        $directories = [];
+
+        foreach (self::trackedFiles() as $relative) {
+            if (preg_match($regex, $relative, $match) === 1) {
+                $directories[] = self::root() . '/' . $match[1];
+            }
+        }
+
+        $directories = array_values(array_unique($directories));
+        sort($directories);
+
+        return $directories;
+    }
+
+    /** trackedPaths()・trackedDirectories()の$patternを、正規表現の断片(区切りの`#`をエスケープ済み)にする */
+    private static function patternRegex(string $pattern): string
+    {
+        $segments = [];
+
+        foreach (explode('/', $pattern) as $segment) {
+            $regex = str_replace('\\*', '[^/]*', preg_quote($segment, '#'));
+            $segments[] = str_starts_with($segment, '*') ? '(?!\.)' . $regex : $regex;
+        }
+
+        return implode('/', $segments);
     }
 
     /**

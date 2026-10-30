@@ -3,6 +3,31 @@
 新しい版を上に書く。v0.1.0〜v0.8.0は実装計画(docs/12-implementation-plan.md)の版で、タグを付けて公開していない。各版の詳細は、docs/acceptance/の受け入れ記録にある。
 まだリリースしていない変更は、先頭のUnreleasedの節に書く。リリースの準備のコミットで、この節の見出しを手で`## vX.Y.Z — 題名`(下の各版の見出しと同じ形)に改める。
 
+## v0.9.1 — 導入の支え
+
+### 追加
+
+- tmswp/coreのレシピに`rules/deploy.md`を足した。FTPで本番へ上げる手順(`composer install --no-dev --optimize-autoloader`で作った`vendor/`、上げるもの・上げないもの、同じサイトのテーマ・プラグインの`tmswp/*`の版をそろえること、バックアップと元に戻す手順、保守モード、`wp tmswp discover --check`・`wp tmswp migrate`、OPcache、ページキャッシュ)を1か所にまとめた。rules/model.md・blocks.md・acf.md、スターターとexamples/sample-siteのAGENTS.md、packages/acf-bridge/README.mdのデプロイの記述は、このレシピを参照する形にした。
+- tmswp/coreのレシピに`rules/rest.md`を足した。TMSWPはRESTのルートを宣言する仕組みを持たず、WordPress標準の`register_rest_route()`を`#[AsHook]`のクラスの`rest_api_init`に書く。`permission_callback`を必ず書くこと、`args`のすべての引数に`type`と`'validate_callback' => 'rest_validate_request_arg'`を書き、`sanitize_callback`を書かないこと(`sanitize_callback`を書くと型等が検証されず、整数への変換も外れる)、`permission_callback`は検証の前の値でも呼ばれること、例外をKernelのロガーに記録して500の応答に変え、debugでないときは詳細を出さないこと、Cookie認証(`X-WP-Nonce`)をそのまま使うことを、完全な実装例とともに示した。
+- スターター(テーマ・プラグイン)とexamples/sample-siteのAGENTS.mdの「最初に読むもの」の表と、packages/core/README.mdのレシピの表に、`rules/rest.md`と`rules/deploy.md`の行を足した。既存のプロジェクトでは、AGENTS.mdの表に同じ2行を足す。
+
+### 変更
+
+- `Kernel::VERSION`を0.9.1にし、packages/*・starters/*・examples/sample-siteの`tmswp/*`の制約を`^0.9`から`^0.9.1`にした。packages/*のbranch-aliasは`0.9.x-dev`のままである。
+- スターター(テーマ・プラグイン)とexamples/sample-siteの`tests/bootstrap.php`が、WordPressが起動時に定義する`WP_CONTENT_DIR`を、システムの一時ディレクトリの下のプロジェクトごとのディレクトリ(`sys_get_temp_dir() . '/tmswp-unit-tests/' . md5(dirname(__DIR__)) . '/wp-content'`)に定義する。`tmswp-kernel.php`の`SimpleLogger`は出力先を省くと`WP_CONTENT_DIR`の下に書くため、これまでは、ユニットテストで`tmswp-kernel.php`を`KernelConfig::load()`で読んだ構成の`logChannels`を呼ぶと例外になった。本番のログの出力先(`wp-content/tmswp-logs/`)は変わらない。あわせて、それを確かめる例のユニットテスト(`tests/Unit/TmswpKernelTest.php`)を置いた。既存のプロジェクトで同じテストを書くには、`tests/bootstrap.php`に同じ`define()`を足す。
+- tmswp/testingのレシピ(`rules/testing.md`)の`tests/bootstrap.php`の完全な実装例を、スターターと同じ`WP_CONTENT_DIR`の定義付きにした。「してはいけないこと」の、WordPressの定数を`tests/bootstrap.php`で定義しない規則は、`WP_CONTENT_DIR`だけを例外にし、代わりに「`app/`のコードから`WP_CONTENT_DIR`を直接読まない」規則を足した(定義したことで、`app/`のコードがこの定数を読んでもユニットテストで検出されなくなるため)。スターターとexamples/sample-siteのAGENTS.mdの「ログ」の項にも、同じ規則を書いた。
+- packages/*のrules/とREADME.mdの設計文書への参照を、その版のタグのmonorepoのURL(`https://github.com/tmstack-io/tmswp/blob/v0.9.1/docs/...`)へのMarkdownのリンクにした。Composerで受け取るパッケージには`docs/`が入らないため、これまでのファイル名と節の番号(`docs/02-kernel.md §4`等)では辿れなかった。節は番号ではなく節の名前で示す。
+- packages/*のsrc/・phpstan/・bin/のコメントから、設計文書(`00-overview.md §5.6`・`docs/09 §6.6`・`§3.3`等)・設計文書の規則の番号(`R1`等)と公開していない決定の番号への参照を除き、参照が担っていた内容(debugでは例外を投げ、本番ではKernelのロガーに記録して既定値を返す等)をコメントに書いた。コードの動作は変わらない。
+- acf-bridgeのW006(locationの`block`)のメッセージの案内先を、利用者の手元に無い設計文書(docs/12)の節と決定の番号からtmswp/coreのレシピ`rules/blocks.md`に改めた。メッセージの文字列を照合しているスクリプトがあれば、新しい文字列に合わせる。
+
+### 開発
+
+- ルートのlockのPHPStanを2.2.2から2.3.4に上げ(制約は`^2.1`のまま。phpstan-deprecation-rules 2.0.5・phpstan-phpunit 2.1.1・phpstan-strict-rules 2.1.0・phpstan-wordpress 2.0.4も上げた)、ルートの`tests/bootstrap-unit.php`でも、coreの`tests/bootstrap.php`と同じく、Patchworkが`phar://`のストリームを差し替える前にPHPStanのテストのコンテナを作るようにした(しないと、PHPStanの拡張のテストがクラスの再宣言で止まる)。2.3で新しく出た指摘(FormRuntimeTestとWpdbTestDoubleParityTestの10件)は、テストのコードを直して解消した。lockの拡張(phpstan-strict-rules 2.1.0・phpstan-phpunit 2.1.1)が`phpstan/phpstan ^2.3`を要求するため、実際の下限は2.3になる。制約を`^2.3`に上げると、packages/core・starters/*の`^2.1`と食い違って`composer monorepo:validate`が失敗するため、制約はそろえたまま据え置いた。
+- docs/11の全文の写し(monorepoのAGENTS.mdと、テーマのスターターのAGENTS.md)が実物と同じであることを確かめるユニットテスト(`tests/Unit/Docs/AgentsDocumentCopyTest.php`)を足した。
+- tests/Unit/RepositoryScanTest.phpのファイルの走査を、gitの追跡するファイル(`git ls-files`のうち作業ツリーにあるもの)に限った。これまでは作業ツリーのすべてのファイルを読んでいたため、追跡外のファイル(`.DS_Store`、作業の道具の状態のファイル、examples/sample-siteの`composer.lock`等)の数だけ、手元のユニットテストのアサーションの数がCIより多くなっていた。テキストのファイルは1つにつき2件(読み込みと行への分割)、バイナリのファイルは1件増え、packages/core/srcの`acf`の文字列の検査も、ドットで始まるディレクトリの下の追跡外のファイルを1件ずつ数えていた。調べるファイルとディレクトリ(`packages/*/src`等)を列挙する`glob()`も、すべて追跡するファイルからの選択に替えた(追跡していない新しいディレクトリで、分かりにくい失敗にならない)。`git ls-files`の一覧に`composer.json`が無ければ止め、マージの競合の間の重複したパスは除く。追跡するファイルの中の規約違反は、ステージしていない変更を含めて引き続き検出する。新しく作ったファイルは、`git add`の後に検査の対象になる。
+- tests/Unit/RepositoryScanTest.phpに、packages/*のsrc/・phpstan/・bin/に設計文書と決定の番号への参照(`§`・`docs/`・設計文書の名前・`文書NN`と、`D-`・`DR-`・`R`に続く番号)が無いことと、packages/*のrules/・README.mdの設計文書へのリンクのタグが`Kernel::VERSION`の版であることを確かめるテストを足した(版の準備でリンクを上げ忘れると失敗する)。検出の正規表現の正と負の対照のテストも足した。
+- docs/00〜11・docs/RELEASING.mdから、公開していない決定の番号への参照を除いた。DRには移さず、決定の内容はその箇所の記述に任せた。判断の理由が文書に無かった箇所には、その箇所に理由を1文ずつ書いた(docs/01 §4.3のmonorepo-builderの標準のリリースのワーカーを使わない理由と、版を同じコミットで手で上げる理由、docs/02の`tmswp-kernel.php`をWordPressなしで読めるファイルにする理由、docs/08のthumbnailのGCが最後のREST経由の要求からの日数で数える理由、docs/10のACF Proのテストでライセンスキーを使わない理由と、MySQLでの統合テストをCIで毎回行う理由)。docs/11 §6.2に、レシピ・README.mdから設計文書へのリンクの書き方を書いた。docs/RELEASING.mdの版の確かめの手順と、docs/01 §4.3・docs/11 §4・AGENTS.mdの版を上げる項目の列挙に、rules/・README.mdのリンクの版を足した。docs/10の写しにあわせて、.github/workflows/qa.ymlとmonorepo-builder.phpのコメントの決定の番号も除いた。
+
 ## v0.9.0 — 導入できる版
 
 ### 追加

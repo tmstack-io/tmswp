@@ -204,7 +204,7 @@ tmswp/                                  # monorepo ルート (tmstack-io/tmswp)
 
 スターターの名前空間は、create-projectの`bin/setup.php`がスラッグから生成した名前空間に書き換える(実装計画§1.6。プラグインごとに名前空間が違うため、同じサイトの複数のプラグインでクラスが衝突しない。詳細はAI資料設計書§10)。
 
-`^X.Y`は、版の最初のタスクで`Kernel::VERSION`と同じコミットで手で上げ、リリースの前の検査(§4.3)がタグの版との一致を確かめる(D-54)。全パッケージのライセンスは**GPL-2.0-or-later**(WordPress互換。旧iwf2bと同一)。packages/*はそれぞれ`LICENSE`のファイルを持つ(splitの配布物にライセンスの本文が入るように)。スターターは`LICENSE`のファイルを置かず、composer.jsonの`license`だけで示す(create-projectで作ったプロジェクトは`bin/setup.php`が`proprietary`に書き換えるため)。
+`^X.Y`(PATCHが0より大きい版では`^X.Y.Z`)は、版の最初のタスクで`Kernel::VERSION`と同じコミットで手で上げ、リリースの前の検査(§4.3)がタグの版との一致を確かめる。全パッケージのライセンスは**GPL-2.0-or-later**(WordPress互換。旧iwf2bと同一)。packages/*はそれぞれ`LICENSE`のファイルを持つ(splitの配布物にライセンスの本文が入るように)。スターターは`LICENSE`のファイルを置かず、composer.jsonの`license`だけで示す(create-projectで作ったプロジェクトは`bin/setup.php`が`proprietary`に書き換えるため)。
 
 ### 3.2 依存ポリシー(規範)
 
@@ -270,7 +270,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
     "require-dev": {
         "mikey179/vfsstream": "^1.6.12",
         "phpstan/phpstan": "^2.1",
-        "tmswp/testing": "^0.9"
+        "tmswp/testing": "^0.9.1"
     },
     "autoload-dev": {
         "psr-4": {"TMSWP\\Core\\Tests\\": "tests/"}
@@ -291,7 +291,7 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 
 - PSR-4 で `TMSWP\Core\PHPStan\` を先に書いても、composer は最長一致で解決するため `src/` 側と衝突しない。
 - PHPStan 拡張の設定ファイルは `phpstan/extension.neon` の 1 枚だけを置く(§3.4)。`extra.phpstan.includes` とルートの phpstan.neon.dist はどちらもこのファイルを直接指す。
-- `branch-alias`は`<major>.<minor>.x-dev`の形で、版の最初のタスクで`Kernel::VERSION`・制約と同じコミットで手で上げ、リリースの前の検査(§4.3)がタグの版との一致を確かめる(D-54)。リリースの後に次の版へ自動で上げない。branch-aliasを持つのはpackages/*のcomposer.jsonだけで、スターターには無い。上の値は`Kernel::VERSION`が0.9.0の間のもので、`tmswp/core`・`tmswp/testing`の制約(`^0.9`)はこの版を満たす。
+- `branch-alias`は`<major>.<minor>.x-dev`の形で、版の最初のタスクで`Kernel::VERSION`・制約と同じコミットで手で上げ、リリースの前の検査(§4.3)がタグの版との一致を確かめる。リリースの後に次の版へ自動で上げない。branch-aliasを持つのはpackages/*のcomposer.jsonだけで、スターターには無い。上の値は`Kernel::VERSION`が0.9.1の間のもので、`tmswp/core`・`tmswp/testing`の制約(`^0.9.1`)はこの版を満たす。
 - `scripts.test`は、パッケージに置いた`phpunit.xml.dist`(`tests/Unit/`)を走らせる。coreの`phpunit.xml.dist`のbootstrap(`tests/bootstrap.php`)は、Brain MonkeyのPatchworkが`phar://`のストリームを差し替える前にPHPStanのテストのコンテナを作る(PHPStan 2.3のpharは、差し替えた後に初めて読み込むと、同じファイルを別のパスで二度読み込んでクラスの再宣言で止まるため)。
 - `files` オートロードは `src/functions.php` の 1 ファイルのみ(§6)。拡張パッケージがヘルパを持つ場合も同形式(各 1 ファイル)とする。
 - 拡張パッケージのcomposer.jsonは本形式から`require`に`"tmswp/core": "^X.Y"`を加え、`require-dev`を`"tmswp/testing": "^X.Y"`だけにし、psr-4・phpstanエントリを各自のものに差し替えた形とする(thumbnailのみ`"ext-gd": "*"`を追加)。`tmswp/testing`は`require`に`tmswp/core`・PHPUnit・Brain Monkey・Mockery・psr/logを持ち、`require-dev`を持たない。
@@ -374,11 +374,13 @@ DR-05 の「FW 同梱の PHPStan 拡張」(MetaSchema からの型ナローイ�
 `symplify/monorepo-builder ^12`を次の2用途に限定して使う(`merge`は使わない。§4.2):
 
 1. **validate**:パッケージ間の依存バージョン矛盾、ルートとの乖離検出(CIで実行)。
-2. **releaseワーカー**: `vendor/bin/monorepo-builder release vX.Y.Z`で、monorepo-builder.phpに登録した`tools/release/`の次の2つのワーカーだけを順に実行する(D-54。手順は`docs/RELEASING.md`)。monorepo-builderが既定で持つワーカー(`TagVersionReleaseWorker`・`PushTagReleaseWorker`)は`MBConfig::disableDefaultWorkers()`で外し、標準のワーカーは1つも登録しない。版の書き換え、mainへのcommit・push、リリースの後の次の版(`^X.(Y+1)`・`X.(Y+1).x-dev`)への引き上げは行わない。mainへの反映は、このコマンドではなく、PR(`rewrite/v0`→`main`)のマージでユーザーの確認を経て行う。
+2. **releaseワーカー**: `vendor/bin/monorepo-builder release vX.Y.Z`で、monorepo-builder.phpに登録した`tools/release/`の次の2つのワーカーだけを順に実行する(手順は`docs/RELEASING.md`)。monorepo-builderが既定で持つワーカー(`TagVersionReleaseWorker`・`PushTagReleaseWorker`)は`MBConfig::disableDefaultWorkers()`で外し、標準のワーカーは1つも登録しない。版の書き換え、mainへのcommit・push、リリースの後の次の版(`^X.(Y+1)`・`X.(Y+1).x-dev`)への引き上げは行わない。mainへの反映は、このコマンドではなく、PR(`rewrite/v0`→`main`)のマージでユーザーの確認を経て行う。
    1. リリースの前の検査(`CheckReleaseReadinessReleaseWorker`): 次のどれか1つでも満たさなければ、満たさない項目をすべて並べた例外で止まり、タグを作らない。今のブランチが`main`である。originにmainのブランチがあり、`git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main`で取り直した`origin/main`と、HEADが同じコミットである(設定のfetchのrefspecと、手元に残った古い追跡refには頼らない)。作業ツリーが空である(追跡していないファイルも無い)。タグ`vX.Y.Z`が手元にも`origin`にも無い。`Kernel::VERSION`、packages/*とstarters/*のcomposer.jsonの`require`・`require-dev`のtmswp/*の制約とbranch-alias、examples/sample-siteのcomposer.jsonのtmswp/*の制約とpathリポジトリの`versions`が、タグの版と一致する(制約は`^X.Y`、PATCHが0より大きければ`^X.Y.Z`。branch-aliasは`X.Y.x-dev`)。CHANGELOG.mdに`## vX.Y.Z — 題名`の見出しがある。
    2. 注釈付きのタグ(`CreateAnnotatedTagReleaseWorker`): `git tag -a vX.Y.Z -m vX.Y.Z`でHEADに注釈付きのタグを作り、`git push origin refs/tags/vX.Y.Z`でそのタグだけを送る(手元のほかのタグは送らない)。gitのコマンドが失敗すれば例外で止まる。
 
-版(`Kernel::VERSION`・制約・branch-alias・sample-siteの版)は、版の最初のタスクで1つのコミットで手で上げ(D-54)、リリースの道具は書き換えない。
+版(`Kernel::VERSION`・制約・branch-alias・sample-siteの版・packages/*のrules/とREADME.mdの設計文書へのリンクの版)は、版の最初のタスクで1つのコミットで手で上げ、リリースの道具は書き換えない。
+
+標準のワーカーを使わないのは、`TagVersionReleaseWorker`がmainへのpushの失敗を握りつぶしてタグを作り(origin/mainに無いコミットを指すタグが公開されうる)、`PushTagReleaseWorker`が手元のすべてのタグを送り、`AddTagToChangelogReleaseWorker`の見出しの形がCHANGELOG.mdの見出しと違うためである。版をリリースの後に自動で上げず、`Kernel::VERSION`と制約を同じコミットで上げるのは、`Kernel::VERSION`を基準にするCIのジョブ(Starter Projects・Sample Site QA)が、両者の食い違ったコミットで失敗するためである。
 
 ### 4.4 read-only split 配布
 
@@ -488,7 +490,7 @@ jobs:
 | タグ | `vX.Y.Z`の注釈付きのタグ。origin/mainと同じコミットにのみ打つ。monorepo-builder release経由でのみ作成し、そのタグだけをpushする(`CreateAnnotatedTagReleaseWorker`。§4.3) |
 | メンテナンスブランチ | メジャーが進んだ後の旧系列修正用に `1.x` 等を必要時に作成(先行作成しない) |
 | ホットフィックス | 最新タグから `fix/` ブランチ → main へ merge → PATCH リリース。旧系列が必要な場合のみメンテナンスブランチへ cherry-pick |
-| リリース手順 | (1) `rewrite/v0`等の開発のブランチで`composer qa` greenを確認 → (2) CHANGELOG.mdのUnreleasedを`## vX.Y.Z — 題名`に改めるリリースの準備のコミットを置く(`Kernel::VERSION`・制約・branch-alias・sample-siteの版は、版の最初のタスクで上げ済み。D-54) → (3) ユーザーの確認を経て、PR(`rewrite/v0`→`main`)をマージする(mainへの反映はPRのマージだけで行う) → (4) mainをcheckoutし、`vendor/bin/monorepo-builder release vX.Y.Z --dry-run`の後、ユーザーの確認を経て`vendor/bin/monorepo-builder release vX.Y.Z`(リリースの前の検査に通れば、注釈付きのタグを作ってそのタグだけをpushする。§4.3) → (5) split.ymlがタグを複製 → (6) Packagist反映を確認。手順の詳細は`docs/RELEASING.md`。`Kernel::VERSION`がタグの版と違うと、リリースの前の検査が止める(食い違ったまま公開すると、そのタグのtmswp/coreを入れたサイトはboot時の版の照合(Kernel設計書§3.9)で起動しない) |
+| リリース手順 | (1) `rewrite/v0`等の開発のブランチで`composer qa` greenを確認 → (2) CHANGELOG.mdのUnreleasedを`## vX.Y.Z — 題名`に改めるリリースの準備のコミットを置く(`Kernel::VERSION`・制約・branch-alias・sample-siteの版は、版の最初のタスクで上げ済み) → (3) ユーザーの確認を経て、PR(`rewrite/v0`→`main`)をマージする(mainへの反映はPRのマージだけで行う) → (4) mainをcheckoutし、`vendor/bin/monorepo-builder release vX.Y.Z --dry-run`の後、ユーザーの確認を経て`vendor/bin/monorepo-builder release vX.Y.Z`(リリースの前の検査に通れば、注釈付きのタグを作ってそのタグだけをpushする。§4.3) → (5) split.ymlがタグを複製 → (6) Packagist反映を確認。手順の詳細は`docs/RELEASING.md`。`Kernel::VERSION`がタグの版と違うと、リリースの前の検査が止める(食い違ったまま公開すると、そのタグのtmswp/coreを入れたサイトはboot時の版の照合(Kernel設計書§3.9)で起動しない) |
 
 ---
 

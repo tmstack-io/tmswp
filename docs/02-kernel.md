@@ -223,7 +223,7 @@ final readonly class KernelConfig
 6. `$extensions` に同じクラスの拡張が2つ以上あれば、debug に関係なく例外(`extension {class} is registered more than once in the same kernel`)。別の Kernel が同じクラスの拡張を登録するのは正当である(テーマとプラグインがそれぞれ同じ拡張を使う構成)。
 7. `$logChannels` はここでは呼ばない。boot 中に、psr/log の検査(§3.8)の後で1回だけ呼ぶ(`SimpleLogger` 等の `Psr\Log\LoggerInterface` を実装するクラスを、検査より前に読み込まないため。§3 手順3)。null なら遅延デフォルトチャンネル(07-support §5.4)。
 8. `$labelLanguage` の既定は `LabelLanguage::En`。`labelLanguage()` を指定しない PostTypeDefinition・TaxonomyDefinition は、ラベルを組み立てる時点(初期化時)にこの言語を使う(03-entities §2.2)。
-9. `$blockCategories`は`TMSWP\Core\Block\BlockCategory`(スラッグ・見出し・Dashiconsの名前)のリスト。同じスラッグが2つ以上あるか、WordPressの既定のカテゴリ(`BlockCategory::CORE_SLUGS`。WordPress 7.0の`get_default_block_categories()`の`text`・`media`・`design`・`widgets`・`theme`・`embed`・`reusable`)と同じスラッグなら、debugに関係なく例外。`BlockCategory`の生成でも、スラッグが英小文字・数字・`-`でない、または見出しが空なら`KernelException`。block.jsonの`category`に書けるのは、既定のカテゴリとこのスラッグだけである(§4ブロックの走査)。tms-acfがWordPressなしで`tmswp-kernel.php`を読むため、見出しに`__()`等のWordPressの関数は使えない(D-48)。
+9. `$blockCategories`は`TMSWP\Core\Block\BlockCategory`(スラッグ・見出し・Dashiconsの名前)のリスト。同じスラッグが2つ以上あるか、WordPressの既定のカテゴリ(`BlockCategory::CORE_SLUGS`。WordPress 7.0の`get_default_block_categories()`の`text`・`media`・`design`・`widgets`・`theme`・`embed`・`reusable`)と同じスラッグなら、debugに関係なく例外。`BlockCategory`の生成でも、スラッグが英小文字・数字・`-`でない、または見出しが空なら`KernelException`。block.jsonの`category`に書けるのは、既定のカテゴリとこのスラッグだけである(§4ブロックの走査)。tms-acfがWordPressなしで`tmswp-kernel.php`を読むため、見出しに`__()`等のWordPressの関数は使えない。Kernelの構成をWordPressなしで読めるファイルに置くのは、WordPressの実行時とtms-acfで、構成の入手元を1つにするためである。
 
 `theme()` は `pluginFile = null`、`context = KernelContext::Theme` で構築する。`plugin()` は `context = KernelContext::Plugin` で構築する。
 
@@ -252,8 +252,8 @@ use TMSWP\Core\Container\Container;
 
 final class Kernel
 {
-    /** この tmswp/core の版。boot 時に installed.php の tmswp/core の版と照合する(§3.9)。リリースごとにタグの版へ更新する */
-    public const string VERSION = '0.9.0';
+    /** この tmswp/core の版。boot 時に installed.php の tmswp/core の版と照合する(§3.9)。版の最初のタスクで手で上げ、リリースの前の検査がタグの版との一致を確かめる */
+    public const string VERSION = '0.9.1';
 
     /** @var array<string, self> 正規化済みappNamespace => Kernel のグローバルレジストリ */
     private static array $kernels = [];
@@ -563,7 +563,7 @@ boot は手順0で、`InstalledVersionCheck::assertInstalledVersions(Kernel::VER
 - **dev 版は照合の対象外とする。** `dev-*` のブランチ、monorepo の path repository、`x.y.x-dev` のブランチの別名、プレリリース(`x.y.z-beta1` 等)は、`Kernel::VERSION` と比べられる版を持たないためである。replace・provide だけの記載(monorepo のルートが `tmswp/core` を replace する等)も、tmswp/core を入れたものではないため対象外とする。これは黙った代替経路ではなく、照合の範囲の定義である。
 - 対象の版が `Kernel::VERSION` と食い違えば、debug に関係なく `KernelException` を投げる。メッセージには、食い違う版と、その記載の `install_path`(`{vendor}/composer/../tmswp/core` の形で、どの vendor かが分かる)を含める。
 - `Composer\InstalledVersions` が無い(Composer 2 のオートローダを通さずに読み込んだ)場合は、照合できないため `KernelException` を投げる。
-- `Kernel::VERSION` は、リリースのたびにタグの版(先頭の `v` を除く)へ更新する。
+- `Kernel::VERSION`は、版の最初のタスクで、tmswp/*の制約(MINORの版ではbranch-aliasも)と同じコミットで、その版(タグの`vX.Y.Z`の先頭の`v`を除いたもの)に手で上げる。リリースの道具は書き換えず、リリースの前の検査(`RELEASING.md`)がタグの版との一致を確かめる。
 
 #### 3.10 拡張の登録
 

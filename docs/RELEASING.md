@@ -1,11 +1,11 @@
 # リリース手順
 
-TMSWPは全パッケージlockstepバージョニングでリリースする(docs/01 §4.1)。mainへの反映は、PR(`rewrite/v0`→`main`)のマージで行う。リリースの操作`vendor/bin/monorepo-builder release vX.Y.Z`は、リリースの前の検査に通れば注釈付きのタグを作り、そのタグだけをpushする(mainへのcommit・pushと版の書き換えはしない。D-54)。PRのマージとタグ付けは、毎回ユーザーに確認してから行う。
+TMSWPは全パッケージlockstepバージョニングでリリースする(docs/01 §4.1)。mainへの反映は、PR(`rewrite/v0`→`main`)のマージで行う。リリースの操作`vendor/bin/monorepo-builder release vX.Y.Z`は、リリースの前の検査に通れば注釈付きのタグを作り、そのタグだけをpushする(mainへのcommit・pushと版の書き換えはしない)。PRのマージとタグ付けは、毎回ユーザーに確認してから行う。
 
 ## 手順
 
 1. **開発のブランチで検査を通す。** PRの元のブランチ(`rewrite/v0`)で`composer qa`と`composer monorepo:validate`を通し、CI(`.github/workflows/qa.yml`)の全ジョブが成功していることを確かめる。各パッケージのsplit相当の確認は、CIのSplit Packages Checkのジョブが行う(手元で行う場合は下の「split相当の確認」)。
-2. **版がそろっていることを確かめる。** `packages/core/src/Kernel/Kernel.php`の`Kernel::VERSION`、packages/*・starters/*のcomposer.jsonのtmswp/*の制約(`require`と`require-dev`)とbranch-alias、examples/sample-siteのcomposer.jsonのtmswp/*の制約とpathリポジトリの`versions`は、版の最初のタスクで1つのコミットで上げてある(制約は`^X.Y`、PATCHが0より大きい版では`^X.Y.Z`。branch-aliasは`X.Y.x-dev`)。リリースの道具は版を書き換えず、リリースの後に次の版へも上げない。食い違いは手順5の検査が止める。`Kernel::VERSION`が食い違ったまま公開すると、そのタグのtmswp/coreを入れたサイトはboot時の版の照合で起動しない(docs/02 §3.9)。
+2. **版がそろっていることを確かめる。** `packages/core/src/Kernel/Kernel.php`の`Kernel::VERSION`、packages/*・starters/*のcomposer.jsonのtmswp/*の制約(`require`と`require-dev`)とbranch-alias、examples/sample-siteのcomposer.jsonのtmswp/*の制約とpathリポジトリの`versions`は、版の最初のタスクで1つのコミットで上げてある(制約は`^X.Y`、PATCHが0より大きい版では`^X.Y.Z`。branch-aliasは`X.Y.x-dev`)。packages/*のrules/とREADME.mdの設計文書へのリンク(`https://github.com/tmstack-io/tmswp/blob/vX.Y.Z/docs/...`)の版も、同じコミットで上げてある(ユニットテスト`tests/Unit/RepositoryScanTest.php`が`Kernel::VERSION`との一致を確かめる)。リリースの道具は版を書き換えず、リリースの後に次の版へも上げない。食い違いは手順5の検査が止める。`Kernel::VERSION`が食い違ったまま公開すると、そのタグのtmswp/coreを入れたサイトはboot時の版の照合で起動しない(docs/02 §3.9)。
 3. **リリースの準備のコミットを置く。** `CHANGELOG.md`の`## Unreleased`の見出しを、手で`## vX.Y.Z — 題名`(過去の版の見出しと同じ形。区切りは全角のダッシュ`—`)に改めるコミットを、開発のブランチに置く。次の版のUnreleasedの節は、次の版の最初のタスクで開く。
 4. **mainへ反映する。** ユーザーの確認を経て、PR(`rewrite/v0`→`main`)をマージする。マージの方法(マージコミット・squash等)もユーザーに確かめる。mainへのpushで、`.github/workflows/split.yml`が8つの同期先のmainを更新する。同期先のリポジトリを新しく作った場合は、マージの前に、下の「新しい同期先のリポジトリ」の初期コミットを置く。
 5. **タグを作る。** mainをcheckoutしてorigin/mainにそろえ(`git checkout main && git pull --ff-only origin main`)、`vendor/bin/monorepo-builder release vX.Y.Z --dry-run`で実行するワーカーを表示し、ユーザーの確認を取ってから`vendor/bin/monorepo-builder release vX.Y.Z`を実行する。monorepo-builder.phpに登録した`tools/release/`の2つのワーカーが、次の順に実行する。手で`git tag`・`git push`する手順は無い。

@@ -22,7 +22,7 @@ return static function (MBConfig $mbConfig): void {
         ],
     ]);
 
-    // `monorepo-builder release vX.Y.Z`が順に実行するワーカーは、tools/release/の2つだけにする(D-54・docs/RELEASING.md)。
+    // `monorepo-builder release vX.Y.Z`が順に実行するワーカーは、tools/release/の2つだけにする(docs/RELEASING.md)。
     // monorepo-builderが既定で登録するワーカーを外し、版の書き換え・mainへのcommitとpush・次の版への引き上げを行わない
     MBConfig::disableDefaultWorkers();
 

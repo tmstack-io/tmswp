@@ -24,9 +24,11 @@
 | 独自DBテーブルを作って読み書きする | `vendor/tmswp/core/rules/model.md` |
 | サイト設定値(オプション)を定義する | `vendor/tmswp/core/rules/options.md` |
 | add_action・add_filterをまとめて登録する | `vendor/tmswp/core/rules/hooks.md` |
+| REST APIのルートを追加する | `vendor/tmswp/core/rules/rest.md` |
 | テンプレートパーツを読み込む | `vendor/tmswp/core/rules/view.md` |
 | 独自ブロックを追加する | `vendor/tmswp/core/rules/blocks.md` |
 | 公式の拡張(acf-bridge・settings-page・thumbnail・ja-toolkit・testing)を導入する | `vendor/tmswp/core/rules/extensions.md` |
+| 本番へデプロイする(FTP) | `vendor/tmswp/core/rules/deploy.md` |
 | ACFの生成アクセサを生成・照合する(tmswp/acf-bridge) | `vendor/tmswp/acf-bridge/rules/sync-check.md` |
 | 管理画面に設定ページを作る(tmswp/settings-page) | `vendor/tmswp/settings-page/rules/settings-page.md` |
 | 署名付きのURLでサムネイルを出す(tmswp/thumbnail) | `vendor/tmswp/thumbnail/rules/thumbnail.md` |
@@ -129,13 +131,13 @@ composer discover   # 探索結果ファイルを作り直す(wp tmswp discover)
 ## デバッグ
 
 - **開発環境は`WP_DEBUG`を有効にする。** Kernelのdebug(`tmswp-kernel.php`の`KernelConfig`の`debug`。省略すると`WP_DEBUG`の値)が真なら、設定の誤りと実行時のデータの取得の失敗が例外になり、起動のたびに`app/`と`build/blocks/`を走査する。debugが偽(本番)では、実行時の失敗をKernelのロガーに`error`で記録して既定値で続ける。
-- **ログ:** `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`で書く(処理の種類を示すときは`Log::scope('mail')->error(...)`)。どのチャンネル(出力先)に書くかは、`tmswp-kernel.php`の`logChannels`の各`LogChannel`の`levels`・`scopes`で決める。宣言したチャンネルへ直接書くときは`Log::channel('<名前>')`を使う(宣言していない名前は例外になる)。スターターの`SimpleLogger`は既定で`wp-content/tmswp-logs/`に書く。`var_dump`・`print_r`をコミットに残さない。
+- **ログ:** `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`で書く(処理の種類を示すときは`Log::scope('mail')->error(...)`)。どのチャンネル(出力先)に書くかは、`tmswp-kernel.php`の`logChannels`の各`LogChannel`の`levels`・`scopes`で決める。宣言したチャンネルへ直接書くときは`Log::channel('<名前>')`を使う(宣言していない名前は例外になる)。スターターの`SimpleLogger`は既定で`wp-content/tmswp-logs/`に書く。ユニットテストでは、`tests/bootstrap.php`が`WP_CONTENT_DIR`をシステムの一時ディレクトリの下に定義するため、`tmswp-kernel.php`を`KernelConfig::load()`で読んだ構成の`logChannels`を呼べる(例: `tests/Unit/TmswpKernelTest.php`)。この定数はユニットテストだけで定義するため、`app/`のコードから`WP_CONTENT_DIR`を直接読まない(読んでもユニットテストでは検出されない)。`var_dump`・`print_r`をコミットに残さない。
 - **クラスを置いたのに有効にならない:** 次の順に確かめる。
   1. クラス名とファイルのパスがPSR-4で一致しているか(`app/Post/NewsPost.php`なら`TmswpStarterPlugin\Post\NewsPost`)。
   2. Attribute(`#[AsPostType]`等)を付け忘れていないか。
   3. `wp tmswp discover --check`で探索結果ファイルが最新か。古ければ`composer discover`で作り直す。
-- **探索結果ファイルとキャッシュ:** FWは探索の結果をtransient・オブジェクトキャッシュに持たず、探索結果ファイルだけを使う。そのため、消すべきFWのキャッシュは無く、反映されないときは探索結果ファイルを作り直す。`wp tmswp discover`は、そのサイトで起動したすべてのKernel(このプラグインと、TMSWPを使うテーマ・ほかのプラグイン)の探索結果ファイルを作り直し、書いたファイルのOPcacheを無効にする。FTPで上げた探索結果ファイルが本番で反映されない場合は、サーバーのOPcacheが更新を検知しない設定(`opcache.validate_timestamps`が0等)になっていないかを確かめ、OPcacheを空にする。ページキャッシュのプラグインを使うサイトでは、デプロイの後にページキャッシュも消す。
-- **起動時のエラー:** 同じサイトのTMSWPの版が食い違う場合(テーマ・ほかのプラグインが別の版の`tmswp/core`を入れている等)と、他のプラグインが互換の無い`psr/log`・`psr/container`を先に読み込んだ場合は、Kernelが起動時に明示のエラーにする。メッセージに従って版をそろえる。同じサイトの別のプラグインと名前空間が同じ場合も、Kernelが起動時のエラーにする。
+- **探索結果ファイルとキャッシュ:** FWは探索の結果をtransient・オブジェクトキャッシュに持たず、探索結果ファイルだけを使う。そのため、消すべきFWのキャッシュは無く、反映されないときは探索結果ファイルを作り直す。`wp tmswp discover`は、そのサイトで起動したすべてのKernel(このプラグインと、TMSWPを使うテーマ・ほかのプラグイン)の探索結果ファイルを作り直す。本番へ上げた探索結果ファイルが反映されない場合のOPcacheとページキャッシュの扱いは、`vendor/tmswp/core/rules/deploy.md`にある。
+- **起動時のエラー:** 同じサイトのTMSWPの版が食い違う場合(テーマ・ほかのプラグインが別の版の`tmswp/core`を入れている等)と、他のプラグインが互換の無い`psr/log`・`psr/container`を先に読み込んだ場合は、Kernelが起動時に明示のエラーにする。メッセージに従って版をそろえる(そろえ方は`vendor/tmswp/core/rules/deploy.md`)。同じサイトの別のプラグインと名前空間が同じ場合も、Kernelが起動時のエラーにする。
 
 ## 完了条件
 

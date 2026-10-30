@@ -1255,7 +1255,7 @@ v0.9.0。
   - model.md・blocks.md・acf.md・スターターのAGENTS.mdのデプロイの記述は、deploy.mdを参照する形にし、同じ内容を重複させない(§1.18)。スターターのAGENTS.mdの「最初に読むもの」の表と、packages/core/README.mdのレシピの表に、deploy.mdの行がある。
   - rules/rest.mdが、`#[AsHook]`のクラスで`rest_api_init`に`register_rest_route()`を書く手本を示している。少なくとも次を含む。
     1. `permission_callback`を必ず書くこと。ログインの要らないルートは`__return_true`を明示し、理由をコメントに書くこと。
-    2. `args`にJSON Schema(型・必須・列挙・最大長)を書き、`validate_callback`に`rest_validate_request_arg`を指定すること。指定しないと、WordPressは型等を検証しない。
+    2. `args`にJSON Schema(型・必須・列挙・最大長)を書き、`validate_callback`に`rest_validate_request_arg`を指定すること。WordPressは、`sanitize_callback`を書いた引数では指定しないと型等を検証せず、`type`の無い引数は指定しても型を検証しないため、すべての引数に`type`と`validate_callback`を書く。
     3. 応答の形とエラーコード、例外から応答への変換は、アプリ側で決めること(例を1つ示す)。debugでないときに例外の詳細を応答に出さないこと。
     4. Cookie認証(`X-WP-Nonce`)はWordPress標準のまま使うこと。
   - rest.mdの完全な実装例を、`tools/lib/isolated-wp-env.sh`で隔離したwp-envで登録し、スキーマに違反した入力が400に、権限の無い要求が拒否されることを確かめ、受け入れ記録に書いている。

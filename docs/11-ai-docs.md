@@ -72,7 +72,7 @@ tmswp/ (monorepo)
 ├── AGENTS.md                       … §4 全文(コントリビュータ向け。monorepoの開発ルールの正本を含む)
 ├── packages/
 │   ├── core/
-│   │   └── rules/                  … §6 レシピ14本(パッケージに同梱して配布。本文はこのディレクトリが正本)
+│   │   └── rules/                  … §6 レシピ16本(パッケージに同梱して配布。本文はこのディレクトリが正本)
 │   │       ├── post-type.md
 │   │       ├── taxonomy.md
 │   │       ├── user-role.md
@@ -86,7 +86,9 @@ tmswp/ (monorepo)
 │   │       ├── hooks.md
 │   │       ├── view.md
 │   │       ├── blocks.md
-│   │       └── extensions.md
+│   │       ├── extensions.md
+│   │       ├── rest.md
+│   │       └── deploy.md
 │   ├── acf-bridge/rules/sync-check.md        … §6 拡張のレシピ(各パッケージに同梱)
 │   ├── settings-page/rules/settings-page.md
 │   ├── thumbnail/rules/thumbnail.md
@@ -283,7 +285,7 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 ## リリース
 
 - 手順の正本は`docs/RELEASING.md`である。mainへの反映は、PR(`rewrite/v0`→`main`)のマージで行う。`vendor/bin/monorepo-builder release vX.Y.Z`は、mainで`tools/release/`の2つのワーカーを実行し、リリースの前の検査(mainであること・origin/mainと同じであること・作業ツリーが空であること・タグが無いこと・版の一致・CHANGELOGの`## vX.Y.Z — 題名`の見出し)に通れば、注釈付きのタグを作ってそのタグだけをpushする。mainへのcommit・pushと版の書き換えはしない。`split.yml`がmainとタグを各読み取り専用リポジトリへ同期する(`SPLIT_ACCESS_TOKEN`が空なら失敗する)。
-- 版(`Kernel::VERSION`・`tmswp/*`の制約・branch-alias・sample-siteの版)は、版の最初のタスクで1つのコミットで手で上げる。リリースの後に次の版へ自動で上げない。
+- 版(`Kernel::VERSION`・`tmswp/*`の制約・branch-alias・sample-siteの版・packages/*のrules/とREADME.mdの設計文書へのリンクの版)は、版の最初のタスクで1つのコミットで手で上げる。リリースの後に次の版へ自動で上げない。
 - 同期先でプルリクエストを閉じるワークフローの正本は`.github/split/close-pull-request.yml`で、`split.yml`が同期の前に各パッケージの`.github/workflows/`へ写す。packages/*・starters/*には置かない。
 - PRのマージとタグ付けは、毎回ユーザーに確認してから行う。
 ````
@@ -296,7 +298,7 @@ php tools/extract-rules-code.php && php tools/verify-rules-code.php   # packages
 
 実物のAGENTS.mdには、スターターの名前空間(`TmswpStarterTheme\`・`TmswpStarterPlugin\`)を書き、create-projectのsetup.phpがスラッグから生成した名前空間に書き換える(§10)。実物のAGENTS.mdは、レシピ(`vendor/tmswp/*/rules/`)のコード例の名前空間`App\`を、その名前空間に読み替える旨を示す。テキストドメイン(`{{project_slug}}`)とブロック名の名前空間(`tmswp-starter/`)も、setup.phpがスラッグに書き換える。そのため、AGENTS.mdにはこの3つを、書き換えた後もそのまま読める形でだけ書き、ほかの`{{`(setup.phpが置き換えないプレースホルダ)を書かない(`tests/Unit/StarterSetupTest.php`が、作ったプロジェクトに`{{`とスターターの名前空間が残らないことを確かめる)。
 
-AGENTS.mdは次の節を持つ。タスク→レシピの対応表(coreの14本と拡張の5本)、プロジェクト構成、ロジックの置き場(配置決定木)、クラス追加の基本手順、必須コマンド、コーディング規約、禁止事項、デバッグ(ログ・探索の不調・探索結果ファイルとキャッシュ・起動時のエラー)、完了条件。
+AGENTS.mdは次の節を持つ。タスク→レシピの対応表(coreの16本と拡張の5本)、プロジェクト構成、ロジックの置き場(配置決定木)、クラス追加の基本手順、必須コマンド、コーディング規約、禁止事項、デバッグ(ログ・探索の不調・探索結果ファイルとキャッシュ・起動時のエラー)、完了条件。
 
 ### 5.1 theme版全文(starters/theme/AGENTS.md)
 
@@ -330,9 +332,11 @@ AGENTS.mdは次の節を持つ。タスク→レシピの対応表(coreの14本�
 | 独自DBテーブルを作って読み書きする | `vendor/tmswp/core/rules/model.md` |
 | サイト設定値(オプション)を定義する | `vendor/tmswp/core/rules/options.md` |
 | add_action・add_filterをまとめて登録する | `vendor/tmswp/core/rules/hooks.md` |
+| REST APIのルートを追加する | `vendor/tmswp/core/rules/rest.md` |
 | テンプレートパーツを読み込む | `vendor/tmswp/core/rules/view.md` |
 | 独自ブロックを追加する | `vendor/tmswp/core/rules/blocks.md` |
 | 公式の拡張(acf-bridge・settings-page・thumbnail・ja-toolkit・testing)を導入する | `vendor/tmswp/core/rules/extensions.md` |
+| 本番へデプロイする(FTP) | `vendor/tmswp/core/rules/deploy.md` |
 | ACFの生成アクセサを生成・照合する(tmswp/acf-bridge) | `vendor/tmswp/acf-bridge/rules/sync-check.md` |
 | 管理画面に設定ページを作る(tmswp/settings-page) | `vendor/tmswp/settings-page/rules/settings-page.md` |
 | 署名付きのURLでサムネイルを出す(tmswp/thumbnail) | `vendor/tmswp/thumbnail/rules/thumbnail.md` |
@@ -444,13 +448,13 @@ npm run build       # blocks/をbuild/blocks/にビルドし、続けて探索�
 ## デバッグ
 
 - **開発環境は`WP_DEBUG`を有効にする。** Kernelのdebug(`tmswp-kernel.php`の`KernelConfig`の`debug`。省略すると`WP_DEBUG`の値)が真なら、設定の誤りと実行時のデータの取得の失敗が例外になり、起動のたびに`app/`と`build/blocks/`を走査する。debugが偽(本番)では、実行時の失敗をKernelのロガーに`error`で記録して既定値で続ける。
-- **ログ:** `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`で書く(処理の種類を示すときは`Log::scope('mail')->error(...)`)。どのチャンネル(出力先)に書くかは、`tmswp-kernel.php`の`logChannels`の各`LogChannel`の`levels`・`scopes`で決める。宣言したチャンネルへ直接書くときは`Log::channel('<名前>')`を使う(宣言していない名前は例外になる)。スターターの`SimpleLogger`は既定で`wp-content/tmswp-logs/`に書く。`var_dump`・`print_r`をコミットに残さない。
+- **ログ:** `\TMSWP\Core\Log\Log::info('message', ['context' => $value]);`で書く(処理の種類を示すときは`Log::scope('mail')->error(...)`)。どのチャンネル(出力先)に書くかは、`tmswp-kernel.php`の`logChannels`の各`LogChannel`の`levels`・`scopes`で決める。宣言したチャンネルへ直接書くときは`Log::channel('<名前>')`を使う(宣言していない名前は例外になる)。スターターの`SimpleLogger`は既定で`wp-content/tmswp-logs/`に書く。ユニットテストでは、`tests/bootstrap.php`が`WP_CONTENT_DIR`をシステムの一時ディレクトリの下に定義するため、`tmswp-kernel.php`を`KernelConfig::load()`で読んだ構成の`logChannels`を呼べる(例: `tests/Unit/TmswpKernelTest.php`)。この定数はユニットテストだけで定義するため、`app/`のコードから`WP_CONTENT_DIR`を直接読まない(読んでもユニットテストでは検出されない)。`var_dump`・`print_r`をコミットに残さない。
 - **クラスを置いたのに有効にならない:** 次の順に確かめる。
   1. クラス名とファイルのパスがPSR-4で一致しているか(`app/Post/NewsPost.php`なら`TmswpStarterTheme\Post\NewsPost`)。
   2. Attribute(`#[AsPostType]`等)を付け忘れていないか。
   3. `wp tmswp discover --check`で探索結果ファイルが最新か。古ければ`composer discover`で作り直す。
-- **探索結果ファイルとキャッシュ:** FWは探索の結果をtransient・オブジェクトキャッシュに持たず、探索結果ファイルだけを使う。そのため、消すべきFWのキャッシュは無く、反映されないときは探索結果ファイルを作り直す。`wp tmswp discover`は、そのサイトで起動したすべてのKernel(このテーマと、TMSWPを使うプラグイン)の探索結果ファイルを作り直し、書いたファイルのOPcacheを無効にする。FTPで上げた探索結果ファイルが本番で反映されない場合は、サーバーのOPcacheが更新を検知しない設定(`opcache.validate_timestamps`が0等)になっていないかを確かめ、OPcacheを空にする。ページキャッシュのプラグインを使うサイトでは、デプロイの後にページキャッシュも消す。
-- **起動時のエラー:** 同じサイトのTMSWPの版が食い違う場合(別のテーマ・プラグインが別の版の`tmswp/core`を入れている等)と、他のプラグインが互換の無い`psr/log`・`psr/container`を先に読み込んだ場合は、Kernelが起動時に明示のエラーにする。メッセージに従って版をそろえる。
+- **探索結果ファイルとキャッシュ:** FWは探索の結果をtransient・オブジェクトキャッシュに持たず、探索結果ファイルだけを使う。そのため、消すべきFWのキャッシュは無く、反映されないときは探索結果ファイルを作り直す。`wp tmswp discover`は、そのサイトで起動したすべてのKernel(このテーマと、TMSWPを使うプラグイン)の探索結果ファイルを作り直す。本番へ上げた探索結果ファイルが反映されない場合のOPcacheとページキャッシュの扱いは、`vendor/tmswp/core/rules/deploy.md`にある。
+- **起動時のエラー:** 同じサイトのTMSWPの版が食い違う場合(別のテーマ・プラグインが別の版の`tmswp/core`を入れている等)と、他のプラグインが互換の無い`psr/log`・`psr/container`を先に読み込んだ場合は、Kernelが起動時に明示のエラーにする。メッセージに従って版をそろえる(そろえ方は`vendor/tmswp/core/rules/deploy.md`)。
 
 ## 完了条件
 
@@ -502,7 +506,7 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所だけを
 
 ### 6.1 構成
 
-`packages/core/rules/`に以下14ファイルを置く。tmswp/coreパッケージの配布物に含める(composer.jsonのarchive excludeに入れない)。
+`packages/core/rules/`に以下16ファイルを置く。tmswp/coreパッケージの配布物に含める(composer.jsonのarchive excludeに入れない)。
 
 | ファイル | 対象タスク | 主依存文書 |
 |---|---|---|
@@ -520,6 +524,8 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所だけを
 | view.md | テンプレートパーツ運用 | 07-support |
 | blocks.md | 独自ブロック(置き場・npmのビルドと探索コマンドの連結・対象外) | 02-kernel・03-entities |
 | extensions.md | 拡張パッケージ導入(拡張のレシピへの入口) | 08-extensions |
+| rest.md | REST APIのルート(WordPress標準の`register_rest_route()`を`#[AsHook]`のクラスで書く。権限の判定・引数の検証・応答とエラー・Cookie認証) | 02-kernel |
+| deploy.md | 本番へのデプロイ(FTP。`--no-dev`の`vendor/`・上げるもの・版の照合・保守モード・マイグレーション・OPcache・ページキャッシュ) | 01-architecture・02-kernel |
 
 拡張パッケージの使い方のレシピは、その拡張パッケージの`rules/`に同じ共通フォーマット(§6.2)で置き、そのパッケージの配布物に含める。
 
@@ -544,7 +550,11 @@ plugin版はtheme版と同一の章立て・文面とし、次の箇所だけを
 ## 発展         … 他レシピ・設計書への参照(任意)
 ```
 
+deploy.mdはコードの例を持たない手順のレシピのため、「完全な実装例」の節と、下の名前空間の読み替えの1行を省く。ほかの節は同じ形にする。
+
 レシピ内のコード例の名前空間は`App\`とする。スターターから作ったプロジェクトの名前空間は、create-projectのsetup.phpがスラッグから生成するため(§10)、プロジェクトごとに違う。各レシピの冒頭に、`App\`をプロジェクトの名前空間(`KernelConfig`の`appNamespace`)に読み替える旨を1行で示す。スターターのAGENTS.mdも、そのプロジェクトの名前空間と読み替えを示す(§5)。
+
+レシピとパッケージのREADME.mdから設計文書(`docs/`)を指すときは、その版のタグのmonorepoのURLへのMarkdownのリンクにする(例: `[docs/02-kernel.md](https://github.com/tmstack-io/tmswp/blob/vX.Y.Z/docs/02-kernel.md)`。`vX.Y.Z`はその版のタグ)。利用者がComposerで受け取るパッケージには`docs/`が入らないため、相対パスやファイル名だけでは辿れない。タグのURLにするのは、利用者が入れた版の設計文書を指すためである。リンクの版は、版の準備で`Kernel::VERSION`と同じコミットで上げる(ユニットテストが一致を確かめる)。節を示すときは、節の番号(`§4`等)やアンカーのURLではなく、節の名前を文で書く(例: `docs/02-kernel.md`の「Discovery」の節)。日本語の見出しのアンカーは、見出しを変えると壊れるためである。配布物のソース(src/・phpstan/・bin/)のコメントには、設計文書(ファイル名・節の番号)と、公開していないファイルの決定の番号への参照を書かない。参照していた内容(エラーの扱い等)は、その箇所に書く(ユニットテストが確かめる)。
 
 レシピの本文は各パッケージの `rules/*.md` が正本であり、本文書は構成と共通フォーマットだけを定める。レシピのコード例が担当文書(02〜10)の確定APIと食い違う場合は **担当文書を正としてレシピ側を修正** する。拡張パッケージ固有のレシピは、そのパッケージの `rules/` に同じ共通フォーマットで置く。
 
@@ -616,8 +626,9 @@ starters/theme/
 │   ├── Model/.gitkeep
 │   └── Option/.gitkeep
 ├── tests/
-│   ├── bootstrap.php         # §8.6(require vendor/autoload のみ)
+│   ├── bootstrap.php         # §8.6(vendor/autoloadの読み込みと、一時ディレクトリの下のWP_CONTENT_DIRの定義)
 │   └── Unit/
+│       ├── TmswpKernelTest.php  # tmswp-kernel.phpをKernelConfig::load()で読み、logChannelsを呼ぶ例のユニットテスト
 │       └── Hook/
 │           └── ThemeSetupHookTest.php  # ThemeSetupHookの例のユニットテスト(Brain Monkey。利用者のテストの手本)
 ├── bin/
@@ -641,7 +652,7 @@ starters/theme/
   "license": "GPL-2.0-or-later",
   "require": {
     "php": ">=8.3",
-    "tmswp/core": "^0.9"
+    "tmswp/core": "^0.9.1"
   },
   "require-dev": {
     "brain/monkey": "^2.6",
@@ -692,7 +703,7 @@ starters/theme/
 - `name` はPackagist登録名のまま配布し、create-project後に `bin/setup.php` が `local/<slug>` へ書き換える(§10)。licenseは、スターター自身はGPL-2.0-or-laterで、setup.phpが作ったプロジェクトでは`proprietary`にする。
 - `autoload`・`autoload-dev`の名前空間`TmswpStarterTheme\`は、setup.phpがスラッグから作った名前空間に書き換える(§10)。
 - `phpstan/extension-installer` がPHPStan拡張(szepeviktor/phpstan-wordpress と tmswp/core 同梱拡張)を自動登録する(10-quality.md §7 項目2)。`allow-plugins` を事前記載しているため、create-project後の `composer install` は承認プロンプトなしで完了する。
-- `tmswp/core`の制約は、リリースのときに`monorepo-builder release`がその版の`^X.Y`に同期する(10-quality.md §6.2)。
+- `tmswp/core`の制約は、版の最初のタスクで`Kernel::VERSION`と同じコミットで、その版の`^X.Y`(PATCHが0より大きい版では`^X.Y.Z`)に手で上げる。`monorepo-builder release`は制約を書き換えず、リリースの前の検査がタグの版との一致を確かめる(10-quality.md §6.2、`RELEASING.md`)。
 - `qa`は`lint` → `analyse` → `discover:check` → `test`の順で、`discover:check`(`wp tmswp discover --check`)は探索結果ファイルの照合である。`discover`・`discover:check`は、WP-CLIの`wp`がこのテーマを有効にしたサイトに届く場所で実行する(10-quality.md §7の項目5)。
 - `post-create-project-cmd`は、`bin/setup.php`と、書き換えた名前空間でオートローダを作り直す`composer dump-autoload`の2つである(§10.1)。
 - 統合テスト(`test:integration`)はスターターには含めない(利用側プロジェクトのテストはユニット層のみを既定とする。必要なプロジェクトはコアのwp-env構成を参考に追加する)。したがってスターターの `test` はユニット層のみを指す(コアmonorepoとの範囲差はAGENTS.mdに注記済み。§2参照)。
@@ -908,6 +919,7 @@ return (new Config())
 
 - `failOnRisky`から`displayDetailsOnTestsThatTriggerWarnings`までの属性は、packages/*/phpunit.xml.dist(10-quality.md §4.3)と同じである。加えて`failOnEmptyTestSuite`で、テストが1件も無いときも失敗にする。
 - テストの例は`tests/Unit/Hook/ThemeSetupHookTest.php`(プラグインは`PluginSetupHookTest.php`)で、tmswp/testingを使わず、Brain MonkeyとPHPUnitの`TestCase`だけで書く。Brain Monkeyの準備(`Brain\Monkey\setUp()`・`tearDown()`)はテストのクラスの`setUp()`・`tearDown()`で行い、`tests/bootstrap.php`には要らない(Brain MonkeyとPatchworkは、Composerのオートローダが読み込む)。
+- `tests/bootstrap.php`は、WordPressが起動時に定義する`WP_CONTENT_DIR`を、システムの一時ディレクトリの下の、プロジェクトごとのディレクトリ(プロジェクトのパスのmd5)に定義する。`tmswp-kernel.php`の`SimpleLogger`は、出力先を省くと`WP_CONTENT_DIR`の下(`tmswp-logs/`)を使い、この定数が無いと例外になるためである。ログの出力先は、本番では変わらず`wp-content/tmswp-logs/`である。ユニットテストだけで定数を定義するため、`app/`のコードが`WP_CONTENT_DIR`を直接読んでも、ユニットテストでは検出されない。`app/`のコードからこの定数を直接読まない(packages/testingのrules/testing.mdの「してはいけないこと」)。`tests/Unit/TmswpKernelTest.php`は、`tmswp-kernel.php`を`KernelConfig::load()`で読み、`logChannels`のクロージャを呼べることを確かめる例である。
 
 `tests/bootstrap.php`:
 
@@ -917,6 +929,11 @@ return (new Config())
 declare(strict_types=1);
 
 require __DIR__ . '/../vendor/autoload.php';
+
+// WordPressが起動時に定義するWP_CONTENT_DIRを、ユニットテストではシステムの一時ディレクトリの下の、プロジェクトごとの
+// ディレクトリにする。tmswp-kernel.phpのSimpleLoggerは、出力先を省くとWP_CONTENT_DIRの下(tmswp-logs/)に書くため、
+// この定数が無いと、ユニットテストでlogChannelsのクロージャを呼べない。app/のコードからこの定数を直接読まない
+define('WP_CONTENT_DIR', sys_get_temp_dir() . '/tmswp-unit-tests/' . md5(dirname(__DIR__)) . '/wp-content');
 ```
 
 ### 8.7 README.md(全文)
@@ -1149,6 +1166,7 @@ starters/plugin/
 ├── tests/
 │   ├── bootstrap.php         # theme版と同一
 │   └── Unit/
+│       ├── TmswpKernelTest.php  # theme版と同じ例(名前空間だけが違う)
 │       └── Hook/
 │           └── PluginSetupHookTest.php  # 雛形のPluginSetupHookの例のユニットテスト(Brain Monkeyの準備の形を示す出発点)
 ├── bin/
@@ -1998,8 +2016,8 @@ function writeTextFile(string $file, string $contents): void
 ### 12.1 成果物の存在と形式
 
 - [ ] monorepoルートに`AGENTS.md`(§4の全文。冒頭にmonorepoの開発ルールを含む)が存在し、`CLAUDE.md`はmonorepo・スターター・examples/sample-siteのどこにも存在しない(`git ls-files | grep -i 'claude.md'`が0件)。
-- [ ] `packages/core/rules/`に14ファイル(post-type/taxonomy/user-role/meta/acf/form/form-mail/page/model/options/hooks/view/blocks/extensions)が存在し、拡張パッケージの`rules/`に§6.1の5ファイルが存在し、composer配布物に含まれる(`composer archive`の内容で確認)。
-- [ ] 各レシピが共通フォーマット(§6.2: 手順/完全な実装例/してはいけないこと/確認方法)を満たす。
+- [ ] `packages/core/rules/`に16ファイル(post-type/taxonomy/user-role/meta/acf/form/form-mail/page/model/options/hooks/view/blocks/extensions/rest/deploy)が存在し、拡張パッケージの`rules/`に§6.1の5ファイルが存在し、composer配布物に含まれる(`composer archive`の内容で確認)。
+- [ ] 各レシピが共通フォーマット(§6.2: 手順/完全な実装例/してはいけないこと/確認方法)を満たす(コードの例を持たないdeploy.mdは「完全な実装例」を省く)。
 - [ ] `starters/theme` / `starters/plugin` が§8/§9のツリーどおりに存在する。
 - [ ] スターター直下に `README.md`(§8.7)が存在し、セットアップ手順・create-project例・AGENTS.md/rules/への導線を含む(規約本文の転載はないこと)。
 - [ ] スターターのAGENTS.mdのタスク対応表のパス(`vendor/tmswp/<パッケージ>/rules/*.md`)が、`packages/<パッケージ>/rules/`の実在ファイルと一致する。

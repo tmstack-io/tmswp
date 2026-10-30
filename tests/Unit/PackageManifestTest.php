@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace TMSWP\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\DataProvider;
+use TMSWP\Core\Kernel\Kernel;
 use TMSWP\Testing\UnitTestCase;
 
 /**
@@ -28,10 +29,10 @@ final class PackageManifestTest extends UnitTestCase
      * docs/08の受け入れ基準: 拡張のcomposer.jsonが共通の規約に従う。requireのphpが`>=8.3`、tmswp/coreの制約が今の版、
      * PSR-4が`TMSWP\<Pascal>\` → `src/`の1つだけである。
      *
-     * tmswp/coreの今の版は、packages/core/composer.jsonのbranch-alias(`X.Y.x-dev`)から求め、`^X.Y`か`^X.Y.Z`を正とする。
+     * tmswp/coreの制約は、`Kernel::VERSION`から求めた今の版の制約(`currentConstraint()`)と完全に一致する。
      * 制約・branch-alias・Kernel::VERSIONは、版の最初のタスクで1つのコミットで手で上げ、リリースの道具は書き換えない
-     * (リリースの後に次の版へ自動で上げない。D-54)。固定の`^0.9`を書くと版を上げるたびにこのテストも直すことになるため、
-     * 版はbranch-aliasから求める。制約・branch-alias・Kernel::VERSIONとタグの版との一致は、リリースの前の検査
+     * (リリースの後に次の版へ自動で上げない。D-54)。固定の`^0.9.1`を書くと版を上げるたびにこのテストも直すことになるため、
+     * 版は`Kernel::VERSION`から求める。制約・branch-alias・Kernel::VERSIONとタグの版との一致は、リリースの前の検査
      * (tools/release/CheckReleaseReadinessReleaseWorker.php)が確かめる。
      */
     #[DataProvider('conventionalExtensions')]
@@ -39,11 +40,9 @@ final class PackageManifestTest extends UnitTestCase
     {
         $manifest = self::manifest('packages/' . $package);
         $require = self::section($manifest, 'require');
-        [$major, $minor] = self::coreDevelopmentVersion();
 
         self::assertSame('>=8.3', $require['php'] ?? null);
-        self::assertIsString($require['tmswp/core'] ?? null);
-        self::assertMatchesRegularExpression('/\A\^' . $major . '\.' . $minor . '(?:\.\d+)?\z/', $require['tmswp/core']);
+        self::assertSame(self::currentConstraint(), $require['tmswp/core'] ?? null);
         self::assertSame([$namespace => 'src/'], self::section(self::section($manifest, 'autoload'), 'psr-4'));
     }
 
@@ -153,7 +152,8 @@ final class PackageManifestTest extends UnitTestCase
      * - 名前空間: 表の名前空間ルートがautoloadのpsr-4のキーにあり、psr-4のほかのキーはその下の名前空間だけである
      *   (tmswp/coreの`TMSWP\Core\PHPStan\`。docs/01 §2)。
      * - runtime依存: requireからphpを除いたものが、表の依存の列のバッククォートの項目(`<名前> <制約>`)と同じ。表の
-     *   `^X.Y`は、packages/core/composer.jsonのbranch-aliasから求めた今の版(`^X.Y`)と読む。
+     *   `^X.Y`は、`Kernel::VERSION`から求めた今の版の制約(`currentConstraint()`。PATCHが0より大きい版では`^X.Y.Z`)と
+     *   読む。
      */
     public function testComposerManifestsMatchThePackageTableOfDocs01(): void
     {
@@ -163,7 +163,6 @@ final class PackageManifestTest extends UnitTestCase
         self::assertIsInt($start, 'docs/01 has no section 3.1');
         $end = strpos($markdown, "\n### 3.2", $start);
         self::assertIsInt($end);
-        [$major, $minor] = self::coreDevelopmentVersion();
         $rows = [];
 
         foreach (explode("\n", substr($markdown, $start, $end - $start)) as $line) {
@@ -176,7 +175,7 @@ final class PackageManifestTest extends UnitTestCase
             $require = [];
 
             foreach ($dependencies as [, $name, $constraint]) {
-                $require[$name] = $constraint === '^X.Y' ? "^{$major}.{$minor}" : $constraint;
+                $require[$name] = $constraint === '^X.Y' ? self::currentConstraint() : $constraint;
             }
 
             ksort($require);
@@ -214,17 +213,14 @@ final class PackageManifestTest extends UnitTestCase
     }
 
     /**
-     * packages/core/composer.jsonのbranch-alias(dev-main => X.Y.x-dev)の[X, Y]。
-     *
-     * @return array{string, string}
+     * 今の版の`tmswp/*`の制約。`Kernel::VERSION`(X.Y.Z)から、PATCHが0なら`^X.Y`、0より大きければ`^X.Y.Z`を求める
+     * (リリースの前の検査のCheckReleaseReadinessReleaseWorker::requiredConstraint()と同じ規則)。
      */
-    private static function coreDevelopmentVersion(): array
+    private static function currentConstraint(): string
     {
-        $alias = self::section(self::section(self::manifest('packages/core'), 'extra'), 'branch-alias')['dev-main'] ?? null;
-        self::assertIsString($alias);
-        self::assertSame(1, preg_match('/\A(\d+)\.(\d+)\.x-dev\z/', $alias, $matches));
+        self::assertSame(1, preg_match('/\A(\d+)\.(\d+)\.(\d+)\z/', Kernel::VERSION, $matches));
 
-        return [$matches[1], $matches[2]];
+        return $matches[3] === '0' ? \sprintf('^%s.%s', $matches[1], $matches[2]) : \sprintf('^%s.%s.%s', $matches[1], $matches[2], $matches[3]);
     }
 
     /**
