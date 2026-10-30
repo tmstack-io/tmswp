@@ -173,7 +173,7 @@ acf-bridgeは、WordPressを起動せずにテーマ・プラグインのルー�
 - 規約による自動の探索: 利用側の`app/`にPHP 8のAttributeを付けたクラス(投稿タイプ・タクソノミー・ロール・オプショングループ・Model・フック)を置くだけで、Kernelが探索して登録する。独自ブロックは`build/blocks/`以下の`block.json`を探索して登録する。フォームは探索の対象ではなく、利用側が`FormDefinition`で定義し、前処理クラス等で明示的に作って使う。探索の結果は、探索コマンド(`wp tmswp discover`)が探索結果ファイルに書き、コミットする。本番(debugが偽)は探索結果ファイルだけを読み、debugのときだけ`app/`と`build/blocks/`を毎回走査する。
 - ビューはWordPress標準のテンプレート階層を壊さない(絶対原則)。テンプレートの前処理は、テンプレートの先頭で前処理クラスを明示的に呼ぶ。
 - 外部プラグイン(ACF・CF7等)に依存するコードはコアに置かない(ACFは`packages/acf-bridge`だけ)。拡張は利用側の`KernelConfig`の`extensions`で、Kernelごとに登録する。
-- 配布: このmonorepoで開発し、`.github/workflows/split.yml`がmainとタグを8つの読み取り専用リポジトリ(`tmstack-io/tmswp-*`)へ同期し、Packagistに`tmswp/*`の名前で登録する。全パッケージを同じ版で出す(lockstep。SemVer、0.xの間はマイナーで破壊的変更を許す)。Packagistへの公開はv0.9.0で行う予定で、まだ行っていない。
+- 配布: このmonorepoで開発し、`.github/workflows/split.yml`がmainとタグを8つの読み取り専用リポジトリ(`tmstack-io/tmswp-*`)へ同期し、Packagistに`tmswp/*`の名前で登録する。全パッケージを同じ版で出す(lockstep。SemVer、0.xの間はマイナーで破壊的変更を許す)。Packagistにはv0.9.0から公開している。
 
 ## パッケージ構成
 

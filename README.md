@@ -35,7 +35,7 @@ TMStack WordPress Framework(TMSWP)は、PHP 8.3〜8.5・WordPress 7.0以上を�
 
 ## 使い始め方
 
-テーマ・プラグインは、スターターから作ります。Packagistへの公開はv0.9.0で行う予定で、まだ行っていません。公開の後は、次のコマンドで作れます。
+テーマ・プラグインは、スターターから作ります。v0.9.0からPackagistに公開しており、次のコマンドで作れます。
 
 ```bash
 # テーマ(wp-content/themes/で実行する)
@@ -47,14 +47,14 @@ composer create-project tmswp/starter-plugin my-plugin
 
 作成の直後に、スターターの`bin/setup.php`がスラッグと表示名を尋ね、スラッグから作った名前空間(例: `my-theme` → `MyTheme\`)でプロジェクトを書き換えます。端末の無い環境では、`TMSWP_SETUP_SLUG`・`TMSWP_SETUP_NAME`の環境変数で渡します。その後の手順(探索結果ファイルの作成と`composer qa`)は、作ったプロジェクトのREADME.mdにあります。
 
-公開の前は、このmonorepoの`tools/ci/create-starter-project.sh`で作ります。スターターと`tmswp/core`を、このリポジトリのディレクトリからComposerのpathリポジトリで入れます(CIのStarter Projectsのジョブと同じ手順)。
+拡張は、作ったプロジェクトで`composer require tmswp/<パッケージ>`で入れ、`tmswp-kernel.php`の`extensions`に登録します(手順は`vendor/tmswp/core/rules/extensions.md`)。`tmswp/testing`は`composer require --dev tmswp/testing`で入れます。
+
+このmonorepoのまだリリースしていない変更で試すときは、`tools/ci/create-starter-project.sh`で作ります。スターターと`tmswp/core`を、このリポジトリのディレクトリからComposerのpathリポジトリで入れます(CIのStarter Projectsのジョブと同じ手順)。拡張も同じように試す場合は、作ったプロジェクトのcomposer.jsonに、このリポジトリの`packages/*`を指すpathリポジトリを足します(`examples/sample-site/composer.json`が例です)。
 
 ```bash
 tools/ci/create-starter-project.sh theme ../my-theme my-theme 'My Theme'
 tools/ci/create-starter-project.sh plugin ../my-plugin my-plugin 'My Plugin'
 ```
-
-公開の前は、拡張のパッケージもPackagistから入れられません。拡張を使う場合は、作ったプロジェクトのcomposer.jsonに、このリポジトリの`packages/*`を指すpathリポジトリを足します(`examples/sample-site/composer.json`が例です)。
 
 作ったプロジェクトでの開発の規約は、そのプロジェクトの`AGENTS.md`にあります。機能ごとの手順は`vendor/tmswp/*/rules/*.md`のレシピにあります。
 
