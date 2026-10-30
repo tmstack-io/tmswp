@@ -9,6 +9,10 @@
 
 - `Kernel::VERSION`を0.9.1にし、packages/*・starters/*・examples/sample-siteの`tmswp/*`の制約を`^0.9`から`^0.9.1`にした。packages/*のbranch-aliasは`0.9.x-dev`のままである。
 
+### 開発
+
+- ルートのlockのPHPStanを2.2.2から2.3.4に上げ(制約は`^2.1`のまま。phpstan-deprecation-rules 2.0.5・phpstan-phpunit 2.1.1・phpstan-strict-rules 2.1.0・phpstan-wordpress 2.0.4も上げた)、ルートの`tests/bootstrap-unit.php`でも、coreの`tests/bootstrap.php`と同じく、Patchworkが`phar://`のストリームを差し替える前にPHPStanのテストのコンテナを作るようにした(しないと、PHPStanの拡張のテストがクラスの再宣言で止まる)。2.3で新しく出た指摘(FormRuntimeTestとWpdbTestDoubleParityTestの10件)は、テストのコードを直して解消した。lockの拡張(phpstan-strict-rules 2.1.0・phpstan-phpunit 2.1.1)が`phpstan/phpstan ^2.3`を要求するため、実際の下限は2.3になる。制約を`^2.3`に上げると、packages/core・starters/*の`^2.1`と食い違って`composer monorepo:validate`が失敗するため、制約はそろえたまま据え置いた。
+
 ## v0.9.0 — 導入できる版
 
 ### 追加
